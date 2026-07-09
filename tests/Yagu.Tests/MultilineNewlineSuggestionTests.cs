@@ -42,6 +42,10 @@ public sealed class MultilineNewlineSuggestionTests
         Assert.Contains("&& !_settings.MultilineNewlineSuggestionDismissed", src);
         Assert.Contains("query.Contains(\"\\\\n\", StringComparison.Ordinal)", src);
 
+        // A Windows file path (e.g. one containing a "\net6.0" segment) must NOT be mistaken for a
+        // literal "\n" escape, so the suggestion is suppressed when the query looks like a path.
+        Assert.Contains("!Yagu.Helpers.SingleFilePathQueryDetector.LooksLikePath(query)", src);
+
         // Applying the choice: "don't warn" persists suppression; accepting turns Multiline on (which via
         // OnMultilineChanged also enables Regex and disables Exact match).
         Assert.Contains("public async Task ApplyMultilineSuggestionAsync(bool switchToMultiline, bool dontRemind)", src);

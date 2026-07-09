@@ -2891,7 +2891,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         && !Multiline
         && !_settings.MultilineNewlineSuggestionDismissed
         && !string.IsNullOrEmpty(query)
-        && query.Contains("\\n", StringComparison.Ordinal);
+        && query.Contains("\\n", StringComparison.Ordinal)
+        && !Yagu.Helpers.SingleFilePathQueryDetector.LooksLikePath(query);
 
     /// <summary>
     /// Records the outcome of the "this looks like a multiline search" suggestion. When

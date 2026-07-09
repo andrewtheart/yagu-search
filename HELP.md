@@ -1017,19 +1017,22 @@ for accuracy, falling back to NPU then CPU).
 | Flag | Description |
 | --- | --- |
 | `-SP`, `--semantic-pattern <text>` | Natural-language request translated into the search flags (directory, globs, dates, sizes, search mode) and then executed. Replaces the positional `PATTERN`; `--directory` becomes optional (defaults to the current directory). |
-| `--semantic-model <alias>` | Force a specific Foundry Local model, by family alias (e.g. `phi-4-mini`) or by exact variant id (e.g. `Phi-4-mini-instruct-cuda-gpu:5`). Default: auto-pick the best small model for this machine's hardware, preferring the less-quantized GPU build for accuracy. Skips the first-run model-download prompt. |
-| `--accept-model-download` | Auto-download the recommended model without prompting — for scripts and non-interactive consoles. Without it, a redirected console falls back to Traditional search instead of downloading. |
+| `--semantic-model <alias>` | Force a specific Foundry Local model, by family alias (e.g. `phi-4-mini`) or by exact variant id (e.g. `Phi-4-mini-instruct-cuda-gpu:5`). Default: auto-pick the best small model for this machine's hardware, preferring the less-quantized GPU build for accuracy. Skips the first-run model check. |
+| `--accept-model-download` | Run the one-time AI model check and adopt the best model without prompting — for scripts and non-interactive consoles. Without it, a redirected console falls back to Traditional search instead of running the check. |
 | `--explain` | With `--semantic-pattern`, print the interpreted search parameters and exit **without** searching (a dry-run). Also reports the selected model and the model's raw JSON output (to stderr) to help diagnose interpretation. |
 | `--semantic-batch <file>` | Translate a file of natural-language queries (one per line; blank lines and `#` comments ignored) through a **single loaded model**, printing one delimited `--explain` block per query. The model loads once and is reused for every query, so a whole query set — or a sweep across many models — can be evaluated without paying the cold-load cost per call. Always a dry-run (no search executed). |
 
-**First-run model prompt.** The first time you run a semantic query (and no model has been
-downloaded yet), Yagu lists the local models suited to your hardware — the recommended pick
-first, with smaller/lower-ranked options flagged `(!) may give less accurate results` and
-already-downloaded models tagged. Press **Enter** to download the recommended model, type a
-**number** to choose another, or **n** to decline. Declining (or a non-interactive console
-without `--accept-model-download`) falls back to a literal **Traditional** search of your text.
-Your choice is saved, so later runs skip the prompt. Pass `--semantic-model <alias>` to choose
-up front and bypass the prompt entirely.
+**First-run model check.** The first time you run a semantic query (and the one-time check has not
+run yet), Yagu performs the same on-device **model check** as the app: it tests the models that
+fit your hardware with a few sample searches, times and scores each, prints a per-candidate report
+(accuracy + latency) to stderr, and adopts the fastest model that answers accurately (or the
+best-effort fallback). On an interactive console it first asks to run the check (**y**/**N**), then
+after the report lets you press **Enter** to accept the recommended model, type a **number** to
+choose another probed model, or **n** to decline. Declining — or a non-interactive console without
+`--accept-model-download` — falls back to a literal **Traditional** search of your text. The result
+is saved to the same settings the app uses (so neither surface re-runs the check), and the check
+can download one or more models and take a few minutes. Pass `--semantic-model <alias>` to choose
+up front and bypass the check entirely.
 
 Explicit flags always win over the model's choices, so you can override any part of the
 interpretation (e.g. add `--directory` or `--search-mode`). Progress, the model prompt, and the

@@ -25,6 +25,16 @@ public sealed partial class MainWindow
     {
         if (sender.DataContext is FileGroup g)
         {
+            // A filename-only group (the file's NAME matched, but there are no content matches) has
+            // nothing to expand — the match is already conveyed by the header "file name" pill — so keep
+            // the drawer closed instead of opening an empty one. Re-checked at each expand, so a group
+            // that later gains content matches becomes expandable normally.
+            if (!g.HasContentMatches)
+            {
+                g.IsExpanded = false;
+                return;
+            }
+
             try
             {
                 // Iter 16: ensure any compact evicted-stubs are materialized into Items

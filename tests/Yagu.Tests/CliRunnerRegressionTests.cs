@@ -235,16 +235,45 @@ public sealed class CliRunnerRegressionTests
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
-        // First-run prompt is skipped for an explicit model or a previously downloaded one.
+        // First-run runs the on-device model check under the SAME condition as the GUI
+        // (SemanticModelQualificationCoordinator.ShouldOffer), and is skipped for an explicit
+        // --semantic-model. Declining falls back to a literal Traditional search.
         AssertContainsInOrder(source,
-            "if (!explicitModel && !settings.SemanticModelDownloaded)",
-            "EnsureSemanticModelReadyAsync(translator, args, settings, progress",
+            "if (!explicitModel && SemanticModelQualificationCoordinator.ShouldOffer(settings, translator.IsAvailable))",
+            "RunModelQualificationCliAsync(translator, args, settings, CancellationToken.None)",
             "case SemanticModelSetup.Declined:",
             "return FallBackToTraditional(args);");
 
         // Declining drops to a literal Traditional search of the typed text.
         Assert.Contains("args.FallBackSemanticToTraditional();", source);
         Assert.Contains("Using Traditional search for:", source);
+    }
+
+    [Fact]
+    public void SemanticFirstRun_RunsTextBasedModelProbe_MatchingTheGui()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        // The CLI runs the SAME qualification engine the GUI uses (SemanticProbeSet.Default through
+        // SemanticModelQualificationRunner), keeps the model resident across probes, streams a text
+        // transcript to stderr, prints the report, and adopts the coordinator's suggestion.
+        AssertContainsInOrder(source,
+            "private static async Task<SemanticModelSetup> RunModelQualificationCliAsync(",
+            "translator.SetUnloadAfterUse(false);",
+            "var runner = new SemanticModelQualificationRunner(",
+            "SemanticModelQualificationRunner.DefaultMaxCandidates",
+            "runner.RunAsync(SemanticProbeSet.Default, ModelQualificationThresholds.Default, qualProgress, ct)",
+            "PrintQualificationReport(result);",
+            "SemanticModelQualificationCoordinator.Suggestion(result)");
+
+        // Nothing usable -> mirror the GUI's switch-to-Traditional (disable AI search + mark complete).
+        AssertContainsInOrder(source,
+            "SemanticModelQualificationCoordinator.MarkDeclined(settings);",
+            "settings.SemanticSearchEnabled = false;",
+            "PersistQualificationState(settings, disableSemantic: true);");
+
+        // The per-probe transcript labels PASS / SLOW / FAIL with latency.
+        Assert.Contains("string status = p.ProbePassed ? (p.ProbeSlowWarning ? \"SLOW\" : \"PASS\") : \"FAIL\";", source);
     }
 
     [Fact]
@@ -275,15 +304,18 @@ public sealed class CliRunnerRegressionTests
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
-        // An explicit interactive pick is PINNED (stored as its alias); the non-interactive auto-accept
-        // path stores empty (auto). Either way the downloaded flag is set so later runs skip the prompt.
+        // Applying the check mirrors the GUI (SemanticModelQualificationCoordinator.ApplyResult) and sets
+        // the downloaded flag so the legacy first-run gate stays consistent; both surfaces persist to the
+        // same global settings store.
         AssertContainsInOrder(source,
-            "PersistSemanticModelChoice(pinChoice ? chosenAlias : string.Empty);",
-            "settings.SemanticModelDownloaded = true;");
+            "SemanticModelQualificationCoordinator.ApplyResult(settings, result, accepted: true, chosenAlias);",
+            "settings.SemanticModelDownloaded = true;",
+            "PersistQualificationState(settings, disableSemantic: false);");
         AssertContainsInOrder(source,
-            "private static void PersistSemanticModelChoice(string aliasToPersist)",
-            "global.SemanticModelAlias = aliasToPersist ?? string.Empty;",
-            "global.SemanticModelDownloaded = true;",
+            "private static void PersistQualificationState(AppSettings applied, bool disableSemantic)",
+            "global.SemanticModelQualificationCompleted = applied.SemanticModelQualificationCompleted;",
+            "global.SemanticModelAlias = applied.SemanticModelAlias;",
+            "global.SemanticModelDownloaded = applied.SemanticModelDownloaded;",
             "service.Save(global);");
     }
 

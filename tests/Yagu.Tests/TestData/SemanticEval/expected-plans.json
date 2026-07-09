@@ -1,0 +1,466 @@
+{
+  "all pdf files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.pdf",
+    "pattern": "pdf",
+    "search-mode": "FileNames"
+  },
+  "all png files": {
+    "directory": "C:\\",
+    "exact-match": "False",
+    "include": "*.png",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "any file that has a password in it": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "image-text": "True",
+    "include": "*",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "audio files": {
+    "error": "The model did not return a JSON object."
+  },
+  "c# files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.cs",
+    "pattern": "cs",
+    "search-mode": "FileNames"
+  },
+  "c# files containing \u0027TODO\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.cs",
+    "pattern": "TODO",
+    "search-mode": "Content"
+  },
+  "c# files containing \u0027async\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.cs",
+    "pattern": "async",
+    "search-mode": "Content"
+  },
+  "c# files containing \u0027error\u0027": {
+    "directory": "C:\\",
+    "exact-match": "False",
+    "include": "*.cs",
+    "pattern": "error",
+    "search-mode": "Content"
+  },
+  "c# files containing \u0027password\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.cs",
+    "pattern": "password",
+    "search-mode": "Content"
+  },
+  "c# files that contain \u0027async\u0027 but not \u0027Legacy\u0027": {
+    "directory": "C:\\",
+    "exact-match": "False",
+    "include": "*.cs",
+    "pattern": "async(?!Legacy)",
+    "regex": "True",
+    "search-mode": "Content"
+  },
+  "c\u002B\u002B files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.cpp",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "code files containing a TODO comment": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.py",
+    "pattern": "TODO",
+    "search-mode": "Content"
+  },
+  "config files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.json, *.yaml, *.yml, *.xml, *.ini, *.toml",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "csv files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.csv",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "documents mentioning budget": {
+    "error": "The local AI model failed to respond: Error from chat_completions command: Operation was cancelled\u0000"
+  },
+  "every markdown file": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.md",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "excel spreadsheets": {
+    "archives": "True",
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.xlsx, *.xls",
+    "pattern": "revenue",
+    "search-mode": "Content"
+  },
+  "executable files": {
+    "binary": "True",
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.exe",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "f# files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.fs",
+    "pattern": "*.fsh",
+    "search-mode": "FileNames"
+  },
+  "files that contain the word error": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "pattern": "error",
+    "search-mode": "Content"
+  },
+  "files that mention invoice but not refund": {},
+  "files with the word invoice in them": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "pattern": "invoice",
+    "search-mode": "Content"
+  },
+  "image files": {
+    "error": "The model did not return a JSON object."
+  },
+  "javascript files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.js",
+    "pattern": "javascript files",
+    "search-mode": "FileNames"
+  },
+  "javascript files containing \u0027TODO\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.js",
+    "pattern": "TODO",
+    "search-mode": "Content"
+  },
+  "javascript files containing \u0027async\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.js",
+    "pattern": "async",
+    "search-mode": "Content"
+  },
+  "javascript files containing \u0027error\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.js",
+    "pattern": "error",
+    "search-mode": "Content"
+  },
+  "javascript files containing \u0027password\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.js",
+    "pattern": "password",
+    "search-mode": "Content"
+  },
+  "json files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.json",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "json files containing \u0027TODO\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.json",
+    "pattern": "TODO",
+    "search-mode": "Content"
+  },
+  "json files containing \u0027async\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.json",
+    "pattern": "async",
+    "search-mode": "Content"
+  },
+  "json files containing \u0027error\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.json",
+    "pattern": "error",
+    "search-mode": "Content"
+  },
+  "json files containing \u0027password\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.json",
+    "pattern": "password",
+    "search-mode": "Content"
+  },
+  "log files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.log",
+    "pattern": "log",
+    "search-mode": "FileNames"
+  },
+  "log files containing \u0027TODO\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "pattern": "TODO",
+    "search-mode": "Content"
+  },
+  "log files containing \u0027async\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "pattern": "async",
+    "regex": "True",
+    "search-mode": "Content"
+  },
+  "log files containing \u0027error\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "pattern": "error",
+    "regex": "True",
+    "search-mode": "Content"
+  },
+  "log files containing \u0027password\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.log",
+    "pattern": "password",
+    "regex": "True",
+    "search-mode": "Content"
+  },
+  "log files with error but without warning": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "exclude": "*.log:.*: warning",
+    "pattern": "error",
+    "search-mode": "Content"
+  },
+  "logs that contain the word timeout": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.log",
+    "pattern": "\\bword\\w\u002B\\b",
+    "regex": "True",
+    "search-mode": "Content"
+  },
+  "markdown files containing \u0027TODO\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.md",
+    "pattern": "TODO",
+    "search-mode": "Content"
+  },
+  "markdown files containing \u0027async\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.md",
+    "pattern": "async",
+    "search-mode": "Content"
+  },
+  "markdown files containing \u0027error\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.md",
+    "pattern": "error",
+    "search-mode": "Content"
+  },
+  "markdown files containing \u0027password\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.md",
+    "pattern": "password",
+    "search-mode": "Content"
+  },
+  "objective-c files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.m",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "powerpoint presentations": {
+    "archives": "True",
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.pptx, *.ppt",
+    "pattern": "^.*\\.[p]rtnX[0-9]\u002B[sS]",
+    "search-mode": "FileNames"
+  },
+  "powershell scripts": {
+    "error": "The local AI model failed to respond: Error from chat_completions command: Operation was cancelled\u0000"
+  },
+  "python files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.py",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "python files containing \u0027TODO\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.py",
+    "pattern": "TODO",
+    "search-mode": "Content"
+  },
+  "python files containing \u0027async\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.py",
+    "pattern": "async",
+    "search-mode": "Content"
+  },
+  "python files containing \u0027error\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.py",
+    "pattern": "error",
+    "search-mode": "Content"
+  },
+  "python files containing \u0027password\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.py",
+    "pattern": "password",
+    "search-mode": "Content"
+  },
+  "python files containing import but not test": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "exclude": "test, test.*",
+    "include": "*.py",
+    "pattern": ".* import .\u002B",
+    "search-mode": "Content"
+  },
+  "shell scripts": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.sh",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "source code files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.cs, *.py, *.js, *.ts, *.java, *.cpp, *.c, *.go, *.rs",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "text files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.txt",
+    "pattern": "text",
+    "search-mode": "FileNames"
+  },
+  "typescript files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.ts, *.js, *.py",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "typescript files containing \u0027TODO\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.ts, *.py",
+    "pattern": "TODO",
+    "search-mode": "Content"
+  },
+  "typescript files containing \u0027async\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.ts, *.js",
+    "pattern": "async",
+    "search-mode": "Content"
+  },
+  "typescript files containing \u0027error\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.ts, *.js, *.py",
+    "pattern": "error",
+    "search-mode": "Content"
+  },
+  "typescript files containing \u0027password\u0027": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.ts",
+    "pattern": "password",
+    "search-mode": "Content"
+  },
+  "video files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.mp4",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "word documents": {
+    "archives": "True",
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.docx, *.doc",
+    "pattern": "word",
+    "search-mode": "Content"
+  },
+  "xml files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.xml",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "yaml files": {
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.yaml",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  },
+  "zip archives": {
+    "archives": "True",
+    "directory": "C:\\src\\Yagu\\tests\\Yagu.Tests\\bin\\Debug\\net10.0-windows",
+    "exact-match": "False",
+    "include": "*.zip",
+    "pattern": ".",
+    "regex": "True",
+    "search-mode": "FileNames"
+  }
+}

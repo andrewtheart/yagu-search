@@ -1413,6 +1413,8 @@ public sealed class PreviewCoreRegressionTests
 
         string expanding = ExtractMethodWindow(MainWindowSource, "OnFileGroupExpanding", window: 2200);
         AssertContainsInOrder(expanding,
+            "if (!g.HasContentMatches)",
+            "g.IsExpanded = false;",
             "g.MaterializeEvictedStubs();",
             "await EnsureVisibleResultsForExpandedGroupSerializedAsync(g, \"expanding\").ConfigureAwait(true);",
             "if (!ReferenceEquals(sender.DataContext, g))",
@@ -2246,7 +2248,7 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void FileGroupChevronExpand_DoesNotSelectOrAddPreview()
     {
-        string expanding = ExtractMethodWindow(MainWindowSource, "OnFileGroupExpanding", window: 1600);
+        string expanding = ExtractMethodWindow(MainWindowSource, "OnFileGroupExpanding", window: 2200);
         Assert.Contains("expand only", expanding);
         Assert.DoesNotContain("g.SelectAll();", expanding);
         Assert.DoesNotContain("SelectFileGroupMatches", expanding);
@@ -3584,7 +3586,7 @@ public sealed class PreviewCoreRegressionTests
             "HideActiveMatchOverlay();");
 
         // Opening the editor must invoke that cancellation, not just hide the overlay.
-        string setVisible = ExtractMethodWindow(PreviewEditorSource, "SetPreviewEditorVisible", 1200);
+        string setVisible = ExtractMethodWindow(PreviewEditorSource, "SetPreviewEditorVisible", 1500);
         Assert.Contains("CancelPendingPreviewMatchNavigation();", setVisible);
 
         // The manual-scroll path (which never reproduced the crash) shares the

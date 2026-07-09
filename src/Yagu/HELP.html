@@ -3071,14 +3071,15 @@ becomes optional (defaults to the current directory).</td>
 (e.g. <code>phi-4-mini</code>) or by exact variant id
 (e.g. <code>Phi-4-mini-instruct-cuda-gpu:5</code>). Default: auto-pick
 the best small model for this machine’s hardware, preferring the
-less-quantized GPU build for accuracy. Skips the first-run
-model-download prompt.</td>
+less-quantized GPU build for accuracy. Skips the first-run model
+check.</td>
 </tr>
 <tr>
 <td><code>--accept-model-download</code></td>
-<td>Auto-download the recommended model without prompting — for scripts
-and non-interactive consoles. Without it, a redirected console falls
-back to Traditional search instead of downloading.</td>
+<td>Run the one-time AI model check and adopt the best model without
+prompting — for scripts and non-interactive consoles. Without it, a
+redirected console falls back to Traditional search instead of running
+the check.</td>
 </tr>
 <tr>
 <td><code>--explain</code></td>
@@ -3099,19 +3100,23 @@ executed).</td>
 </tr>
 </tbody>
 </table>
-<p><strong>First-run model prompt.</strong> The first time you run a
-semantic query (and no model has been downloaded yet), Yagu lists the
-local models suited to your hardware — the recommended pick first, with
-smaller/lower-ranked options flagged
-<code>(!) may give less accurate results</code> and already-downloaded
-models tagged. Press <strong>Enter</strong> to download the recommended
-model, type a <strong>number</strong> to choose another, or
-<strong>n</strong> to decline. Declining (or a non-interactive console
-without <code>--accept-model-download</code>) falls back to a literal
-<strong>Traditional</strong> search of your text. Your choice is saved,
-so later runs skip the prompt. Pass
-<code>--semantic-model &lt;alias&gt;</code> to choose up front and
-bypass the prompt entirely.</p>
+<p><strong>First-run model check.</strong> The first time you run a
+semantic query (and the one-time check has not run yet), Yagu performs
+the same on-device <strong>model check</strong> as the app: it tests the
+models that fit your hardware with a few sample searches, times and
+scores each, prints a per-candidate report (accuracy + latency) to
+stderr, and adopts the fastest model that answers accurately (or the
+best-effort fallback). On an interactive console it first asks to run
+the check (<strong>y</strong>/<strong>N</strong>), then after the report
+lets you press <strong>Enter</strong> to accept the recommended model,
+type a <strong>number</strong> to choose another probed model, or
+<strong>n</strong> to decline. Declining — or a non-interactive console
+without <code>--accept-model-download</code> — falls back to a literal
+<strong>Traditional</strong> search of your text. The result is saved to
+the same settings the app uses (so neither surface re-runs the check),
+and the check can download one or more models and take a few minutes.
+Pass <code>--semantic-model &lt;alias&gt;</code> to choose up front and
+bypass the check entirely.</p>
 <p>Explicit flags always win over the model’s choices, so you can
 override any part of the interpretation (e.g. add
 <code>--directory</code> or <code>--search-mode</code>). Progress, the

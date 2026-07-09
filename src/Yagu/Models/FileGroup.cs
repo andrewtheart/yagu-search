@@ -578,7 +578,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             bool addedToVisible = false;
             if (IsExpanded)
             {
-                bool skipFileNameMatches = HasContentMatches;
+                // Never render the filename-match ("0" line) row: a file-name match is conveyed by the
+                // header "file name" pill, so a filename-only group shows no rows (and is not expandable).
+                bool skipFileNameMatches = HasFileNameMatch;
                 if (skipFileNameMatches)
                 {
                     // Remove any filename matches that were added before content matches arrived.
@@ -660,7 +662,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             return 0;
         }
 
-        bool skipFileNameMatches = HasContentMatches;
+        bool skipFileNameMatches = HasFileNameMatch; // filename-match rows are shown via the header pill, not as a "0" line
         var batch = new List<SearchResult>(end - start);
         int evictedCount = 0;
         int emptyMatchCount = 0;
@@ -691,7 +693,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public void ShowAll()
     {
         int start = VisibleResults.Count + _visibleSkipped;
-        bool skipFileNameMatches = HasContentMatches;
+        bool skipFileNameMatches = HasFileNameMatch; // filename-match rows are shown via the header pill, not as a "0" line
         var batch = new List<SearchResult>(Count - start);
         for (int i = start; i < Count; i++)
         {

@@ -93,6 +93,36 @@ public sealed class SingleFilePathQueryDetectorTests : IDisposable
         Assert.Null(SingleFilePathQueryDetector.Resolve(query));
     }
 
+    [Theory]
+    // The reported false-positive: a path segment "\net6.0" reads as a literal "\n" but is NOT a
+    // newline escape, so LooksLikePath must be true and suppress the multiline suggestion.
+    [InlineData(@"C:\Users\andre\.nuget\packages\microsoft.windows.sdk.net.ref\10.0.19041.38\lib\net6.0\Microsoft.Windows.SDK.NET.xml")]
+    [InlineData(@"C:\node_modules\pkg\index.js")]
+    [InlineData(@"D:\net6.0\file.txt")]
+    [InlineData(@"\\server\share\net6.0\thing.dll")]
+    [InlineData(@"  C:\temp\a.txt  ")]
+    [InlineData("\"C:\\temp\\a.txt\"")]
+    public void LooksLikePath_FullyQualifiedPath_ReturnsTrue(string query)
+    {
+        Assert.True(SingleFilePathQueryDetector.LooksLikePath(query));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    // A genuine regex-style multiline query (not a path) must still be treated as a possible "\n" escape.
+    [InlineData(@"foo\nbar")]
+    [InlineData("error message")]
+    // Relative paths and bare names are not fully qualified, so they don't count as a path here.
+    [InlineData(@"packages\net6.0\thing.dll")]
+    [InlineData(@".\net6.0\thing.dll")]
+    [InlineData("bare.txt")]
+    public void LooksLikePath_NonPathOrRelative_ReturnsFalse(string? query)
+    {
+        Assert.False(SingleFilePathQueryDetector.LooksLikePath(query));
+    }
+
     [Fact]
     public void MainViewModel_ShortCircuitsTraditionalSearch_ToSingleFilePath()
     {

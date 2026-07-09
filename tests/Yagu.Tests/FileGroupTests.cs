@@ -73,19 +73,17 @@ public class FileGroupTests
     }
 
     [Fact]
-    public void FilenameOnlyMatch_Expanded_SkipsContextTrimGuard()
+    public void FilenameOnlyMatch_Expanded_ShowsNoZeroLineRow()
     {
-        // A group with only a filename match (LineNumber == 0) has no content matches, so the
-        // filename row is rendered and routed through RegisterVisibleForTrim, which must no-op.
+        // A group whose only match is the file NAME (LineNumber == 0) is conveyed by the header
+        // "file name" pill, so the "0" line row is never rendered — even when the group is expanded.
         var group = new FileGroup(@"D:\name-hit.txt");
         group.IsExpanded = true;
         group.Add(MakeResult(@"D:\name-hit.txt", 0));
 
         Assert.False(group.HasContentMatches);
-        Assert.Single(group.VisibleResults);
-        Assert.Equal(0, group.VisibleResults[0].LineNumber);
-        Assert.Empty(group.VisibleResults[0].NumberedBefore);
-        Assert.Empty(group.VisibleResults[0].NumberedAfter);
+        Assert.True(group.HasFileNameMatch);
+        Assert.Empty(group.VisibleResults);
     }
 
     [Fact]

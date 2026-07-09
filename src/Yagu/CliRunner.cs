@@ -223,16 +223,19 @@ internal static class CliRunner
             if (!string.Equals(msg, lastProgress, StringComparison.Ordinal)) { WriteError(msg); lastProgress = msg; }
         });
 
-        // First run: offer to pick/download a local model (mirrors the GUI download modal). Skipped when
-        // an explicit --semantic-model was given (consent implied) or a model was already downloaded.
-        if (!explicitModel && !settings.SemanticModelDownloaded)
+        // First run: run the on-device AI model check (the text-based counterpart of the GUI's
+        // qualification sweep) to measure the models that fit this PC and adopt the best one. Gated on the
+        // SAME condition as the GUI — SemanticModelQualificationCoordinator.ShouldOffer (semantic
+        // available + enabled + the one-time check not yet completed). Skipped for an explicit
+        // --semantic-model (consent implied).
+        if (!explicitModel && SemanticModelQualificationCoordinator.ShouldOffer(settings, translator.IsAvailable))
         {
-            var setup = await EnsureSemanticModelReadyAsync(translator, args, settings, progress, CancellationToken.None)
+            var setup = await RunModelQualificationCliAsync(translator, args, settings, CancellationToken.None)
                 .ConfigureAwait(false);
             switch (setup)
             {
                 case SemanticModelSetup.Ready:
-                    break; // model downloaded + persisted — continue to translate
+                    break; // a candidate was probed, adopted + persisted — continue to translate
                 case SemanticModelSetup.Declined:
                     return FallBackToTraditional(args);
                 default: // Failed
@@ -449,139 +452,260 @@ internal static class CliRunner
     }
 
     /// <summary>
-    /// Mirrors the GUI download modal for the CLI: lists the hardware-appropriate models, lets the
-    /// user pick one or decline, downloads the choice, and persists it so later runs skip the prompt.
-    /// Returns <see cref="SemanticModelSetup.Declined"/> when the user opts out (caller falls back to
-    /// Traditional search) and <see cref="SemanticModelSetup.Failed"/> on an unrecoverable error.
+    /// The CLI's first-run AI model check — the text-based counterpart of the GUI qualification sweep
+    /// (<see cref="SemanticModelQualificationRunner"/>). Probes the models that fit this PC with
+    /// <see cref="SemanticProbeSet.Default"/>, times/scores each, prints a per-candidate report, and
+    /// adopts the fastest model that answered accurately (or the best-effort fallback). Progress and the
+    /// report go to stderr so stdout stays clean. Persists the SAME settings the GUI writes (via
+    /// <see cref="SemanticModelQualificationCoordinator"/>) so neither surface re-offers the check.
+    /// Returns <see cref="SemanticModelSetup.Declined"/> to fall back to Traditional search, or
+    /// <see cref="SemanticModelSetup.Failed"/> on an unrecoverable error.
     /// </summary>
-    private static async Task<SemanticModelSetup> EnsureSemanticModelReadyAsync(
-        FoundryLocalSemanticQueryTranslator translator, CliArgs args, AppSettings settings,
-        IProgress<SemanticTranslationProgress> progress, CancellationToken ct)
+    private static async Task<SemanticModelSetup> RunModelQualificationCliAsync(
+        FoundryLocalSemanticQueryTranslator translator, CliArgs args, AppSettings settings, CancellationToken ct)
     {
-        // A redirected/non-interactive stdin means we cannot prompt. Only auto-download when the
-        // user explicitly opted in with --accept-model-download; otherwise fall back to Traditional.
+        // A redirected/non-interactive stdin means we cannot prompt. The check is heavy (downloads + probes
+        // several models), so only run it automatically when the user opted in with --accept-model-download;
+        // otherwise fall back to Traditional.
         bool interactive = !Console.IsInputRedirected;
         if (!interactive && !args.AcceptModelDownload)
         {
-            WriteError("Semantic search needs a local AI model (first-time setup), but this console");
+            WriteError("Semantic search needs a one-time AI model check (first-time setup), but this console");
             WriteError("cannot prompt for confirmation. Re-run interactively, pass --semantic-model <alias>,");
-            WriteError("or add --accept-model-download to download the recommended model automatically.");
+            WriteError("or add --accept-model-download to run the check and adopt the best model automatically.");
             return SemanticModelSetup.Declined;
         }
 
-        WriteError("Semantic search needs a local AI model (first-time setup). Checking available models…");
-
-        IReadOnlyList<SemanticModelOption> options;
-        try
+        // Interactive: mirror the GUI "Set up AI (Semantic) search?" offer.
+        if (interactive)
         {
-            options = await translator.ListModelOptionsAsync(progress, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            WriteError($"error: could not list local models: {ex.Message}");
-            return SemanticModelSetup.Failed;
-        }
-
-        if (options.Count == 0)
-        {
-            WriteError("error: no compatible local model is available for this machine.");
-            return SemanticModelSetup.Failed;
-        }
-
-        var recommended = options.FirstOrDefault(o => o.IsRecommended) ?? options[0];
-
-        string chosenAlias;
-        bool pinChoice; // an explicit interactive pick is pinned; auto-accept keeps tracking the best model
-        if (!interactive)
-        {
-            // --accept-model-download on a non-interactive console: take the recommended pick and keep
-            // AUTOMATIC tracking (the user did not choose a specific model).
-            pinChoice = false;
-            chosenAlias = recommended.Alias;
-            WriteError($"Auto-accepting the recommended model: {recommended.DisplayName} ({FormatModelSize(recommended.SizeBytes)}).");
+            WriteError("");
+            WriteError("Set up AI (Semantic) search?  (one-time model check)");
+            WriteError("Yagu can test the AI models that fit this PC with a few sample searches and pick the");
+            WriteError("fastest one that answers accurately. The check runs entirely on your PC; it may download");
+            WriteError("one or more models and take a few minutes.");
+            WriteError("[y] run the check   [N] not now (use Traditional search)");
+            if (!ReadYesNoOnConsole(defaultYes: false))
+            {
+                // Refused: AI (Semantic) search needs a model validated on this PC to be reliable, so turn it
+                // off and mark the one-time check complete — mirrors the GUI's decline-and-disable.
+                SemanticModelQualificationCoordinator.MarkDeclined(settings);
+                settings.SemanticSearchEnabled = false;
+                PersistQualificationState(settings, disableSemantic: true);
+                WriteError("AI (Semantic) search turned off. Re-enable it from Settings (AI tab) to run the check later.");
+                return SemanticModelSetup.Declined;
+            }
         }
         else
         {
-            // An explicit interactive pick is PINNED as an override, even when it is the recommended model
-            // (use --semantic-model, or the Settings "Use recommended (automatic)" button, to go back to auto).
-            var pick = PromptForModelChoice(options, recommended);
-            if (pick is null) return SemanticModelSetup.Declined;
-            pinChoice = true;
-            chosenAlias = pick.Alias;
+            WriteError("Running the one-time AI model check (--accept-model-download)…");
         }
 
+        // Keep each candidate resident across its probes (mirror the GUI/VM) so every timed probe measures
+        // warm inference latency, then restore the user's unload-after-use setting afterwards.
+        bool restoreUnloadAfterUse = settings.SemanticUnloadModelAfterUse;
+        translator.SetUnloadAfterUse(false);
+        ModelQualificationResult result;
         try
         {
-            // Pin the interactive pick (load exactly that alias); auto-accept passes null so the translator
-            // tracks the best model for this machine.
-            await translator.PrepareModelAsync(pinChoice ? chosenAlias : null, progress, ct).ConfigureAwait(false);
+            _lastQualificationLine = null;
+            var qualProgress = new SynchronousProgress<SemanticQualificationProgress>(WriteQualificationProgress);
+            var runner = new SemanticModelQualificationRunner(
+                translator,
+                defaultDirectory: !string.IsNullOrWhiteSpace(args.Directory) ? args.Directory : Environment.CurrentDirectory,
+                directoryExists: static d => Directory.Exists(d),
+                maxCandidates: SemanticModelQualificationRunner.DefaultMaxCandidates,
+                failedProbeHoldMs: 0); // no artificial pacing on the console
+            result = await runner.RunAsync(SemanticProbeSet.Default, ModelQualificationThresholds.Default, qualProgress, ct)
+                .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            WriteError($"error: model download failed: {ex.Message}");
+            WriteError($"error: the AI model check failed: {ex.Message}");
             return SemanticModelSetup.Failed;
         }
+        finally
+        {
+            translator.SetUnloadAfterUse(restoreUnloadAfterUse);
+        }
 
-        PersistSemanticModelChoice(pinChoice ? chosenAlias : string.Empty);
+        PrintQualificationReport(result);
+
+        string? suggestion = SemanticModelQualificationCoordinator.Suggestion(result);
+        if (suggestion is null)
+        {
+            // Nothing usable — mirror the GUI's "switch to Traditional": disable AI search + mark complete.
+            WriteError("");
+            WriteError("No local model produced usable results on this PC. Turning AI (Semantic) search off;");
+            WriteError("re-enable it from Settings (AI tab) to try again or pick a model yourself.");
+            SemanticModelQualificationCoordinator.MarkDeclined(settings);
+            settings.SemanticSearchEnabled = false;
+            PersistQualificationState(settings, disableSemantic: true);
+            return SemanticModelSetup.Declined;
+        }
+
+        // Adopt a model: auto-accept the recommendation (non-interactive), or let the user accept/pick/decline.
+        string? chosenAlias; // null => accept the suggested model
+        if (interactive)
+        {
+            string? adopted = PromptQualifiedModelAdoption(result, suggestion);
+            if (adopted is null)
+            {
+                // Declined after seeing the report — fall back to Traditional (AI search off + complete).
+                SemanticModelQualificationCoordinator.MarkDeclined(settings);
+                settings.SemanticSearchEnabled = false;
+                PersistQualificationState(settings, disableSemantic: true);
+                WriteError("AI (Semantic) search turned off. Using Traditional search.");
+                return SemanticModelSetup.Declined;
+            }
+            chosenAlias = string.Equals(adopted, suggestion, StringComparison.OrdinalIgnoreCase) ? null : adopted;
+        }
+        else
+        {
+            chosenAlias = null; // adopt the recommendation
+            WriteError("");
+            WriteError($"Adopting the recommended model: {suggestion}.");
+        }
+
+        // Fold the result into settings exactly like the GUI (marks the check complete, records the
+        // qualified alias, sets the effective model), then also flag the model as downloaded so the legacy
+        // first-run download gate stays consistent across surfaces.
+        SemanticModelQualificationCoordinator.ApplyResult(settings, result, accepted: true, chosenAlias);
         settings.SemanticModelDownloaded = true;
+        translator.SetModelOverride(string.IsNullOrWhiteSpace(settings.SemanticModelAlias) ? null : settings.SemanticModelAlias);
+        PersistQualificationState(settings, disableSemantic: false);
+
+        // The sweep left the last-probed candidate resident; unload it so the real search below loads the
+        // adopted model from a clean state (avoids the in-process model-switch wedge).
+        try { await translator.UnloadCurrentModelAsync(ct).ConfigureAwait(false); }
+        catch { /* best-effort: freeing the probe model must not fail setup */ }
+
+        WriteError($"AI model check complete — using {settings.SemanticModelAlias}.");
         return SemanticModelSetup.Ready;
     }
 
-    /// <summary>
-    /// Prints the model menu to stderr and reads a choice from stdin. Returns the chosen option,
-    /// the recommended option on an empty/"y" answer, or null when the user declines or gives up.
-    /// </summary>
-    private static SemanticModelOption? PromptForModelChoice(
-        IReadOnlyList<SemanticModelOption> options, SemanticModelOption recommended)
+    /// <summary>Reads a single y/n answer from stdin (empty/EOF returns <paramref name="defaultYes"/>).</summary>
+    private static bool ReadYesNoOnConsole(bool defaultYes)
+    {
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            Console.Error.Write("> ");
+            string? line = Console.ReadLine();
+            if (line is null) return defaultYes; // EOF / closed stdin
+            line = line.Trim();
+            if (line.Length == 0) return defaultYes;
+            if (line.Equals("y", StringComparison.OrdinalIgnoreCase) || line.Equals("yes", StringComparison.OrdinalIgnoreCase)) return true;
+            if (line.Equals("n", StringComparison.OrdinalIgnoreCase) || line.Equals("no", StringComparison.OrdinalIgnoreCase)) return false;
+            WriteError("Please enter 'y' or 'n'.");
+        }
+        return defaultYes;
+    }
+
+    /// <summary>Streams one qualification-sweep progress update to stderr as a text transcript: a one-line
+    /// stage message (de-duplicated), a per-probe PASS/SLOW/FAIL verdict with latency, and nothing for the
+    /// noisy per-token stream. Mirrors what the GUI qualification dialog shows, in plain text.</summary>
+    private static string? _lastQualificationLine;
+    private static void WriteQualificationProgress(SemanticQualificationProgress p)
+    {
+        switch (p.Stage)
+        {
+            case SemanticQualificationStage.ProbeToken:
+                return; // don't stream raw model tokens to the console
+            case SemanticQualificationStage.ProbeCompleted:
+            {
+                string status = p.ProbePassed ? (p.ProbeSlowWarning ? "SLOW" : "PASS") : "FAIL";
+                string where = p.ProbeIndex > 0 && p.ProbeCount > 0
+                    ? $"query {p.ProbeIndex}/{p.ProbeCount}"
+                    : "load";
+                string reason = !p.ProbePassed && p.FailureReason != SemanticProbeFailureReason.None
+                    ? $" ({DescribeProbeFailure(p.FailureReason)})"
+                    : string.Empty;
+                WriteError(string.Create(CultureInfo.InvariantCulture,
+                    $"    [{status}] {p.CandidateAlias} {where} — {p.LatencyMs} ms{reason}"));
+                return;
+            }
+            default:
+            {
+                string msg = p.Message;
+                if (!string.Equals(msg, _lastQualificationLine, StringComparison.Ordinal))
+                {
+                    WriteError(msg);
+                    _lastQualificationLine = msg;
+                }
+                return;
+            }
+        }
+    }
+
+    /// <summary>Human-readable reason a probe did not pass, for the text transcript.</summary>
+    private static string DescribeProbeFailure(SemanticProbeFailureReason reason) => reason switch
+    {
+        SemanticProbeFailureReason.NoAnswer => "no usable answer",
+        SemanticProbeFailureReason.Inaccurate => "inaccurate",
+        SemanticProbeFailureReason.TooSlow => "too slow",
+        SemanticProbeFailureReason.Crashed => "crashed / failed to load",
+        _ => "failed",
+    };
+
+    /// <summary>Prints the per-candidate qualification report + the recommendation to stderr, mirroring the
+    /// GUI results list in plain text.</summary>
+    private static void PrintQualificationReport(ModelQualificationResult result)
     {
         WriteError("");
-        WriteError("Choose a local AI model for semantic search:");
-        for (int idx = 0; idx < options.Count; idx++)
+        if (result.Reports.Count == 0)
         {
-            var o = options[idx];
-            var tags = new List<string>();
-            if (o.IsRecommended) tags.Add("recommended");
-            if (o.IsCached) tags.Add("already downloaded");
-            if (!string.IsNullOrWhiteSpace(o.DeviceLabel)) tags.Add(o.DeviceLabel!);
-            string suffix = tags.Count > 0 ? $"  [{string.Join(", ", tags)}]" : string.Empty;
-            string warn = o.ExceedsAvailableMemory
-                ? "  (!) too large for this PC's memory - will fail to load"
-                : o.IsBelowRecommended ? "  (!) may give less accurate results" : string.Empty;
-            WriteError($"  {idx + 1,2}) {o.DisplayName,-28} {FormatModelSize(o.SizeBytes),8}{suffix}{warn}");
+            WriteError("Model check results: no candidate models were available for this PC.");
+            return;
+        }
+
+        WriteError("Model check results:");
+        foreach (var r in result.Reports)
+        {
+            string verdict = r.Verdict.Passed ? "qualified" : $"not qualified — {r.Verdict.Reason}";
+            WriteError(string.Create(CultureInfo.InvariantCulture,
+                $"  {r.ModelAlias,-30} accuracy {r.EffectiveAccuracy,4:P0}, median {r.MedianLatencyMs,6} ms, max {r.MaxLatencyMs,6} ms — {verdict}"));
         }
 
         WriteError("");
-        WriteError($"[Enter] download recommended ({recommended.DisplayName}, {FormatModelSize(recommended.SizeBytes)})   " +
-                   "[1-N] choose another   [n] no, use Traditional search");
+        if (result.QualifiedModelAlias is { } qualified)
+            WriteError($"Recommended: {qualified} — the fastest model that answered every check accurately.");
+        else if (SemanticModelQualificationCoordinator.Suggestion(result) is { } best)
+            WriteError($"No model fully qualified; best effort: {best}.");
+    }
+
+    /// <summary>Interactive post-report prompt: accept the recommended model, pick another probed model by
+    /// number, or decline (null) to fall back to Traditional search.</summary>
+    private static string? PromptQualifiedModelAdoption(ModelQualificationResult result, string suggestion)
+    {
+        var aliases = result.Reports.Select(r => r.ModelAlias).ToList();
+        WriteError("");
+        WriteError($"[Enter] use recommended ({suggestion})   [1-{aliases.Count}] choose another   [n] no, use Traditional search");
+        for (int i = 0; i < aliases.Count; i++)
+            WriteError($"  {i + 1,2}) {aliases[i]}");
 
         for (int attempt = 0; attempt < 5; attempt++)
         {
             Console.Error.Write("> ");
             string? line = Console.ReadLine();
-            if (line is null) return null; // EOF / closed stdin
+            if (line is null) return suggestion; // EOF → accept recommended
             line = line.Trim();
-            if (line.Length == 0) return recommended;
+            if (line.Length == 0) return suggestion;
             if (line.Equals("n", StringComparison.OrdinalIgnoreCase) || line.Equals("no", StringComparison.OrdinalIgnoreCase))
                 return null;
-            if (line.Equals("y", StringComparison.OrdinalIgnoreCase) || line.Equals("yes", StringComparison.OrdinalIgnoreCase))
-                return recommended;
-            if (int.TryParse(line, out int n) && n >= 1 && n <= options.Count)
-                return options[n - 1];
+            if (int.TryParse(line, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n >= 1 && n <= aliases.Count)
+                return aliases[n - 1];
             WriteError("Please enter a number, press Enter for the recommended model, or 'n' to decline.");
         }
 
-        WriteError("No valid selection — using Traditional search.");
-        return null;
+        return suggestion;
     }
 
-    /// <summary>Formats an approximate model size for the picker (GB/MB), or "size n/a" when unknown.</summary>
-    private static string FormatModelSize(long? bytes)
+    /// <summary>A synchronous <see cref="IProgress{T}"/> so qualification progress lines print IN ORDER on
+    /// the console (the default <see cref="Progress{T}"/> posts to the thread pool when there is no
+    /// synchronization context, which would interleave the transcript).</summary>
+    private sealed class SynchronousProgress<T>(Action<T> handler) : IProgress<T>
     {
-        if (bytes is not { } b || b <= 0) return "size n/a";
-        double gb = b / 1024d / 1024d / 1024d;
-        if (gb >= 1.0) return $"{gb:0.0} GB";
-        double mb = b / 1024d / 1024d;
-        return $"{mb:0} MB";
+        public void Report(T value) => handler(value);
     }
 
     /// <summary>
@@ -654,22 +778,29 @@ internal static class CliRunner
     }
 
     /// <summary>
-    /// Persists the chosen model to the global settings store the GUI also uses, so later runs (CLI or
-    /// GUI) skip the first-run prompt. An empty alias means "track the recommended/auto pick".
+    /// Persists the finished AI model check to the global settings store the GUI also uses, so neither
+    /// surface re-offers the sweep: the one-time "qualified" flag, the recommended + effective model
+    /// aliases, and the downloaded flag. Optionally turns AI (Semantic) search off (when the user declined
+    /// or nothing qualified). The alias/flag fields are copied from the already-mutated
+    /// <paramref name="applied"/> settings so this mirrors <see cref="SemanticModelQualificationCoordinator.ApplyResult"/>.
     /// </summary>
-    private static void PersistSemanticModelChoice(string aliasToPersist)
+    private static void PersistQualificationState(AppSettings applied, bool disableSemantic)
     {
         try
         {
             var service = new SettingsService();
             var global = service.Load();
-            global.SemanticModelAlias = aliasToPersist ?? string.Empty;
-            global.SemanticModelDownloaded = true;
+            global.SemanticModelQualificationCompleted = applied.SemanticModelQualificationCompleted;
+            global.SemanticQualifiedModelAlias = applied.SemanticQualifiedModelAlias;
+            global.SemanticModelAlias = applied.SemanticModelAlias;
+            global.SemanticModelDownloaded = applied.SemanticModelDownloaded;
+            if (disableSemantic)
+                global.SemanticSearchEnabled = false;
             service.Save(global);
         }
         catch (Exception ex)
         {
-            WriteError($"warning: could not save the model choice: {ex.Message}");
+            WriteError($"warning: could not save the AI model check result: {ex.Message}");
         }
     }
 
@@ -1995,18 +2126,21 @@ internal static class CliRunner
                                           translates into the search flags below (directory, globs,
                                           dates, sizes, search mode) and then executes. Replaces the
                                           positional PATTERN; --directory becomes optional.
-                                          The first time you use it, Yagu offers a choice of local
-                                          models to download (recommended pick first). Decline and it
-                                          falls back to a literal Traditional search of your text.
+                                          The first time you use it, Yagu runs a one-time on-device
+                                          AI model check (the same check as the app): it tests the
+                                          models that fit this PC with a few sample searches and
+                                          adopts the fastest one that answers accurately. Decline it
+                                          and it falls back to a literal Traditional search.
                   --semantic-model <alias> Force a specific Foundry Local model, by family alias
                                           (e.g. phi-4-mini) or exact variant id (e.g.
                                           Phi-4-mini-instruct-cuda-gpu:5). Default: auto-pick the
                                           best small model for this machine's hardware, preferring
                                           the less-quantized GPU build for accuracy. Skips the
-                                          first-run model-download prompt.
-                  --accept-model-download Auto-download the recommended model without prompting (for
-                                          scripts / non-interactive consoles). Without it, a redirected
-                                          console falls back to Traditional search.
+                                          first-run model check.
+                  --accept-model-download Run the one-time AI model check and adopt the best model
+                                          without prompting (for scripts / non-interactive consoles).
+                                          Without it, a redirected console falls back to Traditional
+                                          search.
                   --explain               With --semantic-pattern, print the interpreted search
                                           parameters and exit WITHOUT searching (a dry-run).
                   --semantic-batch <file> Translate a file of natural-language queries (one per line;
