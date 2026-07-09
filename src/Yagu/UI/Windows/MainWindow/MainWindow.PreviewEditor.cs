@@ -1513,6 +1513,10 @@ public sealed partial class MainWindow
         PreviewScrollViewer.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         PreviewHeaderBar.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
 
+        // Any editor-visibility change dismisses the "added to preview" snackbar so it can never
+        // reappear stale the next time the editor is shown.
+        HidePreviewAddedToast();
+
         if (visible)
         {
             PreviewEmptyState.Visibility = Visibility.Collapsed;
@@ -1793,6 +1797,69 @@ public sealed partial class MainWindow
         _previewResult = null;
         UpdatePreviewEmptyState();
     }
+
+    // ----------------------------------------------------------------------------------------------
+    // "Added to preview" snackbar — feedback for previewing files from the left panel while the
+    // full-file editor is open (the preview surface is hidden behind the editor, so the user would
+    // otherwise get no confirmation). The View button leaves the editor and scrolls the preview list
+    // to the last-added drawer.
+    // ----------------------------------------------------------------------------------------------
+    private string? _previewAddedToastTargetFile;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewAddedToastTimer;
+
+    /// <summary>Shows the "added to preview" snackbar over the editor, remembering the drawer to jump
+    /// to. Only meaningful while the editor is visible; callers gate on that.</summary>
+    private void ShowPreviewAddedToast(string targetFile, int addedCount)
+    {
+        if (string.IsNullOrEmpty(targetFile))
+            return;
+
+        _previewAddedToastTargetFile = targetFile;
+        PreviewAddedToastText.Text = addedCount > 1
+            ? $"{addedCount} files added to preview"
+            : "Added to preview";
+        PreviewAddedToast.Visibility = Visibility.Visible;
+
+        if (_previewAddedToastTimer is null)
+        {
+            _previewAddedToastTimer = DispatcherQueue.CreateTimer();
+            _previewAddedToastTimer.Interval = TimeSpan.FromSeconds(7);
+            _previewAddedToastTimer.Tick += (_, _) => HidePreviewAddedToast();
+        }
+        _previewAddedToastTimer.Stop();
+        _previewAddedToastTimer.Start();
+    }
+
+    private void HidePreviewAddedToast()
+    {
+        _previewAddedToastTimer?.Stop();
+        if (PreviewAddedToast is not null)
+            PreviewAddedToast.Visibility = Visibility.Collapsed;
+    }
+
+    private async void OnPreviewAddedToastViewClick(object sender, RoutedEventArgs e)
+    {
+        string? target = _previewAddedToastTargetFile;
+        HidePreviewAddedToast();
+
+        // Leave the editor (respecting unsaved edits) so the preview surface becomes visible again.
+        if (PreviewEditor.Visibility == Visibility.Visible)
+        {
+            if (HasRealEditorChanges() && !await ConfirmDiscardPreviewEditAsync())
+                return; // user chose to keep editing — leave the editor open
+            ClosePreviewEditor();
+        }
+
+        // Scroll to the added drawer after the restored surface has laid out.
+        if (!string.IsNullOrEmpty(target))
+        {
+            DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                () => TryScrollToPreviewSection(target!));
+        }
+    }
+
+    private void OnPreviewAddedToastDismissClick(object sender, RoutedEventArgs e) => HidePreviewAddedToast();
 
     /// <summary>
     /// Returns true only if the editor text actually differs from the

@@ -1619,6 +1619,11 @@ public sealed partial class MainWindow
             {
                 await PrependPreviewSectionsForFilesAsync(byFile, byFile.Keys.First());
             }
+
+            // If the editor is open, the preview surface is hidden behind it — surface a snackbar so
+            // the user knows the file was added and can jump to it.
+            if (PreviewEditor.Visibility == Visibility.Visible)
+                ShowPreviewAddedToast(group.FilePath, byFile.Count);
         }
         finally { _suppressPreviewUpdate = false; }
     }
@@ -1685,6 +1690,17 @@ public sealed partial class MainWindow
                 TryScrollToPreviewSection(firstExistingFile);
             }
             // Multi-file with all already present — nothing to do.
+
+            // If the editor is open, the preview surface is hidden behind it — surface a snackbar so
+            // the user knows the files were added and can jump to the last-added drawer.
+            if (PreviewEditor.Visibility == Visibility.Visible)
+            {
+                string? toastTarget = newFiles.Count > 0
+                    ? newFiles.Keys.Last()
+                    : (firstExistingFile ?? byFile.Keys.LastOrDefault());
+                if (toastTarget is not null)
+                    ShowPreviewAddedToast(toastTarget, byFile.Count);
+            }
         }
         finally { _suppressPreviewUpdate = false; }
     }

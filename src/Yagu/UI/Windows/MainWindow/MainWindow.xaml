@@ -2279,6 +2279,45 @@
                                         <TextBlock Text="Saved" Foreground="White" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
                                     </StackPanel>
                                 </Border>
+
+                                <!-- "Added to preview" snackbar: shown when files are previewed from the
+                                     left panel while the editor is open (the preview surface is hidden behind
+                                     the editor). "View in preview" closes the editor and scrolls the preview
+                                     list to the last-added drawer. -->
+                                <Border x:Name="PreviewAddedToast"
+                                        Visibility="Collapsed"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Bottom"
+                                        Margin="0,0,0,24"
+                                        Padding="14,10"
+                                        CornerRadius="20"
+                                        Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        Canvas.ZIndex="20"
+                                        Translation="0,0,32">
+                                    <Border.Shadow>
+                                        <ThemeShadow />
+                                    </Border.Shadow>
+                                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                                        <FontIcon Glyph="&#xE7C3;" FontSize="14" Opacity="0.9" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="PreviewAddedToastText" Text="Added to preview"
+                                                   FontSize="13" VerticalAlignment="Center" />
+                                        <Button Click="OnPreviewAddedToastViewClick" Padding="10,4" CornerRadius="12"
+                                                ToolTipService.ToolTip="Close the editor and jump to the added file in the preview list">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <FontIcon Glyph="&#xE890;" FontSize="12" />
+                                                <TextBlock Text="View in preview" FontSize="12" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Click="OnPreviewAddedToastDismissClick" Width="28" Height="28"
+                                                MinWidth="0" MinHeight="0" Padding="0"
+                                                Background="Transparent" BorderThickness="0"
+                                                ToolTipService.ToolTip="Dismiss">
+                                            <FontIcon Glyph="&#xE711;" FontSize="10" />
+                                        </Button>
+                                    </StackPanel>
+                                </Border>
                             </Grid>
                         </Grid>
                     </Grid>
