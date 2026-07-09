@@ -19,6 +19,10 @@ public sealed class PreviewCoreRegressionTests
         Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "ScrollManager.cs"));
     private static readonly string EditorScrollOffsetSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "IScrollOffsetSource.cs"));
+    private static readonly string EditorDiagonalScrollSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "CoreTextControlBox.DiagonalScroll.cs"));
+    private static readonly string EditorCoreSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "CoreTextControlBox.xaml.cs"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
     private static readonly string HelpWindowSource = File.ReadAllText(
@@ -603,6 +607,33 @@ public sealed class PreviewCoreRegressionTests
         // The editor wheel handler funnels its vertical scroll through the same pixel seam.
         Assert.DoesNotContain("scrollManager.verticalScrollBar.Value", EditorPointerActionsSource);
         Assert.Contains("scrollManager.OffsetSource.VerticalOffset -= delta * scrollManager._VerticalScrollSensitivity;", EditorPointerActionsSource);
+    }
+
+    [Fact]
+    public void EditorDiagonalScroll_UsesTouchpadOnlyInteractionTrackerDrivingTheOffsetSource_AndIsTornDownOnUnload()
+    {
+        // Option B of PLANS/EDITOR_DIAGONAL_SCROLL_REWRITE_PLAN.md: a composition InteractionTracker on the
+        // selection canvas reads the raw 2-D precision-touchpad delta and drives the Phase-1 pixel seam.
+        AssertContainsInOrder(EditorDiagonalScrollSource,
+            "internal sealed partial class CoreTextControlBox : IInteractionTrackerOwner",
+            "InteractionTracker.CreateWithOwner(compositor, this)",
+            "_scrollInteractionSource = VisualInteractionSource.Create(visual);",
+            // CapableTouchpadOnly leaves the wheel + Ctrl/Shift-wheel to the existing PointerWheelAction.
+            "ManipulationRedirectionMode = VisualInteractionSourceRedirectionMode.CapableTouchpadOnly;",
+            // ValuesChanged writes the tracker position into the same offset source the ScrollBars back.
+            "public void ValuesChanged(InteractionTracker sender, InteractionTrackerValuesChangedArgs args)",
+            "src.HorizontalOffset = args.Position.X;",
+            "src.VerticalOffset = args.Position.Y;",
+            "canvasUpdateManager.UpdateAll();");
+
+        // The tracker is wired on Loaded and MUST be torn down on Unload (no leaked 50 ms timer / composition objects).
+        Assert.Contains("Loaded += (_, _) => SetupDiagonalScroll();", EditorCoreSource);
+        Assert.Contains("private void TeardownDiagonalScroll()", EditorDiagonalScrollSource);
+        Assert.Contains("_scrollTrackerTimer.Stop();", EditorDiagonalScrollSource);
+        Assert.Contains("_scrollTracker?.Dispose();", EditorDiagonalScrollSource);
+        int stop = EditorCoreSource.IndexOf("caretBlinkManager.Stop();", StringComparison.Ordinal);
+        int teardown = EditorCoreSource.IndexOf("TeardownDiagonalScroll();", StringComparison.Ordinal);
+        Assert.True(stop >= 0 && teardown > stop, "Unload() must call TeardownDiagonalScroll() after caretBlinkManager.Stop().");
     }
 
     [Fact]

@@ -149,6 +149,10 @@ internal sealed partial class CoreTextControlBox : UserControl
         invisibleCharactersRenderer.Init(designHelper, scrollManager, zoomManager, textLayoutManager, whitespaceCharactersManager);
         linkHighlightManager.Init(textRenderer, this, eventsManager);
         linkRenderer.Init(textRenderer, linkHighlightManager);
+
+        // Option B diagonal (two-axis) precision-touchpad panning: wire the composition InteractionTracker
+        // once the control (and its selection canvas' visual) is in the tree. See CoreTextControlBox.DiagonalScroll.cs.
+        Loaded += (_, _) => SetupDiagonalScroll();
     }
 
     public void InitialiseOnStart()
@@ -1035,6 +1039,7 @@ internal sealed partial class CoreTextControlBox : UserControl
         }
 
         caretBlinkManager.Stop();
+        TeardownDiagonalScroll();
 
         textRenderer.CheckDispose();
         lineNumberRenderer.CheckDispose();

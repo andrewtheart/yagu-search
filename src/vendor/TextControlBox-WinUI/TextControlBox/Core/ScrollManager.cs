@@ -17,8 +17,13 @@ internal class ScrollManager
     public int DefaultVerticalScrollSensitivity = 4;
     public float OldHorizontalScrollValue = 0;
 
-    public double VerticalScroll { get => verticalScrollBar.Value; set { verticalScrollBar.Value = value < 0 ? 0 : value; canvasHelper.UpdateAll(); } }
-    public double HorizontalScroll { get => horizontalScrollBar.Value; set { horizontalScrollBar.Value = coreTextbox?.WordWrap == true ? 0 : value < 0 ? 0 : value; canvasHelper.UpdateAll(); } }
+    // The single pixel-based scroll-position seam (see IScrollOffsetSource / PLANS/EDITOR_DIAGONAL_SCROLL_REWRITE_PLAN.md).
+    // Phase 1 backs it with the two ScrollBar primitives; VerticalScroll/HorizontalScroll below keep their
+    // legacy scrollbar-unit / pixel semantics for the public API but store through the pixel offset source.
+    public IScrollOffsetSource OffsetSource { get; private set; }
+
+    public double VerticalScroll { get => OffsetSource.VerticalOffset / DefaultVerticalScrollSensitivity; set { OffsetSource.VerticalOffset = (value < 0 ? 0 : value) * DefaultVerticalScrollSensitivity; canvasHelper.UpdateAll(); } }
+    public double HorizontalScroll { get => OffsetSource.HorizontalOffset; set { OffsetSource.HorizontalOffset = coreTextbox?.WordWrap == true ? 0 : value < 0 ? 0 : value; canvasHelper.UpdateAll(); } }
 
     public ScrollBar verticalScrollBar;
     public ScrollBar horizontalScrollBar;
@@ -40,6 +45,7 @@ internal class ScrollManager
         this.textManager = textManager;
         this.coreTextbox = coreTextbox;
         this.zoomManager = zoomManager;
+        OffsetSource = new ScrollBarOffsetSource(this.verticalScrollBar, this.horizontalScrollBar, DefaultVerticalScrollSensitivity);
         verticalScrollBar.Loaded += VerticalScrollbar_Loaded;
         verticalScrollBar.Scroll += VerticalScrollBar_Scroll;
         horizontalScrollBar.Scroll += HorizontalScrollBar_Scroll;
@@ -53,7 +59,7 @@ internal class ScrollManager
     internal void VerticalScrollBar_Scroll(object sender, ScrollEventArgs e)
     {
         //only update when a line was scrolled
-        int currentScrollRow = (int)(verticalScrollBar.Value / Math.Max(1, textRenderer.SingleLineHeight) * DefaultVerticalScrollSensitivity);
+        int currentScrollRow = (int)(OffsetSource.VerticalOffset / Math.Max(1, textRenderer.SingleLineHeight));
         int renderedStartRow = coreTextbox.WordWrap ? textRenderer.StartVisualRow : textRenderer.NumberOfStartLine;
         if (currentScrollRow != renderedStartRow)
         {
@@ -80,13 +86,13 @@ internal class ScrollManager
 
     public void ScrollOneLineUp(bool update = true)
     {
-        verticalScrollBar.Value -= textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+        OffsetSource.VerticalOffset -= textRenderer.SingleLineHeight;
         if(update)
             canvasHelper.UpdateAll();
     }
     public void ScrollOneLineDown(bool update = true)
     {
-        verticalScrollBar.Value += textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+        OffsetSource.VerticalOffset += textRenderer.SingleLineHeight;
         if(update)
             canvasHelper.UpdateAll();
     }
@@ -100,11 +106,11 @@ internal class ScrollManager
             int lineRows = textRenderer.GetWrappedRowCount(line);
             int visibleRows = textRenderer.GetVisibleVisualRowCount(coreTextbox.canvasText);
             int targetRow = Math.Max(0, lineStartRow - Math.Max(0, (visibleRows - lineRows) / 2));
-            verticalScrollBar.Value = targetRow * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset = targetRow * textRenderer.SingleLineHeight;
         }
         else
         {
-            verticalScrollBar.Value = (line - textRenderer.NumberOfRenderedLines / 2) * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset = (line - textRenderer.NumberOfRenderedLines / 2) * textRenderer.SingleLineHeight;
         }
         
         if(update)
@@ -119,12 +125,12 @@ internal class ScrollManager
             int cursorVisualRow = textRenderer.GetVisualRowForCursorPosition(coreTextbox.canvasText, cursorManager.currentCursorPosition);
             int visibleRows = textRenderer.GetVisibleVisualRowCount(coreTextbox.canvasText);
             int targetRow = Math.Max(0, cursorVisualRow - visibleRows / 2);
-            verticalScrollBar.Value = targetRow * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset = targetRow * textRenderer.SingleLineHeight;
         }
         else
         {
             int targetLine = Math.Max(0, cursorManager.LineNumber - textRenderer.NumberOfRenderedLines / 2);
-            verticalScrollBar.Value = targetLine * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset = targetLine * textRenderer.SingleLineHeight;
         }
 
         if (update)
@@ -137,11 +143,11 @@ internal class ScrollManager
         {
             textRenderer.EnsureWrapMetrics(coreTextbox.canvasText);
             int targetRow = Math.Max(0, textRenderer.GetLineVisualStartRow(cursorManager.LineNumber) - 1);
-            verticalScrollBar.Value = targetRow * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset = targetRow * textRenderer.SingleLineHeight;
         }
         else
         {
-            verticalScrollBar.Value = (cursorManager.LineNumber - 1) * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset = (cursorManager.LineNumber - 1) * textRenderer.SingleLineHeight;
         }
         if(update)
             canvasHelper.UpdateAll();
@@ -154,11 +160,11 @@ internal class ScrollManager
             int cursorRow = textRenderer.GetVisualRowForCursorPosition(coreTextbox.canvasText, cursorManager.currentCursorPosition);
             int visibleRows = textRenderer.GetVisibleVisualRowCount(coreTextbox.canvasText);
             int targetRow = Math.Max(0, cursorRow - visibleRows + 1);
-            verticalScrollBar.Value = targetRow * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset = targetRow * textRenderer.SingleLineHeight;
         }
         else
         {
-            verticalScrollBar.Value = (cursorManager.LineNumber - textRenderer.NumberOfRenderedLines + 1) * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset = (cursorManager.LineNumber - textRenderer.NumberOfRenderedLines + 1) * textRenderer.SingleLineHeight;
         }
         if(update)
             canvasHelper.UpdateAll();
@@ -170,7 +176,7 @@ internal class ScrollManager
         {
             int visibleRows = textRenderer.GetVisibleVisualRowCount(coreTextbox.canvasText);
             textRenderer.MoveCursorByVisualRows(coreTextbox.canvasText, cursorManager.currentCursorPosition, -visibleRows);
-            verticalScrollBar.Value -= visibleRows * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset -= visibleRows * textRenderer.SingleLineHeight;
         }
         else
         {
@@ -178,7 +184,7 @@ internal class ScrollManager
             if (cursorManager.LineNumber < 0)
                 cursorManager.LineNumber = 0;
 
-            verticalScrollBar.Value -= textRenderer.NumberOfRenderedLines * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset -= textRenderer.NumberOfRenderedLines * textRenderer.SingleLineHeight;
         }
         canvasHelper.UpdateAll();
     }
@@ -190,14 +196,14 @@ internal class ScrollManager
         {
             int visibleRows = textRenderer.GetVisibleVisualRowCount(coreTextbox.canvasText);
             textRenderer.MoveCursorByVisualRows(coreTextbox.canvasText, cursorManager.currentCursorPosition, visibleRows);
-            verticalScrollBar.Value += visibleRows * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset += visibleRows * textRenderer.SingleLineHeight;
         }
         else
         {
             cursorManager.LineNumber += textRenderer.NumberOfRenderedLines;
             if (cursorManager.LineNumber > textManager.LinesCount - 1)
                 cursorManager.LineNumber = textManager.LinesCount - 1;
-            verticalScrollBar.Value += textRenderer.NumberOfRenderedLines * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+            OffsetSource.VerticalOffset += textRenderer.NumberOfRenderedLines * textRenderer.SingleLineHeight;
         }
         canvasHelper.UpdateAll();
     }
@@ -213,15 +219,15 @@ internal class ScrollManager
 
             if (cursorVisualRow >= startVisualRow + visibleRows)
             {
-                verticalScrollBar.Value =
+                OffsetSource.VerticalOffset =
                     (cursorVisualRow - visibleRows + 2) *
-                    textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+                    textRenderer.SingleLineHeight;
             }
             else if (cursorVisualRow < startVisualRow)
             {
-                verticalScrollBar.Value =
+                OffsetSource.VerticalOffset =
                     cursorVisualRow *
-                    textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+                    textRenderer.SingleLineHeight;
             }
 
             if (update)
@@ -231,15 +237,15 @@ internal class ScrollManager
 
         if (textRenderer.NumberOfStartLine + textRenderer.NumberOfRenderedLines - 1 <= cursorManager.LineNumber)
         {
-            verticalScrollBar.Value =
+            OffsetSource.VerticalOffset =
                 (cursorManager.LineNumber - textRenderer.NumberOfRenderedLines + 2) *
-                textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+                textRenderer.SingleLineHeight;
         }
         else if (textRenderer.NumberOfStartLine > cursorManager.LineNumber)
         {
-            verticalScrollBar.Value =
+            OffsetSource.VerticalOffset =
                 cursorManager.LineNumber *
-                textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+                textRenderer.SingleLineHeight;
         }
 
         if (update)
@@ -250,8 +256,8 @@ internal class ScrollManager
     {
         if (coreTextbox.WordWrap)
         {
-            if (horizontalScrollBar.Value != 0)
-                horizontalScrollBar.Value = 0;
+            if (OffsetSource.HorizontalOffset != 0)
+                OffsetSource.HorizontalOffset = 0;
             OldHorizontalScrollValue = 0;
             return false;
         }
@@ -283,19 +289,19 @@ internal class ScrollManager
         if (curPosInLine == OldHorizontalScrollValue)
             return false;
 
-        double visibleStart = horizontalScrollBar.Value;
+        double visibleStart = OffsetSource.HorizontalOffset;
         double visibleEnd = visibleStart + canvasText.ActualWidth;
 
         bool changed = false;
         if (curPosInLine < visibleStart + 3)
         {
             changed = true;
-            horizontalScrollBar.Value = Math.Max(curPosInLine - 3, horizontalScrollBar.Minimum);
+            OffsetSource.HorizontalOffset = Math.Max(curPosInLine - 3, horizontalScrollBar.Minimum);
         }
         else if (curPosInLine > visibleEnd)
         {
             changed = true;
-            horizontalScrollBar.Value = Math.Min(curPosInLine - canvasText.ActualWidth + 5, horizontalScrollBar.Maximum + 5);
+            OffsetSource.HorizontalOffset = Math.Min(curPosInLine - canvasText.ActualWidth + 5, horizontalScrollBar.Maximum + 5);
         }
 
         OldHorizontalScrollValue = curPosInLine;
@@ -312,8 +318,8 @@ internal class ScrollManager
         {
             horizontalScrollBar.ViewportSize = canvasText.ActualWidth;
             horizontalScrollBar.Maximum = 0;
-            if (horizontalScrollBar.Value != 0)
-                horizontalScrollBar.Value = 0;
+            if (OffsetSource.HorizontalOffset != 0)
+                OffsetSource.HorizontalOffset = 0;
             return;
         }
 

@@ -6,6 +6,10 @@ DLL for the hot content-scanning path and optional voidtools **Everything** inte
 discovery. See [README.md](../README.md) for the feature tour and build prerequisites, and
 [HELP.md](../HELP.md) for user-facing behavior. Windows-only.
 
+## Guiding principles
+
+- **Retain feature parity between the UI and CLI.** The GUI and CLI are the same binary, and every user-facing search/behavior capability should be reachable from both. When you add, change, or remove a feature in one surface, make the equivalent change in the other (or explain why it's intentionally surface-specific) — a new Advanced Option needs a matching CLI flag, and a new CLI flag needs a matching UI affordance. Keep `HELP.md` and the `--help` output in sync when parity changes (see the CLI Documentation Rules and the cli-command-generator instruction).
+
 ## Projects (Yagu.sln)
 
 - **Yagu** — the app. Same binary is both the WinUI 3 GUI and the CLI; [Program.cs](../Yagu/Program.cs) / [App.xaml.cs](../Yagu/App.xaml.cs) dispatch to GUI vs [CliRunner.cs](../Yagu/CliRunner.cs) (CLI mode via `--cli`).

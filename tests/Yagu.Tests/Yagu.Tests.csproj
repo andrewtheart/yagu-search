@@ -65,6 +65,7 @@
     <Compile Include="..\..\src\Yagu\Helpers\MultilineTextShadow.cs" Link="Source\Helpers\MultilineTextShadow.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\MultilinePreviewSpan.cs" Link="Source\Helpers\MultilinePreviewSpan.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\PreviewZoomMath.cs" Link="Source\Helpers\PreviewZoomMath.cs" />
+    <Compile Include="..\..\src\vendor\TextControlBox-WinUI\TextControlBox\Core\ScrollOffsetMath.cs" Link="Source\Vendor\ScrollOffsetMath.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SyntaxHighlighter.cs" Link="Source\Helpers\SyntaxHighlighter.cs" />
     <Compile Include="..\..\src\Yagu\Services\FileLister.cs" Link="Source\Services\FileLister.cs" />
     <Compile Include="..\..\src\Yagu\Services\EverythingAssetPaths.cs" Link="Source\Services\EverythingAssetPaths.cs" />
