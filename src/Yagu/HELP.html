@@ -1265,6 +1265,14 @@ backups if one already exists.</td>
 writes the file.</td>
 </tr>
 <tr>
+<td>Pop out</td>
+<td>Detach the editor into its own independent, resizable window (drag
+it to a second monitor and keep editing). Also available on each preview
+drawer’s header — pop out a read-only preview, then click <strong>Edit
+file</strong> to edit it in that same window. Limited to files up to the
+“Preview editor max pop-out size” setting (default 100 MB).</td>
+</tr>
+<tr>
 <td>Large file chunking</td>
 <td>Files over ~10 MB load in chunks with a “Load More” button.</td>
 </tr>
@@ -1903,6 +1911,12 @@ me again” checkbox sets this automatically.</td>
 <tr>
 <td>Preview editor max line length</td>
 <td>Single-line character limit (default: 1 million).</td>
+</tr>
+<tr>
+<td>Preview editor max pop-out size (MB)</td>
+<td>Largest file that can be popped out into its own editor/preview
+window. Popping out loads the whole file (not chunked), so very large
+values can be slow to open (default: 100 MB).</td>
 </tr>
 </tbody>
 </table>

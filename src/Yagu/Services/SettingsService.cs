@@ -486,6 +486,13 @@ public sealed class AppSettings
     public int PreviewEditorMaxTextLength { get; set; } = 20_000_000;
     /// <summary>Built-in editor: maximum single-line length in characters. Files with a line longer than this are blocked.</summary>
     public int PreviewEditorMaxLineLength { get; set; } = 1_000_000;
+    /// <summary>Pop-out editor/preview window: maximum file size in MB that can be popped out into its own
+    /// window. Popping out loads the WHOLE file (not chunked), so this guards against loading an
+    /// unreasonably large file. Files above this are blocked from pop-out.</summary>
+    public int PreviewEditorPopOutMaxSizeMB { get; set; } = 100;
+    /// <summary>How multiple pop-out editor/preview windows auto-arrange on screen.
+    /// 0=Grid, 1=Columns, 2=Rows, 3=Cascade, 4=Manual (no auto-arrange).</summary>
+    public int PreviewEditorPopOutArrangementIndex { get; set; }
     /// <summary>Content-search file size ceiling in MB. Files larger than this are skipped when no explicit max-size filter is set. 0 = no ceiling.</summary>
     public int ContentSearchFileSizeMB { get; set; } = 100;
     /// <summary>Absolute ceiling for max results regardless of user settings. Must be > 0.</summary>

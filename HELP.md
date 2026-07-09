@@ -337,6 +337,7 @@ Click the **Edit** (pencil) button in the preview toolbar to enter editor mode.
 | Back | Return to preview mode (prompts if unsaved changes exist). |
 | Backup on save | Automatically creates `{filename}.yagubak`. Numbered backups if one already exists. |
 | Saved confirmation | Shows a brief Saved confirmation after the editor successfully writes the file. |
+| Pop out | Detach the editor into its own independent, resizable window (drag it to a second monitor and keep editing). Also available on each preview drawer's header — pop out a read-only preview, then click **Edit file** to edit it in that same window. Limited to files up to the "Preview editor max pop-out size" setting (default 100 MB). |
 | Large file chunking | Files over ~10 MB load in chunks with a "Load More" button. |
 | Max file size | Controlled by the "Preview editor max size" setting (default 32 MB). |
 | Forced wrap | Lines longer than 50,000 characters are force-wrapped for display. |
@@ -506,6 +507,7 @@ Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BM
 | Preview editor max size (MB) | Maximum file size the built-in editor loads (default: 32 MB). |
 | Preview editor max text length | Character limit for the built-in editor (default: 20 million). |
 | Preview editor max line length | Single-line character limit (default: 1 million). |
+| Preview editor max pop-out size (MB) | Largest file that can be popped out into its own editor/preview window. Popping out loads the whole file (not chunked), so very large values can be slow to open (default: 100 MB). |
 
 ### Window Tab
 

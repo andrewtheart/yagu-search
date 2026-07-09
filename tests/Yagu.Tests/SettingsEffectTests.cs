@@ -813,6 +813,8 @@ public sealed class SettingsEffectTests : IDisposable
             PreviewEditorMaxSizeMB = 64,
             PreviewEditorMaxTextLength = 50_000_000,
             PreviewEditorMaxLineLength = 5_000_000,
+            PreviewEditorPopOutMaxSizeMB = 250,
+            PreviewEditorPopOutArrangementIndex = 2,
             PreviewShowMoreEllipsisColor = "#FF112233",
             PreviewShowMoreEllipsisFontSize = 21,
         };
@@ -854,6 +856,8 @@ public sealed class SettingsEffectTests : IDisposable
         Assert.Equal(original.PreviewEditorMaxSizeMB, loaded.PreviewEditorMaxSizeMB);
         Assert.Equal(original.PreviewEditorMaxTextLength, loaded.PreviewEditorMaxTextLength);
         Assert.Equal(original.PreviewEditorMaxLineLength, loaded.PreviewEditorMaxLineLength);
+        Assert.Equal(original.PreviewEditorPopOutMaxSizeMB, loaded.PreviewEditorPopOutMaxSizeMB);
+        Assert.Equal(original.PreviewEditorPopOutArrangementIndex, loaded.PreviewEditorPopOutArrangementIndex);
         Assert.Equal(original.PreviewShowMoreEllipsisColor, loaded.PreviewShowMoreEllipsisColor);
         Assert.Equal(original.PreviewShowMoreEllipsisFontSize, loaded.PreviewShowMoreEllipsisFontSize);
     }

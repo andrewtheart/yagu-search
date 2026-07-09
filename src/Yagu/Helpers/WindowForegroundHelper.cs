@@ -186,6 +186,30 @@ internal static class WindowForegroundHelper
         return (extendedStyle & WsExTopmost) != 0;
     }
 
+    /// <summary>
+    /// Returns the work area (excludes the taskbar) of the monitor nearest <paramref name="hwnd"/>,
+    /// in physical pixels. Falls back to the primary monitor when <paramref name="hwnd"/> is 0.
+    /// </summary>
+    public static bool TryGetWorkArea(IntPtr hwnd, out int x, out int y, out int width, out int height)
+    {
+        x = y = width = height = 0;
+        const uint monitorDefaultToNearest = 2;
+        IntPtr monitor = hwnd == IntPtr.Zero
+            ? MonitorFromPoint(new POINT { X = 0, Y = 0 }, monitorDefaultToNearest)
+            : MonitorFromWindow(hwnd, monitorDefaultToNearest);
+
+        var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(monitor, ref info))
+            return false;
+
+        var wa = info.rcWork;
+        x = wa.Left;
+        y = wa.Top;
+        width = wa.Right - wa.Left;
+        height = wa.Bottom - wa.Top;
+        return width > 0 && height > 0;
+    }
+
     private static IntPtr SetWindowLongPtr(IntPtr hWnd, int index, IntPtr value)
         => IntPtr.Size == 8
             ? SetWindowLongPtr64(hWnd, index, value)

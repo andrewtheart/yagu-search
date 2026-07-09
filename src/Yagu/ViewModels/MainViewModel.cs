@@ -387,6 +387,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         PreviewEditorMaxSizeMB = _settings.PreviewEditorMaxSizeMB;
         PreviewEditorMaxTextLength = _settings.PreviewEditorMaxTextLength;
         PreviewEditorMaxLineLength = _settings.PreviewEditorMaxLineLength;
+        PreviewEditorPopOutMaxSizeMB = _settings.PreviewEditorPopOutMaxSizeMB > 0 ? _settings.PreviewEditorPopOutMaxSizeMB : 100;
+        PreviewEditorPopOutArrangementIndex = Math.Clamp(_settings.PreviewEditorPopOutArrangementIndex, 0, 4);
         ContentSearchFileSizeMB = _settings.ContentSearchFileSizeMB;
         MaxResultsCeiling = _settings.MaxResultsCeiling > 0 ? _settings.MaxResultsCeiling : 50_000;
         MmfConcurrencyLimit = _settings.MmfConcurrencyLimit;
@@ -1239,6 +1241,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial int PreviewEditorMaxSizeMB { get; set; } = 32;
     [ObservableProperty] public partial int PreviewEditorMaxTextLength { get; set; } = 20_000_000;
     [ObservableProperty] public partial int PreviewEditorMaxLineLength { get; set; } = 1_000_000;
+    [ObservableProperty] public partial int PreviewEditorPopOutMaxSizeMB { get; set; } = 100;
+    [ObservableProperty] public partial int PreviewEditorPopOutArrangementIndex { get; set; }
     [ObservableProperty] public partial int ContentSearchFileSizeMB { get; set; } = 100;
     [ObservableProperty] public partial int MaxResultsCeiling { get; set; } = 50_000;
     [ObservableProperty] public partial int MmfConcurrencyLimit { get; set; }
@@ -4780,6 +4784,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.PreviewEditorMaxSizeMB = PreviewEditorMaxSizeMB;
         _settings.PreviewEditorMaxTextLength = PreviewEditorMaxTextLength;
         _settings.PreviewEditorMaxLineLength = PreviewEditorMaxLineLength;
+        _settings.PreviewEditorPopOutMaxSizeMB = PreviewEditorPopOutMaxSizeMB;
+        _settings.PreviewEditorPopOutArrangementIndex = PreviewEditorPopOutArrangementIndex;
         _settings.ContentSearchFileSizeMB = ContentSearchFileSizeMB;
         _settings.MaxResultsCeiling = MaxResultsCeiling > 0 ? MaxResultsCeiling : 50_000;
         _settings.MmfConcurrencyLimit = MmfConcurrencyLimit;

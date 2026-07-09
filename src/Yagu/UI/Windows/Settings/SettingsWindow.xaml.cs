@@ -3379,6 +3379,28 @@ public sealed partial class SettingsWindow : Window
             edMaxLine.ValueChanged += (_, args) => _viewModel.PreviewEditorMaxLineLength = (int)args.NewValue;
             fileLimitGroup.Children.Add(edMaxLine);
             fileLimitGroup.Children.Add(new TextBlock { Text = "Single-line length is checked separately because minified or generated files can be small enough to load but expensive to lay out.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            fileLimitGroup.Children.Add(new TextBlock { Text = "Max pop-out size (MB):", Margin = new Thickness(0, 8, 0, 0) });
+            var edPopOutSize = new NumberBox { Value = _viewModel.PreviewEditorPopOutMaxSizeMB, Minimum = 1, Maximum = 2048 };
+            edPopOutSize.ValueChanged += (_, args) => _viewModel.PreviewEditorPopOutMaxSizeMB = (int)Math.Clamp(args.NewValue, 1, 2048);
+            fileLimitGroup.Children.Add(edPopOutSize);
+            fileLimitGroup.Children.Add(new TextBlock { Text = "Largest file that can be \u201cpopped out\u201d into its own editor/preview window. Popping out loads the whole file (not chunked), so very large values can be slow to open. Default 100 MB.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            fileLimitGroup.Children.Add(new TextBlock { Text = "Multiple pop-out windows arrange as:", Margin = new Thickness(0, 8, 0, 0) });
+            var popOutArrange = new ComboBox { MinWidth = 220 };
+            popOutArrange.Items.Add(new ComboBoxItem { Content = "Grid (auto)" });
+            popOutArrange.Items.Add(new ComboBoxItem { Content = "Columns (side by side)" });
+            popOutArrange.Items.Add(new ComboBoxItem { Content = "Rows (stacked)" });
+            popOutArrange.Items.Add(new ComboBoxItem { Content = "Cascade (overlapping)" });
+            popOutArrange.Items.Add(new ComboBoxItem { Content = "Manual (I place them)" });
+            popOutArrange.SelectedIndex = Math.Clamp(_viewModel.PreviewEditorPopOutArrangementIndex, 0, 4);
+            popOutArrange.SelectionChanged += (_, _) =>
+            {
+                if (popOutArrange.SelectedIndex >= 0)
+                    _viewModel.PreviewEditorPopOutArrangementIndex = popOutArrange.SelectedIndex;
+            };
+            fileLimitGroup.Children.Add(popOutArrange);
+            fileLimitGroup.Children.Add(new TextBlock { Text = "When two or more editor/preview windows are open, tiling modes auto-fit them into the screen (a short final row stretches to fill the width). Cascade offsets them; Manual leaves them where you put them.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── Window ──

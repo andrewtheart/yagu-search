@@ -59,6 +59,8 @@
     <Compile Include="..\..\src\Yagu\Helpers\SemanticQueryHeuristicDetector.cs" Link="Source\Helpers\SemanticQueryHeuristicDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SearchPatternClassifier.cs" Link="Source\Helpers\SearchPatternClassifier.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\EditorSyntaxHighlightingResolver.cs" Link="Source\Helpers\EditorSyntaxHighlightingResolver.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\EditorEncodingHelper.cs" Link="Source\Helpers\EditorEncodingHelper.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\PopOutTileLayout.cs" Link="Source\Helpers\PopOutTileLayout.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\EncodingDetector.cs" Link="Source\Helpers\EncodingDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\LineTruncator.cs" Link="Source\Helpers\LineTruncator.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\MatchNavMath.cs" Link="Source\Helpers\MatchNavMath.cs" />

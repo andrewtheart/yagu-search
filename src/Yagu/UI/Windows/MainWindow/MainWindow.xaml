@@ -2227,6 +2227,11 @@
                                                 ToolTipService.ToolTip="Find or replace text in the editor">
                                             <FontIcon Glyph="&#xE721;" FontSize="12" />
                                         </Button>
+                                        <Button x:Name="EditorPopOutButton" Click="OnPopOutPreviewEditor"
+                                                Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                                ToolTipService.ToolTip="Pop the editor out into its own window">
+                                            <FontIcon Glyph="&#xE8A7;" FontSize="12" />
+                                        </Button>
                                     </StackPanel>
                                     <StackPanel x:Name="EditorButtonsPanel" Grid.Column="3" Orientation="Horizontal" Spacing="6"
                                                 VerticalAlignment="Center" Visibility="Collapsed">

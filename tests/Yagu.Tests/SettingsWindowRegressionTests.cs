@@ -1520,6 +1520,49 @@ public sealed class SettingsWindowRegressionTests
             MainWindowWindowSource);
     }
 
+    [Fact]
+    public void SettingsWindow_ExposesPopOutSizeAndArrangementControls_WiredToViewModel()
+    {
+        // Pop-out size NumberBox is wired to the view-model (clamped 1..2048).
+        Assert.Contains("new NumberBox { Value = _viewModel.PreviewEditorPopOutMaxSizeMB, Minimum = 1, Maximum = 2048 }", SettingsWindowSource);
+        Assert.Contains("_viewModel.PreviewEditorPopOutMaxSizeMB = (int)Math.Clamp(args.NewValue, 1, 2048);", SettingsWindowSource);
+
+        // Arrangement ComboBox offers the five modes (order MUST match PopOutTileLayout.FromIndex) and
+        // is two-way wired to the persisted index.
+        AssertContainsInOrder(SettingsWindowSource,
+            "Multiple pop-out windows arrange as:",
+            "Content = \"Grid (auto)\"",
+            "Content = \"Columns (side by side)\"",
+            "Content = \"Rows (stacked)\"",
+            "Content = \"Cascade (overlapping)\"",
+            "Content = \"Manual (I place them)\"",
+            "popOutArrange.SelectedIndex = Math.Clamp(_viewModel.PreviewEditorPopOutArrangementIndex, 0, 4);",
+            "_viewModel.PreviewEditorPopOutArrangementIndex = popOutArrange.SelectedIndex;");
+    }
+
+    [Fact]
+    public void MainViewModel_LoadsAndPersistsPopOutSettings()
+    {
+        // Both new pop-out settings load (with sane fallbacks) and persist back to AppSettings.
+        Assert.Contains("PreviewEditorPopOutMaxSizeMB = _settings.PreviewEditorPopOutMaxSizeMB > 0 ? _settings.PreviewEditorPopOutMaxSizeMB : 100;", MainViewModelSource);
+        Assert.Contains("PreviewEditorPopOutArrangementIndex = Math.Clamp(_settings.PreviewEditorPopOutArrangementIndex, 0, 4);", MainViewModelSource);
+        Assert.Contains("_settings.PreviewEditorPopOutMaxSizeMB = PreviewEditorPopOutMaxSizeMB;", MainViewModelSource);
+        Assert.Contains("_settings.PreviewEditorPopOutArrangementIndex = PreviewEditorPopOutArrangementIndex;", MainViewModelSource);
+    }
+
+    [Fact]
+    public void WindowForegroundHelper_ExposesWorkAreaHelperForTiling()
+    {
+        // The auto-tiler resolves the owner monitor's work area through this public helper.
+        Assert.Contains("public static bool TryGetWorkArea(IntPtr hwnd, out int x, out int y, out int width, out int height)", WindowForegroundHelperSource);
+        string method = ExtractMethod(WindowForegroundHelperSource, "TryGetWorkArea", window: 1200);
+        AssertContainsInOrder(method,
+            "MonitorFromWindow(hwnd, monitorDefaultToNearest)",
+            "GetMonitorInfo(monitor, ref info)",
+            "width = wa.Right - wa.Left;",
+            "return width > 0 && height > 0;");
+    }
+
     // ── Helpers ──
 
     private static string ExtractMethod(string source, string methodName, int window = 4000)

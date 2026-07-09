@@ -2445,6 +2445,19 @@ public sealed partial class MainWindow
         // disabled and non-clickable, mirroring the single-file toolbar (FullFileButton.IsEnabled).
         bool isImageMatch = IsImagePreviewPath(filePath);
 
+        // Pop out the whole drawer into its own independent window (read-only preview with an
+        // "Edit file" button that unlocks editing in the same window). Text files only.
+        var popOutBtn = new Button
+        {
+            Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
+            Content = new FontIcon { Glyph = "\uE8A7", FontSize = 12 },
+            IsEnabled = !isImageMatch,
+        };
+        ToolTipService.SetToolTip(popOutBtn, isImageMatch ? "Pop out (not available for images)" : "Pop out this preview into its own window");
+        var popOutResults = sectionResults;
+        popOutBtn.Click += async (_, _) => await PopOutPreviewDrawerAsync(path, popOutResults);
+        buttonPanel.Children.Add(popOutBtn);
+
         if (sectionBlock is not null && sectionResults is not null)
         {
             var fullFileBtn = new Button
@@ -2476,7 +2489,7 @@ public sealed partial class MainWindow
         var openBtn = new Button
         {
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
-            Content = new FontIcon { Glyph = "\uE8A7", FontSize = 12 },
+            Content = new FontIcon { Glyph = "\uE7AC", FontSize = 12 },
         };
         ToolTipService.SetToolTip(openBtn, "Open with default application");
         openBtn.Click += (_, _) =>

@@ -13,6 +13,8 @@ public sealed class PreviewCoreRegressionTests
     private static readonly string MainWindowSource = ReadMainWindowSources();
     private static readonly string PreviewEditorSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewEditor.cs"));
+    private static readonly string PreviewEditorWindowSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "PreviewEditor", "PreviewEditorWindow.cs"));
     private static readonly string EditorPointerActionsSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "PointerActionsManager.cs"));
     private static readonly string EditorScrollManagerSource = File.ReadAllText(
@@ -3821,6 +3823,163 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(currentLine,
             "IsHorizontallyVirtualized && !IsWordWrapEnabled && HorizontalSliceLength > 0",
             "Math.Min(HorizontalSliceStart, lineText.Length)");
+    }
+
+    [Fact]
+    public void PopOutEditor_TransfersStateToIndependentWindowAndRestoresPreview()
+    {
+        // The main editor toolbar exposes a pop-out button wired to OnPopOutPreviewEditor.
+        string popOutButton = ExtractXamlWindow("x:Name=\"EditorPopOutButton\"", 320);
+        Assert.Contains("Click=\"OnPopOutPreviewEditor\"", popOutButton);
+
+        string handler = ExtractMethodWindow(PreviewEditorSource, "OnPopOutPreviewEditor", window: 4000);
+        // Pop-out is gated by the configurable size limit; over-limit files show a message. A
+        // fully-loaded file TRANSFERS its current state; a chunked (partial-load) file is RELOADED in
+        // full so saving can't truncate it. Afterwards the in-pane editor closes and the read-only
+        // preview surface (and its match navigation) is restored.
+        AssertContainsInOrder(handler,
+            "long limitBytes = PreviewEditorPopOutMaxByteLength;",
+            "if (fileSize > limitBytes)",
+            "pop-out limit",
+            "if (_previewEditorChunked)",
+            "context = await BuildReloadedPreviewEditorWindowContextAsync(_previewEditorPath, limitBytes);",
+            "context = BuildPreviewEditorWindowContext();",
+            "PreviewEditorWindow.Open(context);",
+            "ClosePreviewEditor();",
+            "RestorePreviewSurfaceAfterEditor();");
+
+        // The limit is driven by the configurable setting (default 100 MB).
+        Assert.Contains("PreviewEditorPopOutMaxByteLength => (long)Math.Max(1, ViewModel.PreviewEditorPopOutMaxSizeMB) * 1024 * 1024", PreviewEditorSource);
+        Assert.Contains("public int PreviewEditorPopOutMaxSizeMB { get; set; } = 100;", File.ReadAllText(
+            Path.Combine(RepoRoot, "src", "Yagu", "Services", "SettingsService.cs")));
+
+        // The transferred state carries the CURRENT (possibly-edited) text plus the on-disk baseline
+        // so the pop-out window opens already-dirty when there were unsaved edits.
+        string context = ExtractMethodWindow(PreviewEditorSource, "BuildPreviewEditorWindowContext", window: 3200);
+        AssertContainsInOrder(context,
+            "string currentText = GetPreviewEditorText();",
+            "string diskText = _previewEditorOriginalText ?? currentText;",
+            "Text = currentText,",
+            "DiskText = diskText,",
+            "Encoding = _previewEditorEncoding,",
+            "WordWrap = PreviewEditor.WordWrap,",
+            "ZoomFactor = PreviewEditor.ZoomFactor,",
+            "BackupBeforeSave = ViewModel.BackupBeforeSave,");
+    }
+
+    [Fact]
+    public void PopOutEditorWindow_IsIndependentOfMainWindowMatchPaginator()
+    {
+        // The pop-out window is a self-contained Window that owns its own editor and save path.
+        Assert.Contains("internal sealed class PreviewEditorWindow : Window", PreviewEditorWindowSource);
+        Assert.Contains("private readonly TextControlBoxNS.TextControlBox _editor;", PreviewEditorWindowSource);
+
+        // Yagu's global match paginator assumes all previewed docs live on the single main-window
+        // screen. The popped-out editor must therefore NOT touch any match-navigation state, or a
+        // second screen's edits would corrupt the main window's paginator.
+        Assert.DoesNotContain("_matchParagraphs", PreviewEditorWindowSource);
+        Assert.DoesNotContain("_currentMatchIndex", PreviewEditorWindowSource);
+        Assert.DoesNotContain("MatchNavPanel", PreviewEditorWindowSource);
+        Assert.DoesNotContain("ActiveMatchOverlay", PreviewEditorWindowSource);
+        Assert.DoesNotContain("SectionNav", PreviewEditorWindowSource);
+
+        // It saves straight to disk with the transferred encoding (honoring backup + UTF-8 fallback).
+        string save = ExtractMethodWindow(PreviewEditorWindowSource, "SaveAsync", window: 2800);
+        AssertContainsInOrder(save,
+            "if (_context.BackupBeforeSave && File.Exists(_context.FilePath))",
+            "EditorEncodingHelper.HasUnencodableCharacters(textToSave, _encoding)",
+            "await File.WriteAllTextAsync(_context.FilePath, textToSave, _encoding)",
+            "_dirty = false;",
+            "ShowSavedOverlay();");
+
+        // Closing with unsaved edits is cancellable and prompts Save/Discard/Cancel before it lets
+        // the OS destroy the window.
+        string closing = ExtractMethodWindow(PreviewEditorWindowSource, "OnAppWindowClosing", window: 1800);
+        AssertContainsInOrder(closing,
+            "if (_forceClose || !HasRealChanges())",
+            "args.Cancel = true;",
+            "Unsaved changes",
+            "_forceClose = true;",
+            "Close();");
+    }
+
+    [Fact]
+    public void PopOutEditorWindow_IsIndependentTopLevelNotOwned()
+    {
+        // A popped-out editor is an INDEPENDENT top-level window (not GWL_HWNDPARENT-owned to the main
+        // window), so it survives the main window minimizing / hiding to tray and can live on a second
+        // monitor. An owned window is hidden by Windows whenever its owner hides.
+        Assert.DoesNotContain("ConfigureOwnedWindow(_hwnd", PreviewEditorWindowSource);
+        Assert.Contains("SetForegroundWindow", PreviewEditorWindowSource);
+
+        // The main window keeps itself visible (does not hide to tray) while a pop-out is open.
+        Assert.Contains("public static bool HasOpenOwnedWindow(IntPtr ownerHwnd)", PreviewEditorWindowSource);
+        Assert.Contains("PreviewEditorWindow.HasOpenOwnedWindow(_hwnd)", MainWindowSource);
+    }
+
+    [Fact]
+    public void PopOutEditorWindow_ThemesCaptionSolid_AndAutoArranges()
+    {
+        // White-bar fix: the standard (non-extended) title bar paints the caption buttons with a SOLID
+        // background (matching the title bar), NOT Transparent — a transparent caption strip over
+        // nothing renders as the system-default white bar.
+        string theme = ExtractMethodWindow(PreviewEditorWindowSource, "ThemeStandardTitleBar", window: 2200);
+        Assert.Contains("titleBar.ButtonBackgroundColor = background;", theme);
+        Assert.DoesNotContain("titleBar.ButtonBackgroundColor = Colors.Transparent", theme);
+
+        // Auto-tiling: opening or closing a pop-out reflows every sibling window into the owner
+        // monitor's work area via the pure PopOutTileLayout geometry.
+        Assert.Contains("ArrangeOpenWindows(context.OwnerHwnd, context.Arrangement);", PreviewEditorWindowSource);
+        string arrange = ExtractMethodWindow(PreviewEditorWindowSource, "ArrangeOpenWindows", window: 2200);
+        AssertContainsInOrder(arrange,
+            "if (!PopOutTileLayout.IsTiling(mode))",
+            "WindowForegroundHelper.TryGetWorkArea(ownerHwnd",
+            "PopOutTileLayout.Compute(windows.Count, mode",
+            "MoveAndResize(new Windows.Graphics.RectInt32");
+        string closed = ExtractMethodWindow(PreviewEditorWindowSource, "OnClosed", window: 900);
+        Assert.Contains("ArrangeOpenWindows(_ownerHwnd, _arrangement);", closed);
+
+        // The chosen arrangement flows from the setting through ResolvePopOutArrangement into every
+        // pop-out context (editor transfer, chunked reload, and drawer).
+        Assert.Contains("Yagu.Helpers.PopOutTileLayout.FromIndex(ViewModel.PreviewEditorPopOutArrangementIndex)", PreviewEditorSource);
+        int arrangementFields = System.Text.RegularExpressions.Regex.Matches(PreviewEditorSource, "Arrangement = ResolvePopOutArrangement\\(\\),").Count;
+        Assert.Equal(3, arrangementFields);
+    }
+
+    [Fact]
+    public void PopOutDrawer_OpensReadOnlyPreviewThatUnlocksToEditInSameWindow()
+    {
+        // Each preview drawer header has a pop-out button wired to the drawer pop-out handler.
+        string header = ExtractMethodWindow(MainWindowSource, "BuildPreviewSectionHeader", 9000);
+        Assert.Contains("await PopOutPreviewDrawerAsync(path, popOutResults);", header);
+
+        // The drawer pop-out loads the whole file read-only (reusing the shared static loader), jumps
+        // to the first real match line, and highlights the literal search term.
+        string popout = ExtractMethodWindow(PreviewEditorSource, "PopOutPreviewDrawerAsync", window: 3800);
+        AssertContainsInOrder(popout,
+            "document = await LoadPreviewDocumentAsync(",
+            "if (result.LineNumber > 0) { scrollToLine = result.LineNumber; break; }",
+            "StartReadOnly = true,",
+            "ScrollToLine = scrollToLine,",
+            "HighlightWord = literalHighlight ? ViewModel.LastSearchPattern : null,",
+            "PreviewEditorWindow.Open(context);");
+
+        // The window honors read-only mode and offers an "Edit file" button that unlocks editing in
+        // the SAME window (the workflow: pop out the drawer, then click Edit file).
+        Assert.Contains("public bool StartReadOnly { get; init; }", PreviewEditorWindowSource);
+        Assert.Contains("Text = \"Edit file\"", PreviewEditorWindowSource);
+
+        string enterEdit = ExtractMethodWindow(PreviewEditorWindowSource, "EnterEditMode", window: 1000);
+        AssertContainsInOrder(enterEdit,
+            "_readOnly = false;",
+            "_editor.IsReadOnly = false;",
+            "UpdateModeUi();");
+
+        string loaded = ExtractMethodWindow(PreviewEditorWindowSource, "OnEditorLoaded", window: 2800);
+        AssertContainsInOrder(loaded,
+            "_editor.IsReadOnly = _readOnly;",
+            "_editor.BeginSearch(_context.HighlightWord",
+            "_editor.ScrollLineToCenter(_context.ScrollToLine - 1)");
     }
 
     private static SearchResult CreateResult(string filePath, int lineNumber) =>

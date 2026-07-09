@@ -29,6 +29,7 @@ public sealed partial class MainWindow
     private const int PreviewEditorWrapPromptLineLength = 200_000;
     private const long PreviewEditorChunkByteLength = 10L * 1024 * 1024;
     private long PreviewEditorMaxByteLength => (long)ViewModel.PreviewEditorMaxSizeMB * 1024 * 1024;
+    private long PreviewEditorPopOutMaxByteLength => (long)Math.Max(1, ViewModel.PreviewEditorPopOutMaxSizeMB) * 1024 * 1024;
     private int PreviewEditorMaxTextLength => ViewModel.PreviewEditorMaxTextLength;
     private int PreviewEditorMaxLineLength => ViewModel.PreviewEditorMaxLineLength;
     private bool? _previewEditorWrapOverride;
@@ -59,6 +60,261 @@ public sealed partial class MainWindow
         ClosePreviewEditor();
         RestorePreviewSurfaceAfterEditor();
         await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Pops the in-pane editor out into an independent <see cref="PreviewEditorWindow"/>. For a
+    /// fully-loaded file the current (possibly-edited) text is TRANSFERRED with no reload so unsaved
+    /// edits move with it. For a chunked (large) file — where the in-pane editor only holds part of
+    /// the content — the WHOLE file is reloaded from disk (up to the configurable pop-out size limit)
+    /// so the pop-out is fully editable and safe to save. The main pane then reverts to the read-only
+    /// preview, restoring the global match paginator untouched.
+    /// </summary>
+    private async void OnPopOutPreviewEditor(object sender, RoutedEventArgs e)
+    {
+        LogService.Instance.Info("PreviewEditor",
+            $"Pop-out clicked: editorVisible={PreviewEditor.Visibility == Visibility.Visible}, path='{_previewEditorPath}', hasEncoding={_previewEditorEncoding is not null}, chunked={_previewEditorChunked}.");
+
+        if (PreviewEditor.Visibility != Visibility.Visible || _previewEditorPath is null || _previewEditorEncoding is null)
+            return;
+
+        long limitBytes = PreviewEditorPopOutMaxByteLength;
+        long fileSize = _previewEditorChunked && _previewEditorTotalByteLength > 0
+            ? _previewEditorTotalByteLength
+            : SafeFileLength(_previewEditorPath);
+
+        if (fileSize > limitBytes)
+        {
+            ViewModel.StatusText =
+                $"This file ({FormatBytes(fileSize)}) is larger than the {ViewModel.PreviewEditorPopOutMaxSizeMB} MB pop-out limit. Increase it in Settings \u2192 Preview \u2192 Built-in editor.";
+            return;
+        }
+
+        PreviewEditorWindowContext? context;
+        if (_previewEditorChunked)
+        {
+            // The in-pane editor only loaded PART of this large file; unsaved partial edits can't be
+            // carried across safely, so require a clean editor, then reload the whole file.
+            if (HasRealEditorChanges())
+            {
+                ViewModel.StatusText = "Save or discard your changes before popping this large file out.";
+                return;
+            }
+
+            context = await BuildReloadedPreviewEditorWindowContextAsync(_previewEditorPath, limitBytes);
+        }
+        else
+        {
+            context = BuildPreviewEditorWindowContext();
+        }
+
+        if (context is null)
+            return;
+
+        try
+        {
+            PreviewEditorWindow.Open(context);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("PreviewEditor", $"Pop-out failed: {ex.Message}", ex);
+            ViewModel.StatusText = $"Could not pop out the editor: {ex.Message}";
+            return;
+        }
+
+        // The edits are now owned by the pop-out window, so close the in-pane editor without a
+        // discard prompt and restore the read-only preview surface (and its match navigation).
+        ClosePreviewEditor();
+        RestorePreviewSurfaceAfterEditor();
+        ViewModel.StatusText = $"Editing {Path.GetFileName(context.FilePath)} in its own window.";
+    }
+
+    private static long SafeFileLength(string path)
+    {
+        try { return new FileInfo(path).Length; }
+        catch { return 0; }
+    }
+
+    /// <summary>Builds a pop-out context by reloading the WHOLE file from disk (used when the in-pane
+    /// editor was chunked). Returns null and sets a status message if the load fails.</summary>
+    private async Task<PreviewEditorWindowContext?> BuildReloadedPreviewEditorWindowContextAsync(string filePath, long limitBytes)
+    {
+        PreviewTextDocument document;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+            document = await LoadPreviewDocumentAsync(
+                filePath, cts.Token, enforceLimit: true, fileSizeLimit: limitBytes).ConfigureAwait(true);
+        }
+        catch (PreviewLoadException ex)
+        {
+            ViewModel.StatusText = ex.Message;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("PreviewEditor", $"Pop-out reload failed: {filePath}", ex);
+            ViewModel.StatusText = $"Could not pop out the editor: {ex.Message}";
+            return null;
+        }
+
+        return new PreviewEditorWindowContext
+        {
+            OwnerHwnd = _hwnd,
+            Theme = AppThemeService.ResolveEffectiveTheme(RootGrid, ViewModel.ThemeModeIndex),
+            FilePath = filePath,
+            Text = document.Text,
+            DiskText = document.Text,
+            Encoding = document.Encoding,
+            WordWrap = PreviewEditor.WordWrap,
+            ZoomFactor = PreviewEditor.ZoomFactor,
+            FontFamily = ResolvePreviewEditorFontFamily(),
+            FontSize = ResolvePreviewEditorFontSize(),
+            TextColor = ResolveEffectiveEditorTextColor(),
+            GutterColor = ColorStringHelper.Parse(ViewModel.PreviewEditorGutterColor, Windows.UI.Color.FromArgb(0xFF, 0x3A, 0x8F, 0xD6)),
+            SyntaxHighlightId = ResolvePreviewEditorSyntaxId(filePath),
+            ShowLineNumbers = PreviewEditor.ShowLineNumbers,
+            ShowLineHighlighter = PreviewEditor.ShowLineHighlighter,
+            BackupBeforeSave = ViewModel.BackupBeforeSave,
+            Arrangement = ResolvePopOutArrangement(),
+        };
+    }
+
+    private PreviewEditorWindowContext? BuildPreviewEditorWindowContext()
+    {
+        if (_previewEditorPath is null || _previewEditorEncoding is null)
+            return null;
+
+        string currentText = GetPreviewEditorText();
+        string diskText = _previewEditorOriginalText ?? currentText;
+
+        return new PreviewEditorWindowContext
+        {
+            OwnerHwnd = _hwnd,
+            Theme = AppThemeService.ResolveEffectiveTheme(RootGrid, ViewModel.ThemeModeIndex),
+            FilePath = _previewEditorPath,
+            Text = currentText,
+            DiskText = diskText,
+            Encoding = _previewEditorEncoding,
+            WordWrap = PreviewEditor.WordWrap,
+            ZoomFactor = PreviewEditor.ZoomFactor,
+            FontFamily = ResolvePreviewEditorFontFamily(),
+            FontSize = ResolvePreviewEditorFontSize(),
+            TextColor = ResolveEffectiveEditorTextColor(),
+            GutterColor = ColorStringHelper.Parse(ViewModel.PreviewEditorGutterColor, Windows.UI.Color.FromArgb(0xFF, 0x3A, 0x8F, 0xD6)),
+            SyntaxHighlightId = ResolvePreviewEditorSyntaxId(_previewEditorPath),
+            ShowLineNumbers = PreviewEditor.ShowLineNumbers,
+            ShowLineHighlighter = PreviewEditor.ShowLineHighlighter,
+            BackupBeforeSave = ViewModel.BackupBeforeSave,
+            Arrangement = ResolvePopOutArrangement(),
+        };
+    }
+
+    private string ResolvePreviewEditorFontFamily()
+        => string.IsNullOrWhiteSpace(ViewModel.PreviewEditorFontFamily)
+            ? AppSettings.DefaultPreviewEditorFontFamily
+            : ViewModel.PreviewEditorFontFamily.Trim();
+
+    private int ResolvePreviewEditorFontSize()
+        => Math.Clamp(
+            ViewModel.PreviewEditorFontSize <= 0 ? AppSettings.DefaultPreviewEditorFontSize : ViewModel.PreviewEditorFontSize,
+            6,
+            72);
+
+    private Yagu.Helpers.PopOutArrangement ResolvePopOutArrangement()
+        => Yagu.Helpers.PopOutTileLayout.FromIndex(ViewModel.PreviewEditorPopOutArrangementIndex);
+
+    /// <summary>
+    /// Pops a read-only preview of <paramref name="filePath"/> out into its own independent
+    /// <see cref="PreviewEditorWindow"/> (the "pop out drawer" action). The window loads the whole
+    /// file read-only, jumps to the first match, and offers an "Edit file" button that unlocks
+    /// editing in the SAME window. This does not touch the main window's preview surface or global
+    /// match paginator.
+    /// </summary>
+    private async Task PopOutPreviewDrawerAsync(string filePath, IReadOnlyList<SearchResult>? results)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return;
+
+        LogService.Instance.Info("PreviewEditor", $"Pop-out drawer clicked: path='{filePath}'.");
+
+        PreviewTextDocument document;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            document = await LoadPreviewDocumentAsync(
+                filePath, cts.Token, enforceLimit: true, fileSizeLimit: PreviewEditorPopOutMaxByteLength).ConfigureAwait(true);
+        }
+        catch (PreviewLoadException ex)
+        {
+            ViewModel.StatusText = ex.Message;
+            return;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("PreviewEditor", $"Pop-out drawer load failed: {filePath}", ex);
+            ViewModel.StatusText = $"Could not pop out the preview: {ex.Message}";
+            return;
+        }
+
+        int scrollToLine = 0;
+        if (results is not null)
+        {
+            foreach (var result in results)
+            {
+                if (result.LineNumber > 0) { scrollToLine = result.LineNumber; break; }
+            }
+        }
+
+        bool literalHighlight = !ViewModel.LastSearchUseRegex && !string.IsNullOrEmpty(ViewModel.LastSearchPattern);
+
+        var context = new PreviewEditorWindowContext
+        {
+            OwnerHwnd = _hwnd,
+            Theme = AppThemeService.ResolveEffectiveTheme(RootGrid, ViewModel.ThemeModeIndex),
+            FilePath = filePath,
+            Text = document.Text,
+            DiskText = document.Text,
+            Encoding = document.Encoding,
+            WordWrap = ViewModel.PreviewWordWrap,
+            ZoomFactor = 100,
+            FontFamily = ResolvePreviewEditorFontFamily(),
+            FontSize = ResolvePreviewEditorFontSize(),
+            TextColor = ResolveEffectiveEditorTextColor(),
+            GutterColor = ColorStringHelper.Parse(ViewModel.PreviewEditorGutterColor, Windows.UI.Color.FromArgb(0xFF, 0x3A, 0x8F, 0xD6)),
+            SyntaxHighlightId = ResolvePreviewEditorSyntaxId(filePath),
+            ShowLineNumbers = true,
+            ShowLineHighlighter = true,
+            BackupBeforeSave = ViewModel.BackupBeforeSave,
+            StartReadOnly = true,
+            ScrollToLine = scrollToLine,
+            HighlightWord = literalHighlight ? ViewModel.LastSearchPattern : null,
+            HighlightWholeWord = ViewModel.LastSearchExactMatch,
+            HighlightMatchCase = ViewModel.LastSearchCaseSensitive,
+            Arrangement = ResolvePopOutArrangement(),
+        };
+
+        try
+        {
+            PreviewEditorWindow.Open(context);
+            ViewModel.StatusText = $"Previewing {Path.GetFileName(filePath)} in its own window.";
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("PreviewEditor", $"Pop-out drawer failed: {ex.Message}", ex);
+            ViewModel.StatusText = $"Could not pop out the preview: {ex.Message}";
+        }
+    }
+
+    private TextControlBoxNS.SyntaxHighlightID ResolvePreviewEditorSyntaxId(string? filePath)
+    {
+        if (!ViewModel.EditorSyntaxHighlightingEnabled)
+            return TextControlBoxNS.SyntaxHighlightID.None;
+
+        var language = EditorSyntaxHighlightingResolver.ResolveFromFileName(filePath);
+        return language is null
+            ? TextControlBoxNS.SyntaxHighlightID.None
+            : MapToSyntaxHighlightId(language.Value);
     }
 
     private void OnPreviewEditorTextChanged(TextControlBoxNS.TextControlBox sender)
