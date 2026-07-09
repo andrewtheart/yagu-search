@@ -375,6 +375,7 @@ mod tests {
             multi_line: true,
             multi_line_dotall: dotall,
             multiline_engine: 0,
+            max_matches_per_line: 0,
         }
     }
 

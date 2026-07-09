@@ -1500,6 +1500,13 @@ ceiling and memory safeguards.</td>
 allowed.</td>
 </tr>
 <tr>
+<td>Absolute results safety limit</td>
+<td>Hard backstop on total matches that applies even when Max results is
+0 (unlimited). Prevents an unbounded content search (e.g. a
+match-everything pattern over huge files) from exhausting memory.
+Default 2,000,000; 0 disables the backstop (not recommended).</td>
+</tr>
+<tr>
 <td>Default file size filter</td>
 <td>Minimum and maximum MB applied by default. Both 0 = any size.</td>
 </tr>
@@ -1701,6 +1708,12 @@ disabled.</td>
 <tr>
 <td>Max matches per file</td>
 <td>Cap on stored matches per file (0 = unlimited).</td>
+</tr>
+<tr>
+<td>Max matches per line</td>
+<td>Cap on matches emitted from a single line before the scanner moves
+on (0 = unlimited, default 5,000). Tames a match-everything pattern
+(e.g. the regex <code>.</code>) on very long minified lines.</td>
 </tr>
 <tr>
 <td>Content-search file size ceiling (MB)</td>
@@ -3197,6 +3210,10 @@ for the underlying flags.</p>
 </table>
 <h3 id="performance">Performance</h3>
 <table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
 <thead>
 <tr>
 <th>Flag</th>
@@ -3223,6 +3240,15 @@ for the underlying flags.</p>
 <tr>
 <td><code>--max-matches-per-file &lt;n&gt;</code></td>
 <td>Cap matches per file (0 = unlimited).</td>
+</tr>
+<tr>
+<td><code>--max-matches-per-line &lt;n&gt;</code></td>
+<td>Cap matches emitted per line (0 = unlimited, default 5000).</td>
+</tr>
+<tr>
+<td><code>--absolute-max-results &lt;n&gt;</code></td>
+<td>Hard total-match backstop even when <code>--max-results</code> is 0
+(default 2000000).</td>
 </tr>
 <tr>
 <td><code>--max-depth &lt;n&gt;</code></td>

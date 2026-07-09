@@ -14,6 +14,10 @@ public sealed class SearchService
 {
     private const int MemoryPressureRecoveryMarginPercent = 5;
     private const double ProcessMemoryRecoveryRatio = 0.90;
+    // How often (seconds) to log a machine-wide memory heartbeat while a search is active, so the log
+    // carries a fine-grained WS + system-memory trail up to any native crash. 0.5s ≈ a few lines even on
+    // a fast (multi-GB/s) memory balloon, without spamming ordinary sub-second searches.
+    private const double MemoryHeartbeatSeconds = 0.5;
     private const int EventChannelCapacity = 64;
     private const int PendingFileChannelCapacity = 32_768;
     private const int UnlimitedContentResultChannelCapacity = 2_048;
@@ -86,7 +90,7 @@ public sealed class SearchService
         }
 
         var sw = Stopwatch.StartNew();
-        int cap = perRootOptions[0].MaxResults; // > 0 = global cap; <= 0 = unlimited.
+        int cap = EffectiveHardCap(perRootOptions[0]); // > 0 = global cap; <= 0 = unlimited (both MaxResults and AbsoluteMaxResults disabled).
         long forwardedMatches = 0;
         int totalFiles = 0, filesScanned = 0, filesSkipped = 0, filesWithMatches = 0, totalMatches = 0;
         long bytesScanned = 0;
@@ -401,6 +405,7 @@ public sealed class SearchService
         int pressureCycles = 0;      // total number of memory pressure events emitted
         int consecutiveFutileEvictions = 0; // eviction cycles that freed 0 — used to stop futile loops
         long lastPressureCheckTicks = 0;    // timestamp of last pressure event emission
+        long memHeartbeatTicks = 0;         // timestamp of last machine-wide memory heartbeat
         int nativeBatchesProcessed = 0; // total native batches flushed
         long forwarderItemsForwarded = 0; // total results forwarded from contentResults → events
         long forwarderWriteStallMs = 0;   // cumulative ms the forwarder was blocked writing to events channel
@@ -537,6 +542,23 @@ public sealed class SearchService
         // trigger the same degradation path without waiting for a native batch to end.
         void CheckMemoryPressure()
         {
+            // Machine-wide memory heartbeat (fixed cadence, independent of the pressure threshold). A
+            // native fail-fast in yagu_core.dll (e.g. a failed huge allocation → handle_alloc_error →
+            // abort as 0xc0000409) leaves NO final snapshot, and the pressure-cycle log below only fires
+            // after the threshold trips and holds the eviction lock. This heartbeat guarantees the log
+            // always carries a high-resolution trail of process WS + system available/total right up to
+            // the moment the process dies. CAS so only one of the many worker threads logs per interval.
+            {
+                long nowHb = Stopwatch.GetTimestamp();
+                long lastHb = Volatile.Read(ref memHeartbeatTicks);
+                if ((lastHb == 0 || (double)(nowHb - lastHb) / Stopwatch.Frequency >= MemoryHeartbeatSeconds)
+                    && Interlocked.CompareExchange(ref memHeartbeatTicks, nowHb, lastHb) == lastHb)
+                {
+                    LogService.Instance.Info("SearchService",
+                        $"Memory heartbeat: {GetMemoryDiagnostics()}, scanned={filesScanned:N0}, matches={totalMatches:N0}");
+                }
+            }
+
             if (IsMemoryPressureHigh(options.MaxProcessMemoryBytes, options.MemoryPressurePercent))
             {
                 Volatile.Write(ref degraded, 1);
@@ -1029,7 +1051,7 @@ public sealed class SearchService
                                         {
                                             directSink = new DirectOutputSink(
                                                 options.DirectOutputStream, options.DirectOutputColor,
-                                                pathsByIndex, options.MaxResults, Volatile.Read(ref totalMatches),
+                                                pathsByIndex, EffectiveHardCap(options), Volatile.Read(ref totalMatches),
                                                 cancelPtr, (int*)filesScannedAlloc,
                                                 contextEnabled: options.ContextLines > 0);
                                             sinkInstance = directSink;
@@ -1038,7 +1060,7 @@ public sealed class SearchService
                                         {
                                             streamingSink = new StreamingScanSink(
                                                 pathsByIndex,
-                                                contentResults.Writer, sourceBackedResults.Writer, options.MaxResults, Volatile.Read(ref totalMatches),
+                                                contentResults.Writer, sourceBackedResults.Writer, EffectiveHardCap(options), Volatile.Read(ref totalMatches),
                                                 cancelPtr, (int*)filesScannedAlloc,
                                                 (int*)totalMatchesAlloc, (int*)filesWithMatchesAlloc,
                                                 options.DegradedResultStore);
@@ -1808,6 +1830,18 @@ public sealed class SearchService
         return false;
     }
 
+    /// <summary>
+    /// The effective absolute stop-count for a scan. When <see cref="SearchOptions.MaxResults"/> is
+    /// greater than 0 that user cap wins; when it is 0 (unlimited) the
+    /// <see cref="SearchOptions.AbsoluteMaxResults"/> safety ceiling applies so an unbounded content
+    /// search (e.g. a match-everything regex over huge minified files) cannot exhaust memory. Returns
+    /// 0 only when BOTH are disabled — truly unbounded.
+    /// </summary>
+    internal static int EffectiveHardCap(SearchOptions options)
+        => options.MaxResults > 0
+            ? options.MaxResults
+            : Math.Max(0, options.AbsoluteMaxResults);
+
     private static SearchOptions CopyOptions(
         SearchOptions options,
         string? query = null,
@@ -1839,6 +1873,8 @@ public sealed class SearchService
             ModifiedBeforeDate = options.ModifiedBeforeDate,
             MaxResults = maxResults ?? options.MaxResults,
             MaxMatchesPerFile = options.MaxMatchesPerFile,
+            MaxMatchesPerLine = options.MaxMatchesPerLine,
+            AbsoluteMaxResults = options.AbsoluteMaxResults,
             SkipBinary = options.SkipBinary,
             SearchHiddenFiles = options.SearchHiddenFiles,
             ObeyGitignore = options.ObeyGitignore,
@@ -2177,7 +2213,7 @@ public sealed class SearchService
 
         fixed (int* filesScannedPtr = &filesScanned)
         {
-        using var sink = new BatchScanSink(batch, contentWriter, options.MaxResults, Volatile.Read(ref totalMatches), cancelPtr, filesScannedPtr);
+        using var sink = new BatchScanSink(batch, contentWriter, EffectiveHardCap(options), Volatile.Read(ref totalMatches), cancelPtr, filesScannedPtr);
 
         Native.NativeSearcher.ScanPathsParallel(
             session, batch, parallelism, (int*)cancelPtr, sink);
@@ -2241,9 +2277,10 @@ public sealed class SearchService
         private readonly unsafe int* _filesScannedPtr; // incremented per file for live progress
         private int _runningTotal; // starts from outer totalMatches at batch start
         private bool _stopped;
+        private int _totalEmitted;
 
         public bool Truncated { get; private set; }
-        public int TotalEmitted { get; private set; }
+        public int TotalEmitted => _totalEmitted;
         public Exception? CapturedException { get; set; }
         public string? ErrorMessage { get; set; }
 
@@ -2322,12 +2359,13 @@ public sealed class SearchService
             }
 
             _emitted[idx]++;
-            TotalEmitted++;
-            _runningTotal++;
-            if (_maxResults > 0 && _runningTotal >= _maxResults)
+            Interlocked.Increment(ref _totalEmitted);
+            int total = Interlocked.Increment(ref _runningTotal);
+            if (_maxResults > 0 && total >= _maxResults)
             {
                 Truncated = true;
                 _stopped = true;
+                if (_cancelPtr != null) *_cancelPtr = 1; // global hard stop across all native workers
                 return 1;
             }
             return 0;
@@ -2400,9 +2438,10 @@ public sealed class SearchService
         private readonly object _resizeLock = new();
         private int _runningTotal;
         private bool _stopped;
+        private int _totalEmitted;
 
         public bool Truncated { get; private set; }
-        public int TotalEmitted { get; private set; }
+        public int TotalEmitted => _totalEmitted;
         public Exception? CapturedException { get; set; }
         public string? ErrorMessage { get; set; }
 
@@ -2583,14 +2622,15 @@ public sealed class SearchService
 
                 if (_emitted[idx]++ == 0 && _filesWithMatchesPtr != null)
                     Interlocked.Increment(ref *_filesWithMatchesPtr);
-                TotalEmitted++;
+                Interlocked.Increment(ref _totalEmitted);
                 if (_totalMatchesPtr != null)
                     Interlocked.Increment(ref *_totalMatchesPtr);
-                _runningTotal++;
-                if (_maxResults > 0 && _runningTotal >= _maxResults)
+                int totalDegraded = Interlocked.Increment(ref _runningTotal);
+                if (_maxResults > 0 && totalDegraded >= _maxResults)
                 {
                     Truncated = true;
                     _stopped = true;
+                    if (_cancelPtr != null) *_cancelPtr = 1; // global hard stop across all native workers
                     return 1;
                 }
                 return 0;
@@ -2622,14 +2662,15 @@ public sealed class SearchService
 
             if (_emitted[idx]++ == 0 && _filesWithMatchesPtr != null)
                 Interlocked.Increment(ref *_filesWithMatchesPtr);
-            TotalEmitted++;
+            Interlocked.Increment(ref _totalEmitted);
             if (_totalMatchesPtr != null)
                 Interlocked.Increment(ref *_totalMatchesPtr);
-            _runningTotal++;
-            if (_maxResults > 0 && _runningTotal >= _maxResults)
+            int totalNormal = Interlocked.Increment(ref _runningTotal);
+            if (_maxResults > 0 && totalNormal >= _maxResults)
             {
                 Truncated = true;
                 _stopped = true;
+                if (_cancelPtr != null) *_cancelPtr = 1; // global hard stop across all native workers
                 return 1;
             }
             return 0;

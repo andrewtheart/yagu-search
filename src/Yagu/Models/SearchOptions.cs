@@ -114,6 +114,17 @@ public sealed class SearchOptions
     /// <summary>Maximum matches per individual file before moving to the next. 0 disables.</summary>
     public int MaxMatchesPerFile { get; init; }
 
+    /// <summary>Maximum matches emitted from a single line before the scanner moves to the next line.
+    /// Bounds a pathological pattern (e.g. the regex <c>.</c>, which matches every character) on a very
+    /// long minified line from emitting millions of matches. 0 disables (unlimited per line).</summary>
+    public int MaxMatchesPerLine { get; init; } = 5_000;
+
+    /// <summary>Absolute safety ceiling on total matches that applies EVEN WHEN <see cref="MaxResults"/>
+    /// is 0 (unlimited). Prevents an unbounded content search (e.g. a match-everything regex over huge
+    /// files) from exhausting memory: once reached, the scan stops and the result is marked truncated.
+    /// 0 disables the backstop (truly unlimited — not recommended).</summary>
+    public int AbsoluteMaxResults { get; init; } = 2_000_000;
+
     public bool SkipBinary { get; init; } = true;
 
     /// <summary>

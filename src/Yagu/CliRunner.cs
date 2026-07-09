@@ -1113,6 +1113,8 @@ internal static class CliRunner
         bool gitignorePrecedence = args.GitignoreTakesPrecedence ?? s.GitignoreTakesPrecedence;
         bool exactMatch = args.ExactMatch ?? s.ExactMatch;
         int maxMatchesPerFile = args.MaxMatchesPerFile ?? s.MaxMatchesPerFile;
+        int maxMatchesPerLine = args.MaxMatchesPerLine ?? s.MaxMatchesPerLine;
+        int absoluteMaxResults = args.AbsoluteMaxResults ?? s.AbsoluteMaxResults;
         int maxSearchDepth = args.MaxSearchDepth ?? s.MaxSearchDepth;
         var includeMode = (FilterPatternMode)(args.IncludeFilterModeIndex ?? s.IncludeFilterModeIndex);
         var excludeMode = (FilterPatternMode)(args.ExcludeFilterModeIndex ?? s.ExcludeFilterModeIndex);
@@ -1154,6 +1156,8 @@ internal static class CliRunner
             ModifiedBeforeDate    = args.ModifiedBefore ?? s.DefaultModifiedBeforeDate,
             MaxResults            = Math.Min(maxResults, SearchOptions.MaxResultsCeiling),
             MaxMatchesPerFile     = maxMatchesPerFile,
+            MaxMatchesPerLine     = maxMatchesPerLine,
+            AbsoluteMaxResults    = absoluteMaxResults,
             MaxSearchDepth        = maxSearchDepth,
             SkipBinary            = skipBinary,
             SearchOnlineOnlyFiles = s.SearchOnlineOnlyFiles,
@@ -2042,6 +2046,8 @@ internal static class CliRunner
                   --sdk-channel-buffer <n> Everything SDK channel buffer size.
                   --file-lister-backend <n> File lister: 0=Auto, 1=SDK, 2=es.exe, 3=Managed.
                   --max-matches-per-file <n> Cap matches per file (0 = unlimited).
+                  --max-matches-per-line <n> Cap matches emitted per line (0 = unlimited, default 5000).
+                  --absolute-max-results <n> Hard total-match backstop even when --max-results is 0 (default 2000000).
                   --max-depth <n>         Max directory recursion depth (0 = unlimited).
 
             ARCHIVE SEARCH:
@@ -3242,6 +3248,8 @@ internal sealed class CliArgs
     public int?             IncludeFilterModeIndex { get; private set; }
     public int?             ExcludeFilterModeIndex { get; private set; }
     public int?             MaxMatchesPerFile { get; private set; }
+    public int?             MaxMatchesPerLine { get; private set; }
+    public int?             AbsoluteMaxResults { get; private set; }
     public int?             MaxSearchDepth { get; private set; }
     public bool?            ExactMatch { get; private set; }
     public bool?            Multiline { get; private set; }
@@ -3402,6 +3410,8 @@ internal sealed class CliArgs
             if (TryGetInt(raw, ref i, out n, "--console-log-level"))     { a.ConsoleLogLevelIndex = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--file-lister-backend"))   { a.FileListerBackendIndex = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--max-matches-per-file"))  { a.MaxMatchesPerFile = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--max-matches-per-line"))  { a.MaxMatchesPerLine = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--absolute-max-results"))  { a.AbsoluteMaxResults = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--max-depth"))             { a.MaxSearchDepth = n; continue; }
             if (TryGetVal(raw, ref i, out v, "--archive-extensions"))    { a.ArchiveExtensions = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--ocr-engine"))            { a.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(v); continue; }

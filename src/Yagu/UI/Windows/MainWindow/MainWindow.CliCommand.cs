@@ -192,6 +192,10 @@ public sealed partial class MainWindow
             AddValue(parts, "--max-results", Math.Max(0, ViewModel.MaxResults).ToString(CultureInfo.InvariantCulture), quote: false);
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.MaxMatchesPerFile) == Math.Max(0, setting.MaxMatchesPerFile)))
             AddValue(parts, "--max-matches-per-file", Math.Max(0, ViewModel.MaxMatchesPerFile).ToString(CultureInfo.InvariantCulture), quote: false);
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.MaxMatchesPerLine) == Math.Max(0, setting.MaxMatchesPerLine)))
+            AddValue(parts, "--max-matches-per-line", Math.Max(0, ViewModel.MaxMatchesPerLine).ToString(CultureInfo.InvariantCulture), quote: false);
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.AbsoluteMaxResults) == Math.Max(0, setting.AbsoluteMaxResults)))
+            AddValue(parts, "--absolute-max-results", Math.Max(0, ViewModel.AbsoluteMaxResults).ToString(CultureInfo.InvariantCulture), quote: false);
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => FormatMaxDepth(ViewModel.MaxSearchDepth) == Math.Max(0, setting.MaxSearchDepth).ToString(CultureInfo.InvariantCulture)))
             AddValue(parts, "--max-depth", FormatMaxDepth(ViewModel.MaxSearchDepth), quote: false);
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => SearchOptions.ResolveContentSearchParallelism(ViewModel.ParallelismIndex, Environment.ProcessorCount) == SearchOptions.ResolveContentSearchParallelism(setting.ParallelismIndex, Environment.ProcessorCount)))

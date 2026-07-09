@@ -182,6 +182,7 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
         {
             Truncated = true;
             _stopped = true;
+            if (_cancelPtr != null) *_cancelPtr = 1; // global hard stop across all native workers
             return 1;
         }
         return 0;

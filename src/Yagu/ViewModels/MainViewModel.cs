@@ -332,6 +332,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SdkChannelBufferSize = _settings.SdkChannelBufferSize;
         MaxMatchesPerFile = _settings.MaxMatchesPerFile;
         ApplyMaxMatchesPerFile(MaxMatchesPerFile);
+        MaxMatchesPerLine = _settings.MaxMatchesPerLine;
+        AbsoluteMaxResults = _settings.AbsoluteMaxResults;
         SkipBinary = _settings.SkipBinary;
         SearchOnlineOnlyFiles = _settings.SearchOnlineOnlyFiles;
         SearchHiddenFiles = _settings.SearchHiddenFiles;
@@ -1123,6 +1125,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial bool ShowAutoScrollResultsCheckbox { get; set; }
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
+    [ObservableProperty] public partial int MaxMatchesPerLine { get; set; } = 5_000;
+    [ObservableProperty] public partial int AbsoluteMaxResults { get; set; } = 2_000_000;
     [ObservableProperty] public partial double MaxSearchDepth { get; set; } = double.NaN;
 
     partial void OnMaxMatchesPerFileChanged(int value) => ApplyMaxMatchesPerFile(value);
@@ -3044,6 +3048,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 ModifiedAfterDate = ModifiedAfterDate,
                 ModifiedBeforeDate = ModifiedBeforeDate,
                 MaxResults = MaxResults,
+                MaxMatchesPerLine = MaxMatchesPerLine,
+                AbsoluteMaxResults = AbsoluteMaxResults,
                 SkipBinary = SkipBinary,
                 SearchOnlineOnlyFiles = SearchOnlineOnlyFiles,
                 SearchHiddenFiles = SearchHiddenFiles,
@@ -4682,6 +4688,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.ShowAutoScrollResultsCheckbox = ShowAutoScrollResultsCheckbox;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.MaxMatchesPerFile = MaxMatchesPerFile;
+        _settings.MaxMatchesPerLine = MaxMatchesPerLine < 0 ? 0 : MaxMatchesPerLine;
+        _settings.AbsoluteMaxResults = AbsoluteMaxResults < 0 ? 0 : AbsoluteMaxResults;
         _settings.SkipBinary = d is null ? SkipBinary : d.SkipBinary;
         _settings.SearchOnlineOnlyFiles = SearchOnlineOnlyFiles;
         _settings.SearchHiddenFiles = d is null ? SearchHiddenFiles : d.SearchHiddenFiles;

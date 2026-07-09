@@ -31,6 +31,27 @@ public class SearchServiceTests : IDisposable
         Assert.Equal(expected, SearchService.ResolveNativeBatchSize(parallelism));
     }
 
+    [Fact]
+    public void EffectiveHardCap_UsesMaxResultsWhenPositive()
+    {
+        var o = new SearchOptions { Query = "x", Directory = "x", MaxResults = 100, AbsoluteMaxResults = 5_000 };
+        Assert.Equal(100, SearchService.EffectiveHardCap(o));
+    }
+
+    [Fact]
+    public void EffectiveHardCap_FallsBackToAbsoluteWhenUnlimited()
+    {
+        var o = new SearchOptions { Query = "x", Directory = "x", MaxResults = 0, AbsoluteMaxResults = 5_000 };
+        Assert.Equal(5_000, SearchService.EffectiveHardCap(o));
+    }
+
+    [Fact]
+    public void EffectiveHardCap_ZeroWhenBothDisabled()
+    {
+        var o = new SearchOptions { Query = "x", Directory = "x", MaxResults = 0, AbsoluteMaxResults = 0 };
+        Assert.Equal(0, SearchService.EffectiveHardCap(o));
+    }
+
     private string Write(string rel, string content)
     {
         var p = Path.Combine(_root, rel);

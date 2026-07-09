@@ -90,6 +90,10 @@ pub struct QgOptions {
     /// Multiline backend selector: 0 = hand-rolled `regex::bytes` (default),
     /// 1 = grep-searcher. Ignored unless `multi_line`.
     pub multiline_engine: c_uchar,
+    /// Maximum matches emitted from a single line before the scanner moves to the
+    /// next line; zero means unlimited. Bounds a match-everything pattern (e.g. the
+    /// regex `.`) on a very long minified line from emitting millions of matches. ABI v7.
+    pub max_matches_per_line: c_ulonglong,
 }
 
 #[repr(C)]
@@ -523,6 +527,7 @@ pub unsafe extern "C" fn qg_search_file(
         multi_line: opts_in.multi_line != 0,
         multi_line_dotall: opts_in.multi_line_dotall != 0,
         multiline_engine: opts_in.multiline_engine,
+        max_matches_per_line: opts_in.max_matches_per_line as usize,
     };
 
     // Open + size check + (probe/read/mmap).
@@ -657,7 +662,62 @@ pub unsafe extern "C" fn qg_free_result(result: *mut QgResult) {
 /// ABI/version probe used by the C# loader to confirm the DLL is the one we built.
 #[no_mangle]
 pub extern "C" fn qg_abi_version() -> c_uint {
-    6
+    // The C# loader calls this once at startup before any scan, so it is the reliable place to arm
+    // the native panic logger (below) for the whole process lifetime.
+    ensure_panic_logger();
+    7
+}
+
+/// One-time install guard for the native panic logger.
+static PANIC_LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+
+/// Installs a process-wide panic hook (once) that appends the panic message, its exact source
+/// `file:line:col`, and a backtrace to `%LOCALAPPDATA%\Yagu\yagu_core_panic.log` BEFORE the
+/// `panic = "abort"` build tears the process down as WER `0xc0000409`. A native Rust panic bypasses
+/// .NET exception logging entirely, so without this hook the only evidence is a bare fault offset.
+/// Best-effort: any I/O failure in the hook is swallowed so it can never make a crash worse.
+pub(crate) fn ensure_panic_logger() {
+    PANIC_LOGGER_INIT.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            use std::io::Write;
+
+            let location = info
+                .location()
+                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+                .unwrap_or_else(|| "<unknown>".to_string());
+            let message = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic payload>".to_string());
+            let thread = std::thread::current().name().unwrap_or("<unnamed>").to_string();
+            let backtrace = std::backtrace::Backtrace::force_capture();
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            let record = format!(
+                "\n=== yagu_core PANIC (unix={secs}) ===\nthread: {thread}\nlocation: {location}\nmessage: {message}\nbacktrace:\n{backtrace}\n=== end yagu_core panic ===\n"
+            );
+
+            if let Some(mut dir) = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from) {
+                dir.push("Yagu");
+                let _ = std::fs::create_dir_all(&dir);
+                dir.push("yagu_core_panic.log");
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&dir) {
+                    let _ = f.write_all(record.as_bytes());
+                    let _ = f.flush();
+                }
+            }
+            let _ = std::io::stderr().write_all(record.as_bytes());
+
+            // Chain to the previous (default) hook, then the runtime aborts.
+            previous(info);
+        }));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -822,6 +882,7 @@ pub unsafe extern "C" fn qg_search_file_stream(
         multi_line: opts_in.multi_line != 0,
         multi_line_dotall: opts_in.multi_line_dotall != 0,
         multiline_engine: opts_in.multiline_engine,
+        max_matches_per_line: opts_in.max_matches_per_line as usize,
     };
 
     let file_bytes = match open_file_for_scan(&path, opts_in.max_file_size, scan_opts.skip_binary) {
@@ -1000,6 +1061,7 @@ pub unsafe extern "C" fn qg_search_file_stream_multiline(
         multi_line: true,
         multi_line_dotall: opts_in.multi_line_dotall != 0,
         multiline_engine: opts_in.multiline_engine,
+        max_matches_per_line: opts_in.max_matches_per_line as usize,
     };
 
     // Build the matcher first so an invalid regex (lookaround) is reported
@@ -1209,6 +1271,7 @@ pub unsafe extern "C" fn qg_create_session(
         multi_line: opts_in.multi_line != 0,
         multi_line_dotall: opts_in.multi_line_dotall != 0,
         multiline_engine: opts_in.multiline_engine,
+        max_matches_per_line: opts_in.max_matches_per_line as usize,
     };
 
     let matcher = match crate::scan::build_matcher(pattern, &scan_opts) {
@@ -2306,6 +2369,7 @@ mod tests {
             multi_line: 0,
             multi_line_dotall: 0,
             multiline_engine: 0,
+            max_matches_per_line: 0,
         }
     }
 
@@ -2321,8 +2385,8 @@ mod tests {
 
     // ---- qg_abi_version ----
     #[test]
-    fn abi_version_returns_6() {
-        assert_eq!(qg_abi_version(), 6);
+    fn abi_version_returns_7() {
+        assert_eq!(qg_abi_version(), 7);
     }
 
     // ---- QgOptions ABI layout ----
@@ -2345,8 +2409,10 @@ mod tests {
         assert_eq!(offset_of!(QgOptions, multi_line), 33);
         assert_eq!(offset_of!(QgOptions, multi_line_dotall), 34);
         assert_eq!(offset_of!(QgOptions, multiline_engine), 35);
-        // 8-byte alignment (max_results/max_file_size are u64) rounds 36 -> 40.
-        assert_eq!(std::mem::size_of::<QgOptions>(), 40);
+        // max_matches_per_line is a u64 (align 8): offset 36 rounds up to 40.
+        assert_eq!(offset_of!(QgOptions, max_matches_per_line), 40);
+        // 8-byte alignment (u64 fields) makes the struct 48 bytes total.
+        assert_eq!(std::mem::size_of::<QgOptions>(), 48);
         assert_eq!(std::mem::align_of::<QgOptions>(), 8);
     }
 

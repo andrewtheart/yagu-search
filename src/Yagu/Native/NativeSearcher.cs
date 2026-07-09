@@ -35,6 +35,9 @@ internal static partial class NativeSearcher
         public byte MultiLine;
         public byte MultiLineDotAll;
         public byte MultilineEngine;
+        // ABI v7 — per-line match cap; 0 = unlimited. Bounds a match-everything
+        // pattern (e.g. the regex ".") on a very long minified line.
+        public ulong MaxMatchesPerLine;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -235,7 +238,7 @@ internal static partial class NativeSearcher
 
         try
         {
-            return QgAbiVersion() == 6;
+            return QgAbiVersion() == 7;
         }
         catch (DllNotFoundException) { LogService.Instance.Info("NativeSearcher", "yagu_core.dll not found"); return false; }
         catch (BadImageFormatException ex) { LogService.Instance.Warning("NativeSearcher", "yagu_core.dll bad image format", ex); return false; }
@@ -281,6 +284,7 @@ internal static partial class NativeSearcher
             MultiLine = 0,
             MultiLineDotAll = 0,
             MultilineEngine = 0,
+            MaxMatchesPerLine = options.MaxMatchesPerLine > 0 ? (ulong)options.MaxMatchesPerLine : 0UL,
         };
     }
 
@@ -313,6 +317,8 @@ internal static partial class NativeSearcher
             // 0 = hand-rolled regex::bytes (default), 1 = grep-searcher. Both engines are
             // compiled into the DLL (grep_crates feature); the selection is a runtime switch.
             MultilineEngine = (byte)options.MultilineEngine,
+            // Per-line cap is meaningless for the whole-buffer multiline engine.
+            MaxMatchesPerLine = 0,
         };
     }
 

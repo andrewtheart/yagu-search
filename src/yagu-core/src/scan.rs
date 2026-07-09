@@ -81,6 +81,10 @@ pub struct ScanOptions {
     /// `grep_crates`). Resolved once per file, never in a hot loop. Ignored
     /// unless `multi_line`.
     pub multiline_engine: u8,
+    /// Maximum matches emitted from a single line before the scanner moves to the
+    /// next line; `0` means unlimited. Bounds a match-everything pattern (e.g. the
+    /// regex `.`) on a very long minified line from emitting millions of matches.
+    pub max_matches_per_line: usize,
 }
 
 const MAX_EMITTED_LINE_BYTES: usize = 4096;
@@ -370,6 +374,7 @@ pub fn scan_bytes_with_matcher_ex(
         let eager_source_col = needs_eager_source_col(line, options);
         let mut col_cursor = Utf16ColCursor::new();
         let mut search_from = 0usize;
+        let mut matches_this_line = 0usize;
         while search_from <= line.len() {
             match matcher.find(&line[search_from..]) {
                 None => break,
@@ -409,6 +414,12 @@ pub fn scan_bytes_with_matcher_ex(
                     }
 
                     search_from = start + len;
+                    matches_this_line += 1;
+                    if options.max_matches_per_line != 0
+                        && matches_this_line >= options.max_matches_per_line
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -548,6 +559,7 @@ where
         let eager_source_col = needs_eager_source_col(line, options);
         let mut col_cursor = Utf16ColCursor::new();
         let mut search_from = 0usize;
+        let mut matches_this_line = 0usize;
         while search_from <= line.len() {
             match matcher.find(&line[search_from..]) {
                 None => break,
@@ -623,6 +635,12 @@ where
                     }
 
                     search_from = start + len;
+                    matches_this_line += 1;
+                    if options.max_matches_per_line != 0
+                        && matches_this_line >= options.max_matches_per_line
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -1119,6 +1137,7 @@ mod tests {
             multi_line: false,
             multi_line_dotall: false,
             multiline_engine: 0,
+            max_matches_per_line: 0,
         }
     }
 
@@ -2094,6 +2113,58 @@ mod tests {
         let bytes = b"foo\nbar\nfoo\n";
         let n = scan_bytes_ex(bytes, "foo", &opts(), || false, |_| true).unwrap();
         assert_eq!(n, 2);
+    }
+
+    // ---- Per-line match cap (bounds a match-everything pattern on a long line) ----
+
+    #[test]
+    fn per_line_cap_limits_matches_on_one_line() {
+        let bytes = b"aaaaaaaa\n"; // 8 occurrences on a single line
+        let o = ScanOptions {
+            max_matches_per_line: 3,
+            ..opts()
+        };
+        let n = scan_bytes_ex(bytes, "a", &o, || false, |_| true).unwrap();
+        assert_eq!(n, 3);
+    }
+
+    #[test]
+    fn per_line_cap_zero_is_unlimited() {
+        let bytes = b"aaaaaaaa\n";
+        let o = ScanOptions {
+            max_matches_per_line: 0,
+            ..opts()
+        };
+        let n = scan_bytes_ex(bytes, "a", &o, || false, |_| true).unwrap();
+        assert_eq!(n, 8);
+    }
+
+    #[test]
+    fn per_line_cap_resets_each_line() {
+        // Cap 2 per line across two lines yields 4 total (the counter resets per line).
+        let bytes = b"aaaa\naaaa\n";
+        let o = ScanOptions {
+            max_matches_per_line: 2,
+            ..opts()
+        };
+        let n = scan_bytes_ex(bytes, "a", &o, || false, |_| true).unwrap();
+        assert_eq!(n, 4);
+    }
+
+    #[test]
+    fn per_line_cap_applies_to_streaming_variant() {
+        let bytes = b"aaaaaaaa\n";
+        let o = ScanOptions {
+            max_matches_per_line: 3,
+            ..opts()
+        };
+        let mut count = 0usize;
+        scan_bytes_streaming_ex(bytes, "a", &o, || false, |_| {
+            count += 1;
+            true
+        })
+        .unwrap();
+        assert_eq!(count, 3);
     }
 
     // ---- Streaming API tests ----

@@ -418,6 +418,7 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | --- | --- |
 | Max results | Stops after this many matches. 0 = unlimited, subject to the hard ceiling and memory safeguards. |
 | Max results ceiling | Hard cap applied to Max results. Values below 1,000 are not allowed. |
+| Absolute results safety limit | Hard backstop on total matches that applies even when Max results is 0 (unlimited). Prevents an unbounded content search (e.g. a match-everything pattern over huge files) from exhausting memory. Default 2,000,000; 0 disables the backstop (not recommended). |
 | Default file size filter | Minimum and maximum MB applied by default. Both 0 = any size. |
 | Default created date filter | Created-after and created-before defaults for Advanced Options. Blank = any date. |
 | Default modified date filter | Modified-after and modified-before defaults for Advanced Options. Blank = any date. |
@@ -460,6 +461,7 @@ Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BM
 | System memory pressure limit (%) | System RAM usage threshold for memory-saving mode. 0 = disabled. |
 | Process memory hard cap (MB) | Working-set limit before memory-saving activates. |
 | Max matches per file | Cap on stored matches per file (0 = unlimited). |
+| Max matches per line | Cap on matches emitted from a single line before the scanner moves on (0 = unlimited, default 5,000). Tames a match-everything pattern (e.g. the regex `.`) on very long minified lines. |
 | Content-search file size ceiling (MB) | Max individual file size for content search when no explicit max-size filter is set. 0 = no ceiling. |
 | MMF concurrency limit | Max concurrent memory-mapped file views. 0 = default 16. |
 | Native scanner concurrency limit | Max concurrent Rust native scanner operations. 0 = default `min(64, CPU cores x 2)`. |
@@ -1075,6 +1077,8 @@ Semantic requests can also set **sorting** and **grouping** (e.g. *"sort by file
 | `--memory-pressure <n>` | System memory threshold 0–100. |
 | `--file-lister-backend <n>` | 0=Auto, 1=SDK, 2=es.exe, 3=Managed. |
 | `--max-matches-per-file <n>` | Cap matches per file (0 = unlimited). |
+| `--max-matches-per-line <n>` | Cap matches emitted per line (0 = unlimited, default 5000). |
+| `--absolute-max-results <n>` | Hard total-match backstop even when `--max-results` is 0 (default 2000000). |
 | `--max-depth <n>` | Max recursion depth (0 = unlimited). |
 
 ### Archive Search

@@ -2324,6 +2324,12 @@ public sealed partial class SettingsWindow : Window
             resultLimitsGroup.Children.Add(resultsCeiling);
             resultLimitsGroup.Children.Add(new TextBlock { Text = "Absolute ceiling for Max Results regardless of per-search setting. Values above this are clamped down. Must be at least 1,000.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            resultLimitsGroup.Children.Add(NextSearchLabel("Absolute results safety limit (0 = unlimited):"));
+            var absoluteMax = new NumberBox { Value = _viewModel.AbsoluteMaxResults, Minimum = 0, Maximum = int.MaxValue };
+            absoluteMax.ValueChanged += (_, args) => _viewModel.AbsoluteMaxResults = double.IsNaN(args.NewValue) ? 0 : (int)args.NewValue;
+            resultLimitsGroup.Children.Add(absoluteMax);
+            resultLimitsGroup.Children.Add(new TextBlock { Text = "Hard backstop on total matches that applies even when \"Max results\" is 0 (unlimited). Prevents an unbounded content search (e.g. a match-everything pattern over huge files) from exhausting memory. Set to 0 to disable the backstop (not recommended).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             defaultFiltersGroup.Children.Add(NextSearchLabel("Default file size filter (MB):"));
             var sizeDefaults = new Grid { ColumnSpacing = 8 };
             sizeDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -2855,6 +2861,12 @@ public sealed partial class SettingsWindow : Window
             maxPerFile.ValueChanged += (_, args) => _viewModel.MaxMatchesPerFile = double.IsNaN(args.NewValue) ? 0 : (int)args.NewValue;
             scanSafeguardsGroup.Children.Add(maxPerFile);
             scanSafeguardsGroup.Children.Add(new TextBlock { Text = "Optional cap on stored matches per file. Useful for taming pathological files (massive logs, generated dumps) that would otherwise dominate memory. Leave at 0 for unlimited matches. Applies to subsequent searches.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            scanSafeguardsGroup.Children.Add(NextSearchLabel("Max matches per line (0 = unlimited):"));
+            var maxPerLine = new NumberBox { Value = _viewModel.MaxMatchesPerLine, Minimum = 0, Maximum = int.MaxValue };
+            maxPerLine.ValueChanged += (_, args) => _viewModel.MaxMatchesPerLine = double.IsNaN(args.NewValue) ? 0 : (int)args.NewValue;
+            scanSafeguardsGroup.Children.Add(maxPerLine);
+            scanSafeguardsGroup.Children.Add(new TextBlock { Text = "Caps how many matches a single line can emit before the scanner moves on. Tames a match-everything pattern (e.g. the regex \".\") on very long minified lines, which would otherwise produce millions of matches. Leave at 0 for unlimited. Applies to subsequent searches.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             scanSafeguardsGroup.Children.Add(NextSearchLabel("Content-search file size ceiling (MB, 0 = no ceiling):"));
             var fileSizeCeiling = new NumberBox { Value = _viewModel.ContentSearchFileSizeMB, Minimum = 0, Maximum = 10240 };

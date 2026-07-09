@@ -265,6 +265,13 @@ public sealed class AppSettings
     [JsonIgnore] public int MaxSearchDepth { get; set; }
     /// <summary>Optional hard cap on stored matches per file. 0 = unlimited (default). Useful for capping pathological files (massive logs, generated dumps) that would otherwise dominate the heap.</summary>
     public int MaxMatchesPerFile { get; set; }
+    /// <summary>Maximum matches emitted from a single line before the scanner moves to the next line. 0 = unlimited.
+    /// Bounds a match-everything pattern (e.g. the regex <c>.</c>) on a very long minified line from emitting millions
+    /// of matches. Default 5000.</summary>
+    public int MaxMatchesPerLine { get; set; } = 5_000;
+    /// <summary>Absolute safety ceiling on total matches that applies EVEN WHEN <c>MaxResults</c> is 0 (unlimited).
+    /// Prevents an unbounded content search from exhausting memory. 0 disables the backstop (not recommended). Default 2,000,000.</summary>
+    public int AbsoluteMaxResults { get; set; } = 2_000_000;
     /// <summary>Whether to skip binary files during content search. Default true.</summary>
     [JsonIgnore] public bool SkipBinary { get; set; } = true;
     /// <summary>When true, the scanner opens cloud-only (online-only) placeholder files
@@ -601,6 +608,10 @@ public sealed class SettingsService
             // Migrate: old default was int.MaxValue which caused unbounded memory growth.
             if (settings.MaxResults > SearchOptions.MaxResultsCeiling)
                 settings.MaxResults = SearchOptions.MaxResultsCeiling;
+            if (settings.MaxMatchesPerLine < 0)
+                settings.MaxMatchesPerLine = 0;
+            if (settings.AbsoluteMaxResults < 0)
+                settings.AbsoluteMaxResults = 0;
             if (settings.SkipExtensions is null)
                 settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
             if (settings.ArchiveExtensions is null)

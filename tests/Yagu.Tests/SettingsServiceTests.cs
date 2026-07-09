@@ -339,6 +339,45 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void Defaults_MaxMatchesPerLineAndAbsoluteMaxResults()
+    {
+        var s = new AppSettings();
+        Assert.Equal(5_000, s.MaxMatchesPerLine);
+        Assert.Equal(2_000_000, s.AbsoluteMaxResults);
+    }
+
+    [Fact]
+    public void RoundTrip_MaxMatchesPerLineAndAbsoluteMaxResults()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-perline-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            var s = new AppSettings { MaxMatchesPerLine = 1234, AbsoluteMaxResults = 987_654 };
+            svc.Save(s);
+            var loaded = svc.Load();
+            Assert.Equal(1234, loaded.MaxMatchesPerLine);
+            Assert.Equal(987_654, loaded.AbsoluteMaxResults);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void Load_ClampsNegativeLimitsToZero()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-neg-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, "{\"MaxMatchesPerLine\":-5,\"AbsoluteMaxResults\":-10}");
+            var svc = new SettingsService(tmp);
+            var loaded = svc.Load();
+            Assert.Equal(0, loaded.MaxMatchesPerLine);
+            Assert.Equal(0, loaded.AbsoluteMaxResults);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
     public void RoundTrip_FoundryModelUpdateFields()
     {
         var tmp = Path.Combine(Path.GetTempPath(), "qg-foundry-update-" + Guid.NewGuid() + ".json");
