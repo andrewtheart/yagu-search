@@ -1447,6 +1447,9 @@ public sealed partial class MainWindow
                 Width = 500,
                 Height = 270,
                 ShowTitleBar = false,
+                // Sit in the top-right near the editor's Save/Back controls instead of covering the
+                // center of the window, so the underlying edit stays visible while deciding.
+                Placement = YaguDialogPlacement.TopRightOverOwner,
             });
         if (choice == YaguDialogResult.Primary)
         {
@@ -1534,6 +1537,15 @@ public sealed partial class MainWindow
         {
             UpdateMatchNavPanel();
             UpdatePreviewEmptyState();
+            // Sections added while the editor covered the preview were deferred as
+            // lazy/collapsed (see PrependPreviewSectionsForFilesAsync) so the
+            // surface could be shown instantly. Now that the preview is visible
+            // again, materialize the ones in view so the user sees content instead
+            // of a wall of collapsed drawers.
+            if (_lazySections.Count > 0)
+                DispatcherQueue.TryEnqueue(
+                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                    MaterializeVisibleLazySections);
         }
 
         if (visible)

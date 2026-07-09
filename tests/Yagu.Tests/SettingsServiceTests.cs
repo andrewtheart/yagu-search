@@ -343,7 +343,27 @@ public class SettingsServiceNewFieldTests
     {
         var s = new AppSettings();
         Assert.Equal(5_000, s.MaxMatchesPerLine);
-        Assert.Equal(2_000_000, s.AbsoluteMaxResults);
+        // Results are unlimited by default — the absolute backstop is disabled (0), so nothing truncates.
+        Assert.Equal(0, s.AbsoluteMaxResults);
+    }
+
+    [Fact]
+    public void Load_MigratesLegacyAbsoluteMaxResultsDefaultToUnlimited()
+    {
+        // A persisted install carrying the old 2,000,000 backstop default must migrate to 0 (unlimited)
+        // so it stops truncating large result sets. A deliberately-set value is preserved.
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-absmax-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, "{\"AbsoluteMaxResults\":2000000}");
+            var migrated = new SettingsService(tmp).Load();
+            Assert.Equal(0, migrated.AbsoluteMaxResults);
+
+            File.WriteAllText(tmp, "{\"AbsoluteMaxResults\":500000}");
+            var kept = new SettingsService(tmp).Load();
+            Assert.Equal(500_000, kept.AbsoluteMaxResults);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
     }
 
     [Fact]

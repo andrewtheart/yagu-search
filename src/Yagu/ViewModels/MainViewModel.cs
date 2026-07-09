@@ -1126,7 +1126,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
     [ObservableProperty] public partial int MaxMatchesPerLine { get; set; } = 5_000;
-    [ObservableProperty] public partial int AbsoluteMaxResults { get; set; } = 2_000_000;
+    [ObservableProperty] public partial int AbsoluteMaxResults { get; set; }
     [ObservableProperty] public partial double MaxSearchDepth { get; set; } = double.NaN;
 
     partial void OnMaxMatchesPerFileChanged(int value) => ApplyMaxMatchesPerFile(value);
@@ -2297,7 +2297,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 // plain Traditional search of the typed text. (A salvaged plan already set its own
                 // "best guess" status inside TranslateSemanticQueryAsync.)
                 ErrorText = string.Empty;
-                SemanticStatusText = "AI couldn't interpret that — searching for the text directly.";
+                // A trivially-literal query (e.g. "1") already set an accurate passthrough status inside
+                // TranslateSemanticQueryAsync; only show the generic model-failure message when the
+                // translator left the status blank.
+                if (string.IsNullOrEmpty(SemanticStatusText))
+                    SemanticStatusText = "AI couldn't interpret that — searching for the text directly.";
             }
         }
 
@@ -2367,6 +2371,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         {
             ErrorText = "Describe what you want to find.";
             return SemanticTranslationOutcome.Aborted;
+        }
+
+        // A trivially-literal query — a single character, a bare number, or a short symbol token like
+        // "1" — is not natural language. Small on-device models tend to hallucinate a plan (often
+        // echoing a prompt example) for such input, so skip the model entirely and let the caller run a
+        // plain traditional search of the typed text (what the user means). Set an accurate status so
+        // the caller's generic "AI couldn't interpret that" message is not shown.
+        if (SemanticQuerySalvage.IsTrivialLiteralQuery(text))
+        {
+            SemanticStatusText = $"\u201C{text}\u201D isn't a natural-language query \u2014 searching for it directly.";
+            return SemanticTranslationOutcome.Failed;
         }
 
         try { _semanticCts?.Cancel(); } catch { }
@@ -3120,7 +3135,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             // Without this, the await foreach completes synchronously for thousands of
             // already-buffered items, starving the WinUI message pump and freezing the UI.
             long yieldTimestamp = Stopwatch.GetTimestamp();
-            long yieldIntervalTicks = Stopwatch.Frequency / 60; // ~16ms (one frame)
+            // Yield about twice per frame (not once) so the UI thread gets frequent breathing room to
+            // render smooth scrolling of the results list while heavy result batches stream in.
+            long yieldIntervalTicks = Stopwatch.Frequency / 120; // ~8ms
 
             // UI consumer diagnostics
             long uiEventsReceived = 0;
@@ -3152,7 +3169,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 if (now - yieldTimestamp >= yieldIntervalTicks)
                 {
                     uiYieldCount++;
-                    await Task.Delay(1, token).ConfigureAwait(true);
+                    // Yield to the dispatcher's higher-priority work (pending pointer/scroll input,
+                    // layout, and rendering) instead of a fixed Task.Delay, so buffered result batches
+                    // can never starve smooth scrolling. Resumes as soon as the pump is idle, so a
+                    // non-interactive full-drive scan still drains at full speed.
+                    await YieldToUiPumpAsync().ConfigureAwait(true);
                     yieldTimestamp = Stopwatch.GetTimestamp();
                 }
 
@@ -3734,6 +3755,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(pkg);
         }
         catch (Exception ex) { LogService.Instance.Verbose("Clipboard", "Clipboard unavailable", ex); }
+    }
+
+    /// <summary>
+    /// Yields the UI thread to the dispatcher's higher-priority work — pending pointer/scroll input,
+    /// layout, and rendering — before resuming, so a long run of buffered search-result batches cannot
+    /// starve smooth scrolling of the results list. The Low-priority continuation resumes only after the
+    /// pump has drained higher-priority work; when the UI is idle (e.g. a non-interactive full-drive
+    /// scan) it resumes almost immediately, so result draining still runs at full speed.
+    /// </summary>
+    private Task YieldToUiPumpAsync()
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_dispatcher.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => tcs.TrySetResult()))
+            tcs.TrySetResult();
+        return tcs.Task;
     }
 
     private async Task AddMatchAsync(SearchResult result, CancellationToken cancellationToken)

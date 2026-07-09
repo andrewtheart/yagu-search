@@ -266,11 +266,18 @@ public sealed class PreviewCoreRegressionTests
             "BeginPreviewContentUpdate();",
             "EnsurePreviewPanelVisible();");
 
-        string prepend = ExtractMethodWindow(MainWindowSource, "PrependPreviewSectionsForFilesAsync", 9000);
+        string prepend = ExtractMethodWindow(MainWindowSource, "PrependPreviewSectionsForFilesAsync", 10000);
         AssertContainsInOrder(prepend,
             "BeginPreviewContentUpdate();",
             "EnsurePreviewPanelVisible();",
             "EnsureSectionsSurface();");
+        // Sections added while the editor covers the preview must be deferred as
+        // lazy/collapsed so returning to the surface does not lay out many
+        // expanded sections at once (multi-second freeze on "View in preview").
+        AssertContainsInOrder(prepend,
+            "bool editorHidingPreview = PreviewEditor.Visibility == Visibility.Visible;",
+            "int eagerCount = editorHidingPreview",
+            "bool expanded = !editorHidingPreview && (!bulkInsert || fileIndex < BulkExpandLimit);");
         AssertContainsInOrder(prepend,
             "PreviewSectionsPanel.Children.Insert(insertIndex++, built[i]);",
             "if (i == 0)",
@@ -2303,12 +2310,21 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("truncatePreviewLines && consumed == 0", expandChunk);
         Assert.Contains("int? maxResultsToExpand = null", expandChunk);
         Assert.Contains("requestedChunkSize", expandChunk);
+        Assert.Contains("ov.RenderedSoFar >= MaxOverflowRenderedPerSection", expandChunk);
 
         string expandScrollChunk = ExtractMethodWindow(MainWindowSource, "ExpandOverflowChunk");
         Assert.Contains("bool truncatePreviewLines = ShouldTruncateOverflowPreviewLines()", expandScrollChunk);
+        Assert.Contains("ov.RenderedSoFar >= MaxOverflowRenderedPerSection", expandScrollChunk);
+        Assert.Contains("MarkOverflowCeilingReached(section, ov);", expandScrollChunk);
+
+        string overflowCeiling = ExtractMethodWindow(MainWindowSource, "MarkOverflowCeilingReached", window: 900);
+        Assert.Contains("if (ov.CeilingReached) return;", overflowCeiling);
+        Assert.Contains("ov.CeilingReached = true;", overflowCeiling);
+        Assert.Contains("AppendOverflowCeilingNotice(section, ov.OriginalTotal, ov.RenderedSoFar)", overflowCeiling);
 
         string autoOverflow = ExtractMethodWindow(MainWindowSource, "TryAutoLoadOverflowOnScroll", window: 2200);
         Assert.Contains("IsOverflowAutoLoadSuppressedForMatchNavigation()", autoOverflow);
+        Assert.Contains("ov.RenderedSoFar >= MaxOverflowRenderedPerSection", autoOverflow);
 
         string scrollAfterMatch = ExtractMethodWindow(MainWindowSource, "ScrollAfterMatchNavigation", window: 1200);
         Assert.Contains("SuppressOverflowAutoLoadForMatchNavigation();", scrollAfterMatch);

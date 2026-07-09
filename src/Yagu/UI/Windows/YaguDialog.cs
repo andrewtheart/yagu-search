@@ -24,6 +24,16 @@ internal enum YaguDialogDefaultButton
     Close,
 }
 
+/// <summary>Where an owned <see cref="YaguDialog"/> is placed relative to its owner window.</summary>
+internal enum YaguDialogPlacement
+{
+    /// <summary>Centered over the owner (the default for every dialog).</summary>
+    CenterOverOwner,
+    /// <summary>Anchored to the owner's top-right, just below its title bar/toolbar — for prompts that
+    /// should sit near the top-right controls rather than cover the center of the window.</summary>
+    TopRightOverOwner,
+}
+
 internal sealed record YaguDialogOptions
 {
     public required string Title { get; init; }
@@ -41,6 +51,9 @@ internal sealed record YaguDialogOptions
     public bool ShowTitle { get; init; } = true;
     public bool ShowTitleBar { get; init; } = true;
     public bool ShowTopRightCloseButton { get; init; }
+
+    /// <summary>Where the dialog is placed relative to its owner. Defaults to centered.</summary>
+    public YaguDialogPlacement Placement { get; init; } = YaguDialogPlacement.CenterOverOwner;
 
     /// <summary>Optional Segoe Fluent/MDL2 glyph shown to the left of the title (e.g. a warning icon). Null = no glyph.</summary>
     public string? TitleGlyph { get; init; }
@@ -90,7 +103,10 @@ internal sealed class YaguDialog : Window
         var appWindow = AppWindow.GetFromWindowId(windowId);
         _appWindow = appWindow;
         appWindow.Title = Title;
-        WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, options.Width, options.Height);
+        if (options.Placement == YaguDialogPlacement.TopRightOverOwner)
+            WindowForegroundHelper.PositionTopRightOverOwner(appWindow, _ownerHwnd, options.Width, options.Height);
+        else
+            WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, options.Width, options.Height);
         TryConfigurePresenter(appWindow, options.IsResizable, options.ShowTitleBar);
         TrySetIcon(appWindow);
     }
@@ -357,8 +373,12 @@ internal sealed class YaguDialog : Window
         if (Math.Abs(desiredHeightPhysical - currentSize.Height) <= 2)
             return; // already the right height
 
-        WindowForegroundHelper.CenterWindowOverOwner(
-            _appWindow, _ownerHwnd, currentSize.Width, desiredHeightPhysical);
+        if (_options.Placement == YaguDialogPlacement.TopRightOverOwner)
+            WindowForegroundHelper.PositionTopRightOverOwner(
+                _appWindow, _ownerHwnd, currentSize.Width, desiredHeightPhysical);
+        else
+            WindowForegroundHelper.CenterWindowOverOwner(
+                _appWindow, _ownerHwnd, currentSize.Width, desiredHeightPhysical);
     }
 
     /// <summary>Top+bottom non-client frame height in physical pixels at this window's DPI (border +

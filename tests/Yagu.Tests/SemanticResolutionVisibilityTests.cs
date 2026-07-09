@@ -41,7 +41,7 @@ public sealed class SemanticResolutionVisibilityTests
         // The reset runs ONLY inside the Semantic branch, so a Traditional search never alters Advanced
         // Options (the include-glob-wiped-in-traditional-mode bug). The mode gate must appear BEFORE the
         // reset call within SubmitSearchAsync.
-        string submit = Method("SubmitSearchAsync", 3400);
+        string submit = Method("SubmitSearchAsync", 3700);
         int semanticGate = submit.IndexOf("if (IsSemanticQueryMode && SemanticSearchAvailable)", StringComparison.Ordinal);
         int resetCall = submit.IndexOf("ResetVisibleSemanticResolution();", StringComparison.Ordinal);
         Assert.True(semanticGate >= 0, "SubmitSearchAsync must gate on the Semantic mode.");

@@ -270,8 +270,9 @@ public sealed class AppSettings
     /// of matches. Default 5000.</summary>
     public int MaxMatchesPerLine { get; set; } = 5_000;
     /// <summary>Absolute safety ceiling on total matches that applies EVEN WHEN <c>MaxResults</c> is 0 (unlimited).
-    /// Prevents an unbounded content search from exhausting memory. 0 disables the backstop (not recommended). Default 2,000,000.</summary>
-    public int AbsoluteMaxResults { get; set; } = 2_000_000;
+    /// When &gt; 0, an unbounded content search stops once reached (result marked truncated). Default 0 (disabled —
+    /// no truncation); memory-pressure eviction and the per-line cap still protect against runaway usage.</summary>
+    public int AbsoluteMaxResults { get; set; }
     /// <summary>Whether to skip binary files during content search. Default true.</summary>
     [JsonIgnore] public bool SkipBinary { get; set; } = true;
     /// <summary>When true, the scanner opens cloud-only (online-only) placeholder files
@@ -598,6 +599,10 @@ public sealed class SettingsService
     public static string DefaultPath() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Yagu", "settings.json");
 
+    // The pre-"unlimited by default" backstop value. A persisted AbsoluteMaxResults equal to this exact
+    // legacy default is migrated to 0 (disabled) on load so existing installs stop truncating results.
+    private const int LegacyDefaultAbsoluteMaxResults = 2_000_000;
+
     public AppSettings Load()
     {
         try
@@ -611,6 +616,10 @@ public sealed class SettingsService
             if (settings.MaxMatchesPerLine < 0)
                 settings.MaxMatchesPerLine = 0;
             if (settings.AbsoluteMaxResults < 0)
+                settings.AbsoluteMaxResults = 0;
+            // Unlimited-by-default: migrate the exact legacy 2,000,000 backstop to 0 (disabled) so
+            // existing installs stop truncating large result sets. A deliberately-set value is kept.
+            else if (settings.AbsoluteMaxResults == LegacyDefaultAbsoluteMaxResults)
                 settings.AbsoluteMaxResults = 0;
             if (settings.SkipExtensions is null)
                 settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
@@ -655,6 +664,11 @@ public sealed class SettingsService
             var settings = await JsonSerializer.DeserializeAsync(fs, AppSettingsJsonContext.Default.AppSettings, cancellationToken).ConfigureAwait(false) ?? new AppSettings();
             if (settings.MaxResults > SearchOptions.MaxResultsCeiling)
                 settings.MaxResults = SearchOptions.MaxResultsCeiling;
+            if (settings.AbsoluteMaxResults < 0)
+                settings.AbsoluteMaxResults = 0;
+            // Unlimited-by-default: migrate the exact legacy 2,000,000 backstop to 0 (disabled).
+            else if (settings.AbsoluteMaxResults == LegacyDefaultAbsoluteMaxResults)
+                settings.AbsoluteMaxResults = 0;
             if (settings.SkipExtensions is null)
                 settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
             if (settings.ArchiveExtensions is null)

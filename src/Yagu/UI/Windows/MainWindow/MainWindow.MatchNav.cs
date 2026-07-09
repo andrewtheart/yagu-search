@@ -3578,6 +3578,15 @@ public sealed partial class MainWindow
     {
         var sw = Stopwatch.StartNew();
         if (!_sectionOverflow.TryGetValue(section, out var ov)) return false;
+
+        // Respect the global render ceiling (see MaxOverflowRenderedPerSection):
+        // growing a single RichTextBlock past it fail-fasts WinUI text layout.
+        if (ov.CeilingReached || ov.RenderedSoFar >= MaxOverflowRenderedPerSection)
+        {
+            MarkOverflowCeilingReached(section, ov);
+            return false;
+        }
+
         int requestedChunkSize = maxResultsToExpand is > 0 ? maxResultsToExpand.Value : MaxMatchesPerExpandChunk;
         int chunkSize = Math.Min(requestedChunkSize, ov.RemainingResults.Count);
         if (ov.IsHighlightMode && ov.AllLines != null && chunkSize > 0)

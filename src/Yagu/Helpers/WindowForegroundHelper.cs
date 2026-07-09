@@ -115,6 +115,68 @@ internal static class WindowForegroundHelper
         return new RectInt32(x, y, width, height);
     }
 
+    /// <summary>
+    /// Positions <paramref name="appWindow"/> anchored to the TOP-RIGHT of its owner (just below the
+    /// owner's title bar/toolbar) instead of centered — used by dialogs that should sit out of the way
+    /// near the top-right controls (e.g. the editor "unsaved changes" prompt next to Save/Back) rather
+    /// than covering the center of the window. Margins are DPI-scaled logical pixels; the result is
+    /// clamped to the monitor work area.
+    /// </summary>
+    public static void PositionTopRightOverOwner(
+        AppWindow appWindow,
+        IntPtr ownerHwnd,
+        int width,
+        int height,
+        int marginTopDip = 56,
+        int marginRightDip = 14,
+        int minWidth = 420,
+        int minHeight = 260)
+    {
+        appWindow.MoveAndResize(CalculateTopRightBounds(ownerHwnd, width, height, marginTopDip, marginRightDip, minWidth, minHeight));
+    }
+
+    private static RectInt32 CalculateTopRightBounds(IntPtr ownerHwnd, int width, int height, int marginTopDip, int marginRightDip, int minWidth, int minHeight)
+    {
+        int x = 100;
+        int y = 100;
+
+        const uint monitorDefaultToNearest = 2;
+        IntPtr monitor = ownerHwnd == IntPtr.Zero
+            ? MonitorFromPoint(new POINT { X = 0, Y = 0 }, monitorDefaultToNearest)
+            : MonitorFromWindow(ownerHwnd, monitorDefaultToNearest);
+
+        var monitorInfo = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (GetMonitorInfo(monitor, ref monitorInfo))
+        {
+            var workArea = monitorInfo.rcWork;
+            width = Math.Min(width, Math.Max(minWidth, workArea.Right - workArea.Left));
+            height = Math.Min(height, Math.Max(minHeight, workArea.Bottom - workArea.Top));
+
+            double dpiScale = ownerHwnd != IntPtr.Zero ? GetDpiForWindow(ownerHwnd) / 96.0 : 1.0;
+            if (dpiScale <= 0) dpiScale = 1.0;
+            int marginTop = (int)Math.Round(marginTopDip * dpiScale);
+            int marginRight = (int)Math.Round(marginRightDip * dpiScale);
+
+            if (ownerHwnd != IntPtr.Zero && GetWindowRect(ownerHwnd, out var ownerRect))
+            {
+                x = ownerRect.Right - width - marginRight;
+                y = ownerRect.Top + marginTop;
+            }
+            else
+            {
+                x = workArea.Right - width - marginRight;
+                y = workArea.Top + marginTop;
+            }
+
+            if (x < workArea.Left) x = workArea.Left;
+            if (y < workArea.Top) y = workArea.Top;
+            if (x + width > workArea.Right) x = workArea.Right - width;
+            if (y + height > workArea.Bottom) y = workArea.Bottom - height;
+        }
+
+        return new RectInt32(x, y, width, height);
+    }
+
     private static bool IsTopMost(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero)
@@ -166,6 +228,9 @@ internal static class WindowForegroundHelper
 
     [DllImport("user32.dll")]
     private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT

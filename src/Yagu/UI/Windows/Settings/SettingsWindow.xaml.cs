@@ -2328,7 +2328,7 @@ public sealed partial class SettingsWindow : Window
             var absoluteMax = new NumberBox { Value = _viewModel.AbsoluteMaxResults, Minimum = 0, Maximum = int.MaxValue };
             absoluteMax.ValueChanged += (_, args) => _viewModel.AbsoluteMaxResults = double.IsNaN(args.NewValue) ? 0 : (int)args.NewValue;
             resultLimitsGroup.Children.Add(absoluteMax);
-            resultLimitsGroup.Children.Add(new TextBlock { Text = "Hard backstop on total matches that applies even when \"Max results\" is 0 (unlimited). Prevents an unbounded content search (e.g. a match-everything pattern over huge files) from exhausting memory. Set to 0 to disable the backstop (not recommended).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            resultLimitsGroup.Children.Add(new TextBlock { Text = "Hard backstop on total matches that applies even when \"Max results\" is 0 (unlimited). 0 (the default) disables it — no truncation; memory-pressure eviction (results paged to disk) and the per-line cap still protect against runaway usage. Set a positive value to cap an unbounded match-everything search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             defaultFiltersGroup.Children.Add(NextSearchLabel("Default file size filter (MB):"));
             var sizeDefaults = new Grid { ColumnSpacing = 8 };

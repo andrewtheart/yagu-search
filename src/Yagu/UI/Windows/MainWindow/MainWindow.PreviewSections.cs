@@ -122,6 +122,11 @@ public sealed partial class MainWindow
         /// highlight mode to clip overlapping context windows so expansion
         /// continues directly from the last rendered line.</summary>
         public int LastRenderedLine;
+        /// <summary>True once <see cref="MaxOverflowRenderedPerSection"/> has been
+        /// reached and expansion was permanently stopped (a terminal notice is
+        /// shown). Prevents further scroll/Next-match growth that would fail-fast
+        /// WinUI text layout.</summary>
+        public bool CeilingReached;
     }
     private readonly Dictionary<RichTextBlock, SectionOverflow> _sectionOverflow = new();
 
@@ -1158,6 +1163,14 @@ public sealed partial class MainWindow
                 // is inside or near the current view.
                 if (sectionBottom <= vpBottom + prefetchBuffer && sectionBottom >= sv.VerticalOffset - vpH)
                 {
+                    // Never grow a section past the global render ceiling; skip it
+                    // so the prefetch continuation loop doesn't spin on it forever.
+                    if (ov.CeilingReached || ov.RenderedSoFar >= MaxOverflowRenderedPerSection)
+                    {
+                        MarkOverflowCeilingReached(section, ov);
+                        continue;
+                    }
+
                     _autoLoadOverflowInFlight = true;
                     DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () =>
                     {
@@ -1201,6 +1214,29 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
+    /// Permanently stops overflow expansion for a section that has reached the
+    /// global <see cref="MaxOverflowRenderedPerSection"/> render ceiling,
+    /// replacing its truncation notice with a terminal "open in editor" message.
+    /// Idempotent — safe to call from every expansion path. The overflow state
+    /// itself is kept (so the match-count denominator stays correct); only
+    /// further growth is blocked.
+    /// </summary>
+    private void MarkOverflowCeilingReached(RichTextBlock section, SectionOverflow ov)
+    {
+        if (ov.CeilingReached) return;
+        ov.CeilingReached = true;
+
+        // Swap the "click Next match to load more" notice for the terminal one.
+        if (ov.NoticePara != null)
+        {
+            section.Blocks.Remove(ov.NoticePara);
+            if (_sectionGutterBlocks.TryGetValue(section, out var gb) && gb.Blocks.Count > 0)
+                gb.Blocks.RemoveAt(gb.Blocks.Count - 1);
+        }
+        ov.NoticePara = AppendOverflowCeilingNotice(section, ov.OriginalTotal, ov.RenderedSoFar);
+    }
+
+    /// <summary>
     /// Expands up to <paramref name="matchCount"/> matches from a section's
     /// overflow, similar to <see cref="ExpandSectionNextChunk"/> but with a
     /// configurable chunk size.
@@ -1209,6 +1245,17 @@ public sealed partial class MainWindow
     {
         var sw = Stopwatch.StartNew();
         if (!_sectionOverflow.TryGetValue(section, out var ov)) return;
+
+        // Global render ceiling: a single RichTextBlock cannot grow without bound.
+        // Past this many rendered matches WinUI's text layout fail-fasts
+        // (0xc000027b / E_UNEXPECTED), worse under concurrent-search memory
+        // pressure. Stop expanding and leave a terminal "open in editor" notice.
+        if (ov.CeilingReached || ov.RenderedSoFar >= MaxOverflowRenderedPerSection)
+        {
+            MarkOverflowCeilingReached(section, ov);
+            return;
+        }
+
         int chunkSize = Math.Min(matchCount, ov.RemainingResults.Count);
         if (ov.IsHighlightMode && ov.AllLines != null && chunkSize > 0)
         {
@@ -1537,7 +1584,18 @@ public sealed partial class MainWindow
             LogService.Instance.Info("Preview",
                 $"PrependPreviewSectionsForFilesAsync: capping initial render at {pageEnd:N0}/{totalRequested:N0}; remainder deferred to 'Show more'.");
 
-        bool showSpinner = pageEnd > EffectivePreviewSectionPageSize / 2 || deferRemainder;
+        // While the full-file editor covers the preview (PreviewScrollViewer is
+        // Collapsed), any section we build now is NOT laid out until the surface
+        // is shown again — so eagerly expanding many here means they ALL lay out
+        // at once when the user clicks "View in preview", freezing the UI for
+        // seconds. Defer every new section as lazy/collapsed instead;
+        // MaterializeVisibleLazySections (run when the surface reappears) builds
+        // only the ones in view, and TryScrollToPreviewSection expands the file
+        // the toast jumps to. See note #49: never lay out many expanded sections
+        // at once.
+        bool editorHidingPreview = PreviewEditor.Visibility == Visibility.Visible;
+
+        bool showSpinner = (pageEnd > EffectivePreviewSectionPageSize / 2 || deferRemainder) && !editorHidingPreview;
         if (showSpinner)
             ShowProgressOverlay($"Adding {pageEnd:N0} of {totalRequested:N0} files\u2026", 0);
 
@@ -1546,7 +1604,9 @@ public sealed partial class MainWindow
         // file on demand inside MaterializeLazySection.
         var fileList = orderedFiles.GetRange(0, pageEnd);
         bool bulkInsert = fileList.Count > BulkExpandLimit;
-        int eagerCount = bulkInsert ? Math.Min(BulkExpandLimit, fileList.Count) : fileList.Count;
+        int eagerCount = editorHidingPreview
+            ? 0
+            : (bulkInsert ? Math.Min(BulkExpandLimit, fileList.Count) : fileList.Count);
         var fileContents = await ReadAllFileContentsAsync(
             eagerCount == fileList.Count ? fileList : fileList.GetRange(0, eagerCount));
 
@@ -1559,7 +1619,8 @@ public sealed partial class MainWindow
         int fileIndex = 0;
         foreach (var (filePath, results) in fileList)
         {
-            bool expanded = !bulkInsert || fileIndex < BulkExpandLimit;
+            // While the editor hides the preview, never eager-expand (see above).
+            bool expanded = !editorHidingPreview && (!bulkInsert || fileIndex < BulkExpandLimit);
             var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results,
                 isExpanded: expanded, addToPanel: false);
 

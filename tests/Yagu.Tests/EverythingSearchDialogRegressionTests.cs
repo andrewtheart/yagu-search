@@ -36,6 +36,31 @@ public sealed class EverythingSearchDialogRegressionTests
     }
 
     [Fact]
+    public void UnsavedChangesPrompt_IsPlacedTopRightOverOwner()
+    {
+        string root = FindRepoRoot();
+        string dialog = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "YaguDialog.cs"));
+        string previewEditor = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewEditor.cs"));
+        string helper = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Helpers", "WindowForegroundHelper.cs"));
+
+        // The dialog exposes a placement option (default centered) and the top-right helper exists.
+        Assert.Contains("enum YaguDialogPlacement", dialog);
+        Assert.Contains("public YaguDialogPlacement Placement { get; init; } = YaguDialogPlacement.CenterOverOwner;", dialog);
+        Assert.Contains("public static void PositionTopRightOverOwner(", helper);
+
+        // Top-right routing must happen at BOTH positioning sites — the ctor AND the auto-size re-fit —
+        // or the re-fit would recenter it. (The default-center path keeps the CenterWindowOverOwner pin.)
+        int topRightCalls = dialog.Split("PositionTopRightOverOwner(").Length - 1;
+        Assert.True(topRightCalls >= 2, "YaguDialog must place top-right at both the ctor and the auto-size re-fit.");
+
+        // The editor "unsaved changes" prompt sits top-right (near Save/Back), not centered.
+        int idx = previewEditor.IndexOf("Title = \"Unsaved changes\"", StringComparison.Ordinal);
+        Assert.True(idx >= 0, "Expected the 'Unsaved changes' prompt in MainWindow.PreviewEditor.cs");
+        string block = previewEditor.Substring(idx, Math.Min(900, previewEditor.Length - idx));
+        Assert.Contains("Placement = YaguDialogPlacement.TopRightOverOwner", block);
+    }
+
+    [Fact]
     public void EverythingNotFoundPrompt_HasStandoutInstallRecommendation()
     {
         string startupChecks = File.ReadAllText(

@@ -61,6 +61,37 @@ internal static class SemanticQuerySalvage
         @"\b(?:contain(?:s|ing)?|mention(?:s|ing)?|with\s+the\s+words?|has\s+the\s+words?|about|that\s+(?:says?|mentions?))\s+(?:the\s+words?\s+)?[""'\u201C\u2018]?([A-Za-z0-9 _./+#@-]{1,40}?)[""'\u201D\u2019]?(?:\s+in\s+(?:it|them|the\s+files?))?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="query"/> is a trivial literal token rather than a
+    /// natural-language request — a single character, a bare number, or a short symbol token (e.g.
+    /// "1", "42", "ab", "!!"). Small on-device models tend to hallucinate a plan (often echoing a
+    /// prompt example) for such input, so the caller should skip the model and search for the text
+    /// literally, which is what the user means. A multi-word phrase, or a single word of three or more
+    /// letters (e.g. "photos", "readme"), is NOT trivial and should go to the model.
+    /// </summary>
+    public static bool IsTrivialLiteralQuery(string? query)
+    {
+        string text = query?.Trim() ?? string.Empty;
+        if (text.Length == 0)
+            return false;
+
+        // A phrase (any internal whitespace) is a real request — let the model interpret it.
+        foreach (char c in text)
+            if (char.IsWhiteSpace(c))
+                return false;
+
+        // Single tokens of 1-2 characters are never meaningful natural language.
+        if (text.Length <= 2)
+            return true;
+
+        // A longer token with NO letters at all is a bare number or punctuation run
+        // (e.g. "2024", "42", "!!!") — a literal the user typed to find verbatim.
+        foreach (char c in text)
+            if (char.IsLetter(c))
+                return false;
+        return true;
+    }
+
     /// <summary>Builds a best-guess <see cref="SemanticSearchPlan"/> from <paramref name="query"/> using
     /// only deterministic rules. Returns <c>true</c> when it recovered at least one concrete constraint
     /// (a file-type glob, content term, known folder, or hidden-file preference); <c>false</c> means the

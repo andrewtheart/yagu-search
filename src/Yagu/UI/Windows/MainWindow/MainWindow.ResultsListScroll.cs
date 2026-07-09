@@ -18,6 +18,10 @@ public sealed partial class MainWindow
     private const double ResultsListScrollEdgeEpsilon = 0.5;
     private double ResultsFileOverlayFallbackHeight => ViewModel.FileListOverlayHeight;
     private const int ResultsListSmartScrollRestorePasses = 3;
+    // While the user is actively scrolling (or just did), the streaming smart-scroll restore must not
+    // yank the view back to top/bottom — that fights the scroll and is what makes it feel choppy during
+    // a live search. Suppress the automatic restore for this long after the last manual scroll frame.
+    private const double ResultsListUserScrollSuppressMs = 500;
 
     private enum ResultsListSmartScrollIntent
     {
@@ -33,6 +37,7 @@ public sealed partial class MainWindow
     private bool _resultsListSmartScrollPending;
     private bool _resultsListTopRestoreInProgress;
     private bool _resultsListShowMoreRestoreInProgress;
+    private long _resultsListLastUserScrollTicks;
     private bool _resultsFileOverlayUpdatePending;
     private FileGroup? _resultsFileOverlayGroup;
     private ResultsListSmartScrollIntent _pendingResultsListSmartScrollIntent;
@@ -81,6 +86,11 @@ public sealed partial class MainWindow
 
     private void OnResultsListScrollViewerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
+        // Intermediate frames only occur during a manual wheel/drag/touch scroll — the programmatic
+        // restore uses ChangeView(disableAnimation:true) which produces a single non-intermediate
+        // event. Record the manual-scroll time so the streaming restore stops fighting it.
+        if (e.IsIntermediate)
+            _resultsListLastUserScrollTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         CaptureResultsListScrollPosition();
         QueueResultsFileOverlayUpdate();
     }
@@ -393,6 +403,12 @@ public sealed partial class MainWindow
         if (_resultsListShowMoreRestoreInProgress)
             return ResultsListSmartScrollIntent.None;
 
+        // Do not fight an active manual scroll: while the user is dragging/wheeling the results list
+        // (or just did), suppress the automatic keep-top / follow-bottom restore that would otherwise
+        // yank the view on every streaming batch. Explicit auto-scroll (opt-in follow-tail) is exempt.
+        if (!_autoScrollEnabled && IsResultsListUserScrollingRecently())
+            return ResultsListSmartScrollIntent.None;
+
         if (_resultsListWasAtTop)
             return ResultsListSmartScrollIntent.KeepTop;
         if (_autoScrollEnabled)
@@ -401,6 +417,15 @@ public sealed partial class MainWindow
             return ResultsListSmartScrollIntent.FollowBottom;
 
         return ResultsListSmartScrollIntent.None;
+    }
+
+    private bool IsResultsListUserScrollingRecently()
+    {
+        if (_resultsListLastUserScrollTicks == 0)
+            return false;
+        double elapsedMs = (System.Diagnostics.Stopwatch.GetTimestamp() - _resultsListLastUserScrollTicks)
+            * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        return elapsedMs >= 0 && elapsedMs < ResultsListUserScrollSuppressMs;
     }
 
     private void QueueResultsListSmartScrollRestore(ResultsListSmartScrollIntent intent)
@@ -443,6 +468,14 @@ public sealed partial class MainWindow
     private void ApplyResultsListSmartScrollIntent(ResultsListSmartScrollIntent intent, int remainingPasses)
     {
         if (ViewModel.ResultRows.Count == 0)
+        {
+            _resultsListTopRestoreInProgress = false;
+            return;
+        }
+
+        // A restore can be queued (Low priority, multi-pass) just before the user starts scrolling.
+        // Re-check here so a stale restore never jumps the view out from under an active manual scroll.
+        if (!_autoScrollEnabled && IsResultsListUserScrollingRecently())
         {
             _resultsListTopRestoreInProgress = false;
             return;

@@ -120,10 +120,11 @@ public sealed class SearchOptions
     public int MaxMatchesPerLine { get; init; } = 5_000;
 
     /// <summary>Absolute safety ceiling on total matches that applies EVEN WHEN <see cref="MaxResults"/>
-    /// is 0 (unlimited). Prevents an unbounded content search (e.g. a match-everything regex over huge
-    /// files) from exhausting memory: once reached, the scan stops and the result is marked truncated.
-    /// 0 disables the backstop (truly unlimited — not recommended).</summary>
-    public int AbsoluteMaxResults { get; init; } = 2_000_000;
+    /// is 0 (unlimited). When &gt; 0, an unbounded content search (e.g. a match-everything regex over huge
+    /// files) stops once reached and the result is marked truncated. Default 0 (disabled — no truncation):
+    /// memory-pressure eviction (results paged to disk) and the per-line <see cref="MaxMatchesPerLine"/>
+    /// cap still protect against runaway usage.</summary>
+    public int AbsoluteMaxResults { get; init; }
 
     public bool SkipBinary { get; init; } = true;
 

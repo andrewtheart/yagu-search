@@ -1501,10 +1501,10 @@ allowed.</td>
 </tr>
 <tr>
 <td>Absolute results safety limit</td>
-<td>Hard backstop on total matches that applies even when Max results is
-0 (unlimited). Prevents an unbounded content search (e.g. a
-match-everything pattern over huge files) from exhausting memory.
-Default 2,000,000; 0 disables the backstop (not recommended).</td>
+<td>Optional hard backstop on total matches that applies even when Max
+results is 0 (unlimited). Default 0 (disabled — no truncation). Set a
+positive value to cap an unbounded match-everything search;
+memory-pressure eviction and the per-line cap always apply.</td>
 </tr>
 <tr>
 <td>Default file size filter</td>
@@ -3248,7 +3248,7 @@ for the underlying flags.</p>
 <tr>
 <td><code>--absolute-max-results &lt;n&gt;</code></td>
 <td>Hard total-match backstop even when <code>--max-results</code> is 0
-(default 2000000).</td>
+(default 0 = unlimited).</td>
 </tr>
 <tr>
 <td><code>--max-depth &lt;n&gt;</code></td>

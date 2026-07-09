@@ -217,6 +217,16 @@ public sealed partial class MainWindow
     /// </summary>
     private const int MaxMatchEntriesPerExpandChunk = 2_000;
 
+    /// <summary>
+    /// Absolute ceiling on how many overflow matches a single preview section's
+    /// <c>RichTextBlock</c> may render across ALL scroll/Next-match expansions.
+    /// A single RichTextBlock grown past this fail-fasts WinUI's text layout
+    /// (<c>0xc000027b</c> / <c>E_UNEXPECTED</c>), worse under the memory pressure
+    /// of a concurrent search. Once reached, expansion stops and the section
+    /// directs the user to the full-file editor for the remaining matches.
+    /// </summary>
+    private const int MaxOverflowRenderedPerSection = 4_000;
+
     // ── Gutter-height synchronization (word-wrap support) ─────────────────
     //
     // The gutter and content are separate RichTextBlocks in a two-column Grid.
@@ -449,6 +459,27 @@ public sealed partial class MainWindow
         {
             Text = $"\u26A0 Showing first {renderedMatches:N0} of {totalMatches:N0} matches. " +
                    "Click \u2193 (Next match) to load more, or open in editor to browse all.",
+        };
+        run.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 200, 160, 60));
+        notice.Inlines.Add(run);
+        section.Blocks.Add(notice);
+        SyncGutterSpacer(section, notice.Margin);
+        return notice;
+    }
+
+    /// <summary>
+    /// Terminal notice appended when a section reaches
+    /// <see cref="MaxOverflowRenderedPerSection"/>. Unlike
+    /// <see cref="AppendTruncationNotice"/> it does NOT invite further loading
+    /// (which would fail-fast WinUI layout); it points the user to the editor.
+    /// </summary>
+    private Paragraph AppendOverflowCeilingNotice(RichTextBlock section, int totalMatches, int renderedMatches)
+    {
+        var notice = new Paragraph { Margin = new Thickness(0, 12, 0, 4) };
+        var run = new Run
+        {
+            Text = $"\u26A0 Showing {renderedMatches:N0} of {totalMatches:N0} matches. " +
+                   "This file has too many matches to render fully here \u2014 open it in the editor to browse all.",
         };
         run.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 200, 160, 60));
         notice.Inlines.Add(run);

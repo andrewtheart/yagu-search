@@ -92,4 +92,28 @@ public sealed class SemanticQuerySalvageTests
     [Fact]
     public void TryBuildPlan_NullQuery_ReturnsFalse()
         => Assert.False(SemanticQuerySalvage.TryBuildPlan(null, out _));
+
+    [Theory]
+    [InlineData("1")]        // the reported case: a single digit
+    [InlineData("9")]
+    [InlineData("ab")]       // any 1-2 char token
+    [InlineData("c#")]
+    [InlineData("42")]       // bare number of any length
+    [InlineData("2024")]
+    [InlineData("!!!")]      // pure punctuation
+    [InlineData("  7  ")]    // trimmed to a bare digit
+    public void IsTrivialLiteralQuery_TrivialTokens_ReturnTrue(string query)
+        => Assert.True(SemanticQuerySalvage.IsTrivialLiteralQuery(query));
+
+    [Theory]
+    [InlineData("photos")]                       // single meaningful word (3+ letters) → let the model map it
+    [InlineData("readme")]
+    [InlineData("invoice2024")]                  // has letters and 3+ chars
+    [InlineData("large minified javascript files over 1 MB")] // a real phrase
+    [InlineData("files from 2024")]              // number inside a phrase
+    [InlineData("")]                             // nothing to short-circuit
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void IsTrivialLiteralQuery_NaturalLanguageOrEmpty_ReturnFalse(string? query)
+        => Assert.False(SemanticQuerySalvage.IsTrivialLiteralQuery(query));
 }
