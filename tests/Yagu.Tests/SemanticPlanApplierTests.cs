@@ -88,6 +88,64 @@ public sealed class SemanticPlanApplierTests
     }
 
     [Fact]
+    public void Resolve_AttributeOnlyPlanWithContentMode_ForcesFileNamesNotContentMatchAll()
+    {
+        // "large minified javascript files over 1 MB" — an attribute-only request (size + type, no
+        // text term). The model guessed Content mode; synthesizing "." there would scan every byte of
+        // every matching file (millions of matches on minified one-line files). Must list by name.
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = null,
+            SearchMode = "content",
+            IncludeGlobs = new() { "*.min.js" },
+            MinFileSizeBytes = 1_048_576,
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Equal(".", resolved.Pattern);
+        Assert.True(resolved.UseRegex);
+        Assert.Equal(SearchMode.FileNames, resolved.SearchMode);
+    }
+
+    [Fact]
+    public void Resolve_ModelEmitsMatchAllRegexInContentMode_ForcesFileNames()
+    {
+        // A model that routes a bare "." regex into a content search would match every character of
+        // every file. Downgrade it to a filename listing.
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = ".",
+            UseRegex = true,
+            SearchMode = "content",
+            IncludeGlobs = new() { "*.js" },
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Equal(SearchMode.FileNames, resolved.SearchMode);
+    }
+
+    [Fact]
+    public void Resolve_LiteralDotInContentMode_IsPreserved()
+    {
+        // A LITERAL "." (useRegex false) is a genuine "contains a period" content search, not a
+        // match-all, so it must stay a content search.
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = ".",
+            UseRegex = false,
+            SearchMode = "content",
+            IncludeGlobs = new() { "*.txt" },
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Equal(".", resolved.Pattern);
+        Assert.NotEqual(SearchMode.FileNames, resolved.SearchMode);
+    }
+
+    [Fact]
     public void Resolve_GlobPatternDuplicatingInclude_DroppedAndSynthesizesMatchAll()
     {
         // Model mistakenly echoes the file-type filter into pattern ("*.png" with include *.png).

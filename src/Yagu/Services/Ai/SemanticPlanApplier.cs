@@ -338,6 +338,19 @@ public static class SemanticPlanApplier
             }
         }
 
+        // A match-everything regex pattern (".", ".*", "^.*$", …) is a FILE LISTING, never a useful
+        // CONTENT search: as a Content/Both search it matches every character of every file (millions of
+        // matches on minified/one-line files, and no meaningful output). This is exactly the
+        // "large minified javascript files over 1 MB" case — an attribute-only request the model routed
+        // into a content search. When the pattern is a regex match-all, force FileNames mode so it
+        // enumerates files by name instead of scanning their bytes. Only regex match-alls are caught — a
+        // LITERAL "." (useRegex false) is a genuine "contains a period" search and is left alone.
+        if (pattern is not null && useRegex == true && IsMatchAllPattern(pattern)
+            && mode != Models.SearchMode.FileNames)
+        {
+            mode = Models.SearchMode.FileNames;
+        }
+
         // Finding TEXT inside image files requires OCR ("Search image text"). A request like
         // "png files with the word CUDA in it" carries a real content term whose include filter targets
         // image extensions, but the engine can only match that text via OCR. Enable it deterministically
@@ -392,7 +405,10 @@ public static class SemanticPlanApplier
         {
             pattern = ".";
             useRegex = true;
-            mode ??= Models.SearchMode.FileNames;
+            // A synthesized match-all enumerates files by NAME; it must never run as a content search
+            // (that would scan every byte of every matching file). Force FileNames even if the model
+            // guessed Content/Both for this attribute-only plan.
+            mode = Models.SearchMode.FileNames;
         }
 
         // Empty/unusable plan (e.g. the model returned "{}"): with no pattern and nothing to enumerate,
