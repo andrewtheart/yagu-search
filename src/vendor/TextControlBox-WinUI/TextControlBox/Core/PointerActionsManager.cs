@@ -33,6 +33,9 @@ internal class PointerActionsManager
 
     private int _storedSelectionStartLine = -1;
 
+    // Carries sub-notch Ctrl+wheel / pinch deltas across events (see EditorZoomMath).
+    private int _zoomWheelAccumulator;
+
     public void StartLineSelection(int line)
     {
         _storedSelectionStartLine = line;
@@ -433,7 +436,11 @@ internal class PointerActionsManager
         //state, so IsKeyPressed alone misses it — check both.
         if (Utils.IsKeyPressed(VirtualKey.Control) || e.KeyModifiers.HasFlag(VirtualKeyModifiers.Control))
         {
-            zoomManager._ZoomFactor += delta / 20;
+            // A precision-touchpad pinch arrives as many SMALL Ctrl-modified wheel deltas; the old
+            // integer `delta / 20` truncated any |delta| < 20 to 0 so a real pinch did nothing (only a
+            // full 120-unit mouse notch moved the zoom). Accumulate sub-notch deltas into whole percent
+            // steps, mirroring the preview pane's PreviewZoomMath.
+            zoomManager._ZoomFactor = EditorZoomMath.ApplyWheelZoom(zoomManager._ZoomFactor, delta, ref _zoomWheelAccumulator);
             zoomManager.UpdateZoom();
             return;
         }

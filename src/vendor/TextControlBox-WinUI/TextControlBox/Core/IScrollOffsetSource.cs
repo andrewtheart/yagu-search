@@ -38,9 +38,12 @@ internal interface IScrollOffsetSource
     /// Mirrors <c>ScrollViewer.ChangeView</c> so the Phase 2 backend is a drop-in.</summary>
     void ChangeView(double? horizontalOffset, double? verticalOffset);
 
-    /// <summary>Raised when the scroll position changes (user drag of a scrollbar thumb, or — after the
-    /// Phase 2 swap — native wheel/touchpad panning). The Phase 1 <see cref="ScrollBarOffsetSource"/>
-    /// raises it from the two scrollbars' <c>Scroll</c> events.</summary>
+    /// <summary>Raised whenever the scroll position changes — a user drag of a scrollbar thumb OR a
+    /// programmatic write to <see cref="VerticalOffset"/>/<see cref="HorizontalOffset"/> (caret-follow,
+    /// page keys, go-to-line, find reveal, match hand-off, wheel), or — after the Phase 2 swap — native
+    /// wheel/touchpad panning. The Phase 1 <see cref="ScrollBarOffsetSource"/> raises it from the two
+    /// scrollbars' <c>Scroll</c> events and from the offset setters. The diagonal-scroll
+    /// <c>InteractionTracker</c> subscribes so it snaps to any programmatic scroll immediately.</summary>
     event EventHandler ViewChanged;
 }
 
@@ -74,13 +77,21 @@ internal sealed class ScrollBarOffsetSource : IScrollOffsetSource
         get => ScrollOffsetMath.VerticalValueToPixels(_vertical.Value, _verticalSensitivity);
         // ScrollBar.Value is clamped to [Minimum, Maximum] by the control, matching the legacy behavior
         // where every scroll mutator relied on the scrollbar to clamp an out-of-range assignment.
-        set => _vertical.Value = ScrollOffsetMath.PixelsToVerticalValue(value, _verticalSensitivity);
+        set
+        {
+            _vertical.Value = ScrollOffsetMath.PixelsToVerticalValue(value, _verticalSensitivity);
+            ViewChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     public double HorizontalOffset
     {
         get => _horizontal.Value;
-        set => _horizontal.Value = ScrollOffsetMath.ClampHorizontalOffset(value);
+        set
+        {
+            _horizontal.Value = ScrollOffsetMath.ClampHorizontalOffset(value);
+            ViewChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     public double VerticalExtent

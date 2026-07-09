@@ -21,6 +21,8 @@ public sealed class PreviewCoreRegressionTests
         Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "IScrollOffsetSource.cs"));
     private static readonly string EditorDiagonalScrollSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "CoreTextControlBox.DiagonalScroll.cs"));
+    private static readonly string EditorZoomManagerSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "ZoomManager.cs"));
     private static readonly string EditorCoreSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "CoreTextControlBox.xaml.cs"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
@@ -558,13 +560,16 @@ public sealed class PreviewCoreRegressionTests
             "PreviewBlock,",
             "ResolvePreviewTextFontFamily(),");
 
-        // Editor: the vendored control's wheel-zoom now also accepts the pinch
-        // modifier from the wheel message (e.KeyModifiers), not just a held Ctrl key.
-        string editorWheel = ExtractMethodWindow(EditorPointerActionsSource, "PointerWheelAction", 900);
+        // Editor: the vendored control's wheel-zoom accepts the pinch modifier from the wheel message
+        // (e.KeyModifiers), not just a held Ctrl key, AND accumulates sub-notch deltas via EditorZoomMath
+        // so a precision-touchpad pinch (many small Ctrl-wheel deltas) actually zooms instead of the old
+        // integer `delta / 20` truncating every |delta| < 20 to 0.
+        string editorWheel = ExtractMethodWindow(EditorPointerActionsSource, "PointerWheelAction", 1400);
         AssertContainsInOrder(editorWheel,
             "Utils.IsKeyPressed(VirtualKey.Control) || e.KeyModifiers.HasFlag(VirtualKeyModifiers.Control)",
-            "zoomManager._ZoomFactor += delta / 20;",
+            "zoomManager._ZoomFactor = EditorZoomMath.ApplyWheelZoom(zoomManager._ZoomFactor, delta, ref _zoomWheelAccumulator);",
             "zoomManager.UpdateZoom();");
+        Assert.DoesNotContain("zoomManager._ZoomFactor += delta / 20;", EditorPointerActionsSource);
     }
 
     [Fact]
@@ -591,7 +596,7 @@ public sealed class PreviewCoreRegressionTests
         // helper (see ScrollOffsetMathTests), so the seam is pixels.
         AssertContainsInOrder(EditorScrollOffsetSource,
             "get => ScrollOffsetMath.VerticalValueToPixels(_vertical.Value, _verticalSensitivity);",
-            "set => _vertical.Value = ScrollOffsetMath.PixelsToVerticalValue(value, _verticalSensitivity);");
+            "_vertical.Value = ScrollOffsetMath.PixelsToVerticalValue(value, _verticalSensitivity);");
 
         // ScrollManager owns the source and routes all offset reads/writes through it.
         Assert.Contains("public IScrollOffsetSource OffsetSource { get; private set; }", EditorScrollManagerSource);
@@ -634,6 +639,84 @@ public sealed class PreviewCoreRegressionTests
         int stop = EditorCoreSource.IndexOf("caretBlinkManager.Stop();", StringComparison.Ordinal);
         int teardown = EditorCoreSource.IndexOf("TeardownDiagonalScroll();", StringComparison.Ordinal);
         Assert.True(stop >= 0 && teardown > stop, "Unload() must call TeardownDiagonalScroll() after caretBlinkManager.Stop().");
+    }
+
+    [Fact]
+    public void EditorDiagonalScroll_ImmediatelyReSyncsTrackerToProgrammaticScrolls()
+    {
+        // Phase 3 of PLANS/EDITOR_DIAGONAL_SCROLL_REWRITE_PLAN.md ("reconcile every scroll consumer"):
+        // a PROGRAMMATIC scroll (caret-follow, page keys, go-to-line, find reveal, match hand-off, wheel,
+        // scrollbar drag) must move the InteractionTracker to the new position IMMEDIATELY, not on the next
+        // 50 ms timer tick — otherwise a touchpad pan started right after snaps back to the stale position.
+
+        // 1) The offset source now raises ViewChanged from BOTH offset setters (not just the scrollbar Scroll
+        //    event), so every consumer that writes the seam notifies subscribers.
+        Assert.Contains("private void OnScrollBarScroll(object sender, ScrollEventArgs e) => ViewChanged?.Invoke(this, EventArgs.Empty);", EditorScrollOffsetSource);
+        AssertContainsInOrder(EditorScrollOffsetSource,
+            "_vertical.Value = ScrollOffsetMath.PixelsToVerticalValue(value, _verticalSensitivity);",
+            "ViewChanged?.Invoke(this, EventArgs.Empty);",
+            "_horizontal.Value = ScrollOffsetMath.ClampHorizontalOffset(value);",
+            "ViewChanged?.Invoke(this, EventArgs.Empty);");
+
+        // 2) The tracker subscribes to that event on setup and re-syncs immediately, but ignores the
+        //    ViewChanged its OWN touchpad write raises (flagged in ValuesChanged) so a pan can't feed back.
+        AssertContainsInOrder(EditorDiagonalScrollSource,
+            "offsetSource.ViewChanged += OnOffsetSourceViewChanged;",
+            "private void OnOffsetSourceViewChanged(object sender, EventArgs e)",
+            "if (_applyingTrackerScroll)",
+            "SyncScrollTrackerToOffsetNow();",
+            "internal void SyncScrollTrackerToOffsetNow()",
+            "if (_scrollTrackerReady)",
+            "SyncScrollTracker();");
+
+        // 3) ValuesChanged brackets its own offset writes with the guard flag so the re-sync is skipped.
+        AssertContainsInOrder(EditorDiagonalScrollSource,
+            "public void ValuesChanged(InteractionTracker sender, InteractionTrackerValuesChangedArgs args)",
+            "_applyingTrackerScroll = true;",
+            "src.HorizontalOffset = args.Position.X;",
+            "src.VerticalOffset = args.Position.Y;",
+            "_applyingTrackerScroll = false;",
+            "canvasUpdateManager.UpdateAll();");
+
+        // 4) The subscription is removed on teardown so an unloaded editor can't be resurrected by the event.
+        Assert.Contains("offsetSource.ViewChanged -= OnOffsetSourceViewChanged;", EditorDiagonalScrollSource);
+    }
+
+    [Fact]
+    public void EditorZoom_AnchorsViewportCentreRowAcrossZoom()
+    {
+        // Phase 3 of PLANS/EDITOR_DIAGONAL_SCROLL_REWRITE_PLAN.md: zooming must keep the document row under
+        // the vertical viewport centre stationary instead of drifting (the same raw pixel offset maps to a
+        // different row once SingleLineHeight = ZoomedFontSize + LineSpacingPadding changes).
+
+        // ZoomManager holds a ScrollManager reference so it can re-anchor the pixel offset seam.
+        Assert.Contains("private ScrollManager scrollManager;", EditorZoomManagerSource);
+        Assert.Contains("LineNumberRenderer lineNumberRenderer,", EditorZoomManagerSource);
+        Assert.Contains("ScrollManager scrollManager", EditorZoomManagerSource);
+        Assert.Contains("this.scrollManager = scrollManager;", EditorZoomManagerSource);
+        Assert.Contains("zoomManager.Init(textManager, textRenderer, canvasUpdateManager, eventsManager, lineNumberRenderer, scrollManager);", EditorCoreSource);
+
+        // UpdateZoom snapshots the OLD line height BEFORE the format rebuild, then re-anchors before redraw.
+        AssertContainsInOrder(EditorZoomManagerSource,
+            "float oldSingleLineHeight = textRenderer.SingleLineHeight;",
+            "ZoomedFontSize = Math.Clamp(",
+            "if (_ZoomFactor != OldZoomFactor)",
+            "AnchorScrollAcrossZoom(oldSingleLineHeight);",
+            "canvasHelper.UpdateAll();");
+
+        // The anchor computes the new line height from ZoomedFontSize + LineSpacingPadding and keeps the
+        // viewport-centre row put; horizontal scales by the font-size ratio (guarded against divide-by-zero).
+        AssertContainsInOrder(EditorZoomManagerSource,
+            "private void AnchorScrollAcrossZoom(float oldSingleLineHeight)",
+            "IScrollOffsetSource src = scrollManager?.OffsetSource;",
+            "if (src is null || oldSingleLineHeight <= 0.5f)",
+            "float newSingleLineHeight = ZoomedFontSize + TextLayoutManager.LineSpacingPadding;",
+            "double halfViewport = src.ViewportHeight / 2.0;",
+            "double centreRow = (src.VerticalOffset + halfViewport) / oldSingleLineHeight;",
+            "double newVerticalOffset = centreRow * newSingleLineHeight - halfViewport;",
+            "src.VerticalOffset = newVerticalOffset < 0 ? 0 : newVerticalOffset;",
+            "double fontRatio = ZoomedFontSize / oldFontSize;",
+            "src.HorizontalOffset = newHorizontalOffset < 0 ? 0 : newHorizontalOffset;");
     }
 
     [Fact]

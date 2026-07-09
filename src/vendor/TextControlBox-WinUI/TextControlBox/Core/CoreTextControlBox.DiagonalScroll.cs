@@ -27,6 +27,7 @@ internal sealed partial class CoreTextControlBox : IInteractionTrackerOwner
     private Microsoft.UI.Dispatching.DispatcherQueueTimer _scrollTrackerTimer;
     private bool _scrollTrackerReady;
     private bool _scrollTrackerInteracting;
+    private bool _applyingTrackerScroll;
     private float _lastTrackerX;
     private float _lastTrackerY;
 
@@ -61,6 +62,12 @@ internal sealed partial class CoreTextControlBox : IInteractionTrackerOwner
             _scrollTrackerTimer.Interval = TimeSpan.FromMilliseconds(50);
             _scrollTrackerTimer.Tick += (_, _) => SyncScrollTracker();
             _scrollTrackerTimer.Start();
+
+            // Immediately follow PROGRAMMATIC scrolls (caret-follow, page keys, go-to-line, find reveal,
+            // match hand-off, wheel) instead of waiting up to one 50 ms timer tick — otherwise a touchpad
+            // pan started right after one of those snapped back to the stale tracker position.
+            if (scrollManager?.OffsetSource is { } offsetSource)
+                offsetSource.ViewChanged += OnOffsetSourceViewChanged;
 
             _scrollTrackerReady = true;
             TextControlBoxDiagnostics.Verbose("TextControlBox.Scroll", "Diagonal-scroll InteractionTracker ready.");
@@ -106,6 +113,26 @@ internal sealed partial class CoreTextControlBox : IInteractionTrackerOwner
         }
     }
 
+    /// <summary>Fires when the offset source's position changes. A PROGRAMMATIC scroll (any consumer that
+    /// writes <c>IScrollOffsetSource</c>: caret-follow, page keys, go-to-line, find reveal, match hand-off,
+    /// wheel, scrollbar drag) immediately moves the tracker to the new position so a touchpad pan started
+    /// right after begins there instead of snapping back. Our OWN touchpad write (flagged in
+    /// <see cref="ValuesChanged"/>) is ignored so it does not feed back into a redundant reposition.</summary>
+    private void OnOffsetSourceViewChanged(object sender, EventArgs e)
+    {
+        if (_applyingTrackerScroll)
+            return;
+        SyncScrollTrackerToOffsetNow();
+    }
+
+    /// <summary>Immediately re-syncs the tracker to the current offset source. Safe to call from any
+    /// programmatic scroll path; a no-op during an active pan/inertia and before the tracker is ready.</summary>
+    internal void SyncScrollTrackerToOffsetNow()
+    {
+        if (_scrollTrackerReady)
+            SyncScrollTracker();
+    }
+
     /// <summary>Stops the sync timer and disposes the composition tracker + interaction source. Called from
     /// <c>Unload()</c> so an editor instance never leaks a forever-running 50 ms <c>DispatcherQueueTimer</c>
     /// or its composition objects. Idempotent and best-effort.</summary>
@@ -116,6 +143,9 @@ internal sealed partial class CoreTextControlBox : IInteractionTrackerOwner
 
         try
         {
+            if (scrollManager?.OffsetSource is { } offsetSource)
+                offsetSource.ViewChanged -= OnOffsetSourceViewChanged;
+
             if (_scrollTrackerTimer is not null)
             {
                 _scrollTrackerTimer.Stop();
@@ -152,8 +182,18 @@ internal sealed partial class CoreTextControlBox : IInteractionTrackerOwner
 
         if (scrollManager?.OffsetSource is { } src)
         {
-            src.HorizontalOffset = args.Position.X;
-            src.VerticalOffset = args.Position.Y;
+            // Flag our own touchpad-driven writes so the ViewChanged they raise is ignored by
+            // OnOffsetSourceViewChanged (otherwise a pan would feed back into a redundant reposition).
+            _applyingTrackerScroll = true;
+            try
+            {
+                src.HorizontalOffset = args.Position.X;
+                src.VerticalOffset = args.Position.Y;
+            }
+            finally
+            {
+                _applyingTrackerScroll = false;
+            }
             canvasUpdateManager.UpdateAll();
         }
     }
