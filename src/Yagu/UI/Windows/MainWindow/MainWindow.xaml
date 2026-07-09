@@ -119,12 +119,23 @@
                                   IsThreeState="False"
                                   IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
                                   Click="OnFileGroupCheckBoxClicked" />
-                        <Border Grid.Column="1" Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="105"
-                            Visibility="{x:Bind HasContentMatches, Mode=OneWay}">
-                            <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
-                                <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
-                            </TextBlock>
-                        </Border>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="0,0,10,0">
+                            <Border Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" MinWidth="105"
+                                ToolTipService.ToolTip="Matches found inside the file's contents"
+                                Visibility="{x:Bind HasContentMatches, Mode=OneWay}">
+                                <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
+                                    <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
+                                </TextBlock>
+                            </Border>
+                            <Border Background="#284B7A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center"
+                                ToolTipService.ToolTip="The file name matches your search"
+                                Visibility="{x:Bind HasFileNameMatch, Mode=OneWay}">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <FontIcon Glyph="&#xE8AC;" FontSize="10" Foreground="#A9CBF2" VerticalAlignment="Center" />
+                                    <TextBlock VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#A9CBF2" Text="file name" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
                         <StackPanel Grid.Column="2" MinWidth="0" VerticalAlignment="Center">
                             <TextBlock Text="{x:Bind FileName}"
                                        ToolTipService.ToolTip="{x:Bind FileName}"

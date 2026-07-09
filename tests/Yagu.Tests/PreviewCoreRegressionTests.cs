@@ -15,6 +15,10 @@ public sealed class PreviewCoreRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewEditor.cs"));
     private static readonly string EditorPointerActionsSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "PointerActionsManager.cs"));
+    private static readonly string EditorScrollManagerSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "ScrollManager.cs"));
+    private static readonly string EditorScrollOffsetSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "IScrollOffsetSource.cs"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
     private static readonly string HelpWindowSource = File.ReadAllText(
@@ -550,6 +554,48 @@ public sealed class PreviewCoreRegressionTests
             "Utils.IsKeyPressed(VirtualKey.Control) || e.KeyModifiers.HasFlag(VirtualKeyModifiers.Control)",
             "zoomManager._ZoomFactor += delta / 20;",
             "zoomManager.UpdateZoom();");
+    }
+
+    [Fact]
+    public void EditorScroll_IsFunneledThroughPixelBasedOffsetSource()
+    {
+        // Phase 1 of PLANS/EDITOR_DIAGONAL_SCROLL_REWRITE_PLAN.md: every editor scroll-position
+        // read/write goes through a single pixel-based IScrollOffsetSource seam so the Phase 2
+        // backend swap (two ScrollBars -> a real ScrollViewer) is a small, contained diff.
+
+        // The seam exists, is pixel-based, and ships a ScrollBar-backed adapter that converts
+        // the legacy vertical scrollbar units internally.
+        AssertContainsInOrder(EditorScrollOffsetSource,
+            "internal interface IScrollOffsetSource",
+            "double VerticalOffset { get; set; }",
+            "double HorizontalOffset { get; set; }",
+            "double VerticalExtent { get; set; }",
+            "double HorizontalExtent { get; set; }",
+            "double ViewportWidth { get; set; }",
+            "double ViewportHeight { get; set; }",
+            "void ChangeView(double? horizontalOffset, double? verticalOffset)",
+            "event EventHandler ViewChanged;",
+            "internal sealed class ScrollBarOffsetSource : IScrollOffsetSource");
+        // The adapter delegates the pixel↔scrollbar-unit arithmetic to the unit-tested ScrollOffsetMath
+        // helper (see ScrollOffsetMathTests), so the seam is pixels.
+        AssertContainsInOrder(EditorScrollOffsetSource,
+            "get => ScrollOffsetMath.VerticalValueToPixels(_vertical.Value, _verticalSensitivity);",
+            "set => _vertical.Value = ScrollOffsetMath.PixelsToVerticalValue(value, _verticalSensitivity);");
+
+        // ScrollManager owns the source and routes all offset reads/writes through it.
+        Assert.Contains("public IScrollOffsetSource OffsetSource { get; private set; }", EditorScrollManagerSource);
+        Assert.Contains("OffsetSource = new ScrollBarOffsetSource(this.verticalScrollBar, this.horizontalScrollBar, DefaultVerticalScrollSensitivity);", EditorScrollManagerSource);
+
+        // The vertical scroll mutators are now pixel-based: no scroll-position write divides by
+        // DefaultVerticalScrollSensitivity anymore (only the extent/Maximum math, kept for Phase 2, may).
+        Assert.DoesNotContain("verticalScrollBar.Value", EditorScrollManagerSource);
+        Assert.DoesNotContain("horizontalScrollBar.Value", EditorScrollManagerSource);
+        string oneLineUp = ExtractMethodWindow(EditorScrollManagerSource, "ScrollOneLineUp", 300);
+        Assert.Contains("OffsetSource.VerticalOffset -= textRenderer.SingleLineHeight;", oneLineUp);
+
+        // The editor wheel handler funnels its vertical scroll through the same pixel seam.
+        Assert.DoesNotContain("scrollManager.verticalScrollBar.Value", EditorPointerActionsSource);
+        Assert.Contains("scrollManager.OffsetSource.VerticalOffset -= delta * scrollManager._VerticalScrollSensitivity;", EditorPointerActionsSource);
     }
 
     [Fact]
@@ -1751,8 +1797,10 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("ViewModel.ResultRows.CollectionChanged += OnResultGroupsCollectionChanged;", scrollSource);
         Assert.DoesNotContain("ViewModel.ResultGroups.CollectionChanged += OnResultGroupsCollectionChanged;", scrollSource);
 
-        string fileGroupTemplate = ExtractXamlWindow("<DataTemplate x:Key=\"FileGroupResultTemplate\"", 4600);
+        string fileGroupTemplate = ExtractXamlWindow("<DataTemplate x:Key=\"FileGroupResultTemplate\"", 5600);
         Assert.Contains("Visibility=\"{x:Bind HasContentMatches, Mode=OneWay}\"", fileGroupTemplate);
+        // A second pill distinguishes a file-name match from a content match (content-only, name-only, or both).
+        Assert.Contains("Visibility=\"{x:Bind HasFileNameMatch, Mode=OneWay}\"", fileGroupTemplate);
     }
 
     [Fact]

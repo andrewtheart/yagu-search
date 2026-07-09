@@ -70,6 +70,11 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// <summary>True when this group has content matches (LineNumber &gt; 0) alongside filename matches.</summary>
     public bool HasContentMatches => (Count + HiddenMatchCount + _evictedOnlyCount) > _fileNameMatchCount;
 
+    /// <summary>True when this group has at least one filename match — a result with LineNumber == 0,
+    /// i.e. the file's NAME matched the query. Independent of <see cref="HasContentMatches"/>: a group
+    /// can have a name match only, content matches only, or both.</summary>
+    public bool HasFileNameMatch => _fileNameMatchCount > 0;
+
     /// <summary>True when this group represents a file inside an archive.</summary>
     public bool IsArchiveEntry => ZipArchiveSearcher.IsArchivePath(FilePath);
 
@@ -184,14 +189,15 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     private static readonly System.ComponentModel.PropertyChangedEventArgs s_indexerChanged = new("Item[]");
     private static readonly System.ComponentModel.PropertyChangedEventArgs s_hasContentMatchesChanged = new(nameof(HasContentMatches));
     private static readonly System.ComponentModel.PropertyChangedEventArgs s_matchCountChanged = new(nameof(MatchCount));
+    private static readonly System.ComponentModel.PropertyChangedEventArgs s_hasFileNameMatchChanged = new(nameof(HasFileNameMatch));
 
     protected override void InsertItem(int index, SearchResult item)
     {
         bool hadContentMatches = HasContentMatches;
         ApplySelectionIntent(item);
 
-        if (item.LineNumber == 0)
-            _fileNameMatchCount++;
+        if (item.LineNumber == 0 && _fileNameMatchCount++ == 0)
+            OnPropertyChanged(s_hasFileNameMatchChanged);
 
         if (Count >= MaxMatchesPerGroup)
         {
@@ -274,8 +280,8 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
         bool hadContentMatches = HasContentMatches;
 
-        if (lineNumber == 0)
-            _fileNameMatchCount++;
+        if (lineNumber == 0 && _fileNameMatchCount++ == 0)
+            OnPropertyChanged(s_hasFileNameMatchChanged);
 
         if (Count >= MaxMatchesPerGroup)
         {
@@ -339,8 +345,8 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         for (int i = 0; i < count; i++)
         {
             var result = results[start + i];
-            if (result.LineNumber == 0)
-                _fileNameMatchCount++;
+            if (result.LineNumber == 0 && _fileNameMatchCount++ == 0)
+                OnPropertyChanged(s_hasFileNameMatchChanged);
 
             if (TotalStoredCount >= MaxMatchesPerGroup)
             {

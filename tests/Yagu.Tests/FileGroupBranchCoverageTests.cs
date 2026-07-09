@@ -154,6 +154,55 @@ public sealed class FileGroupBranchCoverageTests
         Assert.True(g.HasContentMatches);
     }
 
+    [Fact]
+    public void HasFileNameMatch_ContentMatchOnly_ReturnsFalse()
+    {
+        var g = new FileGroup(@"C:\file.cs");
+        g.Add(MakeResult(lineNumber: 5));
+        Assert.False(g.HasFileNameMatch);
+        Assert.True(g.HasContentMatches);
+    }
+
+    [Fact]
+    public void HasFileNameMatch_FileNameMatchOnly_ReturnsTrue()
+    {
+        var g = new FileGroup(@"C:\file.cs");
+        g.Add(MakeFileNameResult());
+        Assert.True(g.HasFileNameMatch);
+        Assert.False(g.HasContentMatches);
+    }
+
+    [Fact]
+    public void HasFileNameMatch_MixedMatches_BothTrue()
+    {
+        var g = new FileGroup(@"C:\file.cs");
+        g.Add(MakeFileNameResult());
+        g.Add(MakeResult(lineNumber: 5));
+        Assert.True(g.HasFileNameMatch);
+        Assert.True(g.HasContentMatches);
+    }
+
+    [Fact]
+    public void HasFileNameMatch_FiresPropertyChangedOnceOnFirstFileNameMatch()
+    {
+        var g = new FileGroup(@"C:\file.cs");
+        var changed = new List<string>();
+        ((System.ComponentModel.INotifyPropertyChanged)g).PropertyChanged += (_, e) => changed.Add(e.PropertyName ?? "");
+
+        // A content match must NOT raise HasFileNameMatch.
+        g.Add(MakeResult(lineNumber: 5));
+        Assert.DoesNotContain(nameof(FileGroup.HasFileNameMatch), changed);
+
+        // The first filename match raises it.
+        g.Add(MakeFileNameResult());
+        Assert.Contains(nameof(FileGroup.HasFileNameMatch), changed);
+
+        // A subsequent filename match does not raise it again.
+        changed.Clear();
+        g.Add(MakeFileNameResult());
+        Assert.DoesNotContain(nameof(FileGroup.HasFileNameMatch), changed);
+    }
+
     // ═══════════════════════════════════════════════════════════════
     //  Selection
     // ═══════════════════════════════════════════════════════════════
