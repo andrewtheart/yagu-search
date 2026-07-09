@@ -446,6 +446,75 @@ public sealed partial class MainWindow
         return true;
     }
 
+    /// <summary>
+    /// Warns before a REGEX <em>content</em> search whose whole pattern matches everything (<c>.</c>,
+    /// <c>.*</c>, <c>[\s\S]</c>, …). Such a search emits one match per character (or line) of every
+    /// file — millions of noise matches on minified/one-line files — and is almost always a mistake
+    /// (a literal <c>.</c>, or a file-name listing). Offers "Search file names" (switch to a filename
+    /// listing) or "Search anyway"; Esc cancels. A literal "." (regex off) and a file-names-only search
+    /// are never flagged. Returns false to cancel the search.
+    /// </summary>
+    private async Task<bool> CheckMatchEverythingPatternAndWarnAsync()
+    {
+        // Only a REGEX match-everything pattern that will actually scan CONTENT is a problem.
+        if (!ViewModel.UseRegex) return true;
+        if ((Yagu.Models.SearchMode)ViewModel.SearchModeIndex == Yagu.Models.SearchMode.FileNames) return true;
+        if (!Yagu.Helpers.SearchPatternClassifier.IsMatchEverythingRegex(ViewModel.Query)) return true;
+
+        string query = (ViewModel.Query ?? string.Empty).Trim();
+
+        var contentPanel = new StackPanel { Spacing = 12, MinWidth = 360 };
+        var message = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        message.Inlines.Add(new Run { Text = "The regular expression " });
+        message.Inlines.Add(new Run { Text = query, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        message.Inlines.Add(new Run { Text = " matches everything, so a content search returns one result for every " +
+            "character (or line) of every file \u2014 usually millions of noise matches. Did you mean to search file " +
+            "names, or to search for a literal character?" });
+        contentPanel.Children.Add(message);
+
+        contentPanel.Children.Add(new TextBlock
+        {
+            Text = "Choose \"Search file names\" to list matching files instead, or \"Search anyway\" to run the content " +
+                   "search (results stay bounded by your safety limits). To search for a literal character, turn off the " +
+                   "regex option and try again.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Opacity = 0.8,
+        });
+
+        var result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Very broad search pattern",
+                TitleGlyph = "\uE7BA", // Warning
+                Content = contentPanel,
+                PrimaryButtonText = "Search file names",
+                SecondaryButtonText = "Search anyway",
+                CloseButtonText = null,
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                RequestedTheme = RootGrid.ActualTheme,
+                ShowTitleBar = false,
+                Width = 600,
+                Height = 340,
+                MaxContentHeight = 240,
+            });
+
+        if (result == YaguDialogResult.Close)
+            return false; // Esc / close — cancel rather than flood the results.
+
+        if (result == YaguDialogResult.Primary)
+        {
+            // Switch this search to a file-name listing (the likely intent). SearchModeIndex is
+            // session-only and resets to the default after the search, so no persisted change.
+            ViewModel.SearchModeIndex = (int)Yagu.Models.SearchMode.FileNames;
+        }
+
+        // Secondary ("Search anyway") proceeds unchanged — the per-line cap and absolute results
+        // ceiling keep memory bounded.
+        return true;
+    }
+
     private static string DescribeExclusionReasons(Yagu.Services.ExtensionExclusionReason reasons)
     {
         var parts = new List<string>();

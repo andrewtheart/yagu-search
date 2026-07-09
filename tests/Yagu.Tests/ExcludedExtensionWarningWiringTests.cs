@@ -46,6 +46,32 @@ public sealed class ExcludedExtensionWarningWiringTests
     }
 
     [Fact]
+    public void PreSearchGate_RunsMatchEverythingCheckLast_ModalIsTitlelessAndOffersFilenameListing()
+    {
+        // The combined gate runs HDD -> excluded-extension -> match-everything (broad regex) check.
+        int gateStart = SearchInputSource.IndexOf("private async Task<bool> RunPreSearchWarningGatesAsync(", StringComparison.Ordinal);
+        Assert.True(gateStart >= 0, "Expected RunPreSearchWarningGatesAsync in MainWindow.SearchInput.cs");
+        string gate = Slice(SearchInputSource, gateStart, 700);
+        int excluded = gate.IndexOf("CheckExcludedExtensionAndWarnAsync", StringComparison.Ordinal);
+        int broad = gate.IndexOf("CheckMatchEverythingPatternAndWarnAsync", StringComparison.Ordinal);
+        Assert.True(excluded >= 0 && broad > excluded,
+            "The match-everything check must run after the excluded-extension check.");
+
+        // The gate fires only in regex mode, only when content is scanned (not a FileNames-only search),
+        // and only for a whole-pattern match-all; the modal is title-bar-less and offers a name listing.
+        int start = AdminSettingsSource.IndexOf(
+            "private async Task<bool> CheckMatchEverythingPatternAndWarnAsync(", StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected CheckMatchEverythingPatternAndWarnAsync in MainWindow.AdminSettings.cs");
+        string method = Slice(AdminSettingsSource, start, 3600);
+        Assert.Contains("if (!ViewModel.UseRegex) return true;", method);
+        Assert.Contains("SearchMode.FileNames) return true;", method);
+        Assert.Contains("SearchPatternClassifier.IsMatchEverythingRegex(ViewModel.Query)", method);
+        Assert.Contains("ShowTitleBar = false", method);
+        Assert.Contains("PrimaryButtonText = \"Search file names\"", method);
+        Assert.Contains("ViewModel.SearchModeIndex = (int)Yagu.Models.SearchMode.FileNames;", method);
+    }
+
+    [Fact]
     public void ViewModel_SubmitSearch_RunsGateAfterSemanticTranslation()
     {
         int idx = MainViewModelSource.IndexOf("public async Task SubmitSearchAsync(", StringComparison.Ordinal);

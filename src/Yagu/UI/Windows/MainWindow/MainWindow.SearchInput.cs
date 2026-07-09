@@ -215,7 +215,8 @@ public sealed partial class MainWindow
     private async Task<bool> RunPreSearchWarningGatesAsync()
     {
         if (!await CheckHddAndWarnAsync()) return false;
-        return await CheckExcludedExtensionAndWarnAsync();
+        if (!await CheckExcludedExtensionAndWarnAsync()) return false;
+        return await CheckMatchEverythingPatternAndWarnAsync();
     }
 
     /// <summary>
