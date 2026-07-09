@@ -68,8 +68,15 @@ ArchitecturesAllowed=x86compatible
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 #endif
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+; Always install per-machine (elevated). Yagu is an unsigned, per-machine desktop app whose layout
+; lives under {commonpf}\Yagu (C:\Program Files\Yagu), so an UPDATE must be able to overwrite that
+; location. The old non-elevated model (run as the current user by default, with a "for all users /
+; just me" mode dialog) put the elevation decision on the user; re-running it over an existing
+; per-machine install then silently failed to update Program Files (it either targeted a separate
+; per-user copy or copied nothing). Requiring admin makes Setup auto-prompt for elevation (UAC) every
+; time, so a real user never has to know to "run as administrator" -- the update just lands in the
+; existing C:\Program Files\Yagu install.
+PrivilegesRequired=admin
 CloseApplications=yes
 RestartApplications=no
 

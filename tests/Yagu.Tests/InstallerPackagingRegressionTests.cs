@@ -138,6 +138,23 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
+    public void Installer_RequiresAdminSoUpdatesReplaceThePerMachineInstall()
+    {
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        // Yagu installs per-machine under {commonpf}\Yagu (C:\Program Files\Yagu), so an UPDATE must be
+        // able to overwrite that location. Requiring admin makes Setup auto-elevate (UAC) on every run,
+        // so a re-install/update always lands in the existing per-machine install without the user having
+        // to know to "run as administrator". The old `lowest` + `PrivilegesRequiredOverridesAllowed=dialog`
+        // model ran the installer NON-elevated by default and silently failed to update Program Files.
+        Assert.Contains("PrivilegesRequired=admin", inno);
+        Assert.Contains(@"DefaultDirName={autopf}\{#MyAppName}", inno);
+        Assert.DoesNotContain("PrivilegesRequired=lowest", inno);
+        Assert.DoesNotContain("PrivilegesRequiredOverridesAllowed", inno);
+    }
+
+    [Fact]
     public void InnoInstaller_IsArchitectureParameterizedAndSelfContained()
     {
         string root = FindRepoRoot();
