@@ -53,6 +53,9 @@
     <Compile Include="..\..\src\Yagu\Services\CloudFileHelper.cs" Link="Source\Services\CloudFileHelper.cs" />
     <Compile Include="..\..\src\Yagu\Services\TerminalShellKind.cs" Link="Source\Services\TerminalShellKind.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\DiskTypeDetector.cs" Link="Source\Helpers\DiskTypeDetector.cs" />
+    <!-- WorkerOcrEngine.cs (pulled in by the Services\Ocr\*.cs glob below) verifies the OCR worker's
+         Authenticode signature, so AuthenticodeVerifier.cs must be compiled in too. -->
+    <Compile Include="..\..\src\Yagu\Services\AuthenticodeVerifier.cs" Link="Source\Services\AuthenticodeVerifier.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\*.cs" Link="Source\Services\Ocr\%(Filename)%(Extension)" />
     <Compile Include="..\..\src\Yagu\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
     <Compile Include="..\..\src\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
