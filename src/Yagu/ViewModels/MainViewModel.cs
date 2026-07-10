@@ -606,6 +606,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [NotifyPropertyChangedFor(nameof(SearchActionButtonVisibility))]
     public partial bool IsTranslatingSemanticQuery { get; set; }
 
+    partial void OnIsTranslatingSemanticQueryChanged(bool value)
+    {
+        // When the AI translation step ends, clear the "Canceling.." state — unless a real file scan is
+        // still running (a normal semantic run transitions translation → scan; a cancelled one ends both).
+        if (!value && !IsSearching) IsCancelling = false;
+    }
+
     /// <summary>Status/progress line shown next to the mode toggle during translation.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SemanticStatusBarVisibility))]
@@ -1950,6 +1957,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [NotifyPropertyChangedFor(nameof(SearchActionButtonVisibility))]
     [NotifyPropertyChangedFor(nameof(ProgressTooltip))]
     public partial bool IsSearching { get; set; }
+
+    /// <summary>True from the instant the user clicks Cancel until the in-flight file scan or semantic
+    /// translation actually stops. Cancellation isn't instantaneous — a large search keeps draining
+    /// buffered results for a moment after <see cref="CancelAsync"/> fires — so this drives the morphing
+    /// Cancel button into a disabled "Canceling.." state, giving immediate feedback and preventing a
+    /// second Cancel click while the first is still in progress. Reset automatically when the search or
+    /// translation ends (see <see cref="OnIsSearchingChanged"/> / <see cref="OnIsTranslatingSemanticQueryChanged"/>).</summary>
+    [ObservableProperty]
+    public partial bool IsCancelling { get; set; }
     [ObservableProperty] public partial string StatusText { get; set; } = string.Empty;
     [ObservableProperty] public partial string? ErrorText { get; set; }
     [ObservableProperty] public partial string? FallbackReason { get; set; }
@@ -2339,6 +2355,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// can abort the AI step the same way they cancel a running file search.</summary>
     public void CancelSemanticTranslation()
     {
+        if (IsTranslatingSemanticQuery) IsCancelling = true;
         try { _semanticCts?.Cancel(); } catch { }
         SemanticStatusText = string.Empty;
     }
@@ -3700,6 +3717,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [RelayCommand]
     public Task CancelAsync()
     {
+        // Only flip into the "Canceling.." state when there's actually a run to cancel — CancelAsync is
+        // also called on session load/close where nothing is in flight.
+        if (IsSearching) IsCancelling = true;
         try { _cts?.Cancel(); } catch (Exception ex) { LogService.Instance.Warning("Search", "Cancel failed", ex); }
         return Task.CompletedTask;
     }
@@ -5282,6 +5302,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     partial void OnIsSearchingChanged(bool value)
     {
         if (value) return;                                // act only when a search ENDS (finish or cancel)
+        if (!IsTranslatingSemanticQuery) IsCancelling = false;   // cancel drained — restore the button
         if (!_advancedOptionsTransientlyChanged) return;
         _advancedOptionsTransientlyChanged = false;
         // A semantic search intentionally leaves its resolved plan visible in Advanced Options and reverts

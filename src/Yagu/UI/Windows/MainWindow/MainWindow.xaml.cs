@@ -385,7 +385,8 @@ public sealed partial class MainWindow : Window, IDisposable
         ViewModel.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName != nameof(ViewModel.IsSearching) &&
-                e.PropertyName != nameof(ViewModel.IsTranslatingSemanticQuery)) return;
+                e.PropertyName != nameof(ViewModel.IsTranslatingSemanticQuery) &&
+                e.PropertyName != nameof(ViewModel.IsCancelling)) return;
 
             // "Busy" covers both the semantic translation phase and the actual file scan, so the
             // Search button morphs into the red Cancel action the instant the user clicks Search —
@@ -394,9 +395,13 @@ public sealed partial class MainWindow : Window, IDisposable
             if (busy)
             {
                 if (_launcherMode) ExitLauncherMode();
+                // Once Cancel is clicked, cancellation isn't instantaneous — reflect it by disabling the
+                // button and showing "Canceling.." until the run actually stops (IsCancelling clears).
+                bool cancelling = ViewModel.IsCancelling;
                 SearchCancelIcon.Glyph = "\uE711";   // Cancel X
-                SearchCancelLabel.Text = "Cancel";
-                ToolTipService.SetToolTip(SearchCancelButton, "Cancel (F5)");
+                SearchCancelLabel.Text = cancelling ? "Canceling.." : "Cancel";
+                SearchCancelButton.IsEnabled = !cancelling;
+                ToolTipService.SetToolTip(SearchCancelButton, cancelling ? "Canceling…" : "Cancel (F5)");
                 if (TryGetApplicationStyle("DefaultButtonStyle") is { } defaultButtonStyle)
                     SearchCancelButton.Style = defaultButtonStyle;
                 SearchCancelButton.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 220, 220));
@@ -407,6 +412,7 @@ public sealed partial class MainWindow : Window, IDisposable
             {
                 SearchCancelIcon.Glyph = "\uE721";   // Search magnifier
                 SearchCancelLabel.Text = "Search";
+                SearchCancelButton.IsEnabled = true;
                 ToolTipService.SetToolTip(SearchCancelButton, "Search (F5)");
                 if (TryGetApplicationStyle("AccentButtonStyle") is { } accentButtonStyle)
                     SearchCancelButton.Style = accentButtonStyle;
