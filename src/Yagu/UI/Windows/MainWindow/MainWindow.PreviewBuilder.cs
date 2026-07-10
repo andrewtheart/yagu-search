@@ -156,13 +156,25 @@ public sealed partial class MainWindow
     private int GetPreviewShowAllMaxRevealLength()
         => Math.Max(GetEffectiveSegmentSize(), PreviewShowAllMaxRevealLength);
 
+    /// <summary>
+    /// Extra characters each "Preview context line" adds to a truncated match window. On a
+    /// single-line (or very-long-line) document there are no neighbouring source lines to reveal,
+    /// so the only way "more context" can show more of the file is to widen the per-match character
+    /// window. Short-line files are unaffected because their lines are never truncated.
+    /// </summary>
+    private const int PreviewContextLineCharBudget = 150;
+
     private int GetPreviewTruncatedLength()
     {
         int configuredLength = LineTruncator.TruncatedLength;
         if (configuredLength == 0)
             return 0;
 
-        return Math.Min(configuredLength, GetPreviewShowMoreMaxWindowLength());
+        int contextLines = Math.Max(0, ViewModel.PreviewContextLines);
+        long widened = (long)configuredLength + ((long)contextLines * PreviewContextLineCharBudget);
+        int effectiveLength = widened > int.MaxValue ? int.MaxValue : (int)widened;
+
+        return Math.Min(effectiveLength, GetPreviewShowMoreMaxWindowLength());
     }
 
     /// <summary>

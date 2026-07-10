@@ -1122,6 +1122,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     partial void OnParallelismIndexChanged(int value) => _sessionParallelismOverrideIndex = null;
 
     [ObservableProperty] public partial int LineTruncationLength { get; set; } = 500;
+
+    // Propagate the per-match truncation length to the shared LineTruncator the moment the user
+    // changes it (e.g. via Settings), not only on save/reload, so a live preview refresh picks up
+    // the new window width immediately.
+    partial void OnLineTruncationLengthChanged(int value) => Helpers.LineTruncator.TruncatedLength = value;
+
     [ObservableProperty] public partial int MaxRecentItems { get; set; } = 20;
     [ObservableProperty] public partial int MaxSemanticRecentItems { get; set; } = 20;
     [ObservableProperty] public partial bool GlobalHotkeyEnabled { get; set; }

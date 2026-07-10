@@ -2636,7 +2636,9 @@ public sealed class PreviewCoreRegressionTests
             "private int GetPreviewShowMoreMaxWindowLength()",
             "GetEffectiveSegmentSize() - (2 * LineTruncator.Ellipsis.Length)",
             "private int GetPreviewTruncatedLength()",
-            "return Math.Min(configuredLength, GetPreviewShowMoreMaxWindowLength());");
+            "int contextLines = Math.Max(0, ViewModel.PreviewContextLines);",
+            "long widened = (long)configuredLength + ((long)contextLines * PreviewContextLineCharBudget);",
+            "return Math.Min(effectiveLength, GetPreviewShowMoreMaxWindowLength());");
         Assert.Contains("LogPreviewShowMoreDiagnostics(\"BuildHighlightSection\")", previewBuilder);
 
         string addParagraphs = ExtractMethodWindow(previewBuilder, "AddPreviewLineParagraphs", window: 3400);

@@ -276,7 +276,8 @@ public sealed partial class MainWindow : Window, IDisposable
 
         ViewModel.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName == nameof(ViewModel.PreviewContextLines))
+            if (e.PropertyName == nameof(ViewModel.PreviewContextLines)
+                || e.PropertyName == nameof(ViewModel.LineTruncationLength))
             {
                 if (_previewContextDebounceTimer is null)
                 {
