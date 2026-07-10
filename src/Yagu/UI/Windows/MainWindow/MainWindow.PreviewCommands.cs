@@ -266,6 +266,22 @@ public sealed partial class MainWindow
                 return;
             }
 
+            // If the current preview is on the SECTIONS surface (a clicked-match / preview-single-file
+            // view built via PrependPreviewSectionsForFilesAsync), rebuild it the SAME way so the dense
+            // same-line match windows and per-file match navigation are reproduced identically in the
+            // new wrap mode. GetAllSelectedResults() can be < 2 here because a whole file group is
+            // selected via a flag (group.AllSelected) rather than per-result IsSelected, so the count
+            // check above misses it; falling through to ShowSingleFilePreviewAsync would collapse the
+            // sections view to a single continuous block (the reported no-wrap->wrap inconsistency).
+            if (PreviewSectionsPanel.Visibility == Visibility.Visible
+                && PreviewSectionsPanel.Children.OfType<Expander>().Any()
+                && TryBuildCurrentPreviewSectionResults(out var sectionFiles, out var sectionScrollTo))
+            {
+                ShowPreviewSectionsSurface();
+                await PrependPreviewSectionsForFilesAsync(sectionFiles, sectionScrollTo);
+                return;
+            }
+
             if (_previewResult is null) return;
             ViewModel.HydrateResult(_previewResult);
             await ShowSingleFilePreviewAsync(_previewResult, fullFile: false);
@@ -283,6 +299,44 @@ public sealed partial class MainWindow
                 RestoreActiveMatchAfterPreviewRefresh(restoreMatchIndex);
             }
         }
+    }
+
+    /// <summary>
+    /// Reconstructs the results for every file currently shown on the preview SECTIONS surface, so a
+    /// wrap-mode rebuild can re-run the exact fresh-load path
+    /// (<see cref="PrependPreviewSectionsForFilesAsync"/>) and reproduce the same dense same-line match
+    /// windows and per-file match navigation. Results come from each displayed file's
+    /// <see cref="FileGroup"/> via the same <see cref="GetPreviewableResults(FileGroup)"/> the original
+    /// build used. Returns <c>false</c> (so the caller falls back to the single-file block surface)
+    /// when nothing reconstructable remains.
+    /// </summary>
+    private bool TryBuildCurrentPreviewSectionResults(
+        out Dictionary<string, List<SearchResult>> byFile,
+        out string? scrollToFile)
+    {
+        byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
+
+        var orderedFilePaths = PreviewSectionsPanel.Children.OfType<Expander>()
+            .Select(expander => _expanderFilePaths.TryGetValue(expander, out var path) ? path : null)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Select(path => path!)
+            .ToList();
+
+        scrollToFile = orderedFilePaths.FirstOrDefault();
+
+        foreach (var path in orderedFilePaths)
+        {
+            if (byFile.ContainsKey(path))
+                continue;
+            var group = FindFileGroup(path);
+            if (group is null)
+                continue;
+            var results = GetPreviewableResults(group);
+            if (results.Count > 0)
+                byFile[path] = results;
+        }
+
+        return byFile.Count > 0;
     }
 
     private void RestorePreviewScrollOffset(double horizontalOffset, double verticalOffset)
@@ -1473,6 +1527,18 @@ public sealed partial class MainWindow
             SetClipboardText(path, "file group path");
     }
 
+    // A very long selected file name (e.g. a 128-char content-hash) makes the "Preview <name>"
+    // context-menu item stretch the whole flyout off-screen. Cap the displayed name at half a full
+    // 128-char hash and trim the rest with a trailing ellipsis so the menu keeps a bounded max width.
+    private const int MaxPreviewMenuFileNameChars = 64;
+
+    private static string TruncateFileNameForPreviewMenu(string fileName)
+    {
+        if (string.IsNullOrEmpty(fileName) || fileName.Length <= MaxPreviewMenuFileNameChars)
+            return fileName;
+        return string.Concat(fileName.AsSpan(0, MaxPreviewMenuFileNameChars - 1), "\u2026");
+    }
+
     private void OnFileHeaderContextMenuOpening(object sender, object e)
     {
         if (sender is MenuFlyout flyout)
@@ -1486,7 +1552,7 @@ public sealed partial class MainWindow
             if (flyout.Items.Count > 0 && flyout.Items[0] is MenuFlyoutItem singleItem)
             {
                 string fileName = contextGroup is not null ? Path.GetFileName(contextGroup.FilePath) : "";
-                singleItem.Text = $"Preview {fileName}";
+                singleItem.Text = $"Preview {TruncateFileNameForPreviewMenu(fileName)}";
                 singleItem.Tag = contextGroup;
             }
 
@@ -1531,7 +1597,7 @@ public sealed partial class MainWindow
             : checkedCount == 1
                 ? Path.GetFileName(checkedGroups[0].FilePath)
                 : "";
-        CtxPreviewSingle.Text = $"Preview {fileName}";
+        CtxPreviewSingle.Text = $"Preview {TruncateFileNameForPreviewMenu(fileName)}";
         CtxPreviewSingle.Tag = contextGroup ?? (checkedCount == 1 ? checkedGroups[0] : null);
         CtxPreviewSingle.Visibility = !string.IsNullOrEmpty(fileName)
             ? Microsoft.UI.Xaml.Visibility.Visible
@@ -2599,6 +2665,11 @@ public sealed partial class MainWindow
         await ShowSingleFilePreviewAsync(r, fullFile: false);
     }
 
+    // Above this many evicted results, a multi-select / wrap-toggle preview rebuild surfaces the
+    // translucent progress overlay and runs the (batched) ResultStore hydration off the UI thread,
+    // so the pane stays responsive instead of freezing for seconds.
+    private const int PreviewHydrationProgressThreshold = 5000;
+
     private async Task UpdateMultiSelectPreviewAsync(SearchResult? scrollTarget = null, bool scrollToTop = false)
     {
         LogService.Instance.Info("Preview", $"UpdateMultiSelectPreviewAsync: scrollTarget='{scrollTarget?.FilePath}', scrollToTop={scrollToTop}");
@@ -2622,9 +2693,32 @@ public sealed partial class MainWindow
         BeginPreviewContentUpdate();
         EnsurePreviewPanelVisible();
 
-        // Hydrate any evicted results before rendering the preview.
-        foreach (var r in selected)
-            ViewModel.HydrateResult(r);
+        // Hydrate any evicted results before rendering the preview. For a large selection (e.g. one
+        // file with tens of thousands of matches) this is the dominant cost by far — disk reads from
+        // the ResultStore — and the old per-result loop ran ~N individual seeks ON the UI thread, so a
+        // wrap-mode rebuild froze the pane for several seconds. Instead do ONE batched read
+        // (ResultStore.ReadBatch) on a worker thread, behind the translucent progress overlay, then
+        // apply the payloads back on the UI thread.
+        var evictedToHydrate = selected.Where(r => r.IsEvicted).ToList();
+        bool showHydrationProgress = evictedToHydrate.Count >= PreviewHydrationProgressThreshold;
+        if (showHydrationProgress)
+        {
+            ShowProgressOverlay($"Applying preview to {selected.Count:N0} matches\u2026", 0);
+            await Task.Yield();
+        }
+        if (evictedToHydrate.Count > 0)
+        {
+            var payloads = await Task.Run(() => ViewModel.ReadHydrationPayloads(evictedToHydrate)).ConfigureAwait(true);
+            // A newer preview update may have started while we were reading off-thread — abort.
+            if (gen != _previewUpdateGen)
+            {
+                if (showHydrationProgress) HideProgressOverlay();
+                return;
+            }
+            Yagu.ViewModels.MainViewModel.ApplyHydrationPayloads(payloads);
+        }
+        if (showHydrationProgress)
+            HideProgressOverlay();
 
         // Group by file first so we know file count for the loading message.
         var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);

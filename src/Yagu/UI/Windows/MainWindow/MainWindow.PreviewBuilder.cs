@@ -1848,7 +1848,15 @@ public sealed partial class MainWindow
         // emptied the preview (clear button, file dismiss, deselect, results clear).
         // This is the single chokepoint every empty-state transition funnels through.
         if (showEmptyState)
+        {
             ClearPreviewCustomSelection();
+            // The single-file BLOCK surface paints PreviewScrollViewer/PreviewMessagePanel with the
+            // opaque "active" (black) content background; if we reach the empty state without going
+            // through ShowPreviewSectionsSurface/ShowPreviewLoading (e.g. adding a preview document
+            // then closing it) that black background lingers behind "Nothing to show". Reset it so the
+            // empty state always shows the themed app/panel background.
+            ClearPreviewBlockContentBackground();
+        }
     }
 
     private void BeginPreviewContentUpdate()

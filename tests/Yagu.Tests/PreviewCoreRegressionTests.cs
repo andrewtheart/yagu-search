@@ -178,11 +178,16 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("FontSize=\"13\"", emptyState);
         Assert.Contains("TextWrapping=\"WrapWholeWords\"", emptyState);
 
-        string update = ExtractMethodWindow(MainWindowSource, "UpdatePreviewEmptyState", 1600);
+        string update = ExtractMethodWindow(MainWindowSource, "UpdatePreviewEmptyState", 2000);
         Assert.Contains("PreviewPanelBorder.Visibility == Visibility.Visible", update);
         Assert.Contains("PreviewBlock.Blocks.Count > 0", update);
         Assert.Contains("PreviewSectionsPanel.Children.OfType<Expander>().Any()", update);
         Assert.Contains("PreviewEmptyState.Visibility = showEmptyState ? Visibility.Visible : Visibility.Collapsed;", update);
+        // The "Nothing to show" empty state must reset the block content background so the lingering
+        // opaque (black) single-file-preview background never bleeds through the themed empty state.
+        AssertContainsInOrder(update,
+            "if (showEmptyState)",
+            "ClearPreviewBlockContentBackground();");
 
         string remove = ExtractMethodWindow(MainWindowSource, "RemovePreviewSection", 4500);
         AssertContainsInOrder(remove,
@@ -273,6 +278,19 @@ public sealed class PreviewCoreRegressionTests
             "var selected = ViewModel.GetAllSelectedResults();",
             "BeginPreviewContentUpdate();",
             "EnsurePreviewPanelVisible();");
+
+        // A large multi-select / wrap-toggle rebuild must NOT freeze the pane: the evicted-result
+        // hydration (the dominant cost) is batched into a single off-UI-thread ResultStore read
+        // behind the translucent progress overlay, and applied back on the UI thread. The old
+        // per-result on-UI-thread hydration loop must be gone.
+        AssertContainsInOrder(multiSelection,
+            "var evictedToHydrate = selected.Where(r => r.IsEvicted).ToList();",
+            "ShowProgressOverlay(",
+            "await Task.Run(() => ViewModel.ReadHydrationPayloads(evictedToHydrate))",
+            "if (gen != _previewUpdateGen)",
+            "Yagu.ViewModels.MainViewModel.ApplyHydrationPayloads(payloads);",
+            "HideProgressOverlay();");
+        Assert.DoesNotContain("ViewModel.HydrateResult(r);", multiSelection);
 
         string prepend = ExtractMethodWindow(MainWindowSource, "PrependPreviewSectionsForFilesAsync", 10000);
         AssertContainsInOrder(prepend,
@@ -402,11 +420,31 @@ public sealed class PreviewCoreRegressionTests
         // stale and the file the user had selected (its black "selected" background) lost
         // its selection. RefreshCurrentPreview must capture the active section's file path
         // before the rebuild and re-select it afterwards.
-        string refresh = ExtractMethodWindow(MainWindowSource, "RefreshCurrentPreview", 2200);
+        string refresh = ExtractMethodWindow(MainWindowSource, "RefreshCurrentPreview", 3600);
         AssertContainsInOrder(refresh,
             "string? restoreActiveSectionFilePath = preserveScroll ? GetActiveSectionFilePath() : null;",
             "await UpdateMultiSelectPreviewAsync();",
             "RestoreActiveSectionByFilePath(restoreActiveSectionFilePath);");
+
+        // A wrap-mode toggle on the SECTIONS surface (a clicked-match / preview-single-file view)
+        // must rebuild the sections the SAME way they were first loaded — NOT collapse to the
+        // single-file block surface (ShowSingleFilePreviewAsync). The rebuild reconstructs each
+        // displayed file's results and re-runs PrependPreviewSectionsForFilesAsync, and it is tried
+        // BEFORE the ShowSingleFilePreviewAsync fallback.
+        AssertContainsInOrder(refresh,
+            "await UpdateMultiSelectPreviewAsync();",
+            "TryBuildCurrentPreviewSectionResults(out var sectionFiles, out var sectionScrollTo)",
+            "ShowPreviewSectionsSurface();",
+            "await PrependPreviewSectionsForFilesAsync(sectionFiles, sectionScrollTo);",
+            "await ShowSingleFilePreviewAsync(_previewResult, fullFile: false);");
+
+        // The helper reconstructs each displayed file's results from its FileGroup using the same
+        // GetPreviewableResults the original build used.
+        string rebuildFiles = ExtractMethodWindow(MainWindowSource, "TryBuildCurrentPreviewSectionResults", 1200);
+        Assert.Contains("_expanderFilePaths.TryGetValue(expander, out var path)", rebuildFiles);
+        Assert.Contains("var group = FindFileGroup(path);", rebuildFiles);
+        Assert.Contains("var results = GetPreviewableResults(group);", rebuildFiles);
+        Assert.Contains("return byFile.Count > 0;", rebuildFiles);
 
         // GetActiveSectionFilePath resolves the active section's stable identity (file path).
         string getPath = ExtractMethodWindow(MainWindowSource, "GetActiveSectionFilePath", 400);
@@ -1146,26 +1184,37 @@ public sealed class PreviewCoreRegressionTests
             "_previewCustomSelectionLastRangeEnd = endIndex;");
         Assert.DoesNotContain("block.TextHighlighters.Add(_previewCustomSelectionHighlighter);", highlighter);
 
-        string overlay = ExtractMethodWindow(MainWindowSource, "DrawPreviewCustomSelectionOverlay", window: 8600);
+        string overlay = ExtractMethodWindow(MainWindowSource, "DrawPreviewCustomSelectionOverlay", window: 9600);
         AssertContainsInOrder(overlay,
             "PreviewSelectionOverlay.ActualWidth > 0",
             "PreviewScrollViewer.ActualWidth",
-            // The highlight bands are clamped to the visible content region: the right edge
-            // stops at the viewport (never over the scrollbar), the left edge stops at the
-            // content column (never over the inline line-number gutter).
-            "double contentRightBound = overlayWidth;",
-            "PreviewScrollViewer.ViewportWidth",
+            // The highlight bands are clamped to the BLOCK's own horizontal scroller (the per-section
+            // content scroller, which sits right of the gutter, or the outer viewer for the single-file
+            // block): the right edge stops at that scroller's viewport and the left edge at its content
+            // column, so a band never paints over the gutter nor spills past the visible right edge.
+            "var horizontalScroller = ResolvePreviewSelectionAutoScrollScroller(block) ?? PreviewScrollViewer;",
+            "double scrollerLeftBound = Math.Max(0, scrollerLeftOverlay);",
+            "double contentRightBound = Math.Min(overlayWidth, scrollerLeftOverlay + scrollerViewportWidth);",
             "bool hasInlineGutter = !_sectionGutterBlocks.ContainsKey(block);",
             "foreach (var textBlock in block.Blocks)",
             "int paragraphStart = blockIndex;",
             "int paragraphEnd = paragraphStart + paragraphLength;",
             "int rangeStart = Math.Max(selectionStart, paragraphStart);",
             "block.TransformToVisual(PreviewSelectionOverlay)",
+            "double contentLeftBound = scrollerLeftBound;",
             "TryGetParagraphInlineGutterLength(paragraph, out int gutterCharLength)",
+            "contentLeftBound = Math.Max(scrollerLeftBound, contentLeftOverlay);",
             "double visibleLeft = Math.Max(contentLeftBound, left);",
             "double visibleRight = Math.Min(contentRightBound, right);",
             "GetPreviewCustomSelectionOverlayMarker(markerIndex++)",
             "PreviewSelectionOverlay.Visibility = Visibility.Visible;");
+        // The wrapped path clamps its bands with the same scroller-left bound so continuation rows
+        // never paint over the gutter either.
+        Assert.Contains("markerHeight, scrollerLeftBound, contentRightBound, overlayHeight, out var wrappedRows", overlay);
+        string wrappedRowsBuilder = ExtractMethodWindow(MainWindowSource, "TryBuildWrappedPreviewSelectionRows", window: 4000);
+        Assert.Contains("double clampLeft,", wrappedRowsBuilder);
+        string bandRect = ExtractMethodWindow(MainWindowSource, "AddOverlayBandRect", window: 1600);
+        Assert.Contains("double visibleLeft = Math.Max(clampLeft, left);", bandRect);
 
         // The inline gutter length is recorded so the overlay can find the content column.
         string makeParagraph = ExtractMethodWindow(MainWindowSource, "MakePreviewParagraph", window: 3200);
@@ -2241,6 +2290,8 @@ public sealed class PreviewCoreRegressionTests
             "previewAllItem.Tag = contextGroup;",
             "previewAllItem.Visibility = checkedCount > 1",
             "int count = checkedCount > 0 ? checkedCount : 1;");
+        // The long selected file name is truncated so the "Preview <name>" item can't stretch the menu.
+        Assert.Contains("singleItem.Text = $\"Preview {TruncateFileNameForPreviewMenu(fileName)}\";", opening);
 
         string contextGroup = ExtractMethodWindow(MainWindowSource, "GetFileHeaderContextGroup", window: 1400);
         Assert.Contains("if (sender is MenuFlyout { Target: FrameworkElement target })", contextGroup);
@@ -2255,6 +2306,13 @@ public sealed class PreviewCoreRegressionTests
             "CtxPreviewSelected.Tag = contextGroup;",
             "CtxPreviewSelected.Visibility = checkedCount > 1",
             "int count = checkedCount > 0 ? checkedCount : contextGroup is null ? 0 : 1;");
+        Assert.Contains("CtxPreviewSingle.Text = $\"Preview {TruncateFileNameForPreviewMenu(fileName)}\";", resultsOpening);
+
+        // The helper caps the displayed name at half a 128-char hash (64 chars) and adds a trailing ellipsis.
+        string truncate = ExtractMethodWindow(MainWindowSource, "TruncateFileNameForPreviewMenu", window: 500);
+        Assert.Contains("fileName.Length <= MaxPreviewMenuFileNameChars", truncate);
+        Assert.Contains("string.Concat(fileName.AsSpan(0, MaxPreviewMenuFileNameChars - 1), \"\\u2026\")", truncate);
+        Assert.Contains("private const int MaxPreviewMenuFileNameChars = 64;", MainWindowSource);
 
         string capture = ExtractMethodWindow(MainWindowSource, "CaptureResultsContextMenuGroup", window: 900);
         Assert.Contains("_lastResultsContextMenuGroup = FindContextFileGroup(source);", capture);

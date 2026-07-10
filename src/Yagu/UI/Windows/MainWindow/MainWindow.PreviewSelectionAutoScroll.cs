@@ -792,15 +792,32 @@ public sealed partial class MainWindow
             return;
         }
 
-        // Never let the highlight bands spill past the visible preview surface on the right
-        // (into the vertical scrollbar / panel chrome) nor over the line-number gutter on the
-        // left. contentRightBound is the viewport's right edge (excludes the scrollbar); the
-        // per-paragraph contentLeftBound (computed in the loop) is the content column's left
-        // edge for the inline-gutter single-file surface.
-        double contentRightBound = overlayWidth;
-        double viewportRight = PreviewScrollViewer.ViewportWidth;
-        if (viewportRight > 0 && viewportRight < contentRightBound)
-            contentRightBound = viewportRight;
+        // Clamp every highlight band to the visible content region of the BLOCK's own horizontal
+        // scroller — the per-section content scroller on the sections surface (which sits to the RIGHT
+        // of the line-number gutter and is narrower than the outer viewer), or the outer
+        // PreviewScrollViewer for the single-file block. This keeps a band inside
+        // [content-left, content-right] so it can never paint over the gutter on the left nor spill
+        // past the visible right edge, in either wrap or no-wrap mode. Off-screen selected text stays
+        // tracked for copy; it just isn't painted until the user scrolls it into view.
+        var horizontalScroller = ResolvePreviewSelectionAutoScrollScroller(block) ?? PreviewScrollViewer;
+        double scrollerLeftOverlay = 0;
+        double scrollerViewportWidth = overlayWidth;
+        try
+        {
+            var scrollerToOverlay = horizontalScroller.TransformToVisual(PreviewSelectionOverlay);
+            scrollerLeftOverlay = scrollerToOverlay.TransformPoint(new Point(0, 0)).X;
+            double viewportWidth = horizontalScroller.ViewportWidth > 0
+                ? horizontalScroller.ViewportWidth
+                : horizontalScroller.ActualWidth;
+            if (viewportWidth > 0)
+                scrollerViewportWidth = viewportWidth;
+        }
+        catch
+        {
+            // Fall back to the full overlay width when the scroller transform is unavailable.
+        }
+        double scrollerLeftBound = Math.Max(0, scrollerLeftOverlay);
+        double contentRightBound = Math.Min(overlayWidth, scrollerLeftOverlay + scrollerViewportWidth);
         bool hasInlineGutter = !_sectionGutterBlocks.ContainsKey(block);
 
         int markerIndex = 0;
@@ -856,7 +873,7 @@ public sealed partial class MainWindow
 
             if (block.TextWrapping == TextWrapping.Wrap
                 && TryBuildWrappedPreviewSelectionRows(
-                    block, paragraph, localStart, localEnd, rect, markerHeight, contentRightBound, overlayHeight, out var wrappedRows))
+                    block, paragraph, localStart, localEnd, rect, markerHeight, scrollerLeftBound, contentRightBound, overlayHeight, out var wrappedRows))
             {
                 bool wrapCapReached = false;
                 foreach (var rowRect in wrappedRows)
@@ -894,8 +911,9 @@ public sealed partial class MainWindow
             // Clamp the band's left edge to the content column so a fully-selected line does
             // not paint the blue band over the inline line-number gutter. For the inline-gutter
             // single-file surface the content starts after the gutter runs; section content
-            // blocks have no inline gutter (their gutter is a separate block), so this stays 0.
-            double contentLeftBound = 0;
+            // blocks have no inline gutter (their gutter is a separate block), so this starts at
+            // the section content scroller's left edge (scrollerLeftBound).
+            double contentLeftBound = scrollerLeftBound;
             if (hasInlineGutter
                 && TryGetParagraphInlineGutterLength(paragraph, out int gutterCharLength)
                 && gutterCharLength > 0)
@@ -911,7 +929,7 @@ public sealed partial class MainWindow
                             double contentLeftOverlay = block
                                 .TransformToVisual(PreviewSelectionOverlay)
                                 .TransformPoint(new Point(contentStartRect.X, contentStartRect.Y)).X;
-                            contentLeftBound = Math.Max(0, contentLeftOverlay);
+                            contentLeftBound = Math.Max(scrollerLeftBound, contentLeftOverlay);
                         }
                     }
                     catch
@@ -956,6 +974,7 @@ public sealed partial class MainWindow
         int localEnd,
         Windows.Foundation.Rect paragraphFirstCharRect,
         double markerHeight,
+        double clampLeft,
         double contentRightBound,
         double overlayHeight,
         out List<Windows.Foundation.Rect> rows)
@@ -1009,21 +1028,21 @@ public sealed partial class MainWindow
         if (sameRow)
         {
             AddOverlayBandRect(toOverlay, startRect.X, startRect.Y, endRect.X, startRect.Y + rowHeight,
-                contentRightBound, overlayHeight, rows);
+                clampLeft, contentRightBound, overlayHeight, rows);
         }
         else
         {
             // Partial first row: selection start -> content right edge.
             AddOverlayBandRect(toOverlay, startRect.X, startRect.Y, contentRightBlock, startRect.Y + rowHeight,
-                contentRightBound, overlayHeight, rows);
+                clampLeft, contentRightBound, overlayHeight, rows);
             // Full-width middle band covering every row strictly between start and end.
             double midTopBlock = startRect.Y + rowHeight;
             if (endRect.Y - midTopBlock > 1)
                 AddOverlayBandRect(toOverlay, contentLeftBlock, midTopBlock, contentRightBlock, endRect.Y,
-                    contentRightBound, overlayHeight, rows);
+                    clampLeft, contentRightBound, overlayHeight, rows);
             // Partial last row: content left edge -> selection end.
             AddOverlayBandRect(toOverlay, contentLeftBlock, endRect.Y, endRect.X, endRect.Y + rowHeight,
-                contentRightBound, overlayHeight, rows);
+                clampLeft, contentRightBound, overlayHeight, rows);
         }
 
         return rows.Count > 0;
@@ -1038,6 +1057,7 @@ public sealed partial class MainWindow
         double topBlock,
         double rightBlock,
         double bottomBlock,
+        double clampLeft,
         double clampRight,
         double overlayHeight,
         List<Windows.Foundation.Rect> rows)
@@ -1064,7 +1084,7 @@ public sealed partial class MainWindow
             || double.IsInfinity(left) || double.IsInfinity(right) || double.IsInfinity(top) || double.IsInfinity(bottom))
             return;
 
-        double visibleLeft = Math.Max(0, left);
+        double visibleLeft = Math.Max(clampLeft, left);
         double visibleRight = Math.Min(clampRight, right);
         double width = visibleRight - visibleLeft;
         double height = bottom - top;
