@@ -149,6 +149,10 @@ public sealed partial class MainWindow
         await VerifyTerminalDirectoryIsYaguExecutableDirectoryAsync();
 
         string commandText = text.TrimEnd('\r', '\n');
+        // The generated command starts with a bare "Yagu.exe", which cmd.exe runs from the current
+        // directory but PowerShell does not (it never searches the CWD) — prefix it with ".\" for
+        // PowerShell so it resolves. The terminal was just cd'd to the exe directory above.
+        commandText = TerminalShell.PrefixCurrentDirectoryExecutable(commandText, _terminalActiveShellKind);
         PostTerminalPasteTextToWebView(commandText);
         FocusTerminal();
     }

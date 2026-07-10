@@ -39,6 +39,43 @@ internal static class TerminalShell
     public static int NormalizeSettingsIndex(int index)
         => index == 1 ? 1 : 0;
 
+    /// <summary>
+    /// Adapts a command that starts with a bare executable name (e.g. <c>Yagu.exe</c>) so it runs in
+    /// the target shell from the current directory. cmd.exe resolves a bare exe name from the current
+    /// working directory, but PowerShell never searches the CWD for executables and reports "is not
+    /// recognized as the name of a cmdlet, function, script file, or operable program" unless the
+    /// invocation is prefixed with <c>.\</c>. The embedded terminal always cd's into the Yagu
+    /// executable directory before a generated command is sent, so a <c>.\</c> prefix makes the bare
+    /// exe resolve reliably. Returns the command unchanged for cmd, when the first token is already
+    /// quoted / rooted / relative, or when there is no leading bare <c>.exe</c> token.
+    /// </summary>
+    public static string PrefixCurrentDirectoryExecutable(string commandText, TerminalShellKind shellKind)
+    {
+        if (shellKind != TerminalShellKind.PowerShell || string.IsNullOrEmpty(commandText))
+            return commandText;
+
+        // Isolate the first whitespace-delimited token (the executable being invoked).
+        int tokenEnd = 0;
+        while (tokenEnd < commandText.Length && !char.IsWhiteSpace(commandText[tokenEnd]))
+            tokenEnd++;
+
+        string firstToken = commandText.Substring(0, tokenEnd);
+
+        // Only a bare exe name resolved from the CWD needs the prefix. Leave quoted, rooted
+        // (C:\...), or already-relative (.\, ..\) invocations alone, and anything that is not an .exe.
+        if (firstToken.Length == 0
+            || firstToken[0] is '"' or '\'' or '.' or '&'
+            || firstToken.Contains('\\', StringComparison.Ordinal)
+            || firstToken.Contains('/', StringComparison.Ordinal)
+            || firstToken.Contains(':', StringComparison.Ordinal)
+            || !firstToken.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return commandText;
+        }
+
+        return ".\\" + commandText;
+    }
+
     // A custom PSHost whose UI writes prompts and output to the process's stdout and reads answers
     // from stdin. Running user commands in a runspace bound to this host is what makes interactive
     // prompts (mandatory parameters, Read-Host, choice prompts) visible under pipe redirection, and

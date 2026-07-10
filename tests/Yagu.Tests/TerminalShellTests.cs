@@ -35,6 +35,36 @@ public sealed class TerminalShellTests
     }
 
     [Fact]
+    public void PrefixCurrentDirectoryExecutable_PowerShell_PrefixesBareExeWithDotSlash()
+    {
+        // PowerShell will not run "Yagu.exe" from the CWD; it needs ".\Yagu.exe".
+        const string command = "Yagu.exe --cli --directory C:\\ --pattern foo";
+        Assert.Equal(
+            ".\\Yagu.exe --cli --directory C:\\ --pattern foo",
+            TerminalShell.PrefixCurrentDirectoryExecutable(command, TerminalShellKind.PowerShell));
+    }
+
+    [Fact]
+    public void PrefixCurrentDirectoryExecutable_Cmd_LeavesBareExeUnchanged()
+    {
+        // cmd.exe resolves a bare exe name from the current directory, so no prefix is needed.
+        const string command = "Yagu.exe --cli --directory C:\\ --pattern foo";
+        Assert.Equal(command, TerminalShell.PrefixCurrentDirectoryExecutable(command, TerminalShellKind.Cmd));
+    }
+
+    [Theory]
+    [InlineData(".\\Yagu.exe --cli")]           // already relative
+    [InlineData("\"Yagu.exe\" --cli")]          // quoted
+    [InlineData("C:\\Program Files\\Yagu\\Yagu.exe --cli")] // rooted path
+    [InlineData("& Yagu.exe --cli")]            // call operator already present
+    [InlineData("Get-ChildItem -Recurse")]      // not an exe (a cmdlet)
+    [InlineData("")]                             // empty
+    public void PrefixCurrentDirectoryExecutable_PowerShell_LeavesNonBareExeUnchanged(string command)
+    {
+        Assert.Equal(command, TerminalShell.PrefixCurrentDirectoryExecutable(command, TerminalShellKind.PowerShell));
+    }
+
+    [Fact]
     public void PowerShellReplScript_IsANoEchoLineReader()
     {
         string script = TerminalShell.PowerShellReplScript;

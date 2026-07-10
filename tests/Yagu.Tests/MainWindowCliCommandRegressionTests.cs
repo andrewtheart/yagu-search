@@ -117,6 +117,9 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("EnsureTerminalPaneExpandedAsync", terminalSource);
         Assert.Contains("await WaitForTerminalShellReadyAsync();", terminalSource);
         Assert.Contains("await VerifyTerminalDirectoryIsYaguExecutableDirectoryAsync();", terminalSource);
+        // The bare "Yagu.exe" must be adapted for the active shell before it is sent (PowerShell
+        // will not run it from the CWD without a ".\" prefix).
+        Assert.Contains("TerminalShell.PrefixCurrentDirectoryExecutable(commandText, _terminalActiveShellKind)", terminalSource);
         Assert.Contains("cd /d", terminalDirectoryGuardSource);
         Assert.Contains("&& echo", terminalDirectoryGuardSource);
         Assert.Contains("TerminalDirectoryGuard.BuildChangeDirectoryProbeCommand", terminalSource);
