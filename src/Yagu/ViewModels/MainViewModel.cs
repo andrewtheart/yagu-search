@@ -1127,7 +1127,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial bool ShowAutoScrollResultsCheckbox { get; set; }
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
-    [ObservableProperty] public partial int MaxMatchesPerLine { get; set; } = 5_000;
+    [ObservableProperty] public partial int MaxMatchesPerLine { get; set; }
     [ObservableProperty] public partial int AbsoluteMaxResults { get; set; }
     [ObservableProperty] public partial double MaxSearchDepth { get; set; } = double.NaN;
 

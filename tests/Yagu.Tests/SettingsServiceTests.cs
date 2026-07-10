@@ -342,9 +342,31 @@ public class SettingsServiceNewFieldTests
     public void Defaults_MaxMatchesPerLineAndAbsoluteMaxResults()
     {
         var s = new AppSettings();
-        Assert.Equal(5_000, s.MaxMatchesPerLine);
+        // Per-line matches are unlimited by default (0) — a giant single line is no longer capped at 5000.
+        Assert.Equal(0, s.MaxMatchesPerLine);
         // Results are unlimited by default — the absolute backstop is disabled (0), so nothing truncates.
         Assert.Equal(0, s.AbsoluteMaxResults);
+    }
+
+    [Fact]
+    public void Load_MigratesLegacy5000MaxMatchesPerLineToUnlimitedOnce()
+    {
+        // An existing install that persisted the old 5000 per-line default is migrated to 0 (unlimited)
+        // exactly once; the one-time flag then preserves a value the user deliberately sets afterward.
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-perline-mig-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, "{\"MaxMatchesPerLine\":5000}");
+            var migrated = new SettingsService(tmp).Load();
+            Assert.Equal(0, migrated.MaxMatchesPerLine);
+            Assert.True(migrated.MaxMatchesPerLineMigratedToUnlimited);
+
+            // After migration a deliberately-set 5000 is kept (not re-migrated) because the flag is set.
+            File.WriteAllText(tmp, "{\"MaxMatchesPerLine\":5000,\"MaxMatchesPerLineMigratedToUnlimited\":true}");
+            var kept = new SettingsService(tmp).Load();
+            Assert.Equal(5000, kept.MaxMatchesPerLine);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
     }
 
     [Fact]

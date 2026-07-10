@@ -119,18 +119,21 @@
                                   IsThreeState="False"
                                   IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
                                   Click="OnFileGroupCheckBoxClicked" />
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="0,0,10,0">
-                            <Border Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" MinWidth="105"
+                        <StackPanel Grid.Column="1" Orientation="Vertical" Spacing="3" VerticalAlignment="Center" Margin="0,0,10,0">
+                            <Border Background="#1A6B5A" CornerRadius="4" Padding="8,2" HorizontalAlignment="Left" MinWidth="105"
                                 ToolTipService.ToolTip="Matches found inside the file's contents"
                                 Visibility="{x:Bind HasContentMatches, Mode=OneWay}">
-                                <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
-                                    <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
-                                </TextBlock>
+                                <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
+                                    <FontIcon Glyph="&#xE8A5;" FontSize="10" Foreground="#B0E0D0" VerticalAlignment="Center" />
+                                    <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
+                                        <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
+                                    </TextBlock>
+                                </StackPanel>
                             </Border>
-                            <Border Background="#284B7A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center"
+                            <Border Background="#284B7A" CornerRadius="4" Padding="8,2" HorizontalAlignment="Center"
                                 ToolTipService.ToolTip="The file name matches your search"
                                 Visibility="{x:Bind HasFileNameMatch, Mode=OneWay}">
-                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
                                     <FontIcon Glyph="&#xE8AC;" FontSize="10" Foreground="#A9CBF2" VerticalAlignment="Center" />
                                     <TextBlock VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#A9CBF2" Text="file name" />
                                 </StackPanel>
@@ -565,7 +568,7 @@
                     <SplitButton x:Name="SearchSplitButton"
                                  Click="OnSearchSplitButtonClick"
                                  Visibility="{x:Bind ViewModel.SearchModeSplitButtonVisibility, Mode=OneWay}"
-                                 Padding="12,9" MinWidth="0" MinHeight="40" CornerRadius="6"
+                                 Padding="12,5,12,6" MinWidth="0" MinHeight="32" CornerRadius="6"
                                  ToolTipService.ToolTip="Search (F5) — use the chevron to switch mode">
                         <SplitButton.Resources>
                             <SolidColorBrush x:Key="SplitButtonBackground" Color="{ThemeResource SystemAccentColor}" />
@@ -599,7 +602,7 @@
                             </MenuFlyout>
                         </SplitButton.Flyout>
                     </SplitButton>
-                    <Button x:Name="SearchCancelButton" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,9" MinWidth="0" MinHeight="40" CornerRadius="6"
+                    <Button x:Name="SearchCancelButton" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,5,12,6" MinWidth="0" MinHeight="32" CornerRadius="6"
                             Visibility="{x:Bind ViewModel.SearchActionButtonVisibility, Mode=OneWay}"
                             ToolTipService.ToolTip="Search (F5)">
                         <Button.KeyboardAccelerators>

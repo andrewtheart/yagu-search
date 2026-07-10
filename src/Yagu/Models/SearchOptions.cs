@@ -117,7 +117,7 @@ public sealed class SearchOptions
     /// <summary>Maximum matches emitted from a single line before the scanner moves to the next line.
     /// Bounds a pathological pattern (e.g. the regex <c>.</c>, which matches every character) on a very
     /// long minified line from emitting millions of matches. 0 disables (unlimited per line).</summary>
-    public int MaxMatchesPerLine { get; init; } = 5_000;
+    public int MaxMatchesPerLine { get; init; }
 
     /// <summary>Absolute safety ceiling on total matches that applies EVEN WHEN <see cref="MaxResults"/>
     /// is 0 (unlimited). When &gt; 0, an unbounded content search (e.g. a match-everything regex over huge

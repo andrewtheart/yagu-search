@@ -265,10 +265,10 @@ public sealed class AppSettings
     [JsonIgnore] public int MaxSearchDepth { get; set; }
     /// <summary>Optional hard cap on stored matches per file. 0 = unlimited (default). Useful for capping pathological files (massive logs, generated dumps) that would otherwise dominate the heap.</summary>
     public int MaxMatchesPerFile { get; set; }
-    /// <summary>Maximum matches emitted from a single line before the scanner moves to the next line. 0 = unlimited.
-    /// Bounds a match-everything pattern (e.g. the regex <c>.</c>) on a very long minified line from emitting millions
-    /// of matches. Default 5000.</summary>
-    public int MaxMatchesPerLine { get; set; } = 5_000;
+    /// <summary>Maximum matches emitted from a single line before the scanner moves to the next line. 0 = unlimited (default).
+    /// A positive value bounds a match-everything pattern (e.g. the regex <c>.</c>) on a very long minified line from
+    /// emitting millions of matches.</summary>
+    public int MaxMatchesPerLine { get; set; }
     /// <summary>Absolute safety ceiling on total matches that applies EVEN WHEN <c>MaxResults</c> is 0 (unlimited).
     /// When &gt; 0, an unbounded content search stops once reached (result marked truncated). Default 0 (disabled —
     /// no truncation); memory-pressure eviction and the per-line cap still protect against runaway usage.</summary>
@@ -449,6 +449,10 @@ public sealed class AppSettings
     /// rebased onto a modern default at least once. Kept for backwards compatibility with installs
     /// migrated by an earlier build; the new migration uses <see cref="StartInLauncherModeMigrated"/>.</summary>
     public bool WindowFocusBehaviorMigratedFromLegacyDefault { get; set; }
+    /// <summary>One-time migration guard: existing installs persisted the old 5000 per-line-match default.
+    /// On load it is flipped to 0 (unlimited) exactly once so those installs stop capping giant single
+    /// lines at 5000; a value the user deliberately sets afterward is preserved.</summary>
+    public bool MaxMatchesPerLineMigratedToUnlimited { get; set; }
     /// <summary>When true (default), closing the window docks to system tray instead of exiting.</summary>
     public bool CloseToTray { get; set; } = true;
     /// <summary>Whether the user has been informed that closing docks to the system tray.</summary>
@@ -610,6 +614,11 @@ public sealed class SettingsService
     // legacy default is migrated to 0 (disabled) on load so existing installs stop truncating results.
     private const int LegacyDefaultAbsoluteMaxResults = 2_000_000;
 
+    // The pre-"unlimited by default" per-line match cap. A persisted MaxMatchesPerLine equal to this
+    // exact legacy default is migrated ONCE to 0 (unlimited) on load (guarded by
+    // MaxMatchesPerLineMigratedToUnlimited) so existing installs stop capping giant single lines at 5000.
+    private const int LegacyDefaultMaxMatchesPerLine = 5_000;
+
     public AppSettings Load()
     {
         try
@@ -622,6 +631,9 @@ public sealed class SettingsService
                 settings.MaxResults = SearchOptions.MaxResultsCeiling;
             if (settings.MaxMatchesPerLine < 0)
                 settings.MaxMatchesPerLine = 0;
+            else if (!settings.MaxMatchesPerLineMigratedToUnlimited && settings.MaxMatchesPerLine == LegacyDefaultMaxMatchesPerLine)
+                settings.MaxMatchesPerLine = 0; // one-time flip of the old 5000 default to unlimited
+            settings.MaxMatchesPerLineMigratedToUnlimited = true;
             if (settings.AbsoluteMaxResults < 0)
                 settings.AbsoluteMaxResults = 0;
             // Unlimited-by-default: migrate the exact legacy 2,000,000 backstop to 0 (disabled) so

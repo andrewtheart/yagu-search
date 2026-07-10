@@ -2180,7 +2180,7 @@ internal static class CliRunner
                   --sdk-channel-buffer <n> Everything SDK channel buffer size.
                   --file-lister-backend <n> File lister: 0=Auto, 1=SDK, 2=es.exe, 3=Managed.
                   --max-matches-per-file <n> Cap matches per file (0 = unlimited).
-                  --max-matches-per-line <n> Cap matches emitted per line (0 = unlimited, default 5000).
+                  --max-matches-per-line <n> Cap matches emitted per line (0 = unlimited, default 0).
                   --absolute-max-results <n> Hard total-match backstop even when --max-results is 0 (default 2000000).
                   --max-depth <n>         Max directory recursion depth (0 = unlimited).
 

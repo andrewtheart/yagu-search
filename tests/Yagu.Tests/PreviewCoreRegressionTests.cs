@@ -1922,10 +1922,20 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("ViewModel.ResultRows.CollectionChanged += OnResultGroupsCollectionChanged;", scrollSource);
         Assert.DoesNotContain("ViewModel.ResultGroups.CollectionChanged += OnResultGroupsCollectionChanged;", scrollSource);
 
-        string fileGroupTemplate = ExtractXamlWindow("<DataTemplate x:Key=\"FileGroupResultTemplate\"", 5600);
+        string fileGroupTemplate = ExtractXamlWindow("<DataTemplate x:Key=\"FileGroupResultTemplate\"", 6600);
         Assert.Contains("Visibility=\"{x:Bind HasContentMatches, Mode=OneWay}\"", fileGroupTemplate);
         // A second pill distinguishes a file-name match from a content match (content-only, name-only, or both).
         Assert.Contains("Visibility=\"{x:Bind HasFileNameMatch, Mode=OneWay}\"", fileGroupTemplate);
+        // The two pills stack VERTICALLY (matches on top, "file name" below) so a row with both a
+        // content match and a file-name match shows the file-name pill under the match-count pill.
+        AssertContainsInOrder(fileGroupTemplate,
+            "<StackPanel Grid.Column=\"1\" Orientation=\"Vertical\"",
+            "Visibility=\"{x:Bind HasContentMatches, Mode=OneWay}\"",
+            "Visibility=\"{x:Bind HasFileNameMatch, Mode=OneWay}\"");
+        // Both pills carry a leading FontIcon: a Document glyph for content matches, a Rename glyph for
+        // the file-name match.
+        Assert.Contains("<FontIcon Glyph=\"&#xE8A5;\" FontSize=\"10\" Foreground=\"#B0E0D0\"", fileGroupTemplate);
+        Assert.Contains("<FontIcon Glyph=\"&#xE8AC;\" FontSize=\"10\" Foreground=\"#A9CBF2\"", fileGroupTemplate);
     }
 
     [Fact]
