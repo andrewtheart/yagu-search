@@ -617,6 +617,28 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void EditorMatchReveal_CentersMatchHorizontally_NotAtTheEdge()
+    {
+        // Jumping to a search match in the built-in editor must CENTER the match column in the
+        // viewport, not reveal it pinned against the right edge (which is what the plain
+        // edge-reveal ScrollIntoViewHorizontal does). The reveal path calls the centering method.
+        Assert.Contains("PreviewEditor.ScrollLineToCenter(targetLineIndex);", PreviewEditorSource);
+        Assert.Contains("PreviewEditor.ScrollIntoViewHorizontallyCentered();", PreviewEditorSource);
+        Assert.DoesNotContain("PreviewEditor.ScrollIntoViewHorizontally();", PreviewEditorSource);
+
+        // The vendored ScrollManager provides the centering method: it targets the middle of the
+        // viewport (curPosInLine - ActualWidth / 2) and records OldHorizontalScrollValue so the
+        // per-draw EnsureHorizontalScrollBounds edge-reveal does not immediately un-center it.
+        string centered = ExtractMethodWindow(EditorScrollManagerSource, "ScrollCursorIntoViewHorizontallyCentered", 900);
+        Assert.Contains("curPosInLine - canvasText.ActualWidth / 2", centered);
+        Assert.Contains("OldHorizontalScrollValue = curPosInLine;", centered);
+
+        // Both the edge-reveal and the centering method resolve the column through the shared helper.
+        Assert.Contains("float curPosInLine = GetCurrentCursorPixelPositionInLine();", EditorScrollManagerSource);
+        Assert.Contains("private float GetCurrentCursorPixelPositionInLine()", EditorScrollManagerSource);
+    }
+
+    [Fact]
     public void EditorDiagonalScroll_UsesTouchpadOnlyInteractionTrackerDrivingTheOffsetSource_AndIsTornDownOnUnload()
     {
         // Option B of PLANS/EDITOR_DIAGONAL_SCROLL_REWRITE_PLAN.md: a composition InteractionTracker on the

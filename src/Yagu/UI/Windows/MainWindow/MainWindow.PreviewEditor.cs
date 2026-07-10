@@ -1343,7 +1343,7 @@ public sealed partial class MainWindow
                     SelectPreviewEditorText(s, l);
                 }
                 PreviewEditor.ScrollLineToCenter(targetLineIndex);
-                PreviewEditor.ScrollIntoViewHorizontally();
+                PreviewEditor.ScrollIntoViewHorizontallyCentered();
                 if (LogService.Instance.IsVerboseEnabled)
                     LogService.Instance.Verbose("PreviewEditor", $"RevealEditorMatch: source={source}, line={targetLineIndex}, start={capturedStart}, length={capturedLength}, wordWrap={PreviewEditor.WordWrap}");
             }

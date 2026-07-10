@@ -815,6 +815,11 @@ internal sealed partial class CoreTextControlBox : UserControl
         scrollManager.ScrollIntoViewHorizontal(canvasText);
     }
 
+    public void ScrollIntoViewHorizontallyCentered()
+    {
+        scrollManager.ScrollCursorIntoViewHorizontallyCentered(canvasText);
+    }
+
     public void ScrollLineToCenter(int line)
     {
         TextControlBoxDiagnostics.Verbose("TextControlBox.Scroll", $"ScrollLineToCenter: line={line}, before={DescribeTextControlBoxState()}");

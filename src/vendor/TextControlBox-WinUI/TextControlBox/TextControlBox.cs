@@ -351,6 +351,15 @@ public partial class TextControlBox : UserControl
     }
 
     /// <summary>
+    /// Scrolls the textbox horizontally so the cursor column is centered in the viewport
+    /// (instead of merely revealed at the nearest edge). No-op in word-wrap mode.
+    /// </summary>
+    public void ScrollIntoViewHorizontallyCentered()
+    {
+        coreTextBox.ScrollIntoViewHorizontallyCentered();
+    }
+
+    /// <summary>
     /// Gets the content of the line specified by the zero based index
     /// </summary>
     /// <param name="line">The zero based index of the line</param>
