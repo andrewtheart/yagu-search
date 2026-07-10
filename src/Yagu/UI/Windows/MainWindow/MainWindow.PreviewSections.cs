@@ -477,6 +477,28 @@ public sealed partial class MainWindow
         _ = VisualStateManager.GoToState(checkBox, desired ? "Checked" : "Unchecked", false);
     }
 
+    /// <summary>
+    /// Permanently kills the recurring phantom "dash" (indeterminate glyph) on the circular
+    /// per-file-group selection checkbox. The header CheckBox lives in a virtualizing
+    /// <see cref="Microsoft.UI.Xaml.Controls.ListView"/> item container; when the container is
+    /// recycled and its template is re-applied, WinUI can transiently reset <c>IsChecked</c>
+    /// (a <c>bool?</c>) to its <c>null</c> default and drop the box into the indeterminate
+    /// visual state — which then sticks, because the OneWay <c>AllSelected</c> binding does not
+    /// re-push an unchanged value. <see cref="OnResultsListContainerContentChanging"/> coerces
+    /// the state at container-prep time, but a template re-apply can happen AFTER that, so it
+    /// loses the race. The <c>Indeterminate</c> event is the only hook raised exactly when
+    /// <c>IsChecked</c> becomes <c>null</c>, whenever that occurs, so snapping the box straight
+    /// back to the group's real selection state here catches every phantom, permanently.
+    /// </summary>
+    private void OnFileGroupCheckBoxIndeterminate(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox checkBox)
+            return;
+
+        bool desired = checkBox.DataContext is FileGroup group && group.AllSelected;
+        SetFileGroupCheckBoxState(checkBox, desired);
+    }
+
     private static CheckBox? FindFileGroupCheckBox(Microsoft.UI.Xaml.DependencyObject parent)
     {
         int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent);

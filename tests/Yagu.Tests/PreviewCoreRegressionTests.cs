@@ -2071,6 +2071,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("IsThreeState=\"False\"", headerCheckbox);
         Assert.DoesNotContain("Mode=TwoWay", headerCheckbox);
         Assert.Contains("Click=\"OnFileGroupCheckBoxClicked\"", headerCheckbox);
+        Assert.Contains("Indeterminate=\"OnFileGroupCheckBoxIndeterminate\"", headerCheckbox);
         Assert.DoesNotContain("IsHitTestVisible=\"False\"", headerCheckbox);
         Assert.DoesNotContain("Checked=\"OnSelectAllChecked\"", headerCheckbox);
         Assert.DoesNotContain("Unchecked=\"OnSelectAllUnchecked\"", headerCheckbox);

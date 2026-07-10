@@ -118,6 +118,7 @@
                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
                                   IsThreeState="False"
                                   IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
+                                  Indeterminate="OnFileGroupCheckBoxIndeterminate"
                                   Click="OnFileGroupCheckBoxClicked" />
                         <StackPanel Grid.Column="1" Orientation="Vertical" Spacing="3" VerticalAlignment="Center" Margin="0,0,10,0">
                             <Border Background="#1A6B5A" CornerRadius="4" Padding="8,2" HorizontalAlignment="Left" MinWidth="105"

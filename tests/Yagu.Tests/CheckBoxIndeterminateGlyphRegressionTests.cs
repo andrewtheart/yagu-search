@@ -71,6 +71,41 @@ public sealed class CheckBoxIndeterminateGlyphRegressionTests
             xaml);
     }
 
+    [Fact]
+    public void FileGroupCheckBox_HasIndeterminateCorrectionHandler()
+    {
+        // The circular per-file-group selection checkbox lives in a virtualizing ListView item
+        // container. On container recycle the template can re-apply and transiently reset
+        // IsChecked (bool?) to null, sticking the indeterminate "dash". The App.xaml transparent
+        // brushes alone did NOT stop it (the box only rendered the phantom because the state
+        // stuck), so the checkbox MUST also wire the Indeterminate event that snaps it back —
+        // the only hook raised exactly when IsChecked becomes null, whenever that happens.
+        string mainWindowXaml = File.ReadAllText(
+            Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+
+        int idx = mainWindowXaml.IndexOf(
+            "AutomationProperties.AutomationId=\"FileGroupCheckBox\"", StringComparison.Ordinal);
+        Assert.True(idx >= 0, "FileGroupCheckBox not found in MainWindow.xaml.");
+        string checkBoxDecl = mainWindowXaml.Substring(idx, Math.Min(500, mainWindowXaml.Length - idx));
+        Assert.Contains("Indeterminate=\"OnFileGroupCheckBoxIndeterminate\"", checkBoxDecl);
+    }
+
+    [Fact]
+    public void OnFileGroupCheckBoxIndeterminate_SnapsBackToGroupSelectionState()
+    {
+        string source = File.ReadAllText(
+            Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewSections.cs"));
+
+        int idx = source.IndexOf("private void OnFileGroupCheckBoxIndeterminate(", StringComparison.Ordinal);
+        Assert.True(idx >= 0, "OnFileGroupCheckBoxIndeterminate handler not found.");
+        string handler = source.Substring(idx, Math.Min(600, source.Length - idx));
+
+        // It must coerce the box straight back to the group's real selection state, reusing the
+        // shared setter (which also re-asserts the correct visual state).
+        Assert.Contains("checkBox.DataContext is FileGroup group && group.AllSelected", handler);
+        Assert.Contains("SetFileGroupCheckBoxState(checkBox, desired);", handler);
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
