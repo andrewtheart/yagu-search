@@ -114,6 +114,37 @@ public sealed class MainViewModelSearchStatusRegressionTests
     }
 
     [Fact]
+    public void SessionBusyOverlay_ShowsTranslucentProgressWhileSavingOrLoading()
+    {
+        string mainWindowXaml = File.ReadAllText(
+            Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+
+        // A full-content translucent overlay (mirroring the preview loading overlays) covers the
+        // working area whenever a .yagu-session save/load is in progress, driven by IsSessionBusy.
+        string overlay = ExtractWindow(mainWindowXaml, "x:Name=\"SessionBusyOverlay\"", "</Grid>");
+        AssertContainsInOrder(overlay,
+            "Grid.Row=\"2\" Grid.RowSpan=\"4\"",
+            "Visibility=\"{x:Bind ViewModel.IsSessionBusy, Mode=OneWay}\"",
+            "AcrylicBackgroundFillColorBaseBrush",
+            "<ProgressRing IsActive=\"{x:Bind ViewModel.IsSessionBusy, Mode=OneWay}\"",
+            "Text=\"{x:Bind ViewModel.SessionProgressText, Mode=OneWay}\"",
+            "Text=\"{x:Bind ViewModel.SessionProgressPercentLabel, Mode=OneWay}\"");
+
+        // The big percent label is derived from SessionProgressPercent and refreshed when it changes.
+        Assert.Contains("public string SessionProgressPercentLabel => $\"{SessionProgressPercent:F0}%\";", MainViewModelSource);
+        Assert.Contains("partial void OnSessionProgressPercentChanged(double value) => OnPropertyChanged(nameof(SessionProgressPercentLabel));", MainViewModelSource);
+
+        // The busy flag the overlay binds to is toggled around BOTH save and load by the shared helpers.
+        Assert.Contains("[ObservableProperty] public partial bool IsSessionBusy { get; set; }", MainViewModelSource);
+        AssertContainsInOrder(MainViewModelSource,
+            "private void BeginSessionProgress(string initialText)",
+            "IsSessionBusy = true;");
+        AssertContainsInOrder(MainViewModelSource,
+            "private void EndSessionProgress()",
+            "IsSessionBusy = false;");
+    }
+
+    [Fact]
     public void SearchStatusHeartbeat_EnqueuesHighPriorityRefreshWhileSearchIsActive()
     {
         Assert.Contains("private CancellationTokenSource? _searchStatusHeartbeatCts;", MainViewModelSource);

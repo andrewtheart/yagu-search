@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text.Json;
 using Yagu.Models;
 using System.Globalization;
@@ -228,10 +229,17 @@ public static class SessionFileService
     /// <summary>
     /// Reads a session file, invoking <paramref name="onHeader"/> once with the
     /// metadata and <paramref name="onBatch"/> repeatedly with batches of
-    /// rehydrated <see cref="SearchResult"/> instances. Streaming so very large
-    /// sessions don't have to be fully materialised in memory before the UI
-    /// starts displaying them.
+    /// rehydrated <see cref="SearchResult"/> instances.
     /// </summary>
+    /// <remarks>
+    /// Streams the document with a <see cref="Utf8JsonReader"/> over a refillable
+    /// <see cref="ArrayPool{T}"/> buffer rather than <c>JsonDocument.ParseAsync</c>.
+    /// <c>JsonDocument</c> materialises the entire file into a single contiguous
+    /// allocation sized by an <see cref="int"/>: a session larger than 2 GB overflows
+    /// that sizing (a <see cref="long"/> length wraps to a negative <see cref="int"/>)
+    /// and throws <see cref="ArgumentOutOfRangeException"/> from <c>ArrayPool.Rent</c>.
+    /// Streaming keeps memory bounded and removes the 2 GB ceiling entirely.
+    /// </remarks>
     public static async Task<SessionHeader> ReadAsync(
         Stream input,
         Action<SessionHeader> onHeader,
@@ -245,195 +253,395 @@ public static class SessionFileService
 
         progress?.Report(0.0);
 
-        // Parse phase reports 0..0.5 driven by bytes consumed; enumeration phase 0.5..1.0
-        // driven by results parsed. Wrapping with a tracking stream lets us cover the
-        // JsonDocument.ParseAsync buffer-fill, which dominates wall time for big files.
-        long? totalBytes = input.CanSeek ? input.Length : null;
-        Stream parseStream = totalBytes is long t && t > 0
-            ? new ProgressStream(input, t, p => progress?.Report(p * 0.5))
-            : input;
+        // Byte-based progress for seekable inputs (covers the whole file); non-seekable
+        // streams fall back to parsed-vs-declared result count.
+        long? totalBytes = input.CanSeek ? input.Length : (long?)null;
 
-        using var doc = await JsonDocument.ParseAsync(parseStream, default, cancellationToken).ConfigureAwait(false);
-        progress?.Report(0.5);
-        var root = doc.RootElement;
-
-        string schema = root.TryGetProperty("schema", out var s) ? (s.GetString() ?? string.Empty) : string.Empty;
-        if (string.IsNullOrEmpty(schema) || !schema.StartsWith("yagu-session/", StringComparison.Ordinal))
-            throw new InvalidDataException($"Not a Yagu session file (schema='{schema}').");
-
-        // We understand v1 and v2 (see ReadableSchemaVersions). Newer versions: fail loudly.
-        if (Array.IndexOf(ReadableSchemaVersions, schema) < 0)
-            throw new InvalidDataException($"Unsupported session schema '{schema}' (this build understands {string.Join(", ", ReadableSchemaVersions)}).");
-
-        DateTime savedUtc = root.TryGetProperty("savedUtc", out var su) && DateTime.TryParse(su.GetString(), null, DateTimeStyles.RoundtripKind, out var savedParsed)
-            ? savedParsed : DateTime.UtcNow;
-        string query = root.TryGetProperty("query", out var q) ? (q.GetString() ?? string.Empty) : string.Empty;
-        string searchRoot = root.TryGetProperty("searchRoot", out var sr) ? (sr.GetString() ?? string.Empty) : string.Empty;
-
-        var stats = ReadStats(root);
-        int resultCount = root.TryGetProperty("resultCount", out var rc) && rc.TryGetInt32(out var rcv) ? rcv : 0;
-
-        var header = new SessionHeader(schema, savedUtc, query, searchRoot, stats, resultCount);
-        onHeader(header);
-
-        if (!root.TryGetProperty("results", out var resultsEl) || resultsEl.ValueKind != JsonValueKind.Array)
+        var parser = new SessionStreamParser();
+        var readerState = new JsonReaderState();
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(128 * 1024);
+        try
         {
-            progress?.Report(1.0);
-            return header;
-        }
+            int bufferedBytes = 0;
+            bool isFinalBlock = false;
+            long totalConsumed = 0;
+            double lastReported = 0.0;
+            bool headerDelivered = false;
+            SessionHeader? header = null;
 
-        int reportEvery = Math.Max(1, resultCount / 100);
-        int parsedCount = 0;
-        var batch = new List<SearchResult>(ResultBatchSize);
-        foreach (var item in resultsEl.EnumerateArray())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var parsed = ParseResult(item);
-            if (parsed is null) continue;
-
-            batch.Add(parsed);
-            parsedCount++;
-            if (batch.Count >= ResultBatchSize)
+            while (!isFinalBlock)
             {
-                await onBatch(batch).ConfigureAwait(false);
-                batch = new List<SearchResult>(ResultBatchSize);
-                if (resultCount > 0 && parsedCount % reportEvery < ResultBatchSize)
-                    progress?.Report(0.5 + 0.5 * Math.Min(1.0, (double)parsedCount / resultCount));
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // If the buffer filled without the reader consuming a full token (a single
+                // value larger than the buffer, e.g. a multi-MB match line), grow it.
+                if (bufferedBytes == buffer.Length)
+                {
+                    byte[] grown = ArrayPool<byte>.Shared.Rent(buffer.Length * 2);
+                    Buffer.BlockCopy(buffer, 0, grown, 0, bufferedBytes);
+                    ArrayPool<byte>.Shared.Return(buffer);
+                    buffer = grown;
+                }
+
+                int read = await input.ReadAsync(buffer.AsMemory(bufferedBytes), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                    isFinalBlock = true;
+                else
+                    bufferedBytes += read;
+
+                // Consume every complete token now in the buffer. Utf8JsonReader is a ref
+                // struct, so this runs synchronously (no await inside the token loop).
+                int consumed = PumpTokens(buffer.AsSpan(0, bufferedBytes), isFinalBlock, ref readerState, parser);
+                totalConsumed += consumed;
+
+                // Slide any unconsumed tail (a token straddling the buffer edge) to the front.
+                int leftover = bufferedBytes - consumed;
+                if (leftover > 0 && consumed > 0)
+                    Buffer.BlockCopy(buffer, consumed, buffer, 0, leftover);
+                bufferedBytes = leftover;
+
+                if (!headerDelivered && parser.HeaderReady)
+                {
+                    header = parser.BuildHeader();
+                    onHeader(header);
+                    headerDelivered = true;
+                }
+
+                // Hand fully-parsed results to the caller so memory stays bounded.
+                if (parser.Completed.Count >= ResultBatchSize)
+                    await onBatch(parser.TakeAllCompleted()).ConfigureAwait(false);
+
+                double frac =
+                    totalBytes is long tb && tb > 0 ? Math.Min(1.0, (double)totalConsumed / tb)
+                    : parser.ResultCount > 0 ? Math.Min(1.0, (double)parser.ParsedCount / parser.ResultCount)
+                    : 0.0;
+                if (frac < 1.0 && frac > lastReported + 0.005)
+                {
+                    lastReported = frac;
+                    progress?.Report(frac);
+                }
             }
+
+            // Deliver the header even for header-only / empty / truncated sessions.
+            if (!headerDelivered)
+            {
+                header = parser.BuildHeader();
+                onHeader(header);
+                headerDelivered = true;
+            }
+
+            // Flush any trailing partial batch.
+            if (parser.Completed.Count > 0)
+                await onBatch(parser.TakeAllCompleted()).ConfigureAwait(false);
+
+            // Catches empty / schema-less files (a wrong or unsupported schema already
+            // threw as soon as the schema value was read).
+            parser.ThrowIfSchemaInvalid();
+
+            progress?.Report(1.0);
+            return header!;
         }
-
-        if (batch.Count > 0)
-            await onBatch(batch).ConfigureAwait(false);
-
-        progress?.Report(1.0);
-        return header;
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
-    private static SessionStats ReadStats(JsonElement root)
+    private static int PumpTokens(ReadOnlySpan<byte> data, bool isFinalBlock, ref JsonReaderState state, SessionStreamParser parser)
     {
-        if (!root.TryGetProperty("stats", out var statsEl) || statsEl.ValueKind != JsonValueKind.Object)
-            return new SessionStats(DateTime.UtcNow, TimeSpan.Zero, 0, 0, 0);
-
-        DateTime startedUtc = statsEl.TryGetProperty("startedUtc", out var su)
-            && DateTime.TryParse(su.GetString(), null, DateTimeStyles.RoundtripKind, out var startedParsed)
-            ? startedParsed : DateTime.UtcNow;
-
-        long elapsedMs = statsEl.TryGetProperty("elapsedMs", out var em) && em.TryGetInt64(out var emv) ? emv : 0;
-        int filesScanned = statsEl.TryGetProperty("filesScanned", out var fs) && fs.TryGetInt32(out var fsv) ? fsv : 0;
-        long bytesScanned = statsEl.TryGetProperty("bytesScanned", out var bs) && bs.TryGetInt64(out var bsv) ? bsv : 0;
-        int matchesFound = statsEl.TryGetProperty("matchesFound", out var mf) && mf.TryGetInt32(out var mfv) ? mfv : 0;
-
-        return new SessionStats(startedUtc, TimeSpan.FromMilliseconds(elapsedMs), filesScanned, bytesScanned, matchesFound);
-    }
-
-    private static SearchResult? ParseResult(JsonElement el)
-    {
-        if (el.ValueKind != JsonValueKind.Object) return null;
-
-        string filePath = el.TryGetProperty("f", out var f) ? (f.GetString() ?? string.Empty) : string.Empty;
-        if (string.IsNullOrEmpty(filePath)) return null;
-
-        int lineNumber = el.TryGetProperty("ln", out var ln) && ln.TryGetInt32(out var lnv) ? lnv : 0;
-        string matchLine = el.TryGetProperty("ml", out var ml) ? (ml.GetString() ?? string.Empty) : string.Empty;
-        int matchStart = el.TryGetProperty("mc", out var mc) && mc.TryGetInt32(out var mcv) ? mcv : 0;
-        int sourceMatchStart = el.TryGetProperty("sc", out var sc) && sc.TryGetInt32(out var scv) ? scv : matchStart;
-        int matchLength = el.TryGetProperty("mlen", out var mlen) && mlen.TryGetInt32(out var mlenv) ? mlenv : 0;
-
-        // Phase 1b: optional cross-line span. Absent (v1, or a single-line v2 result) => null => single-line.
-        // The writer always pairs mel+mec, so a present mel implies a concrete end column (default 0).
-        int? matchEndLine = el.TryGetProperty("mel", out var melEl) && melEl.TryGetInt32(out var melv) ? melv : null;
-        int? matchEndColumn = matchEndLine is null
-            ? null
-            : (el.TryGetProperty("mec", out var mecEl) && mecEl.TryGetInt32(out var mecv) ? mecv : 0);
-
-        var contextBefore = ReadStringArray(el, "b");
-        var contextAfter = ReadStringArray(el, "a");
-
-        return new SearchResult(filePath, lineNumber, matchLine, matchStart, matchLength, contextBefore, contextAfter)
-        { SourceMatchStartColumn = sourceMatchStart, MatchEndLineNumber = matchEndLine, MatchEndColumn = matchEndColumn };
-    }
-
-    private static string[] ReadStringArray(JsonElement parent, string name)
-    {
-        if (!parent.TryGetProperty(name, out var arr) || arr.ValueKind != JsonValueKind.Array)
-            return Array.Empty<string>();
-
-        int len = arr.GetArrayLength();
-        if (len == 0) return Array.Empty<string>();
-
-        var items = new string[len];
-        int i = 0;
-        foreach (var v in arr.EnumerateArray())
-            items[i++] = v.GetString() ?? string.Empty;
-        return items;
+        var reader = new Utf8JsonReader(data, isFinalBlock, state);
+        while (reader.Read())
+            parser.Consume(ref reader);
+        state = reader.CurrentState;
+        return (int)reader.BytesConsumed;
     }
 
     /// <summary>
-    /// Pass-through read stream that reports fractional progress (0..1) to a callback
-    /// based on bytes consumed against a known total. Used to drive the parse-phase
-    /// progress bar while <see cref="JsonDocument.ParseAsync"/> fills its buffer.
+    /// Incremental, allocation-light state machine that turns the token stream from a
+    /// <see cref="Utf8JsonReader"/> into <see cref="SearchResult"/> instances without
+    /// buffering the whole document. Fed one buffer at a time by <see cref="ReadAsync"/>,
+    /// so it works on files of any size (removes the 2 GB <c>JsonDocument</c> ceiling).
     /// </summary>
-    private sealed class ProgressStream : Stream
+    private sealed class SessionStreamParser
     {
-        private readonly Stream _inner;
-        private readonly long _total;
-        private readonly Action<double> _report;
-        private long _read;
-        private long _lastReportedTick;
+        private enum Scope { None, Root, Stats, Results, Result, StringArray, Skip }
+        private enum HeaderField { Unknown, Schema, SavedUtc, Query, SearchRoot, Stats, ResultCount, Results }
+        private enum StatsField { Unknown, StartedUtc, ElapsedMs, FilesScanned, BytesScanned, MatchesFound }
+        private enum ResultField { Unknown, F, Ln, Ml, Mc, Sc, Mlen, Mel, Mec, Before, After }
 
-        public ProgressStream(Stream inner, long total, Action<double> report)
+        private readonly Stack<Scope> _stack = new();
+        private Scope _scope = Scope.None;
+
+        private HeaderField _headerField;
+        private StatsField _statsField;
+        private ResultField _resultField;
+
+        // Header + stats accumulators.
+        private string _schema = string.Empty;
+        private DateTime _savedUtc = DateTime.UtcNow;
+        private string _query = string.Empty;
+        private string _searchRoot = string.Empty;
+        private int _resultCount;
+        private DateTime _statsStarted = DateTime.UtcNow;
+        private long _statsElapsedMs;
+        private int _statsFiles;
+        private long _statsBytes;
+        private int _statsMatches;
+        private bool _schemaChecked;
+
+        // Current result being assembled.
+        private string _rf = string.Empty;
+        private int _rln, _rmc, _rmlen, _rsc;
+        private bool _rscSet;
+        private string _rml = string.Empty;
+        private int? _rmel;
+        private int _rmec;
+        private List<string>? _rbefore;
+        private List<string>? _rafter;
+        private List<string>? _curArray;
+
+        private List<SearchResult> _completed = new(ResultBatchSize * 2);
+
+        public bool HeaderReady { get; private set; }
+        public int ResultCount => _resultCount;
+        public int ParsedCount { get; private set; }
+        public List<SearchResult> Completed => _completed;
+
+        /// <summary>Hands off the buffered results and installs a fresh list (O(1)).</summary>
+        public List<SearchResult> TakeAllCompleted()
         {
-            _inner = inner;
-            _total = total;
-            _report = report;
+            var taken = _completed;
+            _completed = new List<SearchResult>(ResultBatchSize * 2);
+            return taken;
         }
 
-        public override bool CanRead => _inner.CanRead;
-        public override bool CanSeek => false;
-        public override bool CanWrite => false;
-        public override long Length => _total;
-        public override long Position
+        public SessionHeader BuildHeader()
         {
-            get => _read;
-            set => throw new NotSupportedException();
+            var stats = new SessionStats(
+                _statsStarted, TimeSpan.FromMilliseconds(_statsElapsedMs),
+                _statsFiles, _statsBytes, _statsMatches);
+            return new SessionHeader(_schema, _savedUtc, _query, _searchRoot, stats, _resultCount);
         }
 
-        public override void Flush() => _inner.Flush();
-        public override int Read(byte[] buffer, int offset, int count)
+        /// <summary>
+        /// Validates the schema string. Called both eagerly (as soon as the schema value is read,
+        /// so a wrong/unsupported file fails fast) and at end-of-stream (to catch empty/schema-less
+        /// files). Idempotent via <see cref="_schemaChecked"/>.
+        /// </summary>
+        public void ThrowIfSchemaInvalid()
         {
-            int n = _inner.Read(buffer, offset, count);
-            Advance(n);
-            return n;
+            if (_schemaChecked) return;
+            if (string.IsNullOrEmpty(_schema) || !_schema.StartsWith("yagu-session/", StringComparison.Ordinal))
+                throw new InvalidDataException($"Not a Yagu session file (schema='{_schema}').");
+            if (Array.IndexOf(ReadableSchemaVersions, _schema) < 0)
+                throw new InvalidDataException($"Unsupported session schema '{_schema}' (this build understands {string.Join(", ", ReadableSchemaVersions)}).");
+            _schemaChecked = true;
         }
 
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        public void Consume(ref Utf8JsonReader reader)
         {
-            int n = await _inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-            Advance(n);
-            return n;
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.StartObject: OnStartObject(); break;
+                case JsonTokenType.EndObject: OnEndObject(); break;
+                case JsonTokenType.StartArray: OnStartArray(); break;
+                case JsonTokenType.EndArray: OnEndArray(); break;
+                case JsonTokenType.PropertyName: OnPropertyName(ref reader); break;
+                default: OnValue(ref reader); break;
+            }
         }
 
-        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        private void OnStartObject()
         {
-            int n = await _inner.ReadAsync(buffer.AsMemory(offset, count), cancellationToken).ConfigureAwait(false);
-            Advance(n);
-            return n;
+            _stack.Push(_scope);
+            if (_scope == Scope.None) _scope = Scope.Root;
+            else if (_scope == Scope.Root && _headerField == HeaderField.Stats) _scope = Scope.Stats;
+            else if (_scope == Scope.Results) { _scope = Scope.Result; BeginResult(); }
+            else _scope = Scope.Skip;
         }
 
-        private void Advance(int n)
+        private void OnEndObject()
         {
-            if (n <= 0) return;
-            _read += n;
-            // Throttle to ~50 updates per second using Environment.TickCount.
-            int tick = Environment.TickCount;
-            if (tick - _lastReportedTick < 20 && _read < _total) return;
-            _lastReportedTick = tick;
-            _report(Math.Min(1.0, (double)_read / _total));
+            if (_scope == Scope.Result) EndResult();
+            else if (_scope == Scope.Root) HeaderReady = true; // root closed (covers a missing "results" array)
+            _scope = _stack.Count > 0 ? _stack.Pop() : Scope.None;
         }
 
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        private void OnStartArray()
+        {
+            _stack.Push(_scope);
+            if (_scope == Scope.Root && _headerField == HeaderField.Results)
+            {
+                _scope = Scope.Results;
+                HeaderReady = true; // every header field is written before "results"
+            }
+            else if (_scope == Scope.Result && _resultField is ResultField.Before or ResultField.After)
+            {
+                _scope = Scope.StringArray;
+                _curArray = _resultField == ResultField.Before ? (_rbefore ??= new()) : (_rafter ??= new());
+            }
+            else _scope = Scope.Skip;
+        }
+
+        private void OnEndArray()
+        {
+            if (_scope == Scope.StringArray) _curArray = null;
+            _scope = _stack.Count > 0 ? _stack.Pop() : Scope.None;
+        }
+
+        private void OnPropertyName(ref Utf8JsonReader reader)
+        {
+            switch (_scope)
+            {
+                case Scope.Root:
+                    _headerField =
+                        reader.ValueTextEquals("schema"u8) ? HeaderField.Schema :
+                        reader.ValueTextEquals("savedUtc"u8) ? HeaderField.SavedUtc :
+                        reader.ValueTextEquals("query"u8) ? HeaderField.Query :
+                        reader.ValueTextEquals("searchRoot"u8) ? HeaderField.SearchRoot :
+                        reader.ValueTextEquals("stats"u8) ? HeaderField.Stats :
+                        reader.ValueTextEquals("resultCount"u8) ? HeaderField.ResultCount :
+                        reader.ValueTextEquals("results"u8) ? HeaderField.Results :
+                        HeaderField.Unknown;
+                    break;
+                case Scope.Stats:
+                    _statsField =
+                        reader.ValueTextEquals("startedUtc"u8) ? StatsField.StartedUtc :
+                        reader.ValueTextEquals("elapsedMs"u8) ? StatsField.ElapsedMs :
+                        reader.ValueTextEquals("filesScanned"u8) ? StatsField.FilesScanned :
+                        reader.ValueTextEquals("bytesScanned"u8) ? StatsField.BytesScanned :
+                        reader.ValueTextEquals("matchesFound"u8) ? StatsField.MatchesFound :
+                        StatsField.Unknown;
+                    break;
+                case Scope.Result:
+                    _resultField =
+                        reader.ValueTextEquals("f"u8) ? ResultField.F :
+                        reader.ValueTextEquals("ln"u8) ? ResultField.Ln :
+                        reader.ValueTextEquals("ml"u8) ? ResultField.Ml :
+                        reader.ValueTextEquals("mc"u8) ? ResultField.Mc :
+                        reader.ValueTextEquals("sc"u8) ? ResultField.Sc :
+                        reader.ValueTextEquals("mlen"u8) ? ResultField.Mlen :
+                        reader.ValueTextEquals("mel"u8) ? ResultField.Mel :
+                        reader.ValueTextEquals("mec"u8) ? ResultField.Mec :
+                        reader.ValueTextEquals("b"u8) ? ResultField.Before :
+                        reader.ValueTextEquals("a"u8) ? ResultField.After :
+                        ResultField.Unknown;
+                    break;
+            }
+        }
+
+        private void OnValue(ref Utf8JsonReader reader)
+        {
+            switch (_scope)
+            {
+                case Scope.Root: ApplyHeaderValue(ref reader); break;
+                case Scope.Stats: ApplyStatsValue(ref reader); break;
+                case Scope.Result: ApplyResultValue(ref reader); break;
+                case Scope.StringArray:
+                    if (reader.TokenType == JsonTokenType.String)
+                        _curArray?.Add(reader.GetString() ?? string.Empty);
+                    else if (reader.TokenType == JsonTokenType.Null)
+                        _curArray?.Add(string.Empty);
+                    break;
+            }
+        }
+
+        private void ApplyHeaderValue(ref Utf8JsonReader reader)
+        {
+            switch (_headerField)
+            {
+                case HeaderField.Schema:
+                    _schema = reader.GetString() ?? string.Empty;
+                    ThrowIfSchemaInvalid(); // fail fast on a wrong / unsupported schema
+                    break;
+                case HeaderField.SavedUtc: _savedUtc = ParseDate(ref reader, DateTime.UtcNow); break;
+                case HeaderField.Query: _query = reader.GetString() ?? string.Empty; break;
+                case HeaderField.SearchRoot: _searchRoot = reader.GetString() ?? string.Empty; break;
+                case HeaderField.ResultCount: _resultCount = ReadIntOrZero(ref reader); break;
+            }
+        }
+
+        private void ApplyStatsValue(ref Utf8JsonReader reader)
+        {
+            switch (_statsField)
+            {
+                case StatsField.StartedUtc: _statsStarted = ParseDate(ref reader, DateTime.UtcNow); break;
+                case StatsField.ElapsedMs: _statsElapsedMs = ReadLongOrZero(ref reader); break;
+                case StatsField.FilesScanned: _statsFiles = ReadIntOrZero(ref reader); break;
+                case StatsField.BytesScanned: _statsBytes = ReadLongOrZero(ref reader); break;
+                case StatsField.MatchesFound: _statsMatches = ReadIntOrZero(ref reader); break;
+            }
+        }
+
+        private void ApplyResultValue(ref Utf8JsonReader reader)
+        {
+            switch (_resultField)
+            {
+                case ResultField.F: _rf = reader.GetString() ?? string.Empty; break;
+                case ResultField.Ml: _rml = reader.GetString() ?? string.Empty; break;
+                case ResultField.Ln: _rln = ReadIntOrZero(ref reader); break;
+                case ResultField.Mc: _rmc = ReadIntOrZero(ref reader); break;
+                case ResultField.Sc: _rscSet = TryReadInt(ref reader, out _rsc); break;
+                case ResultField.Mlen: _rmlen = ReadIntOrZero(ref reader); break;
+                case ResultField.Mel: if (TryReadInt(ref reader, out int mel)) _rmel = mel; break;
+                case ResultField.Mec: _rmec = ReadIntOrZero(ref reader); break;
+            }
+        }
+
+        private void BeginResult()
+        {
+            _rf = string.Empty;
+            _rml = string.Empty;
+            _rln = _rmc = _rmlen = _rsc = 0;
+            _rscSet = false;
+            _rmel = null;
+            _rmec = 0;
+            _rbefore = null;
+            _rafter = null;
+            _resultField = ResultField.Unknown;
+        }
+
+        private void EndResult()
+        {
+            // A result with no file path is skipped (parity with the old ParseResult).
+            if (!string.IsNullOrEmpty(_rf))
+            {
+                string[] before = _rbefore is { Count: > 0 } ? _rbefore.ToArray() : Array.Empty<string>();
+                string[] after = _rafter is { Count: > 0 } ? _rafter.ToArray() : Array.Empty<string>();
+                var result = new SearchResult(_rf, _rln, _rml, _rmc, _rmlen, before, after)
+                {
+                    // The writer always pairs mel+mec; absent mel (v1 or single-line v2) => single-line.
+                    SourceMatchStartColumn = _rscSet ? _rsc : _rmc,
+                    MatchEndLineNumber = _rmel,
+                    MatchEndColumn = _rmel is null ? null : _rmec,
+                };
+                _completed.Add(result);
+                ParsedCount++;
+            }
+        }
+
+        private static DateTime ParseDate(ref Utf8JsonReader reader, DateTime fallback)
+        {
+            if (reader.TokenType == JsonTokenType.String
+                && DateTime.TryParse(reader.GetString(), null, DateTimeStyles.RoundtripKind, out var dt))
+                return dt;
+            return fallback;
+        }
+
+        // Number-token readers shared by every integer field. A missing or wrong-typed value
+        // (a corrupt / hand-edited session) yields the fallback instead of throwing.
+        private static int ReadIntOrZero(ref Utf8JsonReader reader)
+            => reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int v) ? v : 0;
+
+        private static long ReadLongOrZero(ref Utf8JsonReader reader)
+            => reader.TokenType == JsonTokenType.Number && reader.TryGetInt64(out long v) ? v : 0;
+
+        private static bool TryReadInt(ref Utf8JsonReader reader, out int value)
+        {
+            if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out value))
+                return true;
+            value = 0;
+            return false;
+        }
     }
 }

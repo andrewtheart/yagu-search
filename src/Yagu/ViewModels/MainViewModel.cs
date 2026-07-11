@@ -1986,6 +1986,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     public bool IsSessionIdle => !IsSessionBusy;
     partial void OnIsSessionBusyChanged(bool value) => OnPropertyChanged(nameof(IsSessionIdle));
 
+    // Whole-number percent label for the full-window session busy overlay (e.g. "42%").
+    public string SessionProgressPercentLabel => $"{SessionProgressPercent:F0}%";
+    partial void OnSessionProgressPercentChanged(double value) => OnPropertyChanged(nameof(SessionProgressPercentLabel));
+
     public string ProgressTooltip
     {
         get

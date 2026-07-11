@@ -78,6 +78,17 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("\"--image-text\"", source);
         Assert.Contains("\"--no-image-text\"", source);
         Assert.Contains("ViewModel.SearchImageText == setting.SearchImageText", source);
+        // OCR engine / recognition model / detection resolution must be reproducible when image-text
+        // is on, so a UI OCR search runs with the same engine/model/resolution from the CLI.
+        Assert.Contains("\"--ocr-engine\"", source);
+        Assert.Contains("\"--ocr-model\"", source);
+        Assert.Contains("\"--ocr-max-side\"", source);
+        Assert.Contains("string.Equals(ViewModel.ImageOcrEngine, setting.ImageOcrEngine", source);
+        Assert.Contains("string.Equals(ViewModel.ImageOcrModel, setting.ImageOcrModel", source);
+        Assert.Contains("ViewModel.ImageOcrMaxSide == setting.ImageOcrMaxSide", source);
+        // A pinned semantic model must be reproducible via --semantic-model in semantic mode.
+        Assert.Contains("\"--semantic-model\"", source);
+        Assert.Contains("string.Equals(ViewModel.SemanticModelAlias, setting.SemanticModelAlias", source);
         Assert.Contains("\"--regex\"", source);
         Assert.Contains("\"--no-regex\"", source);
         Assert.Contains("\"--case-sensitive\"", source);

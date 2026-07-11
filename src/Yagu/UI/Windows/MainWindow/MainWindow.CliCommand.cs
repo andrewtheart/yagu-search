@@ -109,7 +109,14 @@ public sealed partial class MainWindow
         // Semantic mode sends the natural-language query to the on-device model via --semantic-pattern;
         // Traditional mode passes the literal search term via --pattern.
         if (ViewModel.IsSemanticQueryMode)
+        {
             AddValue(parts, "--semantic-pattern", ViewModel.Query);
+            // A pinned semantic model (chosen/downloaded in Settings) must be reproduced so the CLI
+            // uses that exact on-device model instead of auto-selecting one.
+            if (!string.IsNullOrWhiteSpace(ViewModel.SemanticModelAlias)
+                && ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => string.Equals(ViewModel.SemanticModelAlias, setting.SemanticModelAlias, StringComparison.Ordinal)))
+                AddValue(parts, "--semantic-model", ViewModel.SemanticModelAlias);
+        }
         else
             AddValue(parts, "--pattern", ViewModel.Query);
 
@@ -172,6 +179,20 @@ public sealed partial class MainWindow
             parts.Add(ViewModel.SearchHiddenFiles ? "--hidden" : "--no-hidden");
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchImageText == setting.SearchImageText))
             parts.Add(ViewModel.SearchImageText ? "--image-text" : "--no-image-text");
+        // OCR engine / recognition model / detection resolution only affect image-text search, so emit
+        // them only when it is on. Each is a persisted Setting, gated so it drops out when it matches
+        // the saved settings file (unless "include saved options" is on).
+        if (ViewModel.SearchImageText)
+        {
+            if (!string.IsNullOrWhiteSpace(ViewModel.ImageOcrEngine)
+                && ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => string.Equals(ViewModel.ImageOcrEngine, setting.ImageOcrEngine, StringComparison.OrdinalIgnoreCase)))
+                AddValue(parts, "--ocr-engine", ViewModel.ImageOcrEngine, quote: false);
+            if (!string.IsNullOrWhiteSpace(ViewModel.ImageOcrModel)
+                && ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => string.Equals(ViewModel.ImageOcrModel, setting.ImageOcrModel, StringComparison.OrdinalIgnoreCase)))
+                AddValue(parts, "--ocr-model", ViewModel.ImageOcrModel, quote: false);
+            if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.ImageOcrMaxSide == setting.ImageOcrMaxSide))
+                AddValue(parts, "--ocr-max-side", ViewModel.ImageOcrMaxSide.ToString(CultureInfo.InvariantCulture), quote: false);
+        }
         var skipExtensions = FormatExtensionList(BuildEffectiveSkipExtensionsForCli());
         if (!string.IsNullOrWhiteSpace(skipExtensions)
             && ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ExtensionSetsEqual(ParseExtensionSetForCli(skipExtensions), ParseExtensionSetForCli(setting.SkipExtensions))))

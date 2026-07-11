@@ -116,6 +116,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
+                                  Style="{StaticResource CircularSelectionCheckBoxStyle}"
                                   IsThreeState="False"
                                   IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
                                   Indeterminate="OnFileGroupCheckBoxIndeterminate"
@@ -1638,6 +1639,7 @@
                         </Grid.ColumnDefinitions>
                         <Grid Width="38" VerticalAlignment="Center">
                             <CheckBox x:Name="SelectAllFilesCheckBox"
+                                      Style="{StaticResource CircularSelectionCheckBoxStyle}"
                                       ToolTipService.ToolTip="Select / deselect all files"
                                       IsThreeState="False"
                                       IsChecked="False"
@@ -2496,6 +2498,26 @@
                 <FontIconSource Glyph="&#xE7BA;" Foreground="{ThemeResource SystemFillColorCautionBrush}" />
             </TeachingTip.IconSource>
         </TeachingTip>
+
+        <!-- Full-content translucent overlay shown while a .yagu-session file is being saved or
+             loaded. Mirrors the preview loading overlays (Acrylic + ProgressRing + percent) and
+             covers the search card, status/progress row, split pane and terminal so the user can't
+             mutate state mid-write; the custom title bar (row 0) stays usable. Driven by the shared
+             session progress state (BeginSessionProgress/ReportSessionProgress/EndSessionProgress). -->
+        <Grid x:Name="SessionBusyOverlay"
+              Grid.Row="2" Grid.RowSpan="4"
+              Canvas.ZIndex="250"
+              Visibility="{x:Bind ViewModel.IsSessionBusy, Mode=OneWay}">
+            <Border Background="{ThemeResource AcrylicBackgroundFillColorBaseBrush}" Opacity="0.85" />
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" MaxWidth="560" Padding="24">
+                <ProgressRing IsActive="{x:Bind ViewModel.IsSessionBusy, Mode=OneWay}" Width="40" Height="40" />
+                <TextBlock Text="{x:Bind ViewModel.SessionProgressText, Mode=OneWay}"
+                           HorizontalAlignment="Center" TextAlignment="Center"
+                           TextWrapping="Wrap" FontSize="14" />
+                <TextBlock Text="{x:Bind ViewModel.SessionProgressPercentLabel, Mode=OneWay}"
+                           HorizontalAlignment="Center" FontSize="22" FontWeight="SemiBold" />
+            </StackPanel>
+        </Grid>
 
     </Grid>
 </Window>

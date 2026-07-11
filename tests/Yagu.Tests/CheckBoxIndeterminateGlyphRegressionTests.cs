@@ -106,6 +106,60 @@ public sealed class CheckBoxIndeterminateGlyphRegressionTests
         Assert.Contains("SetFileGroupCheckBoxState(checkBox, desired);", handler);
     }
 
+    [Fact]
+    public void CircularSelectionCheckBox_TemplateHasNoDashElement_AndIsAppliedToSelectionBoxes()
+    {
+        // DEFINITIVE fix for the recurring phantom "dash": the content-less circular selection
+        // checkboxes (per-file-group header + toolbar select-all) use a custom ControlTemplate
+        // whose Indeterminate visual state is EMPTY, rendering identically to Unchecked. Because
+        // the template has no dash element at all, a phantom indeterminate state cannot draw one,
+        // regardless of when/how IsChecked becomes null on container recycle. This does not depend
+        // on theme brushes or a C# GoToState race.
+        string appXaml = AppXaml();
+
+        Assert.Contains("<Style x:Key=\"CircularSelectionCheckBoxStyle\" TargetType=\"CheckBox\">", appXaml);
+
+        // The template must define the CheckStates and its Indeterminate visual state must be an
+        // EMPTY visual state (no setters) so it can never paint a glyph/fill.
+        AssertContainsInOrder(appXaml,
+            "<Style x:Key=\"CircularSelectionCheckBoxStyle\" TargetType=\"CheckBox\">",
+            "<VisualStateGroup x:Name=\"CheckStates\">",
+            "<VisualState x:Name=\"Checked\">",
+            "<Setter Target=\"CheckGlyph.Opacity\" Value=\"1\" />",
+            "<VisualState x:Name=\"Unchecked\" />",
+            "<VisualState x:Name=\"Indeterminate\" />");
+
+        // The check glyph starts hidden (Opacity=0) and is only revealed by the Checked state.
+        Assert.Contains("<FontIcon x:Name=\"CheckGlyph\" Glyph=\"&#xE73E;\" FontSize=\"12\" Opacity=\"0\"", appXaml);
+
+        // Both content-less selection checkboxes must use the no-dash template.
+        string mainWindowXaml = File.ReadAllText(
+            Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+
+        int fileGroupIdx = mainWindowXaml.IndexOf(
+            "AutomationProperties.AutomationId=\"FileGroupCheckBox\"", StringComparison.Ordinal);
+        Assert.True(fileGroupIdx >= 0, "FileGroupCheckBox not found.");
+        Assert.Contains("Style=\"{StaticResource CircularSelectionCheckBoxStyle}\"",
+            mainWindowXaml.Substring(fileGroupIdx, Math.Min(500, mainWindowXaml.Length - fileGroupIdx)));
+
+        int selectAllIdx = mainWindowXaml.IndexOf(
+            "x:Name=\"SelectAllFilesCheckBox\"", StringComparison.Ordinal);
+        Assert.True(selectAllIdx >= 0, "SelectAllFilesCheckBox not found.");
+        Assert.Contains("Style=\"{StaticResource CircularSelectionCheckBoxStyle}\"",
+            mainWindowXaml.Substring(selectAllIdx, Math.Min(500, mainWindowXaml.Length - selectAllIdx)));
+    }
+
+    private static void AssertContainsInOrder(string text, params string[] expected)
+    {
+        int offset = 0;
+        foreach (var token in expected)
+        {
+            int idx = text.IndexOf(token, offset, StringComparison.Ordinal);
+            Assert.True(idx >= 0, $"Expected to find '{token}' after offset {offset}.");
+            offset = idx + token.Length;
+        }
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

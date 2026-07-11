@@ -178,7 +178,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("FontSize=\"13\"", emptyState);
         Assert.Contains("TextWrapping=\"WrapWholeWords\"", emptyState);
 
-        string update = ExtractMethodWindow(MainWindowSource, "UpdatePreviewEmptyState", 2000);
+        string update = ExtractMethodWindow(MainWindowSource, "UpdatePreviewEmptyState", 2400);
         Assert.Contains("PreviewPanelBorder.Visibility == Visibility.Visible", update);
         Assert.Contains("PreviewBlock.Blocks.Count > 0", update);
         Assert.Contains("PreviewSectionsPanel.Children.OfType<Expander>().Any()", update);
@@ -2137,12 +2137,14 @@ public sealed class PreviewCoreRegressionTests
     {
         Assert.Contains("AutomationProperties.AutomationId=\"FileGroupCheckBox\"", MainWindowXaml);
 
-        string headerCheckbox = ExtractXamlWindow("AutomationProperties.AutomationId=\"FileGroupCheckBox\"", 500);
+        string headerCheckbox = ExtractXamlWindow("AutomationProperties.AutomationId=\"FileGroupCheckBox\"", 620);
         Assert.Contains("IsChecked=\"{x:Bind AllSelected, Mode=OneWay}\"", headerCheckbox);
         Assert.Contains("IsThreeState=\"False\"", headerCheckbox);
         Assert.DoesNotContain("Mode=TwoWay", headerCheckbox);
         Assert.Contains("Click=\"OnFileGroupCheckBoxClicked\"", headerCheckbox);
         Assert.Contains("Indeterminate=\"OnFileGroupCheckBoxIndeterminate\"", headerCheckbox);
+        // The no-dash circular selection template (permanent phantom-indeterminate fix).
+        Assert.Contains("Style=\"{StaticResource CircularSelectionCheckBoxStyle}\"", headerCheckbox);
         Assert.DoesNotContain("IsHitTestVisible=\"False\"", headerCheckbox);
         Assert.DoesNotContain("Checked=\"OnSelectAllChecked\"", headerCheckbox);
         Assert.DoesNotContain("Unchecked=\"OnSelectAllUnchecked\"", headerCheckbox);

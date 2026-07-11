@@ -138,6 +138,81 @@
                 <Setter Property="CornerRadius" Value="10" />
             </Style>
 
+            <!-- Circular selection checkbox for the content-less selection boxes in the (virtualizing)
+                 results list: the per-file-group header box and the toolbar "select all" box.
+
+                 PERMANENT fix for the recurring phantom indeterminate "dash": a CheckBox in a
+                 virtualizing ListView can transiently have its bool? IsChecked reset to null on
+                 container recycle/template re-apply and drop into the Indeterminate visual state.
+                 The stock template paints a dash there, and every prior mitigation (transparent
+                 indeterminate theme brushes; a C# Indeterminate-event coercion) either lost the race
+                 or did not reach the brush the stock template actually uses. This custom template has
+                 NO dash element at all: the Indeterminate visual state is empty, so it renders
+                 IDENTICALLY to Unchecked (an empty ring). A dash is therefore structurally impossible,
+                 independent of IsChecked timing. Content-less by design (these boxes have no label). -->
+            <Style x:Key="CircularSelectionCheckBoxStyle" TargetType="CheckBox">
+                <Setter Property="IsThreeState" Value="False" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="HorizontalAlignment" Value="Center" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="CheckBox">
+                            <Grid x:Name="RootGrid" Background="Transparent"
+                                  Padding="{TemplateBinding Padding}"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal" />
+                                        <VisualState x:Name="PointerOver">
+                                            <VisualState.Setters>
+                                                <Setter Target="HoverOverlay.Opacity" Value="1" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <VisualState.Setters>
+                                                <Setter Target="HoverOverlay.Opacity" Value="1" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled">
+                                            <VisualState.Setters>
+                                                <Setter Target="RootGrid.Opacity" Value="0.5" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                    <VisualStateGroup x:Name="CheckStates">
+                                        <VisualState x:Name="Checked">
+                                            <VisualState.Setters>
+                                                <Setter Target="Ring.Fill" Value="{ThemeResource CheckBoxCheckBackgroundFillChecked}" />
+                                                <Setter Target="Ring.Stroke" Value="{ThemeResource CheckBoxCheckBackgroundStrokeChecked}" />
+                                                <Setter Target="CheckGlyph.Opacity" Value="1" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Unchecked" />
+                                        <!-- No setters: Indeterminate == Unchecked (empty ring, no glyph).
+                                             This is what makes the phantom dash impossible. -->
+                                        <VisualState x:Name="Indeterminate" />
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <Grid Width="20" Height="20">
+                                    <Ellipse x:Name="HoverOverlay" Width="20" Height="20" Opacity="0"
+                                             Fill="{ThemeResource CheckBoxCheckBackgroundFillUncheckedPointerOver}" />
+                                    <Ellipse x:Name="Ring" Width="20" Height="20" StrokeThickness="1"
+                                             Fill="{ThemeResource CheckBoxCheckBackgroundFillUnchecked}"
+                                             Stroke="{ThemeResource CheckBoxCheckBackgroundStrokeUnchecked}" />
+                                    <FontIcon x:Name="CheckGlyph" Glyph="&#xE73E;" FontSize="12" Opacity="0"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Foreground="{ThemeResource CheckBoxCheckGlyphForegroundChecked}" />
+                                </Grid>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <!-- Render placeholder / example hint text in italic across all text-entry fields.
                  The attached helper italicises only the PlaceholderTextContentPresenter, so the
                  user's typed text stays upright. -->

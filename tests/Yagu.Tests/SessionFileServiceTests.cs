@@ -266,9 +266,10 @@ public class SessionFileServiceTests
     }
 
     [Fact]
-    public async Task ReadAsync_SeekableStream_ReportsProgressViaBoth()
+    public async Task ReadAsync_SeekableStream_ReportsProgress()
     {
-        // A seekable stream triggers ProgressStream (parse-phase: 0→0.5, enum-phase: 0.5→1.0)
+        // The streaming reader reports 0.0 at the start, byte-based fractions for a
+        // seekable stream, and 1.0 at the end.
         var stats = MakeStats();
         var results = Enumerable.Range(0, 100).Select(MakeResult).ToList();
 
@@ -285,8 +286,32 @@ public class SessionFileServiceTests
             new Progress<double>(v => progressValues.Add(v)));
 
         Assert.Equal(100, readResults.Count);
-        // Progress should include the parse phase (0→0.5 via ProgressStream) and end at 1.0
-        Assert.Contains(progressValues, v => v >= 0.45 && v <= 0.55); // around 0.5 (end of parse)
+        Assert.Contains(progressValues, v => v == 0.0);
+        Assert.Contains(progressValues, v => v == 1.0);
+    }
+
+    [Fact]
+    public async Task ReadAsync_LargeStream_ReportsIntermediateProgress()
+    {
+        // A stream large enough to span several buffer refills should report at least one
+        // intermediate byte-based progress fraction strictly between 0 and 1.
+        var stats = MakeStats();
+        var results = Enumerable.Range(0, 20_000).Select(MakeResult).ToList();
+
+        using var ms = new MemoryStream();
+        await SessionFileService.WriteAsync(ms, "q", @"C:\x", stats, results);
+
+        ms.Position = 0;
+        var progressValues = new System.Collections.Concurrent.ConcurrentBag<double>();
+        var readResults = new List<SearchResult>();
+        await SessionFileService.ReadAsync(
+            ms,
+            _ => { },
+            batch => { readResults.AddRange(batch); return Task.CompletedTask; },
+            new Progress<double>(v => progressValues.Add(v)));
+
+        Assert.Equal(20_000, readResults.Count);
+        Assert.Contains(progressValues, v => v > 0.0 && v < 1.0);
         Assert.Contains(progressValues, v => v == 1.0);
     }
 
@@ -416,6 +441,53 @@ public class SessionFileServiceTests
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) => _inner.ReadAsync(buffer, ct);
         public override void Flush() { }
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing) { _inner.Dispose(); base.Dispose(disposing); }
+    }
+
+    [Fact]
+    public async Task ReadAsync_StreamLengthExceedsInt32_DoesNotOverflow()
+    {
+        // Regression (reported: a 3 GB .yagu-session failed to import with
+        // "ArgumentOutOfRangeException: minimumLength ('-2147483648')"). The old reader used
+        // JsonDocument.ParseAsync, which materialises the whole file into a single int-sized
+        // allocation; a >2 GB stream overflowed that sizing (long Length wrapped to a negative
+        // int passed to ArrayPool.Rent). The streaming reader must load a session regardless of
+        // a reported Length beyond int.MaxValue.
+        var stats = MakeStats();
+        var results = Enumerable.Range(0, 10).Select(MakeResult).ToList();
+        using var real = new MemoryStream();
+        await SessionFileService.WriteAsync(real, "q", @"C:\x", stats, results);
+
+        using var huge = new HugeLengthStream(real.ToArray(), reportedLength: 3L * 1024 * 1024 * 1024);
+        var readResults = new List<SearchResult>();
+        var header = await SessionFileService.ReadAsync(
+            huge, _ => { },
+            batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.Equal(10, header.ResultCount);
+        Assert.Equal(10, readResults.Count);
+        Assert.Equal(results[0].FilePath, readResults[0].FilePath);
+    }
+
+    /// <summary>
+    /// A seekable stream whose <see cref="Length"/> reports a value larger than
+    /// <see cref="int.MaxValue"/> (simulating a &gt;2 GB session file) while backing only a
+    /// small buffer, to prove the reader never sizes an allocation from that Length.
+    /// </summary>
+    private sealed class HugeLengthStream(byte[] data, long reportedLength) : Stream
+    {
+        private readonly MemoryStream _inner = new(data);
+        public override bool CanRead => true;
+        public override bool CanSeek => true;
+        public override bool CanWrite => false;
+        public override long Length => reportedLength;
+        public override long Position { get => _inner.Position; set => _inner.Position = value; }
+        public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) => _inner.ReadAsync(buffer, ct);
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         protected override void Dispose(bool disposing) { _inner.Dispose(); base.Dispose(disposing); }
@@ -734,5 +806,236 @@ public class SessionFileServiceTests
         Assert.True(read[0].IsMultilineMatch);
         Assert.Equal(4, read[0].MatchEndLineNumber);
         Assert.Equal(0, read[0].MatchEndColumn);
+    }
+
+    // ─── Streaming reader: buffer/scope/date-fallback branch coverage ───────
+
+    [Fact]
+    public async Task ReadAsync_MalformedSavedUtc_FallsBackToCurrentTime()
+    {
+        // "savedUtc" present but unparseable → ParseDate falls back to DateTime.UtcNow
+        // (the reader must not throw on a bad date).
+        var json = """{"schema":"yagu-session/v1","savedUtc":"not-a-real-date","query":"q","searchRoot":"C:\\x","stats":{"startedUtc":"2025-01-01T00:00:00Z","elapsedMs":0,"filesScanned":0,"bytesScanned":0,"matchesFound":0},"resultCount":0,"results":[]}"""u8.ToArray();
+        using var ms = new MemoryStream(json);
+        SessionFileService.SessionHeader? captured = null;
+        var before = DateTime.UtcNow.AddSeconds(-5);
+
+        var header = await SessionFileService.ReadAsync(ms, h => captured = h, _ => Task.CompletedTask);
+
+        Assert.NotNull(captured);
+        Assert.Equal("q", header.Query);
+        // Fallback is "now", not the JSON's bogus value, so it is a fresh timestamp.
+        Assert.True(header.SavedUtc >= before, $"SavedUtc {header.SavedUtc:o} should fall back to ~now");
+    }
+
+    [Fact]
+    public async Task ReadAsync_ContextArrayWithNullElement_TreatedAsEmptyString()
+    {
+        // A JSON null inside a context array must be materialised as "" (not dropped, not a
+        // null entry), preserving positional alignment.
+        var json = """{"schema":"yagu-session/v1","savedUtc":"2025-01-01T00:00:00Z","query":"q","searchRoot":"C:\\x","stats":{"startedUtc":"2025-01-01T00:00:00Z","elapsedMs":0,"filesScanned":0,"bytesScanned":0,"matchesFound":1},"resultCount":1,"results":[{"f":"C:\\a.cs","ln":1,"ml":"x","mc":0,"sc":0,"mlen":1,"b":[null,"line2"],"a":["a",null]}]}"""u8.ToArray();
+        using var ms = new MemoryStream(json);
+        var readResults = new List<SearchResult>();
+        await SessionFileService.ReadAsync(ms, _ => { }, batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.Single(readResults);
+        Assert.Equal(["", "line2"], readResults[0].ContextBefore);
+        Assert.Equal(["a", ""], readResults[0].ContextAfter);
+    }
+
+    [Fact]
+    public async Task ReadAsync_UnknownObjectArrayAndScalarFields_AreSkipped()
+    {
+        // Forward-compat: unknown scalar/array/object fields at the root, in stats, and in a
+        // result must be skipped without disturbing the known data (the Scope.Skip path).
+        var json = """{"schema":"yagu-session/v2","savedUtc":"2025-01-01T00:00:00Z","query":"q","searchRoot":"C:\\x","future":42,"tags":["a","b"],"extra":{"deep":{"x":1}},"stats":{"startedUtc":"2025-01-01T00:00:00Z","elapsedMs":0,"filesScanned":3,"bytesScanned":0,"matchesFound":1,"newStat":9},"resultCount":1,"results":[{"f":"C:\\a.cs","ln":7,"ml":"hit","mc":0,"sc":0,"mlen":3,"z":99,"tags2":[1,2],"nested":{"k":1},"b":["ctx"],"a":[]}]}"""u8.ToArray();
+        using var ms = new MemoryStream(json);
+        SessionFileService.SessionHeader? captured = null;
+        var readResults = new List<SearchResult>();
+        var header = await SessionFileService.ReadAsync(
+            ms, h => captured = h,
+            batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.NotNull(captured);
+        Assert.Equal("q", header.Query);
+        Assert.Equal(3, header.Stats.FilesScanned);   // known stats field survived the unknown ones
+        Assert.Single(readResults);
+        Assert.Equal(@"C:\a.cs", readResults[0].FilePath);
+        Assert.Equal(7, readResults[0].LineNumber);
+        Assert.Equal(["ctx"], readResults[0].ContextBefore);
+    }
+
+    [Fact]
+    public async Task ReadAsync_EmptyStream_Throws()
+    {
+        // No bytes at all → the Utf8JsonReader reports there are no JSON tokens. The reader must
+        // surface a clean parse failure (this is exactly the empty ".yagu-session" case).
+        using var ms = new MemoryStream(Array.Empty<byte>());
+        await Assert.ThrowsAnyAsync<System.Text.Json.JsonException>(() =>
+            SessionFileService.ReadAsync(ms, _ => { }, _ => Task.CompletedTask));
+    }
+
+    [Fact]
+    public async Task ReadAsync_NonObjectRootJson_ThrowsInvalidDataException()
+    {
+        // A syntactically valid JSON document that is not a Yagu session object (here a bare
+        // number) parses cleanly but never sets a schema, so the header-delivery fallback runs
+        // and then the schema check rejects it as InvalidDataException.
+        using var ms = new MemoryStream("42"u8.ToArray());
+        SessionFileService.SessionHeader? captured = null;
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            SessionFileService.ReadAsync(ms, h => captured = h, _ => Task.CompletedTask));
+
+        // The fallback delivered a (schema-less) header before the schema validation threw.
+        Assert.NotNull(captured);
+    }
+
+    [Fact]
+    public async Task ReadAsync_ResultLargerThanReadBuffer_GrowsBufferAndParses()
+    {
+        // A single result whose match line exceeds the 128 KB read buffer forces the reader to
+        // grow its buffer (a token that can't be consumed in one buffer's worth of data).
+        var stats = MakeStats();
+        string hugeLine = new('x', 200_000);
+        var result = new SearchResult(@"C:\big.txt", 1, hugeLine, 0, 5, ["ctx-before"], ["ctx-after"]);
+
+        using var ms = new MemoryStream();
+        await SessionFileService.WriteAsync(ms, "q", @"C:\x", stats, [result]);
+
+        ms.Position = 0;
+        var readResults = new List<SearchResult>();
+        var header = await SessionFileService.ReadAsync(
+            ms, _ => { },
+            batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.Equal(1, header.ResultCount);
+        Assert.Single(readResults);
+        Assert.Equal(hugeLine, readResults[0].MatchLine);
+        Assert.Equal(["ctx-before"], readResults[0].ContextBefore);
+    }
+
+    [Fact]
+    public async Task ReadAsync_Cancellation_ThrowsOperationCanceled()
+    {
+        var stats = MakeStats();
+        var results = Enumerable.Range(0, 5000).Select(MakeResult).ToList();
+        using var ms = new MemoryStream();
+        await SessionFileService.WriteAsync(ms, "q", @"C:\x", stats, results);
+        ms.Position = 0;
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            SessionFileService.ReadAsync(
+                ms, _ => { }, _ => Task.CompletedTask, cancellationToken: cts.Token));
+    }
+
+    [Fact]
+    public async Task ReadAsync_WrongTypedNumericAndDateFields_DefaultGracefully()
+    {
+        // A corrupt / hand-edited session with wrong-typed values (strings, floats, bools, a
+        // numeric date) must load without throwing: every numeric field defaults to 0, dates fall
+        // back to "now", and the one valid result still comes through.
+        var before = DateTime.UtcNow.AddSeconds(-5);
+        var json = """{"schema":"yagu-session/v2","savedUtc":123,"query":"q","searchRoot":"C:\\x","stats":{"startedUtc":true,"elapsedMs":"nope","filesScanned":1.5,"bytesScanned":1.5,"matchesFound":2.5},"resultCount":"lots","results":[{"f":"C:\\a.cs","ln":"L","mc":1.5,"sc":1.5,"mlen":true,"mel":"M","mec":2.5,"b":[],"a":[]}]}"""u8.ToArray();
+        using var ms = new MemoryStream(json);
+        SessionFileService.SessionHeader? header = null;
+        var readResults = new List<SearchResult>();
+
+        header = await SessionFileService.ReadAsync(
+            ms, h => header = h,
+            batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.NotNull(header);
+        Assert.Equal("q", header.Query);          // valid string field survives
+        Assert.Equal(0, header.ResultCount);        // "lots" (string) → 0
+        Assert.Equal(0, header.Stats.FilesScanned); // 1.5 (float) → 0
+        Assert.Equal(0, header.Stats.BytesScanned); // 1.5 (float long) → 0
+        Assert.Equal(0, header.Stats.MatchesFound); // 2.5 (float) → 0
+        Assert.Equal(TimeSpan.Zero, header.Stats.Elapsed); // "nope" (string) → 0
+        Assert.True(header.SavedUtc >= before);      // 123 (number) → fallback "now"
+
+        var r = Assert.Single(readResults);
+        Assert.Equal(@"C:\a.cs", r.FilePath);
+        Assert.Equal(0, r.LineNumber);              // "L" (string) → 0
+        Assert.Equal(0, r.MatchStartColumn);        // 1.5 (float) → 0
+        Assert.Equal(0, r.SourceMatchStartColumn);  // "sc" invalid → falls back to mc (0)
+        Assert.Equal(0, r.MatchLength);             // true (bool) → 0
+        Assert.Null(r.MatchEndLineNumber);          // "mel" invalid → not multiline
+        Assert.False(r.IsMultilineMatch);
+    }
+
+    [Fact]
+    public async Task ReadAsync_NonSeekableStreamWithNoResults_LoadsHeaderOnly()
+    {
+        // Non-seekable + zero declared results exercises the progress fraction's final fallback
+        // (no byte total AND no result count → 0.0).
+        var stats = MakeStats();
+        using var seekable = new MemoryStream();
+        await SessionFileService.WriteAsync(seekable, "q", @"C:\x", stats, Array.Empty<SearchResult>());
+
+        using var ns = new NonSeekableStream(seekable.ToArray());
+        SessionFileService.SessionHeader? header = null;
+        var readResults = new List<SearchResult>();
+
+        header = await SessionFileService.ReadAsync(
+            ns, h => header = h,
+            batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.NotNull(header);
+        Assert.Equal(0, header.ResultCount);
+        Assert.Empty(readResults);
+    }
+
+    [Fact]
+    public async Task ReadAsync_JsonNullStringFields_TreatedAsEmpty()
+    {
+        // Explicit JSON null for string-typed fields (query/searchRoot/f/ml) must become "" and not
+        // throw. A result whose "f" is null has no file path, so it is skipped.
+        var json = """{"schema":"yagu-session/v1","savedUtc":"2025-01-01T00:00:00Z","query":null,"searchRoot":null,"stats":{"startedUtc":"2025-01-01T00:00:00Z","elapsedMs":0,"filesScanned":0,"bytesScanned":0,"matchesFound":0},"resultCount":2,"results":[{"f":null,"ln":1,"ml":"x","mc":0,"sc":0,"mlen":1,"b":[],"a":[]},{"f":"C:\\a.cs","ln":2,"ml":null,"mc":0,"sc":0,"mlen":1,"b":[],"a":[]}]}"""u8.ToArray();
+        using var ms = new MemoryStream(json);
+        SessionFileService.SessionHeader? header = null;
+        var readResults = new List<SearchResult>();
+
+        header = await SessionFileService.ReadAsync(
+            ms, h => header = h,
+            batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.NotNull(header);
+        Assert.Equal(string.Empty, header.Query);
+        Assert.Equal(string.Empty, header.SearchRoot);
+        var r = Assert.Single(readResults);           // the null-"f" result was skipped
+        Assert.Equal(@"C:\a.cs", r.FilePath);
+        Assert.Equal(string.Empty, r.MatchLine);       // ml:null → ""
+    }
+
+    [Fact]
+    public async Task ReadAsync_NullSchema_ThrowsInvalidDataException()
+    {
+        // A JSON null schema decodes to "" → rejected as not a Yagu session.
+        using var ms = new MemoryStream("""{"schema":null,"query":"x"}"""u8.ToArray());
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            SessionFileService.ReadAsync(ms, _ => { }, _ => Task.CompletedTask));
+    }
+
+    [Fact]
+    public async Task WriteAndRead_NullContextElement_WrittenAsEmptyString()
+    {
+        // A null element inside a context list must be written as "" (WriteStringArray's null-coalesce).
+        var stats = MakeStats();
+        var result = new SearchResult(@"C:\f.cs", 1, "match", 0, 5,
+            ContextBefore: ["a", null!], ContextAfter: []);
+
+        using var ms = new MemoryStream();
+        await SessionFileService.WriteAsync(ms, "q", @"C:\x", stats, [result]);
+
+        ms.Position = 0;
+        var readResults = new List<SearchResult>();
+        await SessionFileService.ReadAsync(ms, _ => { },
+            batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.Single(readResults);
+        Assert.Equal(["a", ""], readResults[0].ContextBefore);
     }
 }
