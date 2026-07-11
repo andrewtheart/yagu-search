@@ -494,7 +494,47 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     public Microsoft.UI.Xaml.Visibility HasQueryText =>
         string.IsNullOrEmpty(Query) ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
 
-    partial void OnQueryChanged(string value) => OnPropertyChanged(nameof(HasQueryText));
+    partial void OnQueryChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasQueryText));
+        UpdateInlineCalculatorResult(value);
+    }
+
+    // ── Inline calculator / unit converter ──
+    /// <summary>The formatted inline answer (e.g. <c>"5 km = 3.106856 miles"</c>) when the current
+    /// query is a math expression or unit conversion; empty otherwise. Shown as a small banner below
+    /// the search box so the user never has to leave Yagu for a quick calculation.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(InlineCalculatorResultVisibility))]
+    public partial string InlineCalculatorResultText { get; set; } = string.Empty;
+
+    /// <summary>Just the answer (no expression), for the banner's Copy button.</summary>
+    public string InlineCalculatorCopyValue { get; private set; } = string.Empty;
+
+    public Microsoft.UI.Xaml.Visibility InlineCalculatorResultVisibility =>
+        string.IsNullOrEmpty(InlineCalculatorResultText)
+            ? Microsoft.UI.Xaml.Visibility.Collapsed
+            : Microsoft.UI.Xaml.Visibility.Visible;
+
+    private void UpdateInlineCalculatorResult(string? query)
+    {
+        // Only Traditional mode has a literal query box; a natural-language request is never a sum.
+        var result = IsSemanticQueryMode ? null : Yagu.Helpers.InlineCalculator.Evaluate(query);
+        InlineCalculatorCopyValue = result?.Value ?? string.Empty;
+        InlineCalculatorResultText = result?.Display ?? string.Empty;
+    }
+
+    /// <summary>Loads the canonical "find code annotations" search — a whole-word regex over
+    /// TODO/FIXME/HACK/BUG/XXX/NOTE/OPTIMIZE/REVIEW — into the search box in Traditional regex mode.
+    /// The caller submits the search afterwards.</summary>
+    public void ApplyCodeAnnotationPreset()
+    {
+        IsSemanticQueryMode = false;
+        UseRegex = true;
+        CaseSensitive = true;
+        ExactMatch = false;
+        Query = Yagu.Helpers.CodeAnnotationQuery.Pattern;
+    }
 
     // ── Semantic search (Foundry Local) ──
     /// <summary>True when the search bar is in natural-language (Semantic) mode rather than the
@@ -730,6 +770,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     partial void OnIsSemanticQueryModeChanged(bool value)
     {
         if (!value) SemanticStatusText = string.Empty;
+        // The inline calculator only applies to the literal (Traditional) query box.
+        UpdateInlineCalculatorResult(Query);
         if (!_queryModeInitialized) return;
         _settings.LastQueryModeIsSemantic = value;
         _settings.HasChosenQueryMode = true;

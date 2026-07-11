@@ -86,6 +86,21 @@ Two interchangeable native backends are available and give identical results —
 (default) and ripgrep's grep-searcher — selectable as a global performance knob in Settings or via
 the CLI `--multiline-engine` flag.
 
+### Inline calculator & unit converter
+
+When the Traditional search box contains a math expression or a unit conversion, Yagu shows the
+answer in a small banner below the search box (it never blocks a normal search). A **Copy** button
+copies just the answer.
+
+- **Math** — `2+2`, `sqrt(9)*4`, `(3+4)^2`, `15% of 340`. Supports `+ - * / ^ %`, parentheses, the
+  functions `sqrt`, `abs`, `round`, `floor`, `ceil`, `sin`, `cos`, `tan`, `log`, `ln`, and the
+  constants `pi` and `e`.
+- **Unit conversion** — `5 km to miles`, `72 f to c`, `2 gb to mb`, `90 min to hours`. Covers length,
+  mass, data size, speed, time, and temperature. `to` and `in` are interchangeable separators.
+
+The same capability is available from the CLI via `--calc "<expr>"` (see
+[Command-Line Interface](#command-line-interface-cli-mode)).
+
 ---
 
 ## Semantic Search (Local AI)
@@ -138,6 +153,7 @@ Click the **Advanced Options** expander below the search bar to reveal a tabbed 
 
 | Control | Effect |
 | --- | --- |
+| Find code annotations (TODO / FIXME…) | One-click quick search that loads a whole-word regex over `TODO`, `FIXME`, `HACK`, `BUG`, `XXX`, `NOTE`, `OPTIMIZE`, and `REVIEW` (in Traditional regex mode, case-sensitive) and immediately runs it — surfacing every outstanding annotation in your codebase. Equivalent to the CLI `--todos` flag. |
 | Search mode | Chooses what the query matches (see Search Modes above). |
 | Include filter | Limits the search to files matching these patterns. Accepts comma- or semicolon-separated extensions, globs, or path segments. Switch the dropdown between **Glob** and **Regex** modes. |
 | Exclude filter | Removes files matching these patterns. Same syntax options as Include. |
@@ -990,6 +1006,8 @@ Yagu.exe --cli --directory <path> PATTERN [OPTIONS]
 | --- | --- |
 | `--directory <path>` | Directory to search recursively. |
 | `PATTERN` (positional) or `--pattern <pat>` | Search pattern (literal by default). |
+| `--todos` | Shorthand for a whole-word regex over `TODO`, `FIXME`, `HACK`, `BUG`, `XXX`, `NOTE`, `OPTIMIZE`, `REVIEW` (implies `--regex`, case-sensitive). Supplies the pattern, so no positional `PATTERN` is needed. |
+| `--calc "<expr>"` | Evaluate a math expression (`"2+2"`, `"sqrt(9)*4"`, `"15% of 340"`) or a unit conversion (`"5 km to miles"`, `"72 f to c"`), print the answer, and exit — no search is run. |
 
 ### Matching Options
 

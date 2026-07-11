@@ -159,6 +159,22 @@ public sealed partial class MainWindow
         await SubmitSearchWithSlowModelWatchAsync();
     }
 
+    // Copies just the answer (no expression) from the inline calculator banner.
+    private void OnCopyInlineCalculatorResult(object sender, RoutedEventArgs e)
+    {
+        var value = ViewModel.InlineCalculatorCopyValue;
+        if (!string.IsNullOrEmpty(value))
+            SetClipboardText(value, "calculator result");
+    }
+
+    // "Find code annotations" quick action: loads the canonical TODO/FIXME regex into the box (in
+    // Traditional regex mode) and runs the search, so outstanding annotations surface in one click.
+    private async void OnFindCodeAnnotations(object sender, RoutedEventArgs e)
+    {
+        ViewModel.ApplyCodeAnnotationPreset();
+        await StartSearchFromUiAsync();
+    }
+
     private async void OnQuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
     {
         var submittedQuery = (args.ChosenSuggestion as Yagu.Models.HistorySuggestion)?.Value;
@@ -550,13 +566,81 @@ public sealed partial class MainWindow
         // HasOpenOwnedWindow; non-YaguDialog owned windows (the AI-model qualification / font-contrast
         // dialogs) hold the list shut by parking the suppression tick, so honor that too — otherwise
         // the windowed suggestion popup floats above the modal.
-        if (sender is AutoSuggestBox box
-            && box.IsSuggestionListOpen
+        if (sender is not AutoSuggestBox box)
+            return;
+
+        if (box.IsSuggestionListOpen
             && (YaguDialog.HasOpenOwnedWindow(_hwnd) || Environment.TickCount64 < _suppressQuerySuggestionsUntilTick))
         {
             box.IsSuggestionListOpen = false;
+            return;
+        }
+
+        // Narrow the query history dropdown so its right edge lines up with the "Match case" (Aa)
+        // toggle instead of running the full width of the box (under the overlaid toggle strip).
+        // Runs after the popup has laid out (Low priority) so the framework's own width pinning is
+        // already applied and ours wins.
+        if (box.IsSuggestionListOpen && ReferenceEquals(box, QueryBox))
+        {
+            DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                ConstrainQuerySuggestionListWidth);
         }
     }
+
+    // The query history dropdown right edge should stop at the "Match case" toggle, not extend under
+    // the overlaid Case/Regex/Multiline/Exact strip. The framework sizes the suggestion popup to the
+    // full AutoSuggestBox width, so we clamp the popup card's MaxWidth to the toggle strip's left edge.
+    private double _querySuggestionTargetWidth;
+
+    private void ConstrainQuerySuggestionListWidth()
+    {
+        var xamlRoot = QueryBox.XamlRoot;
+        if (xamlRoot is null || !QueryBox.IsSuggestionListOpen)
+            return;
+
+        // Only relevant when the toggle strip is overlaid (Traditional mode). With no toggles shown
+        // (Semantic mode) the full-width dropdown is fine, so leave it alone.
+        if (InlineSearchToggles.Visibility != Visibility.Visible || CaseSensitiveToggle.ActualWidth <= 0)
+            return;
+
+        double aaLeft = CaseSensitiveToggle
+            .TransformToVisual(QueryBox)
+            .TransformPoint(new Windows.Foundation.Point(0, 0)).X;
+        if (aaLeft <= 40) // not laid out yet / implausibly small — skip rather than clip to nothing
+            return;
+        _querySuggestionTargetWidth = aaLeft;
+
+        foreach (var popup in Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(xamlRoot))
+        {
+            if (popup.Child is not FrameworkElement card || !IsDescendantOf(popup, QueryBox))
+                continue;
+
+            ApplyQuerySuggestionCardWidth(card);
+            // Re-clamp if the framework widens the card back on a later layout pass.
+            card.SizeChanged -= OnQuerySuggestionCardSizeChanged;
+            card.SizeChanged += OnQuerySuggestionCardSizeChanged;
+            break;
+        }
+    }
+
+    private void ApplyQuerySuggestionCardWidth(FrameworkElement card)
+    {
+        card.HorizontalAlignment = HorizontalAlignment.Left;
+        card.MinWidth = 0;
+        card.MaxWidth = _querySuggestionTargetWidth;
+    }
+
+    private void OnQuerySuggestionCardSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (sender is FrameworkElement card
+            && _querySuggestionTargetWidth > 0
+            && card.ActualWidth > _querySuggestionTargetWidth + 0.5)
+        {
+            ApplyQuerySuggestionCardWidth(card);
+        }
+    }
+
 
     /// <summary>
     /// Closes the directory and query history dropdowns and briefly suppresses them, fighting the

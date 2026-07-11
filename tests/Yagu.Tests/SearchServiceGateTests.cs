@@ -39,6 +39,21 @@ public sealed class SearchServiceGateTests
     }
 
     [Fact]
+    public void NameFirstPass_SuppressesAttribHAndFiltersHiddenInProcess()
+    {
+        // A broad name term (e.g. "a") matches ~1.2M files, so pushing !attrib:h forces a ~35s
+        // unindexed attribute scan inside the SDK's blocking Query — the cause of the long "no
+        // results" gap. The name-first pass suppresses !attrib:h and excludes hidden files in-process
+        // on the few emitted matches instead.
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
+
+        AssertContainsInOrder(source,
+            "nameFirstLister.EarlySuppressHiddenAttributeFilter = true;",
+            "if (!options.SearchHiddenFiles && IsHiddenFile(path)) continue;");
+        Assert.Contains("nameFirstLister.EarlySuppressHiddenAttributeFilter = false;", source);
+    }
+
+    [Fact]
     public void StreamingScannerCancellationCleanup_FinishesBeforeDestroyingCallbacks()
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));

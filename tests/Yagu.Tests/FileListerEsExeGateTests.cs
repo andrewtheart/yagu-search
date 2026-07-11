@@ -168,6 +168,48 @@ public sealed class FileListerEsExeGateTests : IDisposable
         Assert.DoesNotContain(capturedArgs, a => a.Contains("!attrib:h"));
     }
 
+    [Fact]
+    public async Task RunEverythingAsync_NameTermNarrowedQuery_AddsAttribHExclusionByDefault()
+    {
+        // A name term counts as "narrowed" by the heuristic, so !attrib:h is pushed by default.
+        FileLister.Backend = FileListerBackend.EsExe;
+        var dir = Path.GetTempPath().TrimEnd('\\');
+
+        var capturedArgs = new List<IReadOnlyList<string>>();
+        var lister = new FileLister((path, psi) =>
+        {
+            capturedArgs.Add(psi.ArgumentList.ToList());
+            return new FakeProcess(lines: new[] { dir + @"\file1.txt", "" }, exitCode: 0);
+        })
+        { SearchHiddenFiles = false, EarlyFileNameLiteralTerms = ["a"] };
+
+        await foreach (var _ in lister.ListFilesAsync(dir, Array.Empty<string>(), 0, CancellationToken.None)) { }
+
+        Assert.Contains(capturedArgs, a => a.Contains("!attrib:h"));
+    }
+
+    [Fact]
+    public async Task RunEverythingAsync_SuppressHiddenAttributeFilter_OmitsAttribHEvenWhenNarrowed()
+    {
+        // The name-first pass sets EarlySuppressHiddenAttributeFilter because a common name term
+        // (e.g. "a") matches ~1.2M files and !attrib:h then forces a ~35s unindexed attribute scan
+        // inside the SDK's blocking Query. Hidden files are excluded in-process instead.
+        FileLister.Backend = FileListerBackend.EsExe;
+        var dir = Path.GetTempPath().TrimEnd('\\');
+
+        var capturedArgs = new List<IReadOnlyList<string>>();
+        var lister = new FileLister((path, psi) =>
+        {
+            capturedArgs.Add(psi.ArgumentList.ToList());
+            return new FakeProcess(lines: new[] { dir + @"\file1.txt", "" }, exitCode: 0);
+        })
+        { SearchHiddenFiles = false, EarlyFileNameLiteralTerms = ["a"], EarlySuppressHiddenAttributeFilter = true };
+
+        await foreach (var _ in lister.ListFilesAsync(dir, Array.Empty<string>(), 0, CancellationToken.None)) { }
+
+        Assert.DoesNotContain(capturedArgs, a => a.Contains("!attrib:h"));
+    }
+
     private sealed class FakeProcess : FileLister.IProcess
     {
         private readonly string[] _lines;

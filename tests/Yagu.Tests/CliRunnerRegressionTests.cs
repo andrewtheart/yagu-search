@@ -55,10 +55,10 @@ public sealed class CliRunnerRegressionTests
         int explanationCount = System.Text.RegularExpressions.Regex.Matches(source, @"(?m)^\s+Does: ").Count;
         int commandCount = System.Text.RegularExpressions.Regex.Matches(source, @"(?m)^\s+Cmd:\s+Yagu\.exe --cli ").Count;
 
-        Assert.Equal(212, exampleCount);
-        Assert.Equal(212, explanationCount);
-        Assert.Equal(212, commandCount);
-        Assert.Contains("EXAMPLES (212):", source);
+        Assert.Equal(215, exampleCount);
+        Assert.Equal(215, explanationCount);
+        Assert.Equal(215, commandCount);
+        Assert.Contains("EXAMPLES (215):", source);
         Assert.Contains("001. Basic search in the current folder", source);
         Assert.Contains("Does: Finds TODO anywhere under the current directory.", source);
         Assert.Contains("Cmd:  Yagu.exe --cli --directory . \"TODO\"", source);

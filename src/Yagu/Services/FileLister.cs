@@ -197,6 +197,15 @@ public sealed class FileLister : IFileLister
     /// <summary>Literal file-name terms to apply during listing when the search mode first gates by file name.</summary>
     public IReadOnlyList<string> EarlyFileNameLiteralTerms { get; set; } = [];
 
+    /// <summary>
+    /// When true, the Everything query MUST NOT push the <c>!attrib:h</c> hidden-file exclusion, even
+    /// though a name term makes the query nominally "narrowed". A short/common name term (e.g. "a")
+    /// still matches a huge candidate set, and on that set <c>!attrib:h</c> forces a multi-tens-of-
+    /// seconds un-indexed attribute scan inside the SDK's blocking <c>Query</c>. The name-first pass
+    /// sets this and filters hidden files in-process on the few emitted matches instead.
+    /// </summary>
+    public bool EarlySuppressHiddenAttributeFilter { get; set; }
+
     /// <summary>When false (the default), cloud-only placeholder files (OneDrive
     /// Files On-Demand / Google Drive online-only) are skipped during listing so
     /// the scan never blocks on a hydration that may never complete. When true,
@@ -634,7 +643,7 @@ public sealed class FileLister : IFileLister
         bool queryIsNarrowed = (includeExtensions is { Count: > 0 })
             || EarlyFileNameLiteralTerms.Count > 0
             || EarlyIncludeFileNameGlobs.Count > 0;
-        if (!SearchHiddenFiles && queryIsNarrowed)
+        if (!SearchHiddenFiles && queryIsNarrowed && !EarlySuppressHiddenAttributeFilter)
             query += " !attrib:h";
 
         LogService.Instance.Warning("FileLister", $"Everything SDK query: {query}");
@@ -655,10 +664,16 @@ public sealed class FileLister : IFileLister
         // Producer: runs the Everything SDK query and writes paths into the channel.
         _ = Task.Run(() =>
         {
+            // A once-per-query guard: warn only if we waited a long time for the shared SDK lock,
+            // which means a concurrent/lingering Everything query held it (contention).
+            var _sdkLockWait = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 lock (_sdkOps.SyncLock)
                 {
+                    _sdkLockWait.Stop();
+                    if (_sdkLockWait.ElapsedMilliseconds > 1000)
+                        LogService.Instance.Warning("FileLister", $"Everything SDK producer waited {_sdkLockWait.ElapsedMilliseconds}ms for the shared SyncLock (contention): {query}");
                     try
                     {
                         if (!_sdkOps.IsDBLoaded())
@@ -1204,7 +1219,7 @@ public sealed class FileLister : IFileLister
         bool esQueryIsNarrowed = (includeExtensions is { Count: > 0 })
             || EarlyFileNameLiteralTerms.Count > 0
             || EarlyIncludeFileNameGlobs.Count > 0;
-        if (!SearchHiddenFiles && esQueryIsNarrowed)
+        if (!SearchHiddenFiles && esQueryIsNarrowed && !EarlySuppressHiddenAttributeFilter)
             args.Add("!attrib:h");
         var fileNameFilter = BuildEverythingFileNameFilter(EarlyFileNameLiteralTerms);
         if (fileNameFilter is not null)

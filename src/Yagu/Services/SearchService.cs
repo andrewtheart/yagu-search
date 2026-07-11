@@ -710,6 +710,11 @@ public sealed class SearchService
                     // fall through to on a 0-result SDK query). The full discovery pass below still
                     // runs with the caller's normal tiering, so coverage/correctness is unaffected.
                     nameFirstLister.BackendOverride = FileListerBackend.EverythingSdk;
+                    // Do NOT push !attrib:h on this broad name query — a common term like "a" matches
+                    // ~1.2M files and !attrib:h then forces a ~35s un-indexed attribute scan inside the
+                    // SDK's blocking Query (the cause of the long "no results" gap). Hidden files are
+                    // instead excluded in-process on the few emitted matches below.
+                    nameFirstLister.EarlySuppressHiddenAttributeFilter = true;
                     try
                     {
                         await foreach (var path in _fileLister.ListFilesAsync(options.Directory, includeExts, maxFiles: nameFirstCap, cancellationToken).WithCancellation(cancellationToken))
@@ -733,15 +738,22 @@ public sealed class SearchService
                                 int idx = fileName.IndexOf(literal!, cmp);
                                 if (idx >= 0) { fnStart = idx; fnLen = literal!.Length; }
                             }
-                            if (fnStart >= 0 && nameFirstEmitted.Add(path))
+                            if (fnStart >= 0)
                             {
-                                (filenameBatch ??= new List<SearchResult>(FilenameBatchSize)).Add(new SearchResult(
-                                    FilePath: path, LineNumber: 0, MatchLine: fileName,
-                                    MatchStartColumn: fnStart, MatchLength: fnLen,
-                                    ContextBefore: [], ContextAfter: [])
-                                { SourceMatchStartColumn = fnStart });
-                                if (filenameBatch.Count >= FilenameBatchSize)
-                                    await FlushFilenameBatchAsync().ConfigureAwait(false);
+                                // Hidden-file exclusion is done here (the query no longer pushes
+                                // !attrib:h on this broad pass). Only exact-name matches reach this
+                                // point, so the per-match attribute check is cheap.
+                                if (!options.SearchHiddenFiles && IsHiddenFile(path)) continue;
+                                if (nameFirstEmitted.Add(path))
+                                {
+                                    (filenameBatch ??= new List<SearchResult>(FilenameBatchSize)).Add(new SearchResult(
+                                        FilePath: path, LineNumber: 0, MatchLine: fileName,
+                                        MatchStartColumn: fnStart, MatchLength: fnLen,
+                                        ContextBefore: [], ContextAfter: [])
+                                    { SourceMatchStartColumn = fnStart });
+                                    if (filenameBatch.Count >= FilenameBatchSize)
+                                        await FlushFilenameBatchAsync().ConfigureAwait(false);
+                                }
                             }
                         }
                         await FlushFilenameBatchAsync().ConfigureAwait(false);
@@ -750,6 +762,7 @@ public sealed class SearchService
                     {
                         nameFirstLister.EarlyFileNameLiteralTerms = [];
                         nameFirstLister.BackendOverride = nameFirstBackendOverride;
+                        nameFirstLister.EarlySuppressHiddenAttributeFilter = false;
                     }
                     LogService.Instance.Info("Discovery",
                         $"Name-first pass: emitted {nameFirstEmitted.Count:N0} filename match(es) in {sw.Elapsed.TotalSeconds:F2}s");
@@ -1749,6 +1762,19 @@ public sealed class SearchService
         LogService.Instance.Info("SearchService", $"Search complete: {completedSummary.TotalMatches} matches in {completedSummary.FilesWithMatches} files, {completedSummary.FilesScanned} scanned, {completedSummary.FilesSkipped} skipped ({completedSummary.SkipReasons}), earlyFiltered={completedSummary.SkipReasons?.EarlyFiltered ?? 0}, degraded={completedSummary.Degraded}, truncated={completedSummary.Truncated}, " +
             $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={pressureCycles}, forwarderItems={Volatile.Read(ref forwarderItemsForwarded):N0}, forwarderStallMs={Volatile.Read(ref forwarderWriteStallMs)}, {sw.Elapsed.TotalSeconds:F2}s");
         yield return new SearchEvent.Completed(completedSummary);
+    }
+
+    private static bool IsHiddenFile(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.Hidden) != 0;
+        }
+        catch
+        {
+            // Can't determine (deleted/locked) → don't hide it; the full content sweep would show it too.
+            return false;
+        }
     }
 
     private static bool ShouldSkipByFileMetadata(

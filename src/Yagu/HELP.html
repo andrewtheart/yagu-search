@@ -480,6 +480,29 @@ fallback for lookaround patterns). Two interchangeable native backends
 are available and give identical results — a hand-rolled scan (default)
 and ripgrep’s grep-searcher — selectable as a global performance knob in
 Settings or via the CLI <code>--multiline-engine</code> flag.</p>
+<h3 id="inline-calculator-unit-converter">Inline calculator &amp; unit
+converter</h3>
+<p>When the Traditional search box contains a math expression or a unit
+conversion, Yagu shows the answer in a small banner below the search box
+(it never blocks a normal search). A <strong>Copy</strong> button copies
+just the answer.</p>
+<ul>
+<li><strong>Math</strong> — <code>2+2</code>, <code>sqrt(9)*4</code>,
+<code>(3+4)^2</code>, <code>15% of 340</code>. Supports
+<code>+ - * / ^ %</code>, parentheses, the functions <code>sqrt</code>,
+<code>abs</code>, <code>round</code>, <code>floor</code>,
+<code>ceil</code>, <code>sin</code>, <code>cos</code>, <code>tan</code>,
+<code>log</code>, <code>ln</code>, and the constants <code>pi</code> and
+<code>e</code>.</li>
+<li><strong>Unit conversion</strong> — <code>5 km to miles</code>,
+<code>72 f to c</code>, <code>2 gb to mb</code>,
+<code>90 min to hours</code>. Covers length, mass, data size, speed,
+time, and temperature. <code>to</code> and <code>in</code> are
+interchangeable separators.</li>
+</ul>
+<p>The same capability is available from the CLI via
+<code>--calc "&lt;expr&gt;"</code> (see <a
+href="#command-line-interface-cli-mode">Command-Line Interface</a>).</p>
 <hr />
 <h2 id="semantic-search-local-ai">Semantic Search (Local AI)</h2>
 <p>The <strong>Search</strong> button has a <strong>chevron</strong> on
@@ -635,6 +658,16 @@ defaults.</p>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>Find code annotations (TODO / FIXME…)</td>
+<td>One-click quick search that loads a whole-word regex over
+<code>TODO</code>, <code>FIXME</code>, <code>HACK</code>,
+<code>BUG</code>, <code>XXX</code>, <code>NOTE</code>,
+<code>OPTIMIZE</code>, and <code>REVIEW</code> (in Traditional regex
+mode, case-sensitive) and immediately runs it — surfacing every
+outstanding annotation in your codebase. Equivalent to the CLI
+<code>--todos</code> flag.</td>
+</tr>
 <tr>
 <td>Search mode</td>
 <td>Chooses what the query matches (see Search Modes above).</td>
@@ -1720,8 +1753,9 @@ disabled.</td>
 <tr>
 <td>Max matches per line</td>
 <td>Cap on matches emitted from a single line before the scanner moves
-on (0 = unlimited, default 0). Set a positive value to tame a match-everything pattern
-(e.g. the regex <code>.</code>) on very long minified lines.</td>
+on (0 = unlimited, default 0). Set a positive value to tame a
+match-everything pattern (e.g. the regex <code>.</code>) on very long
+minified lines.</td>
 </tr>
 <tr>
 <td>Content-search file size ceiling (MB)</td>
@@ -2977,6 +3011,22 @@ integration:</p>
 <td><code>PATTERN</code> (positional) or
 <code>--pattern &lt;pat&gt;</code></td>
 <td>Search pattern (literal by default).</td>
+</tr>
+<tr>
+<td><code>--todos</code></td>
+<td>Shorthand for a whole-word regex over <code>TODO</code>,
+<code>FIXME</code>, <code>HACK</code>, <code>BUG</code>,
+<code>XXX</code>, <code>NOTE</code>, <code>OPTIMIZE</code>,
+<code>REVIEW</code> (implies <code>--regex</code>, case-sensitive).
+Supplies the pattern, so no positional <code>PATTERN</code> is
+needed.</td>
+</tr>
+<tr>
+<td><code>--calc "&lt;expr&gt;"</code></td>
+<td>Evaluate a math expression (<code>"2+2"</code>,
+<code>"sqrt(9)*4"</code>, <code>"15% of 340"</code>) or a unit
+conversion (<code>"5 km to miles"</code>, <code>"72 f to c"</code>),
+print the answer, and exit — no search is run.</td>
 </tr>
 </tbody>
 </table>

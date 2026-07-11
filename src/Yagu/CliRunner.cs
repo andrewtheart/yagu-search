@@ -84,6 +84,11 @@ internal static class CliRunner
             return 0;
         }
 
+        // --calc: evaluate an inline calculator / unit-conversion expression and exit. Self-contained,
+        // never runs a search — parity with the GUI search box's inline calculator banner.
+        if (!string.IsNullOrWhiteSpace(args.CalcExpression))
+            return RunCalc(args.CalcExpression!);
+
         // --load-session short-circuits the entire search pipeline: just
         // read the file and re-emit results in grep-style format.
         if (!string.IsNullOrWhiteSpace(args.LoadSessionPath))
@@ -1651,6 +1656,20 @@ internal static class CliRunner
         }
     }
 
+    // Evaluates a single --calc expression (arithmetic or unit conversion) and prints the answer.
+    private static int RunCalc(string expression)
+    {
+        var result = Yagu.Helpers.InlineCalculator.Evaluate(expression);
+        if (result is null)
+        {
+            WriteError($"error: not a recognizable expression: {expression}");
+            WriteError("usage: Yagu.exe --cli --calc \"2 + 2\"   or   --calc \"5 km to miles\"");
+            return 2;
+        }
+        Console.Out.WriteLine(result.Display);
+        return 0;
+    }
+
     private static int RunLoadSession(string path, bool vtEnabled)
     {
         bool useColor = vtEnabled;
@@ -2101,6 +2120,15 @@ internal static class CliRunner
 
             PATTERN (positional arg, or explicit flag):
               --pattern <pattern>         Search pattern (literal by default).
+                  --todos                 Shorthand: search for code annotations — a whole-word regex
+                                          over TODO, FIXME, HACK, BUG, XXX, NOTE, OPTIMIZE and REVIEW
+                                          (implies --regex, case-sensitive). Provides the pattern, so
+                                          no positional PATTERN is needed.
+
+            CALCULATOR / UNIT CONVERTER (no search):
+              --calc <expr>               Evaluate a math expression (e.g. "2+2", "sqrt(9)*4",
+                                          "15% of 340") or a unit conversion (e.g. "5 km to miles",
+                                          "72 f to c", "2 gb to mb") and print the answer, then exit.
 
             MATCHING:
               -e, --regex                 Treat pattern as a regular expression.
@@ -2261,7 +2289,7 @@ internal static class CliRunner
                             directory next, then falls back to global AppData settings. CLI flags
                             always override file-based settings.
 
-            EXAMPLES (212):
+            EXAMPLES (215):
               001. Basic search in the current folder
                   Does: Finds TODO anywhere under the current directory.
                   Cmd:  Yagu.exe --cli --directory . "TODO"
@@ -3110,6 +3138,18 @@ internal static class CliRunner
                   Does: Forces the Tesseract OCR engine instead of the default PaddleSharp.
                   Cmd:  Yagu.exe --cli --directory scans "TOTAL" --image-text --ocr-engine tesseract
 
+              213. Find all code annotations
+                  Does: Surfaces every TODO/FIXME/HACK/BUG/XXX/NOTE/OPTIMIZE/REVIEW comment.
+                  Cmd:  Yagu.exe --cli --directory src --todos
+
+              214. Quick calculation (no search)
+                  Does: Evaluates a math expression and prints the answer.
+                  Cmd:  Yagu.exe --cli --calc "15% of 340"
+
+              215. Quick unit conversion (no search)
+                  Does: Converts between units and prints the answer.
+                  Cmd:  Yagu.exe --cli --calc "5 km to miles"
+
             EXIT CODES:
               0   One or more matches found.
               1   No matches found.
@@ -3397,6 +3437,9 @@ internal sealed class CliArgs
     public bool             SuppressAdminWarning { get; private set; }
     public bool             ShowHelp     { get; private set; }
 
+    // --calc <expr>: evaluate an inline calculator / unit-conversion expression and exit (no search).
+    public string?          CalcExpression { get; private set; }
+
     // Semantic search (--semantic-pattern): natural-language request translated by the local model.
     public string?          SemanticPattern { get; private set; }
     public string?          SemanticModel { get; private set; }
@@ -3471,6 +3514,16 @@ internal sealed class CliArgs
             if (Eq(tok, "--no-gitignore-precedence"))        { a.GitignoreTakesPrecedence = false; i++; continue; }
             if (Eq(tok, "--exact-match"))                    { a.ExactMatch = true; i++; continue; }
             if (Eq(tok, "--no-exact-match", "--substring"))  { a.ExactMatch = false; i++; continue; }
+            if (Eq(tok, "--todos", "--code-annotations"))
+            {
+                // Shorthand for a whole-word regex over TODO/FIXME/HACK/BUG/XXX/NOTE/OPTIMIZE/REVIEW.
+                a.Pattern = Yagu.Helpers.CodeAnnotationQuery.Pattern;
+                a.UseRegex = true;
+                a.CaseSensitive = true;
+                a.ExactMatch = false;
+                i++;
+                continue;
+            }
             if (Eq(tok, "--multiline", "-U"))                { a.Multiline = true; i++; continue; }
             if (Eq(tok, "--no-multiline"))                   { a.Multiline = false; i++; continue; }
             if (Eq(tok, "--multiline-dotall"))               { a.Multiline = true; a.MultilineDotAll = true; i++; continue; }
@@ -3487,6 +3540,8 @@ internal sealed class CliArgs
                 { a.Directory = v.Trim('"'); continue; }
             if (TryGetVal(raw, ref i, out v, "--pattern", "-p"))
                 { a.Pattern = v; continue; }
+            if (TryGetVal(raw, ref i, out v, "--calc"))
+                { a.CalcExpression = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--semantic-pattern", "-SP"))
                 { a.SemanticPattern = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--semantic-model"))

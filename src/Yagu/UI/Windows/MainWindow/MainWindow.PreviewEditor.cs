@@ -2091,7 +2091,7 @@ public sealed partial class MainWindow
         if (_previewAddedToastTimer is null)
         {
             _previewAddedToastTimer = DispatcherQueue.CreateTimer();
-            _previewAddedToastTimer.Interval = TimeSpan.FromSeconds(7);
+            _previewAddedToastTimer.Interval = TimeSpan.FromSeconds(3);
             _previewAddedToastTimer.Tick += (_, _) => HidePreviewAddedToast();
         }
         _previewAddedToastTimer.Stop();

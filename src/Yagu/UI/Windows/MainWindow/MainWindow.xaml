@@ -491,6 +491,31 @@
                                 HorizontalAlignment="Right" VerticalAlignment="Center"
                                 Margin="0,0,36,0"
                                 Visibility="{x:Bind ViewModel.InlineSearchTogglesVisibility, Mode=OneWay}">
+                        <!-- Inline calculator / unit-converter answer, shown inside the search box just
+                             to the left of the toggles when the query is a math expression (2+2,
+                             sqrt(9)*4, 15% of 340) or a unit conversion (5 km to miles). The extra right
+                             margin keeps a gap between the pill and the Match case button. -->
+                        <Border x:Name="InlineCalculatorBanner"
+                                Visibility="{x:Bind ViewModel.InlineCalculatorResultVisibility, Mode=OneWay}"
+                                VerticalAlignment="Center" Margin="0,0,10,0" Padding="8,2"
+                                MaxWidth="300" CornerRadius="10"
+                                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                BorderThickness="1">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xE8EF;" FontSize="12" Opacity="0.7" VerticalAlignment="Center" />
+                                <TextBlock Text="{x:Bind ViewModel.InlineCalculatorResultText, Mode=OneWay}"
+                                           VerticalAlignment="Center" FontSize="12" FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis" IsTextSelectionEnabled="True" />
+                                <Button Click="OnCopyInlineCalculatorResult"
+                                        ToolTipService.ToolTip="Copy the answer"
+                                        Padding="4,0" MinWidth="0" Width="24" Height="22"
+                                        VerticalAlignment="Center"
+                                        Background="Transparent" BorderThickness="0">
+                                    <FontIcon Glyph="&#xE8C8;" FontSize="11" />
+                                </Button>
+                            </StackPanel>
+                        </Border>
                         <ToggleButton x:Name="CaseSensitiveToggle"
                                       IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}"
                                       ToolTipService.ToolTip="Match Case (Alt+C)"
@@ -737,6 +762,18 @@
                                         <!-- Search tab -->
                                         <StackPanel x:Name="AdvancedOptionsSearchTabContent" Spacing="14">
                                             <TextBlock Text="Search" FontSize="16" FontWeight="SemiBold" />
+                                            <StackPanel Spacing="6">
+                                                <TextBlock Text="Quick searches" Opacity="0.75" FontWeight="SemiBold" />
+                                                <Button x:Name="FindCodeAnnotationsButton"
+                                                        Click="OnFindCodeAnnotations"
+                                                        HorizontalAlignment="Left"
+                                                        ToolTipService.ToolTip="Load a whole-word regex over TODO, FIXME, HACK, BUG, XXX, NOTE, OPTIMIZE and REVIEW, then search — surfaces every outstanding code annotation.">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <FontIcon Glyph="&#xE8A5;" FontSize="14" />
+                                                        <TextBlock Text="Find code annotations (TODO / FIXME…)" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                            </StackPanel>
                                             <StackPanel Spacing="6">
                                                 <TextBlock Text="Search mode" Opacity="0.75" />
                                                 <ComboBox SelectedIndex="{x:Bind ViewModel.SearchModeIndex, Mode=TwoWay}"

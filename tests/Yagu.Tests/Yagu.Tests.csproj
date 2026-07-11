@@ -56,6 +56,8 @@
     <Compile Include="..\..\src\Yagu\Helpers\DiskTypeDetector.cs" Link="Source\Helpers\DiskTypeDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\GlobMatcher.cs" Link="Source\Helpers\GlobMatcher.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SingleFilePathQueryDetector.cs" Link="Source\Helpers\SingleFilePathQueryDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\InlineCalculator.cs" Link="Source\Helpers\InlineCalculator.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\CodeAnnotationQuery.cs" Link="Source\Helpers\CodeAnnotationQuery.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SemanticQueryHeuristicDetector.cs" Link="Source\Helpers\SemanticQueryHeuristicDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SearchPatternClassifier.cs" Link="Source\Helpers\SearchPatternClassifier.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\EditorSyntaxHighlightingResolver.cs" Link="Source\Helpers\EditorSyntaxHighlightingResolver.cs" />
