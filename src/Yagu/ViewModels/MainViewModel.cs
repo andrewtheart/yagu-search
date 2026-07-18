@@ -338,6 +338,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SearchOnlineOnlyFiles = _settings.SearchOnlineOnlyFiles;
         SearchHiddenFiles = _settings.SearchHiddenFiles;
         SearchImageText = _settings.SearchImageText;
+        SearchPdfText = _settings.SearchPdfText;
         ImageOcrEngine = _settings.ImageOcrEngine;
         ImageOcrModel = _settings.ImageOcrModel;
         ImageOcrMaxSide = _settings.ImageOcrMaxSide;
@@ -1228,6 +1229,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// <c>SearchImageText</c> setting and surfaced as the Advanced Options ▸ Filters toggle.</summary>
     [ObservableProperty] public partial bool SearchImageText { get; set; }
 
+    /// <summary>When true, PDF files are converted to text (via the bundled Xpdf <c>pdftotext</c>) on a
+    /// background queue and their extracted text is searched. Default false. Seeded from the persisted
+    /// <c>SearchPdfText</c> setting and surfaced as the Advanced Options ▸ Filters toggle.</summary>
+    [ObservableProperty] public partial bool SearchPdfText { get; set; }
+
     /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp) or
     /// "tesseract". Defaults to <see cref="AppSettings.EffectiveDefaultImageOcrEngine"/> (PaddleSharp on
     /// x64/Arm64; Tesseract on x86, where PaddleOCR's x64-only runtime cannot load). Settings-only.</summary>
@@ -1893,6 +1899,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         string SettingsBinaryExtensions,
         string SettingsArchiveExtensions,
         bool SearchImageText,
+        bool SearchPdfText,
         bool SearchHiddenFiles,
         int SearchModeIndex);
 
@@ -1921,6 +1928,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SettingsBinaryExtensions,
         SettingsArchiveExtensions,
         SearchImageText,
+        SearchPdfText,
         SearchHiddenFiles,
         SearchModeIndex);
 
@@ -1967,6 +1975,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SettingsBinaryExtensions = s.SettingsBinaryExtensions;
         SettingsArchiveExtensions = s.SettingsArchiveExtensions;
         SearchImageText = s.SearchImageText;
+        SearchPdfText = s.SearchPdfText;
         SearchHiddenFiles = s.SearchHiddenFiles;
         SearchModeIndex = s.SearchModeIndex;
     }
@@ -3152,6 +3161,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine),
                 ImageOcrModel = AppSettings.NormalizeImageOcrModel(ImageOcrModel),
                 ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(ImageOcrMaxSide),
+                SearchPdfText = SearchPdfText,
+                PdfTextExtensions = ParseExtensionSet(AppSettings.DefaultPdfTextExtensions),
                 MaxDegreeOfParallelism = parallelism,
                 FileListerBackendOverride = backendOverride,
                 IoOversubscriptionIndex = IoOversubscriptionIndex,
@@ -4807,6 +4818,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.SearchOnlineOnlyFiles = SearchOnlineOnlyFiles;
         _settings.SearchHiddenFiles = d is null ? SearchHiddenFiles : d.SearchHiddenFiles;
         _settings.SearchImageText = d is null ? SearchImageText : d.SearchImageText;
+        _settings.SearchPdfText = SearchPdfText;
         _settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine);
         _settings.ImageOcrModel = AppSettings.NormalizeImageOcrModel(ImageOcrModel);
         _settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(ImageOcrMaxSide);
@@ -5463,6 +5475,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             $"Search binary files: {OnOff(SearchBinary)}",
             $"Search inside archives: {OnOff(SearchInsideArchives)}",
             $"Search image text (OCR): {(SearchImageText ? $"On ({AppSettings.NormalizeImageOcrEngine(ImageOcrEngine)})" : "Off")}",
+            $"Search PDF text: {OnOff(SearchPdfText)}",
         };
 
         string include = (IncludeGlobs ?? string.Empty).Trim();

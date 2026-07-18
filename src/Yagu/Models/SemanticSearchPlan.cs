@@ -118,6 +118,14 @@ public sealed class SemanticSearchPlan
     [JsonPropertyName("searchImageText")]
     public bool? SearchImageText { get; init; }
 
+    /// <summary>Whether to extract and search the text layer of PDF files. Set <c>true</c> when the
+    /// request is to find text WITHIN PDFs — e.g. "search pdfs for the word invoice", "which pdf
+    /// mentions renewal". Maps to the Advanced Options "Search PDF text" toggle. Null = leave the
+    /// current toggle; the applier also enables this automatically when a content search targets the
+    /// <c>.pdf</c> extension.</summary>
+    [JsonPropertyName("searchPdfText")]
+    public bool? SearchPdfText { get; init; }
+
     /// <summary>Field to sort the results by, e.g. <c>name</c>, <c>size</c>, <c>date</c>/<c>modified</c>,
     /// <c>relevance</c>/<c>matches</c>, or <c>directory</c>/<c>path</c>. Null = leave the current sort.</summary>
     [JsonPropertyName("sortBy")]

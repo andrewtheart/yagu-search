@@ -1098,6 +1098,14 @@
                                                              Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                                              ToolTipService.ToolTip="When on, raster images (PNG/JPG/etc.) are OCR'd on a background queue and their recognized text is searched. Off by default. OCR runs on a separate thread so it never slows the file scan; image matches appear as they finish. Choose the OCR engine (PaddleSharp or Tesseract) in Settings." />
                                                </StackPanel>
+                                               <StackPanel x:Name="PdfTextRow" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                   <ToggleSwitch OnContent="Search PDF text" OffContent="Search PDF text"
+                                                                 IsOn="{x:Bind ViewModel.SearchPdfText, Mode=TwoWay}"
+                                                                 MinWidth="0" />
+                                                   <FontIcon Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
+                                                             Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                                             ToolTipService.ToolTip="When on, PDF files are converted to text on a background queue (via the bundled Xpdf pdftotext) and their extracted text is searched. Off by default. Extraction runs on a separate thread so it never slows the file scan; PDF matches appear as they finish. Only the embedded text layer is read — scanned/image-only PDFs yield no text." />
+                                               </StackPanel>
                                             </StackPanel>
                                         </StackPanel>
 

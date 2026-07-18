@@ -558,8 +558,8 @@ public sealed partial class MainWindow
                 return false;
             }
 
-            // Image previews show OCR text and a thumbnail; double-click / inline editing is a NOOP.
-            if (IsImagePreviewPath(filePath))
+            // Image/PDF previews show extracted text (OCR / pdftotext); double-click / inline editing is a NOOP.
+            if (IsExtractedTextPreviewPath(filePath))
             {
                 LogService.Instance.Verbose("PreviewEditor",
                     $"TryEnterPreviewEditorAtPoint: abort — image preview is read-only, file='{Path.GetFileName(filePath)}'");
@@ -767,9 +767,9 @@ public sealed partial class MainWindow
     private async Task ShowFullFileEditorAsync(SearchResult result, bool scrollToMatch)
     {
         LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: start file='{Path.GetFileName(result.FilePath)}', scrollToMatch={scrollToMatch}");
-        if (IsImagePreviewPath(result.FilePath))
+        if (IsExtractedTextPreviewPath(result.FilePath))
         {
-            LogService.Instance.Info("Preview", "ShowFullFileEditorAsync: blocked - image preview is read-only");
+            LogService.Instance.Info("Preview", "ShowFullFileEditorAsync: blocked - extracted-text (image/PDF) preview is read-only");
             return;
         }
         var editorSw = Stopwatch.StartNew();

@@ -1,2 +1,4 @@
 *.exe filter=lfs diff=lfs merge=lfs -text
-installer/YaguSetup-1.0.0.2283.exe filter=lfs diff=lfs merge=lfs -text
+# The bundled Xpdf pdftotext.exe (~1.4 MB) is a NORMAL git blob, not LFS: it is small enough for a
+# regular blob and keeping it out of LFS avoids consuming the (already-exhausted) LFS budget.
+src/Yagu/NativeTools/pdftotext/pdftotext.exe !filter !diff !merge -text

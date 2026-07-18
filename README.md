@@ -39,7 +39,7 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
     </td>
     <td align="center" width="33%">
       <h3>🖼️ Image-Text (OCR)</h3>
-      Find text <em>inside</em> images and screenshots (PNG, JPG, BMP, TIFF…) with a choice of PaddleOCR or Tesseract engines.
+      Find text <em>inside</em> images and screenshots (PNG, JPG, BMP, TIFF…) with a choice of PaddleOCR or Tesseract engines — and inside <strong>PDFs</strong>, whose text layer is extracted with the bundled Xpdf <code>pdftotext</code>.
     </td>
     <td align="center" width="33%">
       <h3>💾 Instant Sessions</h3>
@@ -98,10 +98,10 @@ To install Yagu without building from source, download the installer that matche
 
 | Installer | What it's for | Image-text (OCR) search |
 | --- | --- | --- |
-| [**x64** — YaguSetup-1.0.0.2379-x64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2379-x64.exe) (~163 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
-| [**x64 · Offline** — YaguSetup-1.0.0.2379-x64-offline.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2379-x64-offline.exe) (~537 MB) | Same as x64, but for machines that must run fully **offline** — air-gapped PCs, or to skip first-run downloads. Bundles everything needed offline: the voidtools **Everything** installer (installs with your consent, no download) and the Microsoft Edge **WebView2** runtime for the embedded terminal. | Works with **no download** — both engines ship inside the installer. **Defaults to PaddleOCR**, same as every other edition: this installer bundles PaddleOCR's full native runtime and English models, so the default engine runs completely offline with no first-run download. Tesseract is bundled too and can be selected in Settings. See the note below. |
-| [**Arm64** — YaguSetup-1.0.0.2379-arm64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2379-arm64.exe) (~162 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
-| [**x86** — YaguSetup-1.0.0.2379-x86.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2379-x86.exe) (~143 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
+| [**x64** — YaguSetup-1.0.0.2380-x64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2380-x64.exe) (~163 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
+| [**x64 · Offline** — YaguSetup-1.0.0.2380-x64-offline.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2380-x64-offline.exe) (~538 MB) | Same as x64, but for machines that must run fully **offline** — air-gapped PCs, or to skip first-run downloads. Bundles everything needed offline: the voidtools **Everything** installer (installs with your consent, no download) and the Microsoft Edge **WebView2** runtime for the embedded terminal. | Works with **no download** — both engines ship inside the installer. **Defaults to PaddleOCR**, same as every other edition: this installer bundles PaddleOCR's full native runtime and English models, so the default engine runs completely offline with no first-run download. Tesseract is bundled too and can be selected in Settings. See the note below. |
+| [**Arm64** — YaguSetup-1.0.0.2380-arm64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2380-arm64.exe) (~163 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
+| [**x86** — YaguSetup-1.0.0.2380-x86.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2380-x86.exe) (~144 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
 
 > There is no Arm64 or x86 "Offline" edition: the bundled OCR runtime is win-x64 only, so it can only be packaged offline for x64. On Arm64 and x86, image-text search still works — it downloads what it needs on first use.
 

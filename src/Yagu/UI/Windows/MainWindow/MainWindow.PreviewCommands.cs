@@ -2318,7 +2318,7 @@ public sealed partial class MainWindow
             copyWithLines.IsEnabled = hasSelection;
             copyWithout.IsEnabled = hasSelection;
             var editFilePath = ResolvePreviewBlockFilePath(block);
-            editFileItem.IsEnabled = !string.IsNullOrWhiteSpace(editFilePath) && !IsImagePreviewPath(editFilePath);
+            editFileItem.IsEnabled = !string.IsNullOrWhiteSpace(editFilePath) && !IsExtractedTextPreviewPath(editFilePath);
         };
         block.ContextFlyout = flyout;
     }

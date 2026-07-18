@@ -431,6 +431,7 @@ internal static class CliRunner
         if (resolved.SearchInsideArchives is { } ar) o.WriteLine($"  archives       : {ar}");
         if (resolved.SearchBinary is { } sb)      o.WriteLine($"  binary         : {sb}");
         if (resolved.SearchImageText is { } sit)  o.WriteLine($"  image-text     : {sit}");
+        if (resolved.SearchPdfText is { } spt)    o.WriteLine($"  pdf-text       : {spt}");
         if (resolved.ObeyGitignore is { } gi)     o.WriteLine($"  obey-gitignore : {gi}");
         if (resolved.Warnings.Count > 0)          o.WriteLine($"  warnings       : {string.Join(" | ", resolved.Warnings)}");
     }
@@ -835,6 +836,7 @@ internal static class CliRunner
         if (resolved.SearchInsideArchives is { } arc) o.WriteLine($"  archives       : {arc}");
         if (resolved.SearchHiddenFiles is { } sh) o.WriteLine($"  hidden         : {sh}");
         if (args.SearchImageText is { } img) o.WriteLine($"  image-text     : {img}{(img ? $" ({AppSettings.NormalizeImageOcrEngine(args.ImageOcrEngine)})" : string.Empty)}");
+        if (args.SearchPdfText is { } pdf) o.WriteLine($"  pdf-text       : {pdf}");
         if (!string.IsNullOrWhiteSpace(args.SortBy))
             o.WriteLine($"  sort           : {args.SortBy} ({(args.SortDescending ? "descending" : "ascending")})");
         if (!string.IsNullOrWhiteSpace(args.GroupBy))
@@ -1241,6 +1243,7 @@ internal static class CliRunner
         bool searchArchives = args.SearchInsideArchives ?? s.SearchInsideArchives;
         string archiveExts = args.ArchiveExtensions ?? s.ArchiveExtensions;
         bool searchImageText = args.SearchImageText ?? s.SearchImageText;
+        bool searchPdfText = args.SearchPdfText ?? s.SearchPdfText;
         string imageOcrEngine = AppSettings.NormalizeImageOcrEngine(args.ImageOcrEngine ?? s.ImageOcrEngine);
         string imageOcrModel = AppSettings.NormalizeImageOcrModel(args.ImageOcrModel ?? s.ImageOcrModel);
         int imageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(args.ImageOcrMaxSide ?? s.ImageOcrMaxSide);
@@ -1314,6 +1317,8 @@ internal static class CliRunner
             ImageOcrEngine        = imageOcrEngine,
             ImageOcrModel         = imageOcrModel,
             ImageOcrMaxSide       = imageOcrMaxSide,
+            SearchPdfText         = searchPdfText,
+            PdfTextExtensions     = SplitSemi(AppSettings.DefaultPdfTextExtensions).ToHashSet(StringComparer.OrdinalIgnoreCase),
             ExcludeAdminProtectedPaths = excludeAdminPaths,
             AdminProtectedPathSegments = Yagu.Services.FileLister.ParseAdminProtectedSegments(adminSegments),
         };
@@ -2222,6 +2227,9 @@ internal static class CliRunner
                   --no-hidden             Exclude hidden files/folders (system files always skipped).
                   --image-text            OCR image files and search the recognized text (off by default).
                   --no-image-text         Do not OCR images (default).
+                  --pdf-text              Convert PDF files to text (via bundled pdftotext) and search it
+                                          (off by default).
+                  --no-pdf-text           Do not convert PDFs to text (default).
                   --allow-ocr-download    Permit the one-time OCR engine/model download (~365 MB) without
                                           an interactive prompt. Needed only on the very first OCR run of
                                           an edition that does not bundle the OCR components.
@@ -2289,7 +2297,7 @@ internal static class CliRunner
                             directory next, then falls back to global AppData settings. CLI flags
                             always override file-based settings.
 
-            EXAMPLES (215):
+            EXAMPLES (217):
               001. Basic search in the current folder
                   Does: Finds TODO anywhere under the current directory.
                   Cmd:  Yagu.exe --cli --directory . "TODO"
@@ -3150,6 +3158,14 @@ internal static class CliRunner
                   Does: Converts between units and prints the answer.
                   Cmd:  Yagu.exe --cli --calc "5 km to miles"
 
+              216. Search text inside PDFs
+                  Does: Converts PDF files to text with the bundled pdftotext and matches the extracted text.
+                  Cmd:  Yagu.exe --cli --directory docs "invoice" --pdf-text
+
+              217. Search PDFs and images together
+                  Does: Extracts PDF text and OCRs images in one search, matching the query across both.
+                  Cmd:  Yagu.exe --cli --directory reports "TOTAL" --pdf-text --image-text
+
             EXIT CODES:
               0   One or more matches found.
               1   No matches found.
@@ -3410,6 +3426,7 @@ internal sealed class CliArgs
     public bool?            SearchInsideArchives { get; private set; }
     public bool?            SearchHiddenFiles { get; private set; }
     public bool?            SearchImageText { get; private set; }
+    public bool?            SearchPdfText { get; private set; }
     public string?          ImageOcrEngine { get; private set; }
     public string?          ImageOcrModel { get; private set; }
     public int?             ImageOcrMaxSide { get; private set; }
@@ -3505,6 +3522,8 @@ internal sealed class CliArgs
             if (Eq(tok, "--no-hidden", "--no-search-hidden")) { a.SearchHiddenFiles = false; i++; continue; }
             if (Eq(tok, "--image-text", "--search-image-text", "--ocr")) { a.SearchImageText = true; i++; continue; }
             if (Eq(tok, "--no-image-text", "--no-search-image-text", "--no-ocr")) { a.SearchImageText = false; i++; continue; }
+            if (Eq(tok, "--pdf-text", "--search-pdf-text", "--pdf")) { a.SearchPdfText = true; i++; continue; }
+            if (Eq(tok, "--no-pdf-text", "--no-search-pdf-text", "--no-pdf")) { a.SearchPdfText = false; i++; continue; }
             if (Eq(tok, "--allow-ocr-download")) { a.AllowOcrDownload = true; i++; continue; }
             if (Eq(tok, "--exclude-admin-paths"))            { a.ExcludeAdminProtectedPaths = true; i++; continue; }
             if (Eq(tok, "--no-exclude-admin-paths"))         { a.ExcludeAdminProtectedPaths = false; i++; continue; }
@@ -3737,6 +3756,7 @@ internal sealed class CliArgs
         if (overlay.SearchBinary == true && SkipBinary is null) SkipBinary = false;
         if (overlay.SearchHiddenFiles is { } sh && SearchHiddenFiles is null) SearchHiddenFiles = sh;
         if (overlay.SearchImageText is { } sit && SearchImageText is null) SearchImageText = sit;
+        if (overlay.SearchPdfText is { } spt && SearchPdfText is null) SearchPdfText = spt;
 
         // Sort/group: only fill from the model when the user did not set them explicitly.
         if (overlay.SortBy is { } sortKey && SortBy is null)

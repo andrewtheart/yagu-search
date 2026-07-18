@@ -55,10 +55,10 @@ public sealed class CliRunnerRegressionTests
         int explanationCount = System.Text.RegularExpressions.Regex.Matches(source, @"(?m)^\s+Does: ").Count;
         int commandCount = System.Text.RegularExpressions.Regex.Matches(source, @"(?m)^\s+Cmd:\s+Yagu\.exe --cli ").Count;
 
-        Assert.Equal(215, exampleCount);
-        Assert.Equal(215, explanationCount);
-        Assert.Equal(215, commandCount);
-        Assert.Contains("EXAMPLES (215):", source);
+        Assert.Equal(217, exampleCount);
+        Assert.Equal(217, explanationCount);
+        Assert.Equal(217, commandCount);
+        Assert.Contains("EXAMPLES (217):", source);
         Assert.Contains("001. Basic search in the current folder", source);
         Assert.Contains("Does: Finds TODO anywhere under the current directory.", source);
         Assert.Contains("Cmd:  Yagu.exe --cli --directory . \"TODO\"", source);
@@ -74,8 +74,9 @@ public sealed class CliRunnerRegressionTests
         Assert.Contains("210. Group by modified date, oldest groups first", source);
         Assert.Contains("211. Search text inside images (OCR)", source);
         Assert.Contains("212. Search image text with the Tesseract engine", source);
+        Assert.Contains("216. Search text inside PDFs", source);
+        Assert.Contains("217. Search PDFs and images together", source);
     }
-
     [Fact]
     public void CliSettings_LoadsCurrentDirectoryThenProcessLaunchDirectoryThenGlobal()
     {
@@ -207,6 +208,23 @@ public sealed class CliRunnerRegressionTests
         // Help mentions the flags.
         Assert.Contains("--image-text", source);
         Assert.Contains("--ocr-engine <name>", source);
+    }
+
+    [Fact]
+    public void CliParser_RecognizesPdfTextFlags()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        // Parser recognizes both enable and disable forms (with aliases).
+        Assert.Contains("Eq(tok, \"--pdf-text\", \"--search-pdf-text\", \"--pdf\")", source);
+        Assert.Contains("Eq(tok, \"--no-pdf-text\", \"--no-search-pdf-text\", \"--no-pdf\")", source);
+        // Nullable arg property exists so the settings default applies when the flag is omitted.
+        Assert.Contains("public bool?            SearchPdfText { get; private set; }", source);
+        // Built into SearchOptions with the settings value as the fallback.
+        Assert.Contains("SearchPdfText         = searchPdfText", source);
+        Assert.Contains("PdfTextExtensions     = SplitSemi(AppSettings.DefaultPdfTextExtensions)", source);
+        // Help mentions the flag.
+        Assert.Contains("--pdf-text", source);
     }
 
     [Fact]

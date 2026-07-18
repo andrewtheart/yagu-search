@@ -18,6 +18,24 @@ GPL-3.0-or-later notice above. Upstream license files are retained where
 included by the upstream projects.
 
 
+Xpdf command line tools (pdftotext)
+
+- Path: src/Yagu/NativeTools/pdftotext/
+- Product: Xpdf 4.06 command line tools (pdftotext.exe)
+- Author / Copyright: Copyright 1996-2025 Glyph & Cog, LLC
+- License: GNU General Public License, version 2 or version 3
+  (GPL-2.0-or-later / GPL-3.0-or-later; dual-versioned by the upstream project)
+- Source: https://www.xpdfreader.com/download.html
+- License files: src/Yagu/NativeTools/pdftotext/COPYING (GPLv2),
+  src/Yagu/NativeTools/pdftotext/COPYING3 (GPLv3)
+
+Yagu bundles the unmodified official Xpdf pdftotext.exe (64-bit) and shells out
+to it to extract the embedded text layer of PDF files. The binary is aggregated at arm's length (run as a
+separate process, not linked), retains its own GPL license, and is not
+relicensed by Yagu. Its GPL license texts ship next to it at <app>\pdftotext\
+(COPYING, COPYING3).
+
+
 SharpSevenZip
 
 - Path: vendor/SharpSevenZip/

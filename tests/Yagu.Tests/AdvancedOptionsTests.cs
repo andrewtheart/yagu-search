@@ -258,6 +258,17 @@ public sealed class AdvancedOptionsTests
     }
 
     [Fact]
+    public void PdfText_FlowsViewModelSettingsAndSearchOptions()
+    {
+        // Load from settings, build into SearchOptions, and persist back — the same bridge as image OCR.
+        Assert.Contains("SearchPdfText = _settings.SearchPdfText;", MainViewModelSource);
+        AssertContainsInOrder(MainViewModelSource,
+            "SearchPdfText = SearchPdfText,",
+            "PdfTextExtensions = ParseExtensionSet(AppSettings.DefaultPdfTextExtensions),");
+        Assert.Contains("_settings.SearchPdfText = SearchPdfText;", MainViewModelSource);
+    }
+
+    [Fact]
     public void BuildSearchOptions_MapsImageTextEngineAndExtensions()
     {
         AssertContainsInOrder(MainViewModelSource,

@@ -278,10 +278,12 @@ public sealed class SearchService
             // zip-like extensions — they need to reach ContentSearcher so it
             // can open them as archives. Likewise, when image-text (OCR) search is
             // enabled, don't skip image extensions — they need to reach the OCR queue.
+            // Same for PDF-text search: don't skip "pdf" so PDFs reach the extraction queue.
             var skipExts = options.SkipExtensions;
             bool bypassArchives = options.SearchInsideArchives && skipExts.Count > 0 && options.ArchiveExtensions.Count > 0;
             bool bypassImages = options.SearchImageText && skipExts.Count > 0 && options.ImageOcrExtensions.Count > 0;
-            if (bypassArchives || bypassImages)
+            bool bypassPdfs = options.SearchPdfText && skipExts.Count > 0 && options.PdfTextExtensions.Count > 0;
+            if (bypassArchives || bypassImages || bypassPdfs)
             {
                 var filtered = new HashSet<string>(skipExts, StringComparer.OrdinalIgnoreCase);
                 // ArchiveExtensions uses ".zip" format; SkipExtensions uses "zip" (no dot).
@@ -291,6 +293,10 @@ public sealed class SearchService
                 // ImageOcrExtensions uses dotless format, matching SkipExtensions.
                 if (bypassImages)
                     foreach (var ext in options.ImageOcrExtensions)
+                        filtered.Remove(ext.TrimStart('.'));
+                // PdfTextExtensions uses dotless format, matching SkipExtensions.
+                if (bypassPdfs)
+                    foreach (var ext in options.PdfTextExtensions)
                         filtered.Remove(ext.TrimStart('.'));
                 skipExts = filtered;
             }
@@ -924,6 +930,45 @@ public sealed class SearchService
                 $"Image-text OCR enabled: engine={ocrEngine.Id}, workers={ocrWorkerCount}, extensions={options.ImageOcrExtensions.Count}");
         }
 
+        // ── PDF-text search session ──
+        // When enabled, PDFs discovered during the scan are routed to a background queue that runs
+        // the bundled Xpdf pdftotext on each file (decoupled from the Rust scan, like the OCR queue).
+        // Extracted text is searched for the query and matches stream into the same content-results
+        // channel as ordinary file matches.
+        Pdf.PdfTextSearchSession? pdfText = null;
+        Pdf.PdfTextExtractor? pdfExtractor = null;
+        if (searchContent && options.SearchPdfText)
+        {
+            pdfExtractor = new Pdf.PdfTextExtractor();
+            // Extracted PDF text is cached under the same PID-scoped, discovery-excluded cache dir as
+            // OCR text, keyed by the pdftotext engine id so it never collides with image OCR entries.
+            Ocr.OcrTextCache.Cleanup();
+            var pdfCache = new Ocr.OcrTextCache();
+            int pdfWorkerCount = Math.Max(1, Math.Min(4, Environment.ProcessorCount / 2));
+            pdfText = new Pdf.PdfTextSearchSession(
+                pdfExtractor,
+                pdfCache,
+                regex,
+                literal,
+                cmp,
+                options.ContextLines,
+                options.MaxMatchesPerFile,
+                contentResults.Writer,
+                onFileProcessed: () => Interlocked.Increment(ref filesScanned),
+                onFileMatched: matchCount =>
+                {
+                    Interlocked.Increment(ref filesWithMatches);
+                    int newTotal = Interlocked.Add(ref totalMatches, matchCount);
+                    if (options.MaxResults > 0 && newTotal >= options.MaxResults)
+                        Volatile.Write(ref truncated, 1);
+                },
+                workerCount: pdfWorkerCount,
+                cancellationToken: cancellationToken,
+                shouldStop: () => Volatile.Read(ref truncated) != 0);
+            LogService.Instance.Info("SearchService",
+                $"PDF-text search enabled: workers={pdfWorkerCount}, extensions={options.PdfTextExtensions.Count}");
+        }
+
         // ── Content workers ──
         var workers = Task.CompletedTask;
         if (searchContent)
@@ -933,6 +978,7 @@ public sealed class SearchService
                 try
                 {
                     imageOcr?.Start();
+                    pdfText?.Start();
                     bool nativeAvailable = Native.NativeSearcher.IsAvailable && !options.Multiline;
                     int parallelism;
                     if (options.Multiline)
@@ -1155,6 +1201,12 @@ public sealed class SearchService
                                                         // native content scanner; matches stream in asynchronously.
                                                         imageOcr.TryEnqueue(file);
                                                     }
+                                                    else if (pdfText != null && Pdf.PdfTextSupport.IsPdfCandidate(file, options.PdfTextExtensions))
+                                                    {
+                                                        // Route PDFs to the background pdftotext queue instead of the
+                                                        // native content scanner; matches stream in asynchronously.
+                                                        pdfText.TryEnqueue(file);
+                                                    }
                                                     else
                                                     {
                                                         pushBatch.Add(file);
@@ -1349,6 +1401,13 @@ public sealed class SearchService
                                 imageOcr.TryEnqueue(file);
                                 return;
                             }
+                            if (pdfText != null && Pdf.PdfTextSupport.IsPdfCandidate(file, options.PdfTextExtensions))
+                            {
+                                // Route PDFs to the background pdftotext queue; the session counts
+                                // them and emits any matches asynchronously.
+                                pdfText.TryEnqueue(file);
+                                return;
+                            }
                             var effectiveOptions = Volatile.Read(ref degraded) != 0 ? degradedOptions : patternOptions;
                             FileSearchOutcome outcome;
                             int produced;
@@ -1432,6 +1491,16 @@ public sealed class SearchService
                         try { await imageOcr.DrainAsync().ConfigureAwait(false); }
                         catch (OperationCanceledException) { }
                         catch (Exception ex) { LogService.Instance.Warning("SearchService", "OCR drain failed", ex); }
+                    }
+
+                    // Likewise finish PDF-text extraction before closing the content channel so all
+                    // pdftotext matches are flushed into the results stream.
+                    if (pdfText != null)
+                    {
+                        pdfText.Complete();
+                        try { await pdfText.DrainAsync().ConfigureAwait(false); }
+                        catch (OperationCanceledException) { }
+                        catch (Exception ex) { LogService.Instance.Warning("SearchService", "PDF-text drain failed", ex); }
                     }
 
                     // Release the OCR engine after draining (terminates the out-of-process worker, if any).

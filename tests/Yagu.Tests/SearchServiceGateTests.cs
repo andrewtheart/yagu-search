@@ -175,7 +175,7 @@ public sealed class SearchServiceGateTests
 
         Assert.Contains("bool bypassImages = options.SearchImageText && skipExts.Count > 0 && options.ImageOcrExtensions.Count > 0;", source);
         AssertContainsInOrder(source,
-            "if (bypassArchives || bypassImages)",
+            "if (bypassArchives || bypassImages || bypassPdfs)",
             "if (bypassImages)",
             "foreach (var ext in options.ImageOcrExtensions)",
             "filtered.Remove(ext.TrimStart('.'));");
@@ -206,6 +206,42 @@ public sealed class SearchServiceGateTests
         Assert.Contains("else if (imageOcr != null && Ocr.ImageOcrSupport.IsImageCandidate(file, options.ImageOcrExtensions))", source);
         Assert.Contains("if (imageOcr != null && Ocr.ImageOcrSupport.IsImageCandidate(file, options.ImageOcrExtensions))", source);
         Assert.Contains("imageOcr.TryEnqueue(file);", source);
+    }
+
+    [Fact]
+    public void PdfText_BypassesSkipExtensionsSoPdfsReachTheExtractionQueue()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
+
+        Assert.Contains("bool bypassPdfs = options.SearchPdfText && skipExts.Count > 0 && options.PdfTextExtensions.Count > 0;", source);
+        AssertContainsInOrder(source,
+            "if (bypassArchives || bypassImages || bypassPdfs)",
+            "if (bypassPdfs)",
+            "foreach (var ext in options.PdfTextExtensions)",
+            "filtered.Remove(ext.TrimStart('.'));");
+    }
+
+    [Fact]
+    public void PdfText_SessionIsCreatedOnlyWhenContentSearchAndPdfTextEnabled()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
+
+        AssertContainsInOrder(source,
+            "if (searchContent && options.SearchPdfText)",
+            "pdfExtractor = new Pdf.PdfTextExtractor();",
+            "pdfText = new Pdf.PdfTextSearchSession(",
+            "shouldStop: () => Volatile.Read(ref truncated) != 0);");
+    }
+
+    [Fact]
+    public void PdfText_RoutesPdfCandidatesToTheQueueOnBothScanPaths()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
+
+        Assert.Contains("pdfText?.Start();", source);
+        Assert.Contains("else if (pdfText != null && Pdf.PdfTextSupport.IsPdfCandidate(file, options.PdfTextExtensions))", source);
+        Assert.Contains("if (pdfText != null && Pdf.PdfTextSupport.IsPdfCandidate(file, options.PdfTextExtensions))", source);
+        Assert.Contains("pdfText.TryEnqueue(file);", source);
     }
 
     [Fact]

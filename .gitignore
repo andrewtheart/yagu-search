@@ -43,7 +43,10 @@ installer/output/
 installer/prerequisites/
 # Vendored VC++ runtime redistributable (bundled locally for the installer)
 vendor/vc-runtime/
-!installer/*.exe
+# Built installers are NOT committed — they are large (150-560 MB each) and would exhaust the
+# Git LFS budget. They are published as GitHub Release assets instead (build-all-installers.ps1
+# uploads them via `gh release`). They remain on disk under installer/ for the release upload.
+installer/YaguSetup-*.exe
 build_debug.txt
 Yagu/Native/yagu_core.dll
 build_output.txt

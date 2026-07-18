@@ -37,6 +37,7 @@ public interface ISemanticPlanTarget
     bool SearchInsideArchives { get; set; }
     bool SearchHiddenFiles { get; set; }
     bool SearchImageText { get; set; }
+    bool SearchPdfText { get; set; }
     int SortModeIndex { get; set; }
     int SortDirectionIndex { get; set; }
     int GroupModeIndex { get; set; }
@@ -85,6 +86,10 @@ public sealed class ResolvedSearchPlan
 
     /// <summary>Enable "Search image text (OCR)" — reading text inside image files. Null = leave unchanged.</summary>
     public bool? SearchImageText { get; init; }
+
+    /// <summary>Enable "Search PDF text" — extracting and searching the text layer of PDF files. Null =
+    /// leave unchanged.</summary>
+    public bool? SearchPdfText { get; init; }
 
     /// <summary>Sort column: 1=matches, 2=date(modified), 3=size, 4=name, 5=directory. Null = leave unchanged.</summary>
     public int? SortModeIndex { get; init; }
@@ -365,6 +370,20 @@ public static class SemanticPlanApplier
             searchImageText = true;
         }
 
+        // Finding TEXT inside PDF files requires "Search PDF text" (pdftotext extraction). A request like
+        // "search pdfs for the word test" carries a real content term whose include filter targets .pdf,
+        // but Yagu skips PDFs by default — the text is only reachable via extraction. Enable it
+        // deterministically under the same conditions as image OCR. The model can also request it
+        // explicitly via searchPdfText.
+        bool? searchPdfText = plan.SearchPdfText;
+        if (searchPdfText != true
+            && pattern is not null
+            && mode != Models.SearchMode.FileNames
+            && include.Exists(IsPdfExtensionToken))
+        {
+            searchPdfText = true;
+        }
+
         // Office Open XML / OpenDocument / zip-family files are archives — their text lives INSIDE the
         // container and is only reachable with "Search archives" on. When the plan filters to such
         // extensions, enable it deterministically (small models routinely forget searchInsideArchives).
@@ -400,7 +419,7 @@ public static class SemanticPlanApplier
         bool hasDirective = hasFileFilter
             || sortModeIndex is not null || groupMode is not null
             || searchHidden == true || searchInsideArchives == true
-            || searchBinary == true || searchImageText == true;
+            || searchBinary == true || searchImageText == true || searchPdfText == true;
         if (pattern is null && (hasDirective || mode == Models.SearchMode.FileNames))
         {
             pattern = ".";
@@ -497,6 +516,7 @@ public static class SemanticPlanApplier
             SearchBinary = searchBinary,
             SearchHiddenFiles = searchHidden,
             SearchImageText = searchImageText,
+            SearchPdfText = searchPdfText,
             SortModeIndex = sortModeIndex,
             SortDirectionIndex = sortDirectionIndex,
             GroupMode = groupMode,
@@ -543,6 +563,7 @@ public static class SemanticPlanApplier
         if (r.SearchBinary is { } sb) parts.Add($"searchBinary={sb}");
         if (r.SearchHiddenFiles is { } sh) parts.Add($"searchHidden={sh}");
         if (r.SearchImageText is { } oit) parts.Add($"searchImageText={oit}");
+        if (r.SearchPdfText is { } pit) parts.Add($"searchPdfText={pit}");
         if (r.SortModeIndex is { } sm) parts.Add($"sortMode={sm}");
         if (r.SortDirectionIndex is { } sd) parts.Add($"sortDir={sd}");
         if (r.GroupMode is { } gm) parts.Add($"group={gm}");
@@ -601,6 +622,7 @@ public static class SemanticPlanApplier
         if (resolved.SearchInsideArchives is { } arc) target.SearchInsideArchives = arc;
         if (resolved.SearchHiddenFiles is { } sh) target.SearchHiddenFiles = sh;
         if (resolved.SearchImageText is { } sit) target.SearchImageText = sit;
+        if (resolved.SearchPdfText is { } spt) target.SearchPdfText = spt;
 
         // Sort: set the column first, then the direction, so the view-model's change handlers
         // settle on the final (mode, direction) pair regardless of the target's prior state.
@@ -689,6 +711,9 @@ public static class SemanticPlanApplier
 
         if (resolved.SearchImageText == true)
             sb.Append(", reading text inside images (OCR)");
+
+        if (resolved.SearchPdfText == true)
+            sb.Append(", extracting text from PDFs");
 
         AppendSizeClause(sb, resolved.MinFileSizeBytes, resolved.MaxFileSizeBytes);
         AppendDateClause(sb, "modified", resolved.ModifiedAfterDate, resolved.ModifiedBeforeDate);
@@ -879,6 +904,7 @@ public static class SemanticPlanApplier
             SearchBinary = resolved.SearchBinary,
             SearchHiddenFiles = resolved.SearchHiddenFiles,
             SearchImageText = resolved.SearchImageText,
+            SearchPdfText = resolved.SearchPdfText,
             SortBy = SortModeIndexToCliKey(resolved.SortModeIndex),
             SortDescending = resolved.SortModeIndex is null ? null : resolved.SortDirectionIndex != 1,
             GroupBy = GroupModeToCliKey(resolved.GroupMode),
@@ -1477,6 +1503,22 @@ public static class SemanticPlanApplier
         return Yagu.Services.Ocr.ImageOcrSupport.DefaultImageExtensions.Contains(ext);
     }
 
+    /// <summary>
+    /// True when <paramref name="token"/> is an include-glob / extension token whose extension is one
+    /// Yagu can extract text from (pdf). Used to enable "Search PDF text" when a content search targets
+    /// PDF files.
+    /// </summary>
+    private static bool IsPdfExtensionToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return false;
+        string t = token.Trim();
+        string ext = Path.GetExtension(t);
+        if (string.IsNullOrEmpty(ext))
+            ext = t; // bare token like "pdf"
+        ext = ext.TrimStart('.', '*');
+        return Yagu.Services.Pdf.PdfTextSupport.DefaultPdfExtensions.Contains(ext);
+    }
+
     // "hidden" used as a file-attribute filter: "hidden file(s)/folder(s)/item(s)/…", or a bare
     // "hidden" governed by an include/exclude verb ("show hidden", "exclude hidden"). Anything else
     // (e.g. searching for the literal word "hidden" in file contents) is left to the model.
@@ -1995,6 +2037,9 @@ public sealed class SemanticSearchOverlay
 
     /// <summary>Enable "Search image text (OCR)". Null when unset.</summary>
     public bool? SearchImageText { get; init; }
+
+    /// <summary>Enable "Search PDF text" (pdftotext extraction). Null when unset.</summary>
+    public bool? SearchPdfText { get; init; }
 
     /// <summary>CLI <c>--sort</c> key (matches, date, size, name, directory), or null when unset.</summary>
     public string? SortBy { get; init; }

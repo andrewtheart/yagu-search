@@ -222,6 +222,22 @@
     <None Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\x86\7z.dll" Link="x86\7z.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- PDF-text search: the bundled Xpdf command-line tool (pdftotext.exe, GPLv3) is shelled out to
+         for extracting the text layer of PDFs (the same technique dnGrep uses). It lands at
+         <app>\pdftotext\pdftotext.exe on build and publish; PdfTextExtractor probes exactly that path.
+         Its GPL license texts ship alongside it to satisfy the conveyance requirement. -->
+    <Content Include="NativeTools\pdftotext\pdftotext.exe" Link="pdftotext\pdftotext.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="NativeTools\pdftotext\COPYING" Link="pdftotext\COPYING">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="NativeTools\pdftotext\COPYING3" Link="pdftotext\COPYING3">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="NativeTools\pdftotext\ANNOUNCE" Link="pdftotext\ANNOUNCE">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <!-- Embedded terminal (xterm.js + ConPTY) -->
     <Content Include="Assets\terminal.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

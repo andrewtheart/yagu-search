@@ -21,6 +21,10 @@ public sealed class AppSettings
     /// normally in <see cref="DefaultSkipExtensions"/>; image-text mode bypasses the skip list for
     /// them (mirroring how archive search bypasses skip for archive extensions).</summary>
     public const string DefaultImageOcrExtensions = "png;jpg;jpeg;bmp;gif;tif;tiff;webp";
+    /// <summary>Document extensions converted to text (via the bundled Xpdf <c>pdftotext</c>) when
+    /// "Search PDF text" is on. These are normally in <see cref="DefaultSkipExtensions"/>; PDF-text
+    /// mode bypasses the skip list for them (mirroring image-text and archive search).</summary>
+    public const string DefaultPdfTextExtensions = "pdf";
     public const string DefaultExcludeGlobs = "node_modules;bin;obj;.git";
     public const string DefaultSelectedPreviewContentBackgroundColor = "#FF000000";
     public const string DefaultUnselectedPreviewContentBackgroundColor = "#FF1E1E1E";
@@ -286,6 +290,10 @@ public sealed class AppSettings
     /// recognized text is searched. Default false. Persisted; also the default for the per-search
     /// Advanced Options ▸ Filters "Search image text" toggle.</summary>
     public bool SearchImageText { get; set; }
+    /// <summary>When true, PDF files are converted to text (via the bundled Xpdf <c>pdftotext</c>) on a
+    /// background queue and their extracted text is searched. Default false. Persisted; also the default
+    /// for the per-search Advanced Options ▸ Filters "Search PDF text" toggle.</summary>
+    public bool SearchPdfText { get; set; }
     /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp) or
     /// "tesseract". Defaults to <see cref="EffectiveDefaultImageOcrEngine"/> (PaddleSharp on x64 and
     /// Arm64; Tesseract on x86, where PaddleOCR's x64-only runtime cannot load). Normalized on load —

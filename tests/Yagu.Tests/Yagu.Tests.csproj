@@ -131,6 +131,10 @@
     <Compile Include="..\..\src\Yagu\Services\Ocr\TesseractOcrEngine.cs" Link="Source\Services\Ocr\TesseractOcrEngine.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\OcrEngineFactory.cs" Link="Source\Services\Ocr\OcrEngineFactory.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\ImageOcrSearchSession.cs" Link="Source\Services\Ocr\ImageOcrSearchSession.cs" />
+    <!-- PDF-text search: pure-managed (Process + stdio to the bundled pdftotext), no native deps. -->
+    <Compile Include="..\..\src\Yagu\Services\Pdf\PdfTextSupport.cs" Link="Source\Services\Pdf\PdfTextSupport.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Pdf\PdfTextExtractor.cs" Link="Source\Services\Pdf\PdfTextExtractor.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Pdf\PdfTextSearchSession.cs" Link="Source\Services\Pdf\PdfTextSearchSession.cs" />
     <!-- Worker-side consent guard: pure-managed (env var check + exception), no native deps. -->
     <Compile Include="..\..\src\Yagu.OcrWorker\DownloadGuard.cs" Link="Source\OcrWorker\DownloadGuard.cs" />
     <!-- Semantic search: pure model→SearchOptions mapping (no Foundry/WindowsAppSDK deps). -->

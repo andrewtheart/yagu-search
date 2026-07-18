@@ -708,6 +708,14 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void Defaults_PdfTextSettings()
+    {
+        var s = new AppSettings();
+        Assert.False(s.SearchPdfText);
+        Assert.Equal("pdf", AppSettings.DefaultPdfTextExtensions);
+    }
+
+    [Fact]
     public void EffectiveDefaultImageOcrEngine_IsPaddleWhereSupported_TesseractOnX86()
     {
         // PaddleSharp is the preferred default (faster + more accurate on CPU), but PaddleOCR's native
@@ -750,6 +758,19 @@ public class SettingsServiceNewFieldTests
             var loaded = svc.Load();
             Assert.True(loaded.SearchImageText);
             Assert.Equal("tesseract", loaded.ImageOcrEngine);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void RoundTrip_SearchPdfText()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-pdf-roundtrip-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            svc.Save(new AppSettings { SearchPdfText = true });
+            Assert.True(svc.Load().SearchPdfText);
         }
         finally { try { File.Delete(tmp); } catch { } }
     }

@@ -273,6 +273,16 @@ public sealed class SearchOptions
     /// PaddleSharp. 0 = unlimited. Higher = better small-text accuracy, slower. Ignored by Tesseract.</summary>
     public int ImageOcrMaxSide { get; init; } = 960;
 
+    /// <summary>When true, PDF files are converted to text on a background queue (via the bundled Xpdf
+    /// <c>pdftotext</c>) and their extracted text is matched against the query. The extensions in
+    /// <see cref="PdfTextExtensions"/> are bypassed from the skip-extension prefilter so the scanner
+    /// surfaces them for extraction. Analogous to <see cref="SearchImageText"/> for images.</summary>
+    public bool SearchPdfText { get; init; }
+
+    /// <summary>Set of document extensions (without dots, case-insensitive) that are converted to text
+    /// when <see cref="SearchPdfText"/> is on.</summary>
+    public IReadOnlySet<string> PdfTextExtensions { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Bounded channel buffer capacity for the Everything SDK streaming path.</summary>
     public int SdkChannelBufferSize { get; init; } = 4096;
 

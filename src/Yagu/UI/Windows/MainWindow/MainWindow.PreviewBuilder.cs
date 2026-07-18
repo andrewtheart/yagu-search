@@ -1429,12 +1429,12 @@ public sealed partial class MainWindow
 
     private string[] ReadAllLinesWithEncodingSync(string filePath)
     {
-        // Image files have no readable text content. Return their recognized OCR text
-        // (split into lines) so the normal preview pipeline — line-number gutter, match
-        // highlighting, and the active-match box — renders the recognized text instead of
-        // the raw binary bytes. An empty array means "image with no cached OCR text yet".
-        if (IsImagePreviewPath(filePath))
-            return GetPreviewOcrLines(filePath) ?? Array.Empty<string>();
+        // Images and PDFs have no readable text content in their raw bytes. Return their extracted text
+        // (OCR for images, pdftotext for PDFs) split into lines so the normal preview pipeline — line-
+        // number gutter, match highlighting, and the active-match box — renders the extracted text
+        // instead of the raw binary bytes. An empty array means "extracted-text file with no cached text yet".
+        if (IsExtractedTextPreviewPath(filePath))
+            return GetPreviewExtractedTextLines(filePath) ?? Array.Empty<string>();
 
         using var fs = new FileStream(
             filePath, FileMode.Open, FileAccess.Read,
@@ -1480,9 +1480,9 @@ public sealed partial class MainWindow
     /// </summary>
     private async Task<string[]> ReadAllLinesWithEncodingAsync(string filePath)
     {
-        // See ReadAllLinesWithEncodingSync: images render their recognized OCR text, not bytes.
-        if (IsImagePreviewPath(filePath))
-            return GetPreviewOcrLines(filePath) ?? Array.Empty<string>();
+        // See ReadAllLinesWithEncodingSync: images/PDFs render their extracted text, not raw bytes.
+        if (IsExtractedTextPreviewPath(filePath))
+            return GetPreviewExtractedTextLines(filePath) ?? Array.Empty<string>();
 
         await using var fs = new FileStream(
             filePath, FileMode.Open, FileAccess.Read,
@@ -1675,15 +1675,19 @@ public sealed partial class MainWindow
         ViewModel.HydrateResult(r);
 
         bool isImagePreview = IsImagePreviewPath(r.FilePath);
-        // Image previews are read-only (OCR text) — disable the "full file" editor entry.
-        FullFileButton.IsEnabled = !isImagePreview;
+        bool isExtractedTextPreview = isImagePreview || IsPdfPreviewPath(r.FilePath);
+        // Extracted-text previews (image OCR / PDF text) are read-only — disable the "full file" editor entry.
+        FullFileButton.IsEnabled = !isExtractedTextPreview;
         string[]? allLines = null;
-        if (isImagePreview)
+        if (isExtractedTextPreview)
         {
-            // Images are not text files: show a thumbnail and render the recognized OCR
-            // text (if any) instead of the raw binary bytes.
-            await ShowPreviewImageThumbnailAsync(r.FilePath);
-            allLines = GetPreviewOcrLines(r.FilePath);
+            // Images/PDFs are not text files: render their extracted text (OCR / pdftotext) instead of
+            // the raw binary bytes. Images additionally show a thumbnail above the text.
+            if (isImagePreview)
+                await ShowPreviewImageThumbnailAsync(r.FilePath);
+            else
+                HidePreviewImageThumbnail();
+            allLines = GetPreviewExtractedTextLines(r.FilePath);
         }
         else
         {
@@ -1714,12 +1718,13 @@ public sealed partial class MainWindow
             ? null
             : BuildSearchHighlightRegex();
 
-        if (isImagePreview && (allLines is null || allLines.Length == 0))
+        if (isExtractedTextPreview && (allLines is null || allLines.Length == 0))
         {
-            AddPreviewPlainNote(PreviewBlock,
-                "No recognized text for this image. Turn on \u201CSearch image text\u201D and run a search to extract text.");
+            AddPreviewPlainNote(PreviewBlock, isImagePreview
+                ? "No recognized text for this image. Turn on \u201CSearch image text\u201D and run a search to extract text."
+                : "No extracted text for this PDF. Turn on \u201CSearch PDF text\u201D and run a search to extract text.");
             singleSw.Stop();
-            LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync complete: image with no OCR text, elapsed={singleSw.ElapsedMilliseconds}ms");
+            LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync complete: extracted-text file with no text, elapsed={singleSw.ElapsedMilliseconds}ms");
         }
         else
         {
@@ -1928,6 +1933,32 @@ public sealed partial class MainWindow
         => !string.IsNullOrEmpty(path) && Yagu.Services.Ocr.ImageOcrSupport.IsImageCandidate(path);
 
     /// <summary>
+    /// True when <paramref name="path"/> is a PDF. PDF previews show the extracted <c>pdftotext</c>
+    /// text (not the raw binary bytes) and are intentionally not text-editable.
+    /// </summary>
+    private static bool IsPdfPreviewPath(string? path)
+        => !string.IsNullOrEmpty(path) && Yagu.Services.Pdf.PdfTextSupport.IsPdfCandidate(path);
+
+    /// <summary>
+    /// True when <paramref name="path"/> is previewed via extracted text rather than its raw bytes —
+    /// an OCR-able image or a PDF. These previews are read-only (the underlying file is binary).
+    /// </summary>
+    private static bool IsExtractedTextPreviewPath(string? path)
+        => IsImagePreviewPath(path) || IsPdfPreviewPath(path);
+
+    /// <summary>
+    /// Returns the extracted text (OCR for images, <c>pdftotext</c> for PDFs) for
+    /// <paramref name="path"/> split into lines so the normal preview match-highlighting pipeline can
+    /// render it, or <c>null</c> when no extracted text is cached.
+    /// </summary>
+    private string[]? GetPreviewExtractedTextLines(string path)
+    {
+        if (IsImagePreviewPath(path)) return GetPreviewOcrLines(path);
+        if (IsPdfPreviewPath(path)) return GetPreviewPdfLines(path);
+        return null;
+    }
+
+    /// <summary>
     /// Returns the cached OCR text for an image split into lines (so the normal preview
     /// match-highlighting pipeline can render it), or <c>null</c> when no recognized text is cached.
     /// </summary>
@@ -1935,6 +1966,18 @@ public sealed partial class MainWindow
     {
         string engineId = AppSettings.NormalizeImageOcrEngine(ViewModel.ImageOcrEngine);
         if (!PreviewOcrTextCache.TryGet(path, engineId, out string text) || string.IsNullOrEmpty(text))
+            return null;
+        return text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+    }
+
+    /// <summary>
+    /// Returns the cached <c>pdftotext</c>-extracted text for a PDF split into lines, or <c>null</c>
+    /// when no extracted text is cached. PDF text is cached in the same PID-scoped, discovery-excluded
+    /// cache as OCR text, keyed by the pdftotext engine id (see <see cref="Yagu.Services.Pdf.PdfTextExtractor.EngineId"/>).
+    /// </summary>
+    private string[]? GetPreviewPdfLines(string path)
+    {
+        if (!PreviewOcrTextCache.TryGet(path, Yagu.Services.Pdf.PdfTextExtractor.EngineId, out string text) || string.IsNullOrEmpty(text))
             return null;
         return text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
     }
@@ -2460,10 +2503,12 @@ public sealed partial class MainWindow
 
         var path = filePath; // capture for lambdas
 
-        // Image content matches show a thumbnail + recognized OCR text and are not text-editable,
-        // so the text-only actions ("Show full file", "Edit file") don't apply — render them
+        // Image/PDF content matches render extracted text (OCR / pdftotext) and are not text-editable,
+        // so the text-only actions ("Show full file", "Edit file", "Pop out") don't apply — render them
         // disabled and non-clickable, mirroring the single-file toolbar (FullFileButton.IsEnabled).
         bool isImageMatch = IsImagePreviewPath(filePath);
+        bool isExtractedTextMatch = isImageMatch || IsPdfPreviewPath(filePath);
+        string extractedTextNoun = isImageMatch ? "images" : "PDFs";
 
         // Pop out the whole drawer into its own independent window (read-only preview with an
         // "Edit file" button that unlocks editing in the same window). Text files only.
@@ -2471,9 +2516,9 @@ public sealed partial class MainWindow
         {
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
             Content = new FontIcon { Glyph = "\uE8A7", FontSize = 12 },
-            IsEnabled = !isImageMatch,
+            IsEnabled = !isExtractedTextMatch,
         };
-        ToolTipService.SetToolTip(popOutBtn, isImageMatch ? "Pop out (not available for images)" : "Pop out this preview into its own window");
+        ToolTipService.SetToolTip(popOutBtn, isExtractedTextMatch ? $"Pop out (not available for {extractedTextNoun})" : "Pop out this preview into its own window");
         var popOutResults = sectionResults;
         popOutBtn.Click += async (_, _) => await PopOutPreviewDrawerAsync(path, popOutResults);
         buttonPanel.Children.Add(popOutBtn);
@@ -2484,9 +2529,9 @@ public sealed partial class MainWindow
             {
                 Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
                 Content = new FontIcon { Glyph = "\uE81E", FontSize = 12 },
-                IsEnabled = !isImageMatch,
+                IsEnabled = !isExtractedTextMatch,
             };
-            ToolTipService.SetToolTip(fullFileBtn, isImageMatch ? "Show full file (not available for images)" : "Show full file");
+            ToolTipService.SetToolTip(fullFileBtn, isExtractedTextMatch ? $"Show full file (not available for {extractedTextNoun})" : "Show full file");
             var capturedBlock = sectionBlock;
             var capturedResults = sectionResults;
             fullFileBtn.Click += async (_, _) =>
@@ -2523,9 +2568,9 @@ public sealed partial class MainWindow
         {
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
             Content = new FontIcon { Glyph = "\uE70F", FontSize = 12 },
-            IsEnabled = !isImageMatch,
+            IsEnabled = !isExtractedTextMatch,
         };
-        ToolTipService.SetToolTip(editorBtn, isImageMatch ? "Edit file (not available for images)" : "Edit file");
+        ToolTipService.SetToolTip(editorBtn, isExtractedTextMatch ? $"Edit file (not available for {extractedTextNoun})" : "Edit file");
         editorBtn.Click += async (_, _) =>
         {
             var result = ResolvePreviewEditorFallbackResult(path);

@@ -78,6 +78,10 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("\"--image-text\"", source);
         Assert.Contains("\"--no-image-text\"", source);
         Assert.Contains("ViewModel.SearchImageText == setting.SearchImageText", source);
+        // PDF-text scope must be reproducible via --pdf-text / --no-pdf-text.
+        Assert.Contains("\"--pdf-text\"", source);
+        Assert.Contains("\"--no-pdf-text\"", source);
+        Assert.Contains("ViewModel.SearchPdfText == setting.SearchPdfText", source);
         // OCR engine / recognition model / detection resolution must be reproducible when image-text
         // is on, so a UI OCR search runs with the same engine/model/resolution from the CLI.
         Assert.Contains("\"--ocr-engine\"", source);

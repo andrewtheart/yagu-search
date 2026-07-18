@@ -517,15 +517,16 @@ public sealed class PreviewCoreRegressionTests
     {
         string header = ExtractMethodWindow(MainWindowSource, "BuildPreviewSectionHeader", 9000);
 
-        // Image content matches (thumbnail + OCR text) are not text-editable, so the text-only
+        // Image/PDF content matches (extracted text) are not text-editable, so the text-only
         // actions must render disabled and non-clickable. The "Show full file" and "Edit file"
-        // buttons gate IsEnabled on the image check; the other actions stay enabled.
+        // buttons gate IsEnabled on the extracted-text check; the other actions stay enabled.
         AssertContainsInOrder(header,
             "bool isImageMatch = IsImagePreviewPath(filePath);",
+            "bool isExtractedTextMatch = isImageMatch || IsPdfPreviewPath(filePath);",
             "Content = new FontIcon { Glyph = \"\\uE81E\", FontSize = 12 },",
-            "IsEnabled = !isImageMatch,",
+            "IsEnabled = !isExtractedTextMatch,",
             "Content = new FontIcon { Glyph = \"\\uE70F\", FontSize = 12 },",
-            "IsEnabled = !isImageMatch,");
+            "IsEnabled = !isExtractedTextMatch,");
     }
 
     [Fact]
@@ -3122,18 +3123,18 @@ public sealed class PreviewCoreRegressionTests
         // OCR text so the sections surface renders line numbers + match highlight + the
         // active-match box instead of the raw binary bytes. An empty array (no cached OCR
         // yet) safely falls back to the result's stored match context downstream.
-        string readSync = ExtractMethodWindow(MainWindowSource, "ReadAllLinesWithEncodingSync", window: 600);
+        string readSync = ExtractMethodWindow(MainWindowSource, "ReadAllLinesWithEncodingSync", window: 900);
         Assert.Contains("private string[] ReadAllLinesWithEncodingSync(string filePath)", readSync);
         AssertContainsInOrder(readSync,
-            "if (IsImagePreviewPath(filePath))",
-            "return GetPreviewOcrLines(filePath) ?? Array.Empty<string>();");
+            "if (IsExtractedTextPreviewPath(filePath))",
+            "return GetPreviewExtractedTextLines(filePath) ?? Array.Empty<string>();");
         Assert.DoesNotContain("private static string[] ReadAllLinesWithEncodingSync", MainWindowSource);
 
-        string readAsync = ExtractMethodWindow(MainWindowSource, "ReadAllLinesWithEncodingAsync", window: 600);
+        string readAsync = ExtractMethodWindow(MainWindowSource, "ReadAllLinesWithEncodingAsync", window: 900);
         Assert.Contains("private async Task<string[]> ReadAllLinesWithEncodingAsync(string filePath)", readAsync);
         AssertContainsInOrder(readAsync,
-            "if (IsImagePreviewPath(filePath))",
-            "return GetPreviewOcrLines(filePath) ?? Array.Empty<string>();");
+            "if (IsExtractedTextPreviewPath(filePath))",
+            "return GetPreviewExtractedTextLines(filePath) ?? Array.Empty<string>();");
 
         // The batch reader must be an instance method so it can resolve OCR text per image.
         Assert.Contains("private async Task<Dictionary<string, string[]?>> ReadAllFileContentsAsync(", MainWindowSource);
@@ -3171,6 +3172,44 @@ public sealed class PreviewCoreRegressionTests
         // The single-file block surface still shows its picture above the recognized text.
         Assert.Contains("x:Name=\"PreviewImageThumbnailBorder\" Grid.Row=\"0\"", MainWindowXaml);
         Assert.Contains("x:Name=\"PreviewSectionsPanel\" Grid.Row=\"1\"", MainWindowXaml);
+    }
+
+    [Fact]
+    public void PdfPreview_RendersExtractedPdfTextInsteadOfRawBytes()
+    {
+        // PDFs are previewed via their extracted pdftotext text, not their raw binary bytes — the same
+        // mechanism as image OCR, generalized into IsExtractedTextPreviewPath / GetPreviewExtractedTextLines.
+        Assert.Contains("private static bool IsPdfPreviewPath(string? path)", MainWindowSource);
+        Assert.Contains("Yagu.Services.Pdf.PdfTextSupport.IsPdfCandidate(path)", MainWindowSource);
+
+        // The extracted-text predicate covers BOTH images and PDFs; the readers key off it.
+        AssertContainsInOrder(MainWindowSource,
+            "private static bool IsExtractedTextPreviewPath(string? path)",
+            "=> IsImagePreviewPath(path) || IsPdfPreviewPath(path);");
+
+        // GetPreviewExtractedTextLines dispatches image -> OCR, pdf -> pdftotext text.
+        string dispatch = ExtractMethodWindow(MainWindowSource, "GetPreviewExtractedTextLines", window: 400);
+        AssertContainsInOrder(dispatch,
+            "if (IsImagePreviewPath(path)) return GetPreviewOcrLines(path);",
+            "if (IsPdfPreviewPath(path)) return GetPreviewPdfLines(path);");
+
+        // PDF text is read from the SAME PID-scoped, discovery-excluded cache as OCR text, keyed by the
+        // pdftotext engine id (so it never collides with image OCR entries and needs no separate cache).
+        string pdfLines = ExtractMethodWindow(MainWindowSource, "GetPreviewPdfLines", window: 400);
+        Assert.Contains("PreviewOcrTextCache.TryGet(path, Yagu.Services.Pdf.PdfTextExtractor.EngineId, out string text)", pdfLines);
+
+        // The single-file preview treats images AND PDFs as read-only extracted-text previews (no
+        // full-file/editor), and renders their extracted text.
+        string single = ExtractMethodWindow(MainWindowSource, "ShowSingleFilePreviewAsync", window: 4000);
+        AssertContainsInOrder(single,
+            "bool isImagePreview = IsImagePreviewPath(r.FilePath);",
+            "bool isExtractedTextPreview = isImagePreview || IsPdfPreviewPath(r.FilePath);",
+            "FullFileButton.IsEnabled = !isExtractedTextPreview;",
+            "allLines = GetPreviewExtractedTextLines(r.FilePath);");
+
+        // Editing is blocked for PDFs too (extracted text is read-only).
+        string fullEditor = ExtractMethodWindow(MainWindowSource, "ShowFullFileEditorAsync", window: 600);
+        Assert.Contains("if (IsExtractedTextPreviewPath(result.FilePath))", fullEditor);
     }
 
     [Fact]

@@ -179,6 +179,8 @@ public sealed partial class MainWindow
             parts.Add(ViewModel.SearchHiddenFiles ? "--hidden" : "--no-hidden");
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchImageText == setting.SearchImageText))
             parts.Add(ViewModel.SearchImageText ? "--image-text" : "--no-image-text");
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchPdfText == setting.SearchPdfText))
+            parts.Add(ViewModel.SearchPdfText ? "--pdf-text" : "--no-pdf-text");
         // OCR engine / recognition model / detection resolution only affect image-text search, so emit
         // them only when it is on. Each is a persisted Setting, gated so it drops out when it matches
         // the saved settings file (unless "include saved options" is on).

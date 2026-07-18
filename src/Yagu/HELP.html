@@ -755,6 +755,18 @@ processed. The OCR engine, recognition quality, and this toggle’s
 default come from the <strong>Settings ▸ OCR</strong> tab (see
 below).</td>
 </tr>
+<tr>
+<td>Search PDF text</td>
+<td>When enabled, PDF files are converted to text (via the bundled Xpdf
+<code>pdftotext</code>) and the extracted text is searched like any
+other file’s contents. Off by default because extraction is slower than
+reading text files. It runs on a background queue that does not block or
+slow the normal file scan; matches appear in the results panel as each
+PDF is processed. Only the embedded text layer is read —
+scanned/image-only PDFs (pages that are just pictures) yield no text.
+The toggle’s default comes from <strong>Settings ▸ Path and File Type
+Filters ▸ Search PDF text</strong>.</td>
+</tr>
 </tbody>
 </table>
 <h3 id="size-tab">Size Tab</h3>
@@ -3418,6 +3430,21 @@ installer ships them so nothing downloads). Without this flag, a
 non-interactive run that needs the download is refused and an
 interactive run prompts before downloading. Consent is remembered for
 future runs.</td>
+</tr>
+<tr>
+<td><code>--pdf-text</code> (aliases <code>--search-pdf-text</code>,
+<code>--pdf</code>)</td>
+<td>Convert PDF files to text (via the bundled Xpdf
+<code>pdftotext</code>) and search the extracted text. Off by default;
+falls back to the <strong>Search PDF text</strong> setting. PDFs are
+processed on a background queue so the normal file scan is not blocked.
+Only the embedded text layer is read — scanned/image-only PDFs yield no
+text.</td>
+</tr>
+<tr>
+<td><code>--no-pdf-text</code> (aliases
+<code>--no-search-pdf-text</code>, <code>--no-pdf</code>)</td>
+<td>Do not convert PDFs to text (default).</td>
 </tr>
 </tbody>
 </table>

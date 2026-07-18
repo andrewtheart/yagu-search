@@ -45,6 +45,7 @@ public sealed class SemanticPlanApplierTests
         public bool SearchInsideArchives { get; set; }
         public bool SearchHiddenFiles { get; set; } = true;
         public bool SearchImageText { get; set; }
+        public bool SearchPdfText { get; set; }
         public int SortModeIndex { get; set; }
         public int SortDirectionIndex { get; set; }
         public int GroupModeIndex { get; set; }
@@ -223,6 +224,62 @@ public sealed class SemanticPlanApplierTests
         var resolved = SemanticPlanApplier.Resolve(plan, Context());
 
         Assert.True(resolved.SearchImageText);
+    }
+
+    // ---- PDF-text enablement ------------------------------------------------
+
+    [Fact]
+    public void Resolve_ContentSearchOverPdfExtension_EnablesSearchPdfText()
+    {
+        // "search pdfs for the word test" — finding text inside PDFs requires pdftotext extraction.
+        var plan = new SemanticSearchPlan { Pattern = "test", SearchMode = "content", IncludeGlobs = new() { "*.pdf" } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.True(resolved.SearchPdfText);
+        Assert.Null(resolved.SearchImageText);
+    }
+
+    [Fact]
+    public void ApplyToTarget_ContentSearchOverPdfs_TurnsOnSearchPdfText()
+    {
+        var target = new FakeTarget();
+        var plan = new SemanticSearchPlan { Pattern = "invoice", SearchMode = "both", IncludeGlobs = new() { "pdf" } };
+
+        SemanticPlanApplier.ApplyToTarget(plan, Context(), target);
+
+        Assert.True(target.SearchPdfText);
+    }
+
+    [Fact]
+    public void Resolve_ContentSearchOverNonPdfExtension_DoesNotEnableSearchPdfText()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "test", SearchMode = "content", IncludeGlobs = new() { "*.cs" } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Null(resolved.SearchPdfText);
+    }
+
+    [Fact]
+    public void Resolve_FilenameOnlyPdfListing_DoesNotEnableSearchPdfText()
+    {
+        // "all pdf files" — a filename listing with no text term needs no extraction.
+        var plan = new SemanticSearchPlan { Pattern = null, SearchMode = "filenames", IncludeGlobs = new() { "*.pdf" } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Null(resolved.SearchPdfText);
+    }
+
+    [Fact]
+    public void Resolve_ModelExplicitlyRequestsSearchPdfText_IsHonored()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "renewal", SearchMode = "content", SearchPdfText = true };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.True(resolved.SearchPdfText);
     }
 
     [Fact]
