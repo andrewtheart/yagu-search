@@ -104,9 +104,9 @@ if (-not (Test-Path -LiteralPath $buildInstaller)) {
 $installerDir = Join-Path $repoRoot 'installer'
 
 # Rewrites the four rows of the README "Download Installer" table so each row's
-# filename, GitHub raw URL, and (~N MB) size match the newest installer of that
-# suffix on disk. Only the link + size token is replaced; the bold label and the
-# rest of every row (including its em-dash / middle-dot glyphs) are preserved via
+# filename, GitHub Release download URL, and (~N MB) size match the newest installer
+# of that suffix on disk. Only the link + size token is replaced; the bold label and
+# the rest of every row (including its em-dash / middle-dot glyphs) are preserved via
 # a capture group, so this script stays ASCII-only. Rows whose suffix has no
 # installer on disk are left untouched.
 function Update-ReadmeDownloadTable {
@@ -121,7 +121,6 @@ function Update-ReadmeDownloadTable {
     return
   }
 
-  $rawBase = 'https://github.com/andrewtheart/yagu-search/raw/main/installer'
   # End-anchored suffixes; 'x64-offline' is checked before 'x64' so the two never
   # collide. Each pattern ends with the exact '-<suffix>.exe', so the 'x64' row
   # can never match the 'x64-offline' installer.
@@ -147,11 +146,21 @@ function Update-ReadmeDownloadTable {
     $fileName = $exe.Name
     $sizeMb = [math]::Round($exe.Length / 1MB)
 
-    # Group 1 captures the '[**Label** - ' display prefix generically (any chars
-    # up to the filename), so the non-ASCII glyphs never appear in this file.
-    $pattern = "(\[[^\]]*?)YaguSetup-[0-9.]+-$suffixEsc\.exe\]\(" +
-               [regex]::Escape($rawBase) + "/YaguSetup-[0-9.]+-$suffixEsc\.exe\)\s*\(~[\d.]+\s*MB\)"
-    $replacement = "`${1}$fileName]($rawBase/$fileName) (~$sizeMb MB)"
+    # Installers are NO LONGER committed to the repo (they exhausted the Git LFS budget); they are
+    # published as GitHub Release assets. Link each row to releases/download/v<version>/<file>, with
+    # the version parsed from the installer's own filename (YaguSetup-<version>-<suffix>.exe).
+    $version = if ($fileName -match "^YaguSetup-([0-9.]+)-$suffixEsc\.exe$") { $Matches[1] } else { $null }
+    if (-not $version) {
+      Write-Warning "Could not parse the version from '$fileName' - leaving its README row unchanged."
+      continue
+    }
+    $releaseBase = "https://github.com/andrewtheart/yagu-search/releases/download/v$version"
+
+    # Group 1 captures the '[**Label** - ' display prefix generically (any chars up to the
+    # filename), so the non-ASCII glyphs never appear in this file. The URL is matched as any
+    # '(...)' so this both migrates the old raw links and keeps release links current.
+    $pattern = "(\[[^\]]*?)YaguSetup-[0-9.]+-$suffixEsc\.exe\]\([^)]*\)\s*\(~[\d.]+\s*MB\)"
+    $replacement = "`${1}$fileName]($releaseBase/$fileName) (~$sizeMb MB)"
 
     $rx = [regex]$pattern
     if (-not $rx.IsMatch($content)) {
