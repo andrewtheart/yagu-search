@@ -1565,6 +1565,7 @@ public sealed class SemanticPlanApplierTests
             SearchBinary = true,
             SearchHiddenFiles = true,
             SearchImageText = true,
+            SearchPdfText = true,
             SortModeIndex = 1,
             SortDirectionIndex = 0,
             GroupMode = GroupMode.Folder,
@@ -1572,12 +1573,15 @@ public sealed class SemanticPlanApplierTests
         });
         Assert.Contains("searchBinary=True", full);
         Assert.Contains("archives=True", full);
+        Assert.Contains("searchImageText=True", full);
+        Assert.Contains("searchPdfText=True", full);
 
         // A plan with no overrides emits the sentinel and none of the optional clauses (covers the
         // null branch of every field, including searchBinary).
         string empty = SemanticPlanApplier.DescribeResolved(new ResolvedSearchPlan());
         Assert.Equal("(no overrides)", empty);
         Assert.DoesNotContain("searchBinary", empty);
+        Assert.DoesNotContain("searchPdfText", empty);
     }
 
     // ---- ToOverlay (CLI surface) -------------------------------------------
@@ -1593,6 +1597,19 @@ public sealed class SemanticPlanApplierTests
         Assert.Equal(@"C:\", overlay.Directory);
         Assert.Equal(1024, overlay.MaxFileSizeBytes);
         Assert.NotNull(overlay.IncludeGlobs);
+    }
+
+    [Fact]
+    public void ToOverlay_CarriesSearchPdfText()
+    {
+        // A content search scoped to *.pdf auto-enables PDF-text extraction; the CLI overlay must carry it.
+        var plan = new SemanticSearchPlan { Pattern = "invoice", SearchMode = "content", IncludeGlobs = new() { "*.pdf" } };
+        var overlay = SemanticPlanApplier.ToOverlay(SemanticPlanApplier.Resolve(plan, Context(@"C:\")));
+        Assert.True(overlay.SearchPdfText);
+
+        var plainOverlay = SemanticPlanApplier.ToOverlay(SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "x", SearchMode = "content", IncludeGlobs = new() { "*.cs" } }, Context(@"C:\")));
+        Assert.Null(plainOverlay.SearchPdfText);
     }
 
     // ---- sorting & grouping ------------------------------------------------
@@ -2655,6 +2672,20 @@ public sealed class SemanticPlanApplierTests
         string plain = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan { Pattern = "x" });
         Assert.DoesNotContain("archives", plain);
         Assert.DoesNotContain("binary", plain);
+    }
+
+    [Fact]
+    public void BuildExplanation_ImageAndPdfTextEnable_StatedInPlainWords()
+    {
+        Assert.Contains("reading text inside images (OCR)",
+            SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan { SearchImageText = true }));
+        Assert.Contains("extracting text from PDFs",
+            SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan { SearchPdfText = true }));
+
+        // Neither clause appears for a plain search.
+        string plain = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan { Pattern = "x" });
+        Assert.DoesNotContain("OCR", plain);
+        Assert.DoesNotContain("PDFs", plain);
     }
 
 

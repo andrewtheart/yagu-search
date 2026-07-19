@@ -90,6 +90,76 @@ public class PdfTextExtractorTests
         }
     }
 
+    [Fact]
+    public async Task ExtractAsync_NonPdfInput_ReturnsFailure()
+    {
+        string? tool = LocateBundledPdftotext();
+        if (tool is null) return; // environment-gated
+
+        // A plain text file is not a valid PDF: pdftotext exits non-zero with no extractable text,
+        // exercising the "exited with code N" failure branch.
+        string notPdf = Path.Combine(Path.GetTempPath(), $"yagu-notpdf-{Guid.NewGuid():N}.pdf");
+        await File.WriteAllTextAsync(notPdf, "this is plainly not a PDF file at all");
+        try
+        {
+            var extractor = new PdfTextExtractor(tool);
+            var result = await extractor.ExtractAsync(notPdf, CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Equal(string.Empty, result.Text);
+            Assert.NotNull(result.Error);
+        }
+        finally
+        {
+            TryDelete(notPdf);
+        }
+    }
+
+    [Fact]
+    public async Task ExtractAsync_ToolPathIsNotExecutable_ReturnsStartFailure()
+    {
+        // A file that exists but is not a runnable executable: ResolveToolPath returns it, but
+        // Process.Start throws, exercising the "failed to start" catch branch.
+        string fakeTool = Path.Combine(Path.GetTempPath(), $"yagu-notexe-{Guid.NewGuid():N}.exe");
+        await File.WriteAllTextAsync(fakeTool, "not a real executable");
+        try
+        {
+            var extractor = new PdfTextExtractor(fakeTool);
+            var result = await extractor.ExtractAsync("whatever.pdf", CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.NotNull(result.Error);
+        }
+        finally
+        {
+            TryDelete(fakeTool);
+        }
+    }
+
+    [Fact]
+    public async Task ExtractAsync_CallerCancellation_Throws()
+    {
+        string? tool = LocateBundledPdftotext();
+        if (tool is null) return; // environment-gated
+
+        string tmp = Path.Combine(Path.GetTempPath(), $"yagu-pdfcancel-{Guid.NewGuid():N}.pdf");
+        await File.WriteAllBytesAsync(tmp, BuildSimpleTextPdf("CANCEL ME"));
+        try
+        {
+            var extractor = new PdfTextExtractor(tool);
+            using var cts = new CancellationTokenSource();
+            cts.Cancel(); // already cancelled before the read
+
+            // Caller cancellation propagates as an OperationCanceledException (not a Fail result).
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => extractor.ExtractAsync(tmp, cts.Token));
+        }
+        finally
+        {
+            TryDelete(tmp);
+        }
+    }
+
     private static string? LocateBundledPdftotext()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

@@ -23,7 +23,7 @@ public readonly record struct PdfTextResult(bool Success, string Text, string? E
 /// + stdio) and therefore Native-AOT safe. It degrades gracefully (logs once, returns failures) when
 /// the tool is missing, so PDF-text search simply yields no matches instead of throwing.
 /// </summary>
-public sealed class PdfTextExtractor
+public class PdfTextExtractor
 {
     /// <summary>Environment variable that overrides the <c>pdftotext.exe</c> path (tests/dev).</summary>
     public const string ToolPathEnvVar = "YAGU_PDFTOTEXT";
@@ -74,9 +74,10 @@ public sealed class PdfTextExtractor
     /// <summary>
     /// Extracts the text layer of <paramref name="pdfPath"/> using <c>pdftotext</c>, returning the
     /// recognized plain text on success. Never throws for expected failures (missing tool, malformed
-    /// PDF, timeout) — those are surfaced as <see cref="PdfTextResult.Fail"/>.
+    /// PDF, timeout) — those are surfaced as <see cref="PdfTextResult.Fail"/>. Virtual so tests can
+    /// substitute canned extraction results without spawning a real process.
     /// </summary>
-    public async Task<PdfTextResult> ExtractAsync(string pdfPath, CancellationToken cancellationToken)
+    public virtual async Task<PdfTextResult> ExtractAsync(string pdfPath, CancellationToken cancellationToken)
     {
         string? tool = ResolveToolPath();
         if (tool is null)

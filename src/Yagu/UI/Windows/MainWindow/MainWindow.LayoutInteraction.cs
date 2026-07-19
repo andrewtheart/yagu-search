@@ -51,6 +51,9 @@ public sealed partial class MainWindow
         AdvancedOptionsExpandGlyph.Glyph = "\uE70E"; // chevron up
         SyncAdvancedOptionsDrawerWidth();
         UpdateAdvancedOptionsDrawerMaxHeight();
+
+        // Always open on the Search tab — the last-selected Advanced Options tab is never persisted.
+        ResetAdvancedOptionsToSearchTab();
     }
 
     private void OnAdvancedOptionsFlyoutClosed(object? sender, object e)

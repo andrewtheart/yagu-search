@@ -123,6 +123,14 @@ public sealed class PreviewCoreRegressionTests
         Assert.DoesNotContain("FileSavePicker", exportReport);
         Assert.DoesNotContain("PickSaveFileAsync", exportReport);
 
+        // The per-file report export (preview right-click) must also use the Win32 dialog, not the
+        // WinAppSDK FileSavePicker/PickSaveFileAsync.
+        string singleReport = ExtractMethodWindow(MainWindowSource, "ExportSingleFileHtmlReportAsync", 4500);
+        Assert.Contains("string? path = PickExportFilePath(", singleReport);
+        Assert.Contains("new FileStream(path, FileMode.Create", singleReport);
+        Assert.DoesNotContain("FileSavePicker", singleReport);
+        Assert.DoesNotContain("PickSaveFileAsync", singleReport);
+
         string textExport = ExtractMethodWindow(MainWindowSource, "PickTextExportFilePath", 400);
         Assert.Contains("private string? PickTextExportFilePath(", textExport);
         Assert.Contains("=> PickExportFilePath(", textExport);
@@ -130,6 +138,21 @@ public sealed class PreviewCoreRegressionTests
         // No export/save path may fall back to the picker anywhere in MainWindow's save flow.
         Assert.DoesNotContain("PickTextExportFileAsync", MainWindowSource);
         Assert.DoesNotContain("FileIO.WriteTextAsync", MainWindowSource);
+    }
+
+    [Fact]
+    public void ExportSingleFileReport_MarshalsBoundStatusToUiThread()
+    {
+        // Repro: the per-file report export awaited the write with ConfigureAwait(false), so its
+        // continuation resumed on a threadpool thread, then set ViewModel.StatusText directly. Because
+        // StatusText is {x:Bind}-bound to a TextBlock, that fired the binding's set_Text off the UI
+        // thread and crashed with RPC_E_WRONGTHREAD (0x8001010E). The status write must be marshalled
+        // back to the UI thread via DispatcherQueue, exactly like the multi-file report export.
+        string method = ExtractMethodWindow(MainWindowSource, "ExportSingleFileHtmlReportAsync", 4500);
+        AssertContainsInOrder(method,
+            "ConfigureAwait(false)",
+            "DispatcherQueue.TryEnqueue(() =>",
+            "ViewModel.StatusText =");
     }
 
     [Fact]
@@ -896,6 +919,11 @@ public sealed class PreviewCoreRegressionTests
             "AdvancedOptionsExpandGlyph.Glyph = \"\\uE70E\";",
             "SyncAdvancedOptionsDrawerWidth();",
             "UpdateAdvancedOptionsDrawerMaxHeight();");
+        // The drawer always reopens on the Search tab (the last-selected tab is not persisted).
+        Assert.Contains("ResetAdvancedOptionsToSearchTab();", opened);
+        string resetTab = ExtractMethodWindow(MainWindowSource, "ResetAdvancedOptionsToSearchTab", 600);
+        Assert.Contains("AdvancedOptionsTabList.SelectedIndex = 0;", resetTab);
+        Assert.Contains("SetAdvancedOptionsTab(0);", resetTab);
         string closed = ExtractMethodWindow(MainWindowSource, "OnAdvancedOptionsFlyoutClosed", 300);
         Assert.Contains("AdvancedOptionsExpandGlyph.Glyph = \"\\uE70D\";", closed);
 

@@ -45,6 +45,22 @@ public sealed partial class MainWindow
     private static void SetAdvancedOptionsTabVisibility(FrameworkElement tabContent, bool isVisible)
         => tabContent.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
 
+    /// <summary>
+    /// Selects the Search tab (index 0) so the Advanced Options drawer always opens on Search rather
+    /// than reopening on whatever tab was last viewed. Called each time the flyout opens.
+    /// </summary>
+    private void ResetAdvancedOptionsToSearchTab()
+    {
+        // Guard: the flyout can open before the templated tab fields are resolved.
+        if (AdvancedOptionsTabList is null || AdvancedOptionsSearchTabContent is null)
+            return;
+
+        if (AdvancedOptionsTabList.SelectedIndex != 0)
+            AdvancedOptionsTabList.SelectedIndex = 0; // fires SelectionChanged -> SetAdvancedOptionsTab(0)
+        else
+            SetAdvancedOptionsTab(0); // already 0: ensure the Search content is the visible one
+    }
+
     private void OnAdvancedOptionsResetClick(object sender, RoutedEventArgs e)
     {
         ViewModel.ResetAdvancedOptionsToSavedDefaults();

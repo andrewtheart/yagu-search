@@ -2569,29 +2569,22 @@ public sealed partial class MainWindow
         var exportOptions = await ReportExportDialog.ShowAsync(_hwnd, ViewModel.ContextLines);
         if (exportOptions is null) return;
 
-        var picker = new Windows.Storage.Pickers.FileSavePicker();
-        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
-        switch (exportOptions.Format)
+        // Pick file extension based on format. Use the robust Win32 Common Item Dialog (via
+        // PickExportFilePath) rather than the WinAppSDK save picker, which can silently fail to
+        // foreground while the UI thread is busy — matching the multi-file report export.
+        (string filterName, string ext) = exportOptions.Format switch
         {
-            case Services.ReportFormat.Json:
-                picker.FileTypeChoices.Add("JSON File", new List<string> { ".json" });
-                picker.SuggestedFileName = $"Yagu_Report_{Path.GetFileNameWithoutExtension(filePath)}";
-                break;
-            case Services.ReportFormat.Csv:
-                picker.FileTypeChoices.Add("CSV File", new List<string> { ".csv" });
-                picker.SuggestedFileName = $"Yagu_Report_{Path.GetFileNameWithoutExtension(filePath)}";
-                break;
-            default:
-                picker.FileTypeChoices.Add("HTML File", new List<string> { ".html" });
-                picker.SuggestedFileName = $"Yagu_Report_{Path.GetFileNameWithoutExtension(filePath)}";
-                break;
-        }
+            Services.ReportFormat.Json => ("JSON File", "json"),
+            Services.ReportFormat.Csv => ("CSV File", "csv"),
+            _ => ("HTML File", "html"),
+        };
 
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-
-        var file = await picker.PickSaveFileAsync();
-        if (file is null) return;
+        string? path = PickExportFilePath(
+            "Export Report",
+            $"Yagu_Report_{Path.GetFileNameWithoutExtension(filePath)}",
+            ext,
+            new[] { (filterName, "*." + ext) });
+        if (path is null) return;
 
         // Hydrate all results before writing
         foreach (var result in group)
@@ -2599,8 +2592,7 @@ public sealed partial class MainWindow
 
         int totalMatches = group.Count;
 
-        await using var stream = await file.OpenStreamForWriteAsync().ConfigureAwait(true);
-        stream.SetLength(0);
+        await using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
         using var w = new StreamWriter(stream, new UTF8Encoding(false), bufferSize: 64 * 1024, leaveOpen: false);
 
         var fileGroup = new HtmlReportExportService.FileMatchGroup(group.FilePath, group.FileName, group.ToList());
@@ -2624,7 +2616,11 @@ public sealed partial class MainWindow
         }
 
         var formatName = exportOptions.Format.ToString().ToUpperInvariant();
-        ViewModel.StatusText = $"Exported {formatName} report ({totalMatches:N0} matches) for {Path.GetFileName(filePath)} to {file.Path}";
+        // The report write above resumes on a threadpool thread (ConfigureAwait(false)); StatusText is
+        // {x:Bind}-bound to a TextBlock, so it MUST be set on the UI thread or the binding's set_Text
+        // throws RPC_E_WRONGTHREAD (0x8001010E). Marshal it, matching the multi-file report export.
+        DispatcherQueue.TryEnqueue(() =>
+            ViewModel.StatusText = $"Exported {formatName} report ({totalMatches:N0} matches) for {Path.GetFileName(filePath)} to {path}");
     }
 
     private void HighlightInline(Paragraph para, string line, int matchStart, int matchLength)
