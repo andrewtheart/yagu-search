@@ -12,8 +12,6 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 > ## ⚠️ License & Legal Notice
 >
 > Yagu is free, open-source software released under the **[GNU General Public License v3.0](LICENSE)**. You are welcome to use, study, modify, and redistribute it — but **only** under the same GPL v3 terms, **with the complete corresponding source code included**.
->
-> **⚠️ I am fortunate enough to have a lawyer, and I 100% plan on suing and taking legal action against any individuals who attempt to rebrand and sell this software without providing the source and distributing it under the exact same license, as required by the GNU General Public License v3. Violations are actively monitored and scanned for.**
 
 ## Why Yagu?
 
