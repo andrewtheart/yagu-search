@@ -45,15 +45,17 @@
 .PARAMETER Push
   After a successful build, stage + commit (exactly as -Commit) and then run git push.
   Implies the commit step, since there must be a commit to push. After a successful push,
-  a DRAFT GitHub release (tag v<version>) is created via the 'gh' CLI with the freshly built
-  installers attached and auto-generated release notes -- unless -SkipRelease is set. It is a
-  DRAFT (not published) so you review the notes/assets and publish it manually. Re-running the
-  same version refreshes the existing release's assets instead of failing. If 'gh' is missing or
-  unauthenticated, the release step warns (the build + push still succeed) and prints the manual
-  'gh release create' command.
+  prompts whether the GitHub release (tag v<version>) should remain a draft or be published
+  officially, then attaches the freshly built installers and auto-generated release notes --
+  unless -SkipRelease is set. Re-running the same version refreshes the existing release's assets.
+  If 'gh' is missing or unauthenticated, the release step warns (the build + push still succeed).
+
+.PARAMETER ReleaseMode
+  GitHub release publication mode used with Push: Prompt (the default), Draft, or Published.
+  Prompt asks interactively after a successful push. Draft and Published support unattended runs.
 
 .PARAMETER SkipRelease
-  With -Push, do NOT create/refresh the draft GitHub release after pushing (build + commit + push
+  With -Push, do NOT create/refresh the GitHub release after pushing (build + commit + push
   only). No effect without -Push.
 
 .EXAMPLE
@@ -79,7 +81,8 @@
 
 .EXAMPLE
   .\build-all-installers.ps1 -Variant x64 -Push
-  Builds the x64 installer, commits the result, and pushes it to the remote.
+  Builds the x64 installer, commits, pushes, then asks whether the release should be a draft
+  or published officially.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
@@ -91,7 +94,9 @@ param(
   [switch]$KeepVersion,
   [switch]$Commit,
   [switch]$Push,
-  [switch]$SkipRelease
+  [switch]$SkipRelease,
+  [ValidateSet('Prompt', 'Draft', 'Published')]
+  [string]$ReleaseMode = 'Prompt'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,6 +107,23 @@ if (-not (Test-Path -LiteralPath $buildInstaller)) {
   throw "build-installer.ps1 not found next to this script at: $buildInstaller"
 }
 $installerDir = Join-Path $repoRoot 'installer'
+
+function Resolve-ReleaseMode {
+  if ($ReleaseMode -ne 'Prompt') { return $ReleaseMode }
+
+  while ($true) {
+    Write-Host ""
+    Write-Host "How should the GitHub release be created?" -ForegroundColor Cyan
+    Write-Host "  [D] Draft - upload it for review without publishing"
+    Write-Host "  [P] Publish - publish it officially and mark it latest"
+    $choice = (Read-Host 'Choose D or P').Trim().ToLowerInvariant()
+    switch ($choice) {
+      { $_ -in @('d', 'draft') } { return 'Draft' }
+      { $_ -in @('p', 'publish', 'published') } { return 'Published' }
+      default { Write-Warning "Invalid choice '$choice'. Enter D for Draft or P for Publish." }
+    }
+  }
+}
 
 # Rewrites the four rows of the README "Download Installer" table so each row's
 # filename, GitHub Release download URL, and (~N MB) size match the newest installer
@@ -219,7 +241,8 @@ if ($WhatIfPreference) {
   if ($Commit -or $Push) {
     Write-Host ("  post-build: git add -A + commit{0}" -f $(if ($Push) { ' + push' } else { '' })) -ForegroundColor Yellow
     if ($Push -and -not $SkipRelease) {
-      Write-Host "  post-push: gh release create v<version> --draft (built installers attached, auto-generated notes)" -ForegroundColor Yellow
+      $plannedMode = if ($ReleaseMode -eq 'Prompt') { 'prompt for Draft or Published' } else { $ReleaseMode }
+      Write-Host "  post-push: create or refresh GitHub release v<version> ($plannedMode; built installers attached)" -ForegroundColor Yellow
     }
   }
   return
@@ -362,9 +385,9 @@ if ($Commit -or $Push) {
       if ($LASTEXITCODE -ne 0) { throw "git push failed (exit $LASTEXITCODE)." }
       Write-Host "Pushed." -ForegroundColor Green
 
-      # --- Publish a DRAFT GitHub release for this version with the built installers attached. ---
+      # --- Create or refresh a GitHub release with the built installers attached. ---
       # Only after a successful push, so HEAD is on the remote and the release tag can point at it.
-      # DRAFT by design: a human reviews the auto-generated notes + assets and publishes manually.
+      # The user chooses draft review or immediate official publication unless ReleaseMode overrides it.
       # A missing/unauthenticated 'gh' or a failed release only WARNS -- the build + push already
       # succeeded, so the whole run must not be reported as a failure for a release-step hiccup.
       if (-not $SkipRelease) {
@@ -380,6 +403,7 @@ if ($Commit -or $Push) {
           }
           else {
             $tag = "v$pinnedVersion"
+            $resolvedReleaseMode = Resolve-ReleaseMode
             # Derive owner/repo from origin so gh targets the right repo regardless of cwd
             # (handles both https://github.com/owner/repo.git and git@github.com:owner/repo.git).
             $originUrl = (& git -C $repoRoot remote get-url origin 2>$null)
@@ -401,14 +425,29 @@ if ($Commit -or $Push) {
                 Write-Warning "GitHub release asset upload failed (exit $LASTEXITCODE). Build + push still succeeded; attach manually: gh release upload $tag installer\YaguSetup-$pinnedVersion-*.exe --clobber"
               }
               else { Write-Host "Refreshed assets on release $tag." -ForegroundColor Green }
+              if ($LASTEXITCODE -eq 0) {
+                if ($resolvedReleaseMode -eq 'Draft') {
+                  & $gh.Source release edit $tag --draft @repoArgs
+                }
+                else {
+                  & $gh.Source release edit $tag --draft=false --latest @repoArgs
+                }
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Warning "Assets were refreshed, but applying $resolvedReleaseMode mode to release $tag failed (exit $LASTEXITCODE). Update it manually."
+                }
+                elseif ($resolvedReleaseMode -eq 'Draft') { Write-Host "Release $tag is saved as a draft for review." -ForegroundColor Green }
+                else { Write-Host "Release $tag is published officially as latest." -ForegroundColor Green }
+              }
             }
             else {
-              Write-Host "Creating DRAFT GitHub release $tag with $($releaseAssets.Count) installer(s) attached..." -ForegroundColor Cyan
+              Write-Host "Creating $($resolvedReleaseMode.ToLowerInvariant()) GitHub release $tag with $($releaseAssets.Count) installer(s) attached..." -ForegroundColor Cyan
               $createArgs = @('release', 'create', $tag,
-                '--draft',
                 '--title', "Yagu $pinnedVersion",
                 '--generate-notes',
-                '--target', $headSha) + @($releaseAssets.FullName) + $repoArgs
+                '--target', $headSha)
+              if ($resolvedReleaseMode -eq 'Draft') { $createArgs += '--draft' }
+              else { $createArgs += '--latest' }
+              $createArgs += @($releaseAssets.FullName) + $repoArgs
               & $gh.Source @createArgs
               if ($LASTEXITCODE -ne 0) {
                 Write-Warning ("GitHub release creation failed (exit $LASTEXITCODE). Build + push still succeeded. Ensure 'gh auth login' is done, then run: " +
@@ -416,7 +455,12 @@ if ($Commit -or $Push) {
               }
               else {
                 $releasesUrl = if ($repoSlug) { "https://github.com/$repoSlug/releases" } else { "the GitHub Releases page" }
-                Write-Host "Draft release $tag created. Review the notes/assets and publish it at: $releasesUrl" -ForegroundColor Green
+                if ($resolvedReleaseMode -eq 'Draft') {
+                  Write-Host "Draft release $tag created. Review the notes/assets and publish it at: $releasesUrl" -ForegroundColor Green
+                }
+                else {
+                  Write-Host "Release $tag published officially as latest: $releasesUrl" -ForegroundColor Green
+                }
               }
             }
           }

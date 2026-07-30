@@ -33,6 +33,20 @@
   Local OCR cache to source the bundled payload from. Defaults to
   %LOCALAPPDATA%\Yagu\ocr-runtime. Missing assets are downloaded by running the
   staged worker.
+
+.PARAMETER Push
+  After one installer builds successfully, stage and commit pending changes, push
+  the current branch, then prompt whether its GitHub release should remain a draft
+  or be published officially. Requires an authenticated gh CLI. Push is restricted
+  to one architecture per invocation; use build-all-installers.ps1 for a full release.
+
+.PARAMETER ReleaseMode
+  GitHub release publication mode used with Push: Prompt (the default), Draft, or
+  Published. Prompt asks interactively after a successful push. Draft and Published
+  support unattended runs.
+
+.PARAMETER SkipRelease
+  With Push, commit and push but do not create or refresh a GitHub release.
 #>
 [CmdletBinding()]
 param(
@@ -42,7 +56,11 @@ param(
   [switch]$SkipBuild,
   [switch]$IncludeOcr,
   [switch]$SkipVersionIncrement,
-  [string]$OcrPayloadCacheDir = (Join-Path $env:LOCALAPPDATA 'Yagu\ocr-runtime')
+  [string]$OcrPayloadCacheDir = (Join-Path $env:LOCALAPPDATA 'Yagu\ocr-runtime'),
+  [switch]$Push,
+  [switch]$SkipRelease,
+  [ValidateSet('Prompt', 'Draft', 'Published')]
+  [string]$ReleaseMode = 'Prompt'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,6 +86,23 @@ if (Test-Path -LiteralPath $webView2PrereqHelper) {
 $everythingPrereqHelper = Join-Path $repoRoot 'scripts\everything-prereq.ps1'
 if (Test-Path -LiteralPath $everythingPrereqHelper) {
   . $everythingPrereqHelper
+}
+
+function Resolve-ReleaseMode {
+  if ($ReleaseMode -ne 'Prompt') { return $ReleaseMode }
+
+  while ($true) {
+    Write-Host ""
+    Write-Host "How should the GitHub release be created?" -ForegroundColor Cyan
+    Write-Host "  [D] Draft - upload it for review without publishing"
+    Write-Host "  [P] Publish - publish it officially and mark it latest"
+    $choice = (Read-Host 'Choose D or P').Trim().ToLowerInvariant()
+    switch ($choice) {
+      { $_ -in @('d', 'draft') } { return 'Draft' }
+      { $_ -in @('p', 'publish', 'published') } { return 'Published' }
+      default { Write-Warning "Invalid choice '$choice'. Enter D for Draft or P for Publish." }
+    }
+  }
 }
 
 # Read version from build-version.txt
@@ -124,6 +159,10 @@ if ($IncludeOcr) {
   $architectures = @('x64')
 }
 
+if ($Push -and $architectures.Count -ne 1) {
+  throw '-Push on build-installer.ps1 requires exactly one architecture. Use build-all-installers.ps1 to publish a multi-installer release.'
+}
+
 Write-Host "Architectures: $($architectures -join ', ')"
 if ($IncludeOcr) {
   Write-Host "Edition: offline (OCR runtime + models bundled; Tesseract is the default engine)"
@@ -142,6 +181,7 @@ if ($IncludeOcr) {
 }
 
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+$builtInstallers = New-Object System.Collections.Generic.List[string]
 
 foreach ($arch in $architectures) {
   $rid = "win-$arch"
@@ -230,6 +270,7 @@ foreach ($arch in $architectures) {
       Remove-Item -Force
 
     Copy-Item -LiteralPath $installerExe -Destination $rootInstallerExe -Force
+    $builtInstallers.Add($rootInstallerExe)
 
     Write-Host ""
     Write-Host "Installer created: $installerExe"
@@ -237,5 +278,93 @@ foreach ($arch in $architectures) {
     Write-Host "File size: $([math]::Round((Get-Item $installerExe).Length / 1MB, 2)) MB"
   } else {
     Write-Warning "Expected installer not found at $installerExe - check Inno Setup output above."
+  }
+}
+
+if ($Push) {
+  if ($builtInstallers.Count -ne 1) { throw 'Push requested, but exactly one installer was not produced.' }
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git was not found on PATH." }
+
+  $restoreNativePref = $false
+  $savedNativePref = $null
+  if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
+    $savedNativePref = $PSNativeCommandUseErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
+    $restoreNativePref = $true
+  }
+  try {
+    $branch = ("$(& git -C $repoRoot rev-parse --abbrev-ref HEAD)").Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($branch) -or $branch -eq 'HEAD') {
+      throw 'Cannot push from a detached HEAD or resolve the current branch.'
+    }
+
+    & git -C $repoRoot add -A
+    if ($LASTEXITCODE -ne 0) { throw "git add -A failed (exit $LASTEXITCODE)." }
+    & git -C $repoRoot diff --cached --quiet
+    $stagedExit = $LASTEXITCODE
+    if ($stagedExit -gt 1) { throw "git diff --cached failed (exit $stagedExit)." }
+    if ($stagedExit -eq 1) {
+      $variantName = if ($IncludeOcr) { 'x64-offline' } else { $architectures[0] }
+      $commitMessage = "Build installer v$version ($variantName)"
+      Write-Host "Committing: $commitMessage" -ForegroundColor Cyan
+      & git -C $repoRoot commit -m $commitMessage
+      if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
+    }
+    else { Write-Host 'Nothing to commit - working tree already clean.' -ForegroundColor DarkGray }
+
+    Write-Host "Pushing '$branch' to origin..." -ForegroundColor Cyan
+    & git -C $repoRoot push origin $branch
+    if ($LASTEXITCODE -ne 0) { throw "git push failed for branch '$branch' (exit $LASTEXITCODE)." }
+    Write-Host 'Pushed.' -ForegroundColor Green
+
+    if (-not $SkipRelease) {
+      $gh = Get-Command gh -ErrorAction SilentlyContinue
+      if (-not $gh) { throw "GitHub CLI (gh) not found. Install it and run 'gh auth login', or use -SkipRelease." }
+
+      $resolvedReleaseMode = Resolve-ReleaseMode
+      $tag = "v$version"
+      $asset = $builtInstallers[0]
+      $originUrl = (& git -C $repoRoot remote get-url origin 2>$null)
+      $repoArgs = @()
+      if ("$originUrl" -match 'github\.com[:/](?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?/?$') {
+        $repoArgs = @('--repo', "$($Matches.owner)/$($Matches.repo)")
+      }
+      $headSha = ("$(& git -C $repoRoot rev-parse HEAD)").Trim()
+
+      & $gh.Source release view $tag @repoArgs *> $null
+      if ($LASTEXITCODE -eq 0) {
+        Write-Host "GitHub release $tag exists - refreshing $([IO.Path]::GetFileName($asset))..." -ForegroundColor Cyan
+        & $gh.Source release upload $tag $asset --clobber @repoArgs
+        if ($LASTEXITCODE -ne 0) { throw "GitHub release asset upload failed (exit $LASTEXITCODE)." }
+        if ($resolvedReleaseMode -eq 'Draft') {
+          & $gh.Source release edit $tag --draft @repoArgs
+        }
+        else {
+          & $gh.Source release edit $tag --draft=false --latest @repoArgs
+        }
+        if ($LASTEXITCODE -ne 0) { throw "Asset upload succeeded, but applying $resolvedReleaseMode mode to release $tag failed (exit $LASTEXITCODE)." }
+        if ($resolvedReleaseMode -eq 'Draft') { Write-Host "Release $tag is saved as a draft for review." -ForegroundColor Green }
+        else { Write-Host "Release $tag is published officially as latest." -ForegroundColor Green }
+      }
+      else {
+        Write-Host "Creating $($resolvedReleaseMode.ToLowerInvariant()) GitHub release $tag..." -ForegroundColor Cyan
+        $createArgs = @('release', 'create', $tag,
+          '--title', "Yagu $version",
+          '--generate-notes',
+          '--target', $headSha)
+        if ($resolvedReleaseMode -eq 'Draft') { $createArgs += '--draft' }
+        else { $createArgs += '--latest' }
+        $createArgs += @($asset) + $repoArgs
+        & $gh.Source @createArgs
+        if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed (exit $LASTEXITCODE)." }
+        if ($resolvedReleaseMode -eq 'Draft') {
+          Write-Host "Draft release $tag created for review." -ForegroundColor Green
+        }
+        else { Write-Host "Release $tag published officially as latest." -ForegroundColor Green }
+      }
+    }
+  }
+  finally {
+    if ($restoreNativePref) { $PSNativeCommandUseErrorActionPreference = $savedNativePref }
   }
 }

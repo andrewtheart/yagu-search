@@ -34,13 +34,20 @@ pick and details about offline/OCR support.
 Build them into this folder (they stay untracked) with:
 
 ```powershell
-# All four variants, then commit + push + create a draft GitHub release with the installers attached
+# All four variants, then commit + push + prompt for a draft or officially published release
 .\build-all-installers.ps1 -Push
 
-# Build only (no publish); or a single architecture
+# Unattended release-mode overrides
+.\build-all-installers.ps1 -Push -ReleaseMode Draft
+.\build-all-installers.ps1 -Push -ReleaseMode Published
+
+# Build only (no publish); or build/push one architecture with the same release prompt
 .\build-all-installers.ps1
 .\build-installer.ps1 -Architecture x64
+.\build-installer.ps1 -Architecture x64 -Push
 ```
 
 The publish step uploads the on-disk `YaguSetup-<version>-*.exe` files here as the release's assets
-and rewrites the README download table to point at that release.
+and rewrites the README download table to point at that release. Unless `-ReleaseMode Draft` or
+`-ReleaseMode Published` is supplied, the scripts ask whether the release should remain a draft for
+review or be published officially as the latest release.
