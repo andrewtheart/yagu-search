@@ -17,4 +17,183 @@
   h1[align="center"] {
     text-align: center;
   }
+  /*
+    Table column sizing. Pandoc emits fixed percentage widths on <col> elements
+    (computed from the number of dashes in each column's delimiter row, e.g.
+    "| ---: | --- | --- | --- |"). For the query-catalog tables that gave the
+    narrow, right-aligned "#" column ~30% of the width, floating its single digit
+    at the far right of a mostly-empty cell and making the whole table look
+    offset to the right. Neutralize those inline widths so every table sizes each
+    column to its content instead (the !important beats pandoc's inline style).
+  */
+  table {
+    table-layout: auto;
+    border-collapse: collapse;
+  }
+  table col {
+    width: auto !important;
+  }
+  /* Keep numeric/index columns compact and their digits next to the content. */
+  th, td {
+    padding: 4px 10px;
+  }
+
+  /*
+    ── Table-of-contents navigation blade ──────────────────────────────────────
+    Pandoc is run with `--toc`, which emits a <nav id="TOC"> holding a nested
+    list of every ## section and its ### subsections. We render that as a fixed
+    collapsible sidebar ("blade") on the left, with the document content flowing
+    to its right. A small script (below) makes each section expand/collapse to
+    reveal its subsections and highlights the section currently in view.
+  */
+  :root { --toc-width: 292px; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    /* Pandoc's default template caps the body at 36em (~576px). With the blade's wide
+       left gutter that would squish the content column, so widen it: fill up to a
+       comfortable reading measure to the right of the blade, shrinking on narrow windows. */
+    max-width: 1180px;
+    padding: 14px 34px 64px calc(var(--toc-width) + 30px);
+    box-sizing: border-box;
+  }
+  /* The document title is centered over the CONTENT area, not the whole page. */
+  h1[align="center"] { margin-left: 0; }
+
+  #TOC {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: var(--toc-width);
+    box-sizing: border-box;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 14px 10px 28px 12px;
+    border-right: 1px solid #3a3a3a;
+    background: #1b1b1b;
+    font-size: 13px;
+    line-height: 1.35;
+    z-index: 10;
+  }
+  /* Branding header injected by the host at runtime (app title + version). */
+  #toc-brand {
+    padding: 2px 8px 12px 8px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid #3a3a3a;
+  }
+  #toc-brand .toc-brand-title { font-weight: 700; font-size: 16px; display: block; }
+  #toc-brand .toc-brand-sub { font-size: 11px; opacity: 0.6; display: block; margin-top: 2px; }
+
+  #TOC ul { list-style: none; margin: 0; padding: 0; }
+  /*
+    Nested levels step clearly to the right (cumulative) so sub / sub-sub / sub-sub-sub
+    items read unmistakably as children: each deeper <ul> adds a left indent plus a faint
+    vertical guide line that visually connects a group to its parent.
+  */
+  #TOC ul ul {
+    padding-left: 16px;
+    margin-left: 8px;
+    border-left: 1px solid rgba(255, 255, 255, 0.10);
+  }
+  #TOC li { margin: 0; position: relative; }
+  #TOC li > a {
+    display: block;
+    padding: 4px 8px 4px 24px;          /* 24px left = room for the caret + consistent text alignment */
+    border-radius: 4px;
+    text-decoration: none;
+    white-space: normal;
+    color: #cfd3dc !important;          /* beats the runtime `a { … !important }` via #TOC specificity */
+  }
+  #TOC > ul > li > a { font-weight: 600; }
+  /* Deeper items get progressively lighter/smaller as an extra depth cue, but keep the 24px
+     left padding so the per-level <ul> indent above (not a reduced pad) does the stepping. */
+  #TOC ul ul li > a { font-weight: 400; font-size: 12.5px; color: #b7bcc6 !important; }
+  #TOC ul ul ul li > a { font-size: 12px; color: #a3a8b3 !important; }
+  #TOC li > a:hover { background: rgba(255, 255, 255, 0.07); }
+  #TOC a.active { background: rgba(108, 182, 255, 0.20); color: #ffffff !important; }
+
+  /* Expand/collapse caret for sections that have subsections. */
+  #TOC .toc-caret {
+    position: absolute;
+    left: 4px;
+    top: 5px;
+    width: 16px;
+    height: 16px;
+    line-height: 16px;
+    text-align: center;
+    cursor: pointer;
+    user-select: none;
+    opacity: 0.65;
+    transition: transform 0.12s ease;
+  }
+  #TOC .toc-caret::before { content: "\25B8"; }   /* ▸ */
+  #TOC li.has-sub:not(.collapsed) > .toc-caret { transform: rotate(90deg); }
+  #TOC li.has-sub.collapsed > ul { display: none; }
 </style>
+<script>
+  /* Turns the pandoc `--toc` <nav id="TOC"> into a collapsible navigation blade:
+     each top-level section gets an expand/collapse caret revealing its
+     subsections, and the section currently scrolled into view is highlighted
+     and auto-revealed. Runs defensively so a rendering hiccup never breaks the
+     document itself. */
+  (function () {
+    function initToc() {
+      var toc = document.getElementById("TOC");
+      if (!toc) return;
+
+      // Any item that has its own sub-list (at any depth) becomes collapsible with a caret,
+      // so sub-sub / sub-sub-sub groups fold too -- not just the top-level sections.
+      var itemsWithSub = toc.querySelectorAll("li");
+      itemsWithSub.forEach(function (li) {
+        var sub = li.querySelector(":scope > ul");
+        if (!sub) return;
+        li.classList.add("has-sub", "collapsed");
+        var caret = document.createElement("span");
+        caret.className = "toc-caret";
+        caret.setAttribute("aria-hidden", "true");
+        caret.addEventListener("click", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          li.classList.toggle("collapsed");
+        });
+        li.insertBefore(caret, li.firstChild);
+        // Clicking the section title also reveals its subsections.
+        var link = li.querySelector(":scope > a");
+        if (link) link.addEventListener("click", function () { li.classList.remove("collapsed"); });
+      });
+
+      // "You are here" highlighting + auto-reveal of the active section.
+      var links = {};
+      toc.querySelectorAll('a[href^="#"]').forEach(function (a) {
+        try { links[decodeURIComponent(a.getAttribute("href").slice(1))] = a; } catch (e) {}
+      });
+      var headings = document.querySelectorAll("h2[id], h3[id]");
+      if (!headings.length || typeof IntersectionObserver === "undefined") return;
+      var current = null;
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          if (!en.isIntersecting) return;
+          var a = links[en.target.id];
+          if (!a) return;
+          if (current && current !== a) current.classList.remove("active");
+          a.classList.add("active");
+          current = a;
+          var li = a.closest("li");
+          while (li) {
+            li.classList.remove("collapsed");
+            li = li.parentElement ? li.parentElement.closest("li") : null;
+          }
+          a.scrollIntoView({ block: "nearest" });
+        });
+      }, { rootMargin: "0px 0px -78% 0px", threshold: 0 });
+      headings.forEach(function (h) { io.observe(h); });
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", initToc);
+    } else {
+      initToc();
+    }
+  })();
+</script>

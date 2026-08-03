@@ -2,6 +2,8 @@
 
 Yagu is a fast Windows search app for finding text, regex matches, or file names across large folder trees. The name stands for "Yet Another Grep Utility". It is built for repeated code, log, and source-tree investigation where you want command-line search speed with a graphical result browser.
 
+**Yagu runs only on Windows.** There is no macOS or Linux version, by design. Yagu is a *native* Windows app rather than a cross-platform one: its interface is built on WinUI 3 (the Windows App SDK), and it relies on Windows-only features throughout — the Explorer right-click menu, the system tray and taskbar, global hotkeys, Windows Error Reporting crash dumps, the NTFS change journal for indexing, and optional voidtools Everything integration (which is also Windows-only). It ships as a self-contained Native AOT build with a Rust engine DLL compiled for Windows. This keeps Yagu as fast as possible on Windows at the cost of portability. See **Prerequisites** in the README for supported Windows versions (Windows 10 build 17763 / version 1809 or newer).
+
 ## Quick Start
 
 1. Open Yagu.
@@ -12,26 +14,30 @@ Yagu is a fast Windows search app for finding text, regex matches, or file names
    - Launch from a command line: `Yagu.exe --dir "D:\projects\myapp"`.
    - Use the Windows Explorer context menu: right-click a folder → **Search with Yagu**.
    - Click the **★ pin** to the left of Browse to keep the current folder as the startup default so it is pre-filled the next time Yagu opens. By default the box starts empty (which searches all drives); click the pin again to unpin and clear the saved folder. Pinning snapshots the folder when you click it — changing the box afterward does not change the pin.
+   - Click the **index** glyph (to the right of the pin) to add the folder in the box to the content index so future searches over it can skip files that cannot match. The button shows as selected whenever the box holds a folder that is already in the index (whether its build has started, finished, or not yet run); click it again to remove that folder from the index. A whole-drive or very large folder is confirmed first. This is the same as `--index-add-root` on the command line.
 3. Enter the search query in the search box.
 4. Choose search options: **Case sensitive** (Alt+C), **Regex** (Alt+R), **Multiline** (Alt+M), **Exact match** (Alt+E).
 5. Click **Search** or press **Enter** in the search box.
 6. Results stream in while the search runs. Click a result or match line to preview it.
 7. Use Open, Edit, Copy, or Export actions to work with the results.
 
-The status bar shows progress during a search. When the search finishes or is canceled, it shows elapsed time. Enable **Stats for nerds** in Settings -> Developer Options to show files processed per second and a real-time throughput sparkline.
+The status bar shows progress during a search. When the search finishes or is canceled, it shows elapsed time. Its right side also shows Yagu's current result-temp usage, the total disk space occupied by all content-index data, and RAM used by Yagu plus its worker processes. Hover any resource value for its location and measurement details. Enable **Stats for nerds** in Settings -> Developer Options to show files processed per second and a real-time throughput sparkline.
 
 ## Main Screen
 
-The main screen has six working areas:
+The main screen has seven working areas:
 
 | Area | Purpose |
 | --- | --- |
 | Title bar | App title, Help button (F1), Settings gear, and window mode pin. |
-| Directory bar | The folder to search, with auto-complete, a pin (★) to keep the current folder as the startup default, Browse, and recent history. |
+| Directory bar | The folder to search, with auto-complete, a pin (★) to keep the current folder as the startup default, an index toggle to add/remove the folder from the content index, Browse, and recent history. |
 | Search bar | Query entry with history (Down arrow), Search/Cancel (F5), and option toggles. |
 | Options row | Quick toggles for Regex, Case, Multiline, Exact match, and the Advanced Options expander. |
 | Results pane (left) | Matching files and lines with sorting, grouping, filtering, selection, copy, and export. |
 | Preview pane (right) | Match preview, full-file view, built-in editor, match navigation, and export. |
+| Status bar | Search progress/completion, result-temp disk usage, total content-index disk usage, Yagu/worker RAM, index health/coverage, and skipped-file count. |
+
+![Yagu main window with a completed traditional search and streaming result groups](docs/images/traditional-search.png)
 
 - Click the **?** button or press **F1** to open Help.
 - Click the **gear** to open Settings.
@@ -49,6 +55,8 @@ Use the search mode dropdown to decide what the query matches:
 | Content only | File contents only. | Code, logs, config files, text dumps. |
 | File names only | File names only. | Finding files by name without reading contents. |
 | File name, then content | File contents, but only for files whose names match the query first. | Narrowing content search to files with relevant names. |
+
+For literal **Content + Names** and **File names only** searches, Yagu first queries Everything for matching filenames across **every selected drive** before starting content work. Filename hits therefore appear immediately even when the file is on a later drive. In **Content + Names** mode, after all drives' filename rows are visible, Yagu content-scans those name-hit files first; content hits are added to the same file group that already carries the **file name** badge. Only then do the sequential full content sweeps begin. Those sweeps skip the priority files and do not emit duplicates. Filename priority runs before content-index setup, so opening a Yagu content index can never delay a filename result already known to Everything.
 
 > **Tip — open a specific file directly.** If you paste a complete file path (and nothing else) into the Traditional search box and press Enter, Yagu skips the normal scan and shows just that one file. This works no matter what's in the Directory box. Surrounding quotes are allowed (e.g. `"C:\path with spaces\app.log"`).
 
@@ -137,26 +145,67 @@ Notes:
 - **Transparent.** After translating, Yagu fills in the Advanced Options so you can see and tweak exactly what it set before or after searching.
 - **Frees GPU memory automatically.** A larger model can hold several GB of GPU VRAM while loaded. By default Yagu **releases the model from memory after each search** — it unloads as soon as each translation finishes and reloads on the next search (a few seconds). You can turn this off under **Settings → AI → GPU Memory** (uncheck **Release model from memory after each search**) to keep the model resident for the fastest back‑to‑back searches at the cost of held VRAM. Either way, translation quality is identical. Yagu also automatically trims an over‑large model's reserved context window down to what a search request needs before loading, reducing the VRAM it reserves without affecting quality.
 - **Switching back to Traditional** (via the same Search‑button chevron menu) restores the literal/regex query behavior; the inline Case/Regex/Exact toggles apply in Traditional mode only.
+- **Single-token queries run as Traditional searches automatically.** A lone word, number, path, or symbol cannot express a natural-language request, so Yagu searches for it literally without starting or loading the AI model. Add another word when you want Semantic interpretation.
 - **Did you mean AI search?** While in **Traditional** mode, if you type something that reads like a natural‑language request — e.g. `files on C: containing the word test` — Yagu offers to run it as a Semantic search instead. Choose **Switch to AI search** to interpret it that way (this turns AI search on for you if you'd disabled it), or **Keep Traditional** to match your text literally. Tick **Don't remind me again** to stop the prompt for good. It only appears once a Semantic model has been downloaded.
 
 Configure availability and the optional preferred model under **Settings → Search Defaults**. The same capability is available from the CLI via `--semantic-pattern` (see [Command-Line Interface](#command-line-interface-cli-mode)).
 
 For a comprehensive, categorized list of example queries and how the options combine, see [Semantic Search Query Examples](#semantic-search-query-examples) (all 300 scenarios from the test suite).
 
+### Advanced: per-model generation parameters
+
+Power users can override the six text-generation (sampling) parameters Yagu sends to the local model
+— **Temperature**, **TopP**, **MaxTokens**, **RandomSeed**, **FrequencyPenalty**, **PresencePenalty**
+— on a **per-model** basis. Yagu ships tuned defaults for each model class (reasoning models sample at
+`Temperature 0.7 / TopP 0.95`; instruct models decode near-greedily with small repetition penalties and
+a JSON-object response format), and those defaults are used until you override them.
+
+There is no in-app editor: add a `SemanticModelParameterOverrides` object to
+`%APPDATA%\Yagu\settings.json`, keyed by the model **alias** (e.g. `phi-4-mini-reasoning`) or the exact
+catalog **variant id** (matched id-first, then alias, case-insensitively). Every field is optional — a
+field you omit keeps Yagu's built-in default for that model:
+
+```json
+"SemanticModelParameterOverrides": {
+  "phi-4-mini-reasoning": { "Temperature": 0.6, "TopP": 0.9 },
+  "Phi-4-mini-instruct-cuda-gpu:5": { "MaxTokens": 256, "FrequencyPenalty": 0.4 }
+}
+```
+
+The overrides apply to **both** the GUI and the `--cli --semantic-pattern` path (they read the same
+settings file), and take effect on the next search after the file is saved — no rebuild required.
+
 ---
 
 ## Advanced Options
 
-Click the **Advanced Options** expander below the search bar to reveal a tabbed panel. The left tabs group controls into **Search**, **Filters**, **Size**, **Dates**, and **Advanced**. Advanced Options are per-session and reset to defaults on next launch (defaults can be configured in Settings). Changes apply immediately; **Apply** closes the panel, and **Reset** restores the controls to the current settings defaults.
+Click the **Advanced Options** expander below the search bar to reveal a tabbed panel. The left tabs group controls into **Search**, **Quick searches**, **Filters**, **Size**, **Dates**, and **Advanced**. Advanced Options are per-session and reset to defaults on next launch (defaults can be configured in Settings). Changes apply immediately; **Apply** closes the panel, and **Reset** restores the controls to the current settings defaults.
+
+![Advanced Options drawer with search tabs, path filters, and command generation](docs/images/advanced-options.png)
 
 ### Search Tab
 
 | Control | Effect |
 | --- | --- |
-| Find code annotations (TODO / FIXME…) | One-click quick search that loads a whole-word regex over `TODO`, `FIXME`, `HACK`, `BUG`, `XXX`, `NOTE`, `OPTIMIZE`, and `REVIEW` (in Traditional regex mode, case-sensitive) and immediately runs it — surfacing every outstanding annotation in your codebase. Equivalent to the CLI `--todos` flag. |
 | Search mode | Chooses what the query matches (see Search Modes above). |
 | Include filter | Limits the search to files matching these patterns. Accepts comma- or semicolon-separated extensions, globs, or path segments. Switch the dropdown between **Glob** and **Regex** modes. |
 | Exclude filter | Removes files matching these patterns. Same syntax options as Include. |
+
+### Quick searches Tab
+
+One-click regex searches for things developers routinely hunt for across a codebase. Each button loads a regex into the search box (Traditional regex mode) and runs it immediately over the current directory.
+
+| Quick search | What it finds |
+| --- | --- |
+| Find code annotations (TODO / FIXME…) | Whole-word regex over `TODO`, `FIXME`, `HACK`, `BUG`, `XXX`, `NOTE`, `OPTIMIZE`, and `REVIEW` (case-sensitive) — every outstanding annotation. Equivalent to the CLI `--todos` flag. |
+| Merge conflict markers | Unresolved Git merge-conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) left in files after a bad merge. |
+| Leftover debug output | `console.log`, `print()`, `printf`, `System.out.print`, `Debug.Write`/`Log`, `fmt.Print` — debug logging you may have forgotten to remove. |
+| Possible secrets / credentials | A first-pass scan for hardcoded credentials — assignments to `api key`, `secret`, `password`, `token`, `access key`, or `connection string`. |
+| URLs / links | Every `http(s)` URL — handy for auditing endpoints and links. |
+| Email addresses | Email addresses in the files. |
+| Empty catch blocks | `catch` blocks with an empty body that silently swallow exceptions. |
+| Deprecated / obsolete markers | `@deprecated`, `[Obsolete]`, `@Deprecated` — APIs marked for removal. |
+| GUIDs / UUIDs | GUID/UUID values in the files. |
 
 ### Filters Tab
 
@@ -169,8 +218,11 @@ Click the **Advanced Options** expander below the search bar to reveal a tabbed 
 | Archive Extensions | Visible when Search archives is on. Controls which extensions are treated as ZIP containers. |
 | Search online-only cloud files | When enabled, OneDrive/Google Drive online-only placeholder files are downloaded on demand and searched — but only while the sync provider is running to serve them. Off by default: cloud-only files are skipped so the scan can't hang on a download. Can be slow and use network/disk. |
 | Search hidden files | When enabled (default), files and folders carrying the Windows Hidden attribute are searched. When disabled, hidden items are excluded — the managed file walker skips them and the Everything backends filter them with `!attrib:h`. System files (e.g. `pagefile.sys`, `hiberfil.sys`) are always skipped by the file walker regardless of this setting. The default for this per-search toggle comes from **Settings ▸ Path and File Type Filters ▸ Search hidden files**. |
-| Search image text (OCR) | When enabled, image files (PNG, JPG, BMP, GIF, TIFF, WEBP) are run through OCR and the recognized text is searched like any other file's contents. Off by default because OCR is slower than reading text files. OCR runs on a background queue that does not block or slow the normal file scan; matches appear in the results panel as each image is processed. The OCR engine, recognition quality, and this toggle's default come from the **Settings ▸ OCR** tab (see below). |
+| Search image text (OCR) | When enabled, image files (PNG, JPG, BMP, GIF, TIFF, WEBP) are run through OCR and the recognized text is searched like any other file's contents. Off by default because OCR is slower than reading text files. OCR runs on a background queue that does not block the normal file scan; matches appear as each image is processed. As discovery identifies image/PDF candidates, those documents are included once in the same overall progress denominator. Once extraction is the visible tail, the label combines both views — for example **95% [OCR: 11,113 / 104,000 images]** (then PDF text if needed) — and the tooltip/status show the same queue count, so a large OCR tail never looks frozen. The OCR engine, recognition quality, and this toggle's default come from the **Settings ▸ OCR** tab (see below). |
 | Search PDF text | When enabled, PDF files are converted to text (via the bundled Xpdf `pdftotext`) and the extracted text is searched like any other file's contents. Off by default because extraction is slower than reading text files. It runs on a background queue that does not block or slow the normal file scan; matches appear in the results panel as each PDF is processed. Only the embedded text layer is read — scanned/image-only PDFs (pages that are just pictures) yield no text. The toggle's default comes from **Settings ▸ Path and File Type Filters ▸ Search PDF text**. |
+| Use content index | When enabled, this search uses the opt-in persistent content index to skip files that cannot contain a match, then verifies the rest live — an accelerator that never changes results. It mirrors **Settings ▸ Indexing ▸ Use the index for searches by default** and requires content indexing to be enabled there; it is independent of the image/PDF/archive toggles. Acceleration applies to raw text and, when **Search binary** is on, bounded printable-ASCII runs in binary files. Case-sensitive or ASCII case-insensitive queries can accelerate; non-ASCII case-insensitive, unsupported-regex, oversized/unsupported binary, and unindexed files transparently live-scan. Equivalent to the CLI `--use-index` / `--no-index` flags. |
+
+Before the first scan of each detected cloud-backed drive in an app session, Yagu warns that the provider may download files or metadata on demand, consuming network bandwidth and local disk. **Search cloud drive** continues; **Cancel** is the safe default. Known online-only placeholders remain skipped unless the corresponding toggle is enabled, but the provider ultimately controls hydration.
 
 ### Size Tab
 
@@ -262,21 +314,25 @@ Below the toolbar is a filter bar:
 | Copy Selected Files With Content | Copies file paths and their matched content. |
 | Save Selected File Paths… | Saves checked file paths to a text file. |
 | Save Selected Files With Content… | Saves checked files with matched content to a text file. |
+| Open with default application | Opens the right-clicked file with its Windows default application. |
 
 **On a match line:**
 
 | Option | Action |
 | --- | --- |
-| Copy Selected Lines | Copies all checked match lines to clipboard. |
-| Export Selected to File… | Saves checked match lines to a text file. |
-| Copy This Line | Copies just the right-clicked line. |
+| Copy line | Copies just the right-clicked line. Always shown first. |
+| Copy lines | Copies all checked match lines. Shown only when more than one line is checked. |
+| Export this to file… | Exports just the right-clicked line. |
+| Export selected to file… | Exports all checked match lines. Shown only when more than one line is checked. |
+
+Right-clicking does not change the checked selection. The singular actions always target the row under the pointer; the plural actions operate only on checked rows.
 
 ### Previewing Files
 
 - **Click a file group header** — opens a context preview of that file's matches.
 - **Double-click a file header** — selects all matches and shows full preview.
 - **Click a match line** — previews that match with surrounding context.
-- **Right-click → Preview all selected** — multi-file preview of all checked files.
+- **Right-click → Preview all selected** — multi-file preview of checked files. To keep the WinUI preview responsive for extreme selections, one preview is limited to the first 1,000 checked files and 100,000 prepared match references (both configurable in Settings ▸ Editor ▸ Preview section limits, 0 = default); Yagu reports the limit in the status bar. Preparation and paging show a live loading overlay and continue pumping UI input/rendering.
 
 ---
 
@@ -288,7 +344,7 @@ The preview pane displays file content with highlighted matches, line numbers, a
 
 | Button | Purpose |
 | --- | --- |
-| Full File | Shows the complete file content with all matches highlighted. |
+| Full File | Shows the complete file content with all matches highlighted. For a very large file the right-panel preview shows the first portion (up to 20,000 lines / 1,000,000 characters) with a truncation notice — open it in the built-in editor (the Full File button) to view the whole file, since the editor loads huge files in chunks. |
 | Copy Path | Copies the previewed file's full path to clipboard. |
 | Open | Opens the file with the default Windows application. |
 | Open in Explorer | Opens the containing folder in Windows Explorer. |
@@ -465,6 +521,174 @@ Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BM
 | Quality preset | Quick presets that set the recognition model and detection resolution together: **Fast** (English v3, 640 px), **Balanced** (Chinese+English v5, 960 px), **Accurate** (Chinese+English v5, 1536 px). Switches to **Custom** when the model/resolution below don't match a preset. Applies to PaddleSharp. |
 | Recognition model | PaddleSharp recognition model: English v3 (fastest), English v4, Chinese+English v4, or Chinese+English v5 (default, recommended, most accurate). Models download on first use. Ignored by Tesseract. |
 | Detection resolution | Longest image side (in pixels) the image is downscaled to before detection: 640, 960, 1280, 1536, 2048, or Unlimited (native resolution). Larger finds smaller text but is slower. Ignored by Tesseract. |
+| OCR worker processes | Number of independent `Yagu.OcrWorker` processes: 0 (default) is automatic; 1–4 is explicit. Automatic uses one Paddle process because oneDNN already parallelizes internally and each model process can use hundreds of MB; Tesseract uses up to two on larger CPUs. The Performance-tab HDD safeguard overrides this to one process for an HDD search root. |
+
+### Indexing Tab
+
+The **Indexing** tab is the authoritative home for the on-device content index (a search accelerator). **Manage Indexes** appears immediately below **Content Index** so registered folders, health, and direct actions are visible before advanced tuning. Indexing is on by default but **builds nothing on its own** — no folder is indexed until you choose one (the first-run prompt, the status-bar indicator, or **Build now** here), so searches keep live-scanning until then. It keeps everything on the machine, and always falls back to a full live scan when the index is missing, stale, disabled, corrupt, or unsafe — results never change. Every setting here also has a matching CLI `--index-config <key>=<value>` key.
+
+#### Should you use indexing?
+
+Indexing is most useful when you repeatedly search file **contents** across the same large source tree, log archive, document collection, or drive. The first build costs time and disk space; later eligible searches can avoid opening most files.
+
+| Good Fit | Usually Not Worth Building an Index |
+| --- | --- |
+| Repeated content searches over tens of thousands or millions of mostly unchanged files. | A one-time search or a small folder that already scans in a moment. |
+| Large repositories, log trees, local document archives, or stable data drives. | Filename-only searches. Everything already accelerates those when available. |
+| Slow storage where avoiding nonmatching reads matters. | Mostly cloud-only files, archives, or live OCR work; those specialized sources are not suppressed by the raw-file index. |
+| A maintained folder whose changes can be followed through the Windows change journal. | A frequently detached or rewritten source where Yagu cannot continuously prove freshness. It remains safe, but may live-scan more often. |
+
+You can index a parent folder and still search only one descendant. Yagu uses the covering parent index but keeps discovery restricted to the directory you requested. Avoid adding overlapping parent and child roots; Yagu consolidates them so only one maintained scope is authoritative.
+
+#### Yagu content index vs. Everything
+
+These are separate, complementary accelerators:
+
+| Accelerator | What It Speeds Up | What It Stores |
+| --- | --- | --- |
+| **voidtools Everything** (optional) | Discovering paths and matching file names. | The filesystem's names and metadata in Everything's own database. |
+| **Yagu content index** (optional) | Eliminating files that cannot contain a content query before the scanner reads them. | Compact content signatures plus Yagu's path, identity, freshness, and optional extended-source metadata. |
+
+A search can use both: Everything supplies the scoped file list quickly, then Yagu's content index prunes impossible content candidates, and the normal scanner verifies every retained file live.
+
+#### Where indexing controls live
+
+| Location | Use It For |
+| --- | --- |
+| **Directory bar index glyph** | Add or remove the folder currently in the directory box. A selected glyph means the folder is covered by a registered index root; it does not by itself mean a completed build exists. |
+| **Settings ▸ Indexing ▸ Manage Indexes** | Add maintained folders, build/update/rebuild/validate/repair/delete indexes, set per-folder filters, inspect health and storage, and configure automatic maintenance. |
+| **Advanced Options ▸ Filters ▸ Use content index** | Enable or bypass index use for this search. It does not build an index. |
+| **Status-bar Index indicator** | See overall health, active build progress, current-search acceleration, recent changes, and direct recovery actions. Click or hover for details; right-click for pause/disable options. |
+| **Result `indexed` badge** | See candidate provenance when enabled. It means the index selected that file for live verification, not that the displayed match came from cached content. |
+| **CLI** | Automate the same search, build, root, filter, configuration, status, and deletion workflows. See **Content Index (CLI)** below. |
+
+#### What the content index does
+
+**Removable-drive safety.** Indexes are bound to the actual mounted volume (volume GUID, serial
+number, and filesystem), not only to a drive letter. Disconnecting media cancels work using that
+volume, marks the source unavailable, refreshes watcher registrations, and leaves the previously
+committed index unchanged. A different device reusing the same drive letter cannot inherit trusted
+postings. A full build commits only after the root was completely enumerated and the same volume and
+change journal are still mounted at the final commit barrier; otherwise its staged replacement is
+discarded.
+
+**Per-file I/O deadline.** Settings ▸ Performance ▸ Search Engine ▸ **Per-file I/O timeout** controls
+how long Yagu waits for one file open/read or low-level index-volume I/O operation (default 30
+seconds, range 1–600). Timed-out search files appear separately in the skipped-files breakdown. Index
+mutations fail closed or keep the file eligible for live scanning; they never advance a checkpoint
+past unrepresented work. Native scans use owned source reads instead of memory mapping on removable
+and optical media, so a disconnect cannot fault a mapped source page in the main process.
+
+The index records compact content signatures and file identity/path metadata so Yagu can prove that many files **cannot** contain a query. It removes only those impossible candidates; every file that remains is opened and searched live by the normal scanner. The index is therefore an accelerator, not a cached copy of search results. Index data, extracted PDF text (when enabled), and diagnostics remain local to the computer.
+
+Acceleration is deliberately conservative. Literal, whole-word/exact, and a safe subset of regex and multiline searches can use it. Non-ASCII case-insensitive queries, unsupported or very complex regex shapes, unsupported binary cases, stale/untrusted layers, an excessive candidate ratio, a query memory/size limit, or an index that is not ready within the startup budget transparently use the live scanner instead. A completion summary of **Content index: accelerated**, **partially accelerated**, or **not used** explains what happened. OCR, archive traversal, and live PDF extraction remain separate pipelines and are never suppressed by raw-file pruning.
+
+#### Quick indexing workflow
+
+1. Open **Settings ▸ Indexing**, or use the index glyph beside the directory box/status-bar index indicator.
+2. Add the folder you want Yagu to maintain. A registered parent can accelerate searches in any descendant, so prefer one useful common root instead of overlapping parent/child entries.
+3. Optionally set **Filters…** before building. Global and per-folder build filters control what is stored; excluded or oversized files still live-scan.
+4. Choose **Build now**. Whole drives and very large/system folders require confirmation. The build runs in the background and uses an isolated worker by default.
+5. Leave **Use the index for searches by default** on, or use Advanced Options ▸ **Use content index** per search. The CLI equivalents are `--use-index` and `--no-index`.
+6. Watch the status-bar indicator or **Manage Indexes** for health. After a search, the coverage summary and optional per-result **indexed** badge show whether acceleration was actually used.
+
+During the first build, Yagu crawls the selected folder, reads eligible files, writes private staged index data, validates it, and then publishes the complete generation atomically. You can continue using Yagu; builds pause during searches by default. A first build has no resumable percentage checkpoint: cancelling or exiting discards that private partial build and the next full build starts over. Once a complete generation exists, it remains usable until a newer complete generation commits.
+
+For ongoing maintenance, **Automatic incremental** is the recommended update mode. Yagu replays the Windows change journal from the last committed checkpoint and publishes a small immutable delta. A file changed after the last update is never trusted as unchanged: it is scanned live until represented by a committed update. Watcher events can request maintenance sooner, but the journal remains authoritative and catches changes made while Yagu was closed.
+
+#### What search and status messages mean
+
+| Message | User Meaning | Best Next Step |
+| --- | --- | --- |
+| **Index: accelerating** | The index safely removed impossible candidates for the active search. | None. Results still come from live verification. |
+| **Index: partially accelerating** | Some searched roots/files were accelerated and the rest were scanned live. | Hover the status for the per-root reason if you expected full coverage. |
+| **Index: available · not accelerated** | A usable index exists, but the query shape was unsupported or too broad, or a query budget/size limit chose live scan. | Read the completion reason. Rebuilding does not fix query-shape or selectivity bypasses. |
+| **Index: none for this folder** | No registered index covers the requested folder. | Click the indicator to add this folder or a useful parent, or keep searching live. |
+| **healthy · recent changes pending** | The committed generation is valid, but newer changed paths are known. Those paths scan live. | Let the next automatic incremental pass run, or choose **Update index**. |
+| **Indexing: preparing...** | Yagu is warming a legacy in-process index before it can be queried. | Wait, raise the startup budget, or search live now. Mapped worker sessions avoid loading the full index into Yagu. |
+| **Content index needs attention** | Freshness, compatibility, storage, or integrity cannot be proven for one or more roots. | Use the reason-specific **Update**, **Increase limit & update**, **Validate**, **Repair**, **Rebuild**, or **Search live** action. |
+| **leftover index — not maintained** | Index files remain for a folder that is no longer registered for automatic maintenance. | Choose **Maintain** to re-register it or **Delete index** to reclaim storage. |
+
+The completed-search summary is the authoritative answer for that run. A green overall health label means maintained indexes are healthy; it does not claim that every possible query used them.
+
+**Uninstall and reinstall.** When interactive Setup detects an existing 32-bit or 64-bit Yagu installation, settings file, or content index, it shows an **Existing Yagu installation or data found** page before installation. **Keep existing settings** and **Keep existing content indexes** are independent and selected by default. Kept settings are loaded by the new version on first launch: newly added settings receive their defaults, obsolete settings disappear on the next save, and Yagu's compatibility migrations handle known renamed or changed settings. Interactive uninstall asks the same preservation questions; **Keep** remains the default. Silent install/uninstall never deletes settings or indexes. Index deletion removes the dedicated default index root; for a custom storage location, Yagu removes only recognized Yagu index scopes and leaves unrelated files in that folder untouched. If settings were removed but reusable indexes remain, Yagu retains the minimum custom-location locator when needed, and the next GUI or interactive CLI launch offers to adopt the indexes without rebuilding.
+
+| Group | What It Controls |
+| --- | --- |
+| Content Index | The **master switch** (on by default; it never builds or deletes anything on its own — a folder is only indexed when you choose one) and whether searches **use the index by default**. The per-search Advanced Options ▸ Use content index toggle and the CLI `--use-index` / `--no-index` flags override the default only while the master is on. |
+| Query Acceleration | Per-family gates (literals, whole-word/exact, regex, multiline) can only narrow the safety gate. **Isolate index maintenance and candidate evaluation** (on by default) sends builds, refreshes, compaction, validation, PDF population, and legacy candidate-set evaluation to worker processes, but that legacy search path still opens/classifies the index inside Yagu and remains subject to the **in-process size limit** (default 2048 MB). **Use memory-mapped worker query sessions (format-v3)** is the separate full-query mode: it moves candidate/path classification and pruning into the long-lived worker, avoids opening the index in Yagu's process, and uses the **mapped worker query size limit** instead (default 30720 MB / 30 GB). It requires format-v3 sidecars in every active layer; missing sidecars or any worker/freshness failure safely live-scans. **Query worker parallelism** controls mapped candidate/path-classification lanes: 0 (default) selects a conservative logical-core-based degree, while 1–32 sets an explicit cap; the HDD safeguard overrides it to one lane for rotational roots. This group also includes query startup, candidate-percentage, and query-memory budgets. When the legacy path has a usable index within its in-process limit, Yagu warms it and shows **Indexing: preparing...**; starting a search can pause that warm-up. Case-insensitive searches accelerate when the query is ASCII; non-ASCII case-insensitive queries live-scan. |
+| Scope & Ingestion | What a build ingests: hidden files, reparse points, removable-drive policy, maximum file size, and build-time excluded globs/extensions. These are not per-search filters — an unindexed file simply live-scans. Case-sensitive directories and cloud-only files are fixed live-only policies. **Build a PDF-text index** can safely skip non-matching PDFs when extraction is repeatable and the PDF is unchanged. **Build an image-text index to prioritize likely OCR matches** runs the selected OCR engine during a full build and stores only positive trigram postings—not recognized text. Because OCR is non-deterministic, the image-text index never skips OCR for a nonmember, unknown, changed, or fingerprint-mismatched image; it only identifies prior positive candidates and can make large builds substantially longer. **Produce format-v3 query structures** writes extra memory-map-friendly postings, path/identity, and tombstone sidecars for every raw-index layer. The optional **Use memory-mapped worker query sessions (format-v3)** mode consumes those sidecars in the isolated worker; the separate **Use format-v3 reader for in-process queries** switch controls only the in-process candidate reader. Benefits are bounded host memory, fewer large deserialization allocations, worker fault isolation, and efficient layered candidate/path classification. Costs are extra build time/I/O and disk space, cold mapped-page faults/IPC overhead, and an all-layers requirement: an older or missing-v3 layer causes safe fallback/live scan until rebuilt. Search results remain identical. |
+| Storage | The **Index data location** — where the indexes Yagu builds are saved on disk (this is not a folder whose contents get indexed; empty = `%LOCALAPPDATA%\Yagu\content-index`; custom folders must be a fixed local NTFS volume), disk quota, reserved free-space floor, **stop-when-full limit** (an index build in progress stops when the index drive reaches this used-space percentage — default 90%; staged full builds leave the previous complete index unchanged), retained generation count, and stale/quarantine cleanup ages. The bottom status bar's **Index:** value totals every file under this storage location, including all indexed folders, retained generations, PDF/v3 data, and temporary/recovery data. It refreshes off the UI thread at most once per minute and never remeasures during a search. Measurement honors the selected file-listing backend: **Everything SDK** uses one in-process size query, **es.exe** launches it with `-get-total-size`, **Managed** scans file metadata, and **Auto** tries SDK → es.exe → Managed. An unavailable/incomplete Everything result safely falls back to the managed scan. |
+| Build Scheduling | The build trigger(s), the **update mode**, and the idle/continuous interval. The trigger is a set of checkboxes — **When enabled**, **At startup**, **When the machine is idle**, **Continuously while Yagu is open**, and **On a schedule** — and you can turn on more than one at once. With none checked the trigger is **Manual**. **When the machine is idle** uses the Windows last-input timestamp. **Continuously while Yagu is open** uses the same safe maintenance path but treats the machine as permanently idle: it evaluates immediately, then waits at least the configured interval before another pass. It still honors searches, battery policy, low disk space, and a user pause. To keep existing indexes continuously current, select **Automatic incremental** (recommended) or **Automatic full rebuild when changed**; the default **Manual full rebuild** update mode only builds missing indexes, regardless of trigger. **On a schedule** supports an interval (5–10080 minutes) or selected weekdays/time. Automatic incremental applies small append-only deltas and never silently escalates to an expensive full rebuild when journal continuity cannot be proven. The only compatibility exception is a one-time automatic rebuild of an older ReFS index whose stored file identities cannot match ReFS journal records; the old index remains active until the replacement commits, and searches safely live-scan changed content meanwhile. |
+| Build Resources | Build memory budget, **build worker parallelism**, serialized folder publication (fixed at one writer), pause-during-search, pause-on-battery, auto-repair, journal catch-up limits, and the incremental-maintenance controls. Build parallelism 0 (default) selects a conservative physical-core-based degree bounded by the memory budget; 1–32 sets an explicit cap. File reads/classification run concurrently, but outcomes are committed in crawl order so content IDs, spill boundaries, and transactional publication remain deterministic. The existing **Limit parallelism on HDDs** safeguard overrides it to one lane for rotational roots. The remaining controls include **use file-system watcher hints** (off by default; a latency hint only — the change journal stays authoritative), the **maximum delta segments** (default 8), **compaction size threshold** (default 256 MB), and the **auto-compaction size cap** (default 512 MB, 0 = no cap). (The opt-in **share aggregate content-index metrics** telemetry toggle lives on the **Privacy** tab.) |
+| Status & Provenance | Whether the main window shows index coverage status, build notifications, and a per-result **indexed** badge on files the content index selected as candidates (files scanned live show no badge). At launch, the bottom status bar checks every ready local fixed drive plus every maintained index root, even when another folder is selected. Hovering opens an interactive status panel with one persistent row per drive/root. When automatic indexing is off, its status hover panel offers an inline schedule dropdown; choosing continuous, idle, startup, or the configured schedule saves immediately. If the update mode was still manual-only, Yagu also selects safe automatic incremental updates so existing indexes stay current. The compact label summarizes mixed health as an affected count (for example, **Index: 1 of 4 needs attention**) instead of making one unavailable drive sound like every index is unavailable; hover shows the exact root and reason. The lifecycle lines distinguish **Created**, **Active generation built**, and **Last incremental update**; paged full-build batches are never mislabeled as incremental updates. Journal-proven file changes that arrived after a recent update are shown as **healthy · recent changes pending** (with the exact count); those files safely scan live until the next incremental update and do not raise a health warning. Unprovable freshness, required rebuilds/builds, and storage problems do raise a warning. During a search, query planning also reports **Index: accelerating**, **partially accelerating**, or **available · not accelerated**. If another root needs attention while the active search is accelerated, both facts remain visible — for example, **Index: accelerating (1 of 4 needs attention)**. Each affected row has its own recovery buttons. A valid **leftover index** offers **Maintain** (register it without rebuilding, then let the next maintenance pass check or update it) and **Delete index**. Irrecoverable freshness failures such as a change-journal gap/reset show **Rebuild** beside that root. A catch-up-limit stop shows the recommended **Increase limit & update** action plus **Rebuild** as an explicit fallback; the incremental action replays from the last committed checkpoint and does not imply that a full rebuild is required. **Indexing settings** is always available. Query-shape bypasses do not offer rebuild because rebuilding cannot make an ineligible or non-selective query acceleratable. The badge is candidacy provenance only — match content is always read live. |
+| Manage Indexes | There is **one list** of the **folders you index**. Add a folder, select it, and the **Build now** / **Rebuild** / **Validate** / **Repair index** / **Delete this index** buttons act on the selection — there is no second folder picker to confuse it with. Adding a folder also enrolls it in the automatic build schedule (Build Scheduling), so you don't manage a separate list. Select a folder and click **Filters…** to give it **per-folder build-time globs**: exclude globs add to the global excludes for that folder only, and include globs re-admit paths a broader exclude would drop (so you can, e.g., exclude `node_modules` globally but still index it under one specific folder). A folder with custom filters is marked in the list. A folder that has an index on disk but is **not** in your list — e.g. one you built, then removed with **Remove selected folder** (which unregisters it without deleting the index files) — still appears, marked **leftover index**: the index stays on disk and searches can still use it, but it won't be kept up to date automatically. An old-version, corrupt, or incomplete index shows its recovered folder and exact reason instead of the vague “unreadable or partial” label. The **Index storage** area is grouped into **Needs attention** and **Healthy indexes** cards: a green check means valid, a red X means broken/incompatible, and an orange warning identifies valid-but-unmaintained or redundant data. Counts are labeled **stored content records** because the cheap manifest-only total counts records in the base plus every active layer; replacements may temporarily exist in more than one layer until compaction, so this is not presented as a unique live-file count. Every card has direct action links beside its explanation — **Repair now**, **Delete stored index**, **Validate**, **Rebuild**, or **Add to maintained folders** as appropriate — so no distant-button hunt is required. Scope residue whose root cannot be recovered appears as **Unidentified index data** and can be deleted individually rather than requiring **Clear all indexes**. Also here: **Clear all indexes**, **Open storage folder**, **Remove selected folder** (unregister it), **Refresh stats**, and **Restore indexing defaults**. The health cards read manifests only, so they stay cheap even for a large index. Building runs in the background and can be cancelled; the previous index stays intact until a replacement is validated. |
+
+#### Folder coverage, freshness, and maintenance
+
+**Removed folders and status health.** Removing a folder from the maintained list immediately removes its freshness warning from the overall status. The ready-drive row remains visible for context, but it is excluded from overall health totals and warnings: it says **not indexed — not maintained** when no index data remains, or **leftover index — not maintained** when files remain on disk. Therefore, three healthy maintained indexes plus an unindexed F: report **Index: all maintained indexes healthy**, not **Index: 3/4 drives healthy**. Add a folder back to resume maintenance, or use **Delete this index** to remove leftover data. Deleting an index or clearing all indexes also refreshes the status panel immediately.
+
+**New files and incremental updates.** For a whole-drive index, the change-journal check treats every new file identity as pending maintenance even though that identity was not present in the prior index. A live file-system watcher can request the update sooner, but it is only a hint; if Yagu was closed or restarted while a file was copied, the next scheduled/continuous journal pass still discovers it. A watcher-triggered pass bypasses the old-identity preflight for the same reason. The HDD safeguard does not disable incremental indexing — it only limits that drive's index worker to one lane, so an update may take longer but is still performed.
+
+#### When settings require a rebuild
+
+**Rebuild advice after settings changes.** When saved settings change what a build stores, Yagu identifies the minimal maintained-folder set and offers an explicit staged rebuild. This applies to the index data location, maximum indexed file size, hidden-file and reparse-point policies, global build-time excluded globs/extensions, per-folder filters, newly added/broadened roots, and enabling PDF-text, image-text, or format-v3 build output. Enabling additive output recommends a rebuild; disabling it applies immediately and does not require one. Query-family switches, query budgets/parallelism, scheduling, build resources, journal limits, compaction thresholds, retention/cleanup, telemetry, and status/provenance settings do **not** trigger rebuild advice because they change how existing indexes are used or maintained, not their stored meaning. The prompt is advisory—search correctness is preserved by live-scan/fallback before rebuilding—and rebuilding several roots is always an explicit, cancellable choice.
+
+#### Diagnostics and overlapping roots
+
+**Local fragmentation and query-open diagnostics.** Every successful mapped index query writes one structured `Index query open diagnostics` entry to the local Yagu log. It reports base-plus-segment layer count, path and tombstone records, distinct newest-owner routes, superseded records, route-record amplification, and separate mapping, candidate-evaluation, routing-table, worker-open, and host-round-trip times. Layer count alone is not treated as degradation because a memory-bounded full build can create several disjoint layers; amplification above 1.0 identifies replacement/tombstone history, while measured open times show whether that structure actually affects searches. These diagnostics stay on the machine and are not sent through telemetry.
+
+**Overlapping index roots are consolidated.** Registered roots form a non-overlapping coverage set. If `C:\` is registered, adding `C:\src` does not create or maintain a second index: descendant searches use the single `C:\` index, but discovery remains restricted to `C:\src`, so files outside the requested folder are never searched. Adding a broader root replaces narrower registrations it contains. Existing child index data from an older Yagu version is retained safely as a **redundant index — covered by …** row; it is not maintained or opened alongside the parent and can be deleted individually to reclaim space. Yagu never combines parent and child postings in one search, so overlap cannot duplicate results.
+
+#### Readiness prompts and quick actions
+
+**Pre-search index readiness warning.** Before an index-enabled query starts, Yagu checks only the lightweight query plan, index metadata/file identities, and bounded change-journal freshness state. If a searched root has no usable index, or its checkpoint is too old to prove freshness (for example, a journal gap/reset or the configured catch-up-record limit), a titleless **Content index needs attention** prompt explains which root would be scanned live. For a folder that is not indexed yet, choose **Index & wait** to block Yagu behind the full-window progress overlay until the build finishes, or **Index & search now** to start indexing in the background and immediately continue the current search using the authoritative live path. Recoverable stale states offer **Update index** before **Rebuild index**. A catch-up-limit stop offers **Increase limit & update**, which raises the persisted bounded replay limit and retries a safe incremental update; if continuity still cannot be proven, Yagu keeps the existing index unchanged instead of silently rebuilding it. Irrecoverable gaps/resets still offer an explicit rebuild. You can also choose **Search live** (the same issue is not repeated again during that app session) or cancel. Query-shape/selectivity bypasses do not show this warning because rebuilding cannot make those queries acceleratable.
+
+**Quick add from the main window.** When a search covers a folder that has no index yet, the status-bar index indicator reads **Index: none for this folder** — click it to open an **Add folder to the content index** dialog. The dialog lets you index that exact folder or any of its parent folders ("subpart of the path"), shows which folders are already indexed, and — if you pick a whole drive or a very large system folder — warns before it starts. Confirming turns the feature on, registers the folder, and builds it in the background. (When an index already exists, clicking the indicator opens this Indexing tab instead.) The first time you run Yagu it also offers, once, to pick a folder to index; the same large-folder warning applies.
+
+#### Pausing, disabling, interruption, and recovery
+
+**Turn the index off from the status bar.** **Right-click any index label** (for example **Index: full** or **Index: accelerating**) for an **Options** menu that expands to three choices: **Pause indexing** (temporarily stops the current background build; resume from the same menu), **Disable index (this run)** (stops using the index for searches for the rest of this session without changing your saved setting — it's used again next launch), and **Disable indexing (persistent)** (turns the whole feature off and saves it; your registered folders and their built indexes are kept, so re-enabling restores them). Each command is **reversible from the same menu**: after "this run" the submenu shows **Use index (this run)**, and after a persistent disable the indicator stays visible as a muted **Index: off** whose right-click **Options** menu offers **Enable indexing (persistent)** (the inverse of **Disable indexing (persistent)**). If a registered folder has no index yet, the menu also offers **Rebuild now**. Every command is keyboard-accessible via the Menu / Shift+F10 key on the focused indicator.
+
+**Crash- and corruption-safe.** The index is only ever an accelerator, so a damaged, incompatible, partial, or missing index never changes your results — the affected search simply live-scans everything. Every index file carries a checksum; a new index generation is written to a temporary folder, validated, and only then swapped in atomically behind redundant pointers, with the previous generation retained. A crash, kill, cancellation, disk-full stop, or power loss while indexing therefore leaves the previous complete index unchanged (and a failed first build publishes nothing).
+
+**Interrupted work does not resume from its displayed percentage.** An interrupted **full build/rebuild** discards its private partial workspace; the next full build starts again from the beginning. An interrupted **incremental update** leaves its journal checkpoint unchanged, so the next update safely replays changes from the last completed checkpoint rather than trusting a half-finished delta. In both cases, searches continue using the previous complete index when safe, and live-scan anything whose freshness cannot be proven.
+
+**Yagu warns before an active index operation is terminated.** Closing the window to the system tray is safe because Yagu and indexing keep running. A real application exit — including **Exit** from the tray, an update that needs to close Yagu, or a Windows restart/shutdown/sign-out request — is blocked while indexing is active and opens a titleless warning. Keep Yagu open to let indexing finish, or explicitly exit anyway. For a full build, partial work is discarded and a complete build must start again later. For an incremental update, the next pass replays from the last committed journal checkpoint; a complete rebuild is required only if continuity can no longer be proven. When Yagu blocks a Windows session-ending request, retry that Windows operation after indexing finishes or after choosing to exit Yagu.
+
+#### Index management actions
+
+| Action | What It Does |
+| --- | --- |
+| Add folder | Registers a maintained root. The quick-add dialog also starts a background build; Settings scheduling controls later maintenance. |
+| Build now | Runs a complete staged build for the selected maintained folder. If an index already exists, it remains active until the new generation validates and commits. |
+| Update index | Applies journal-proven changes incrementally when continuity can be established. |
+| Increase limit & update | Raises the bounded journal catch-up limit and retries the incremental update; it is not resuming a partial full build. |
+| Rebuild | Explicitly forces a complete staged replacement, normally after build-output settings change or when existing data needs replacement. The current complete index stays active until the replacement validates and commits. |
+| Validate | Re-checks the stored manifests, checksums, layers, and pointers. It reports health but does not rebuild content. |
+| Repair index | Builds a safe replacement for recoverable corrupt, incomplete, or incompatible data. |
+| Remove selected folder | Stops maintaining that root but leaves its stored index as a **leftover index** until you delete it. |
+| Delete this index | Removes stored index data for one scope. It does not delete source files. |
+| Clear all indexes | Removes all Yagu content-index data. Registered folders/settings remain unless separately changed. |
+| Pause indexing | Stops background indexing until resumed. It does not disable use of an already healthy index. |
+| Disable index (this run) | Live-scans for the remainder of this Yagu session without changing saved settings or deleting data. |
+| Disable indexing (persistent) | Saves the master switch as off; registered folders and stored data remain available if re-enabled. |
+
+#### Indexing troubleshooting
+
+| Symptom | What To Check |
+| --- | --- |
+| A search says **available · not accelerated** | Check the completion reason: the query may be ineligible, too broad, over the candidate/memory/startup budget, or the index may exceed the in-process size limit. Rebuilding does not help a query-shape/selectivity bypass. |
+| **Indexing: preparing...** stays visible | Yagu is warming a usable index. Wait, increase the query startup budget, or choose to search live; warm-up pauses during that search and resumes afterward. |
+| **healthy · recent changes pending** | The committed index is valid, but the journal proves newer files/changes exist. Those paths live-scan until the next incremental update. |
+| **Content index needs attention** | Read the per-root reason. Use **Update index** for recoverable journal catch-up, **Increase limit & update** when the bounded record limit was reached, or **Rebuild** for a gap/reset or incompatible representation. **Search live** remains safe. |
+| A build was cancelled, Yagu closed, or the worker stopped | A full build restarts next time; an incremental update replays from its last committed checkpoint. The previous complete index is preserved. |
+| Builds are slow | Whole drives, PDF-text output, large files, and broad ingestion increase work. Review build-time excludes/max file size, build memory/parallelism, and whether the HDD safeguard has correctly forced one lane. |
+| Index storage is growing | Review quota/free-space limits, retained generations, cleanup/quarantine ages, redundant child indexes, leftover indexes, and optional PDF/v3 output. **Open storage folder** shows the configured location. |
+| Source folder is missing | Restore the source, remove it from maintenance, or delete its stored index. Searches cannot use an unavailable source and safely live-scan reachable paths. |
+| A worker build failed | The previous generation remains active. Review the local log/status reason, then retry, **Validate**, **Repair**, or **Rebuild** as appropriate. A worker that fails after accepting work is not automatically repeated inside the main app. |
+
+The CLI exposes the same lifecycle through `--build-index`, `--rebuild-index`, `--index-status`, `--delete-index`, `--clear-indexes`, root/filter commands, and `--index-config`; see **Content Index (CLI)** below.
 
 ### Performance Tab
 
@@ -472,7 +696,7 @@ Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BM
 | --- | --- |
 | File-listing backend | Auto, Everything SDK, `es.exe`, or .NET enumeration. |
 | Content-search parallelism | Concurrent file scan workers: Safe cap, 1 thread, Half cores, 2x cores, or All cores. |
-| Limit parallelism on HDD | When the search target is on a rotational drive, warn and force 1 thread. |
+| Limit disk-intensive parallelism on HDDs | Authoritative per-root HDD safeguard. Forces content-scan CPU parallelism, OCR worker processes, content-index query lanes, and content-index build lanes to one. The native scanner's separate I/O oversubscription can still overlap sequential reads. |
 | SDK channel buffer size | Number of file paths buffered between Everything SDK discovery and search workers. |
 | Search result temp-file drive | Drive used for disk-backed result temp files during memory-saving mode. Only writable drives with enough free space are listed. |
 | Temp-drive full warning threshold (%) | Active searches are terminated when the search result temp-file drive is more than this full. Default 90%; valid range 1-99. Checked every 30 seconds. |
@@ -508,6 +732,11 @@ Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BM
 | Max matches per section | Matches shown per file section before an overflow "show more" button (default: 500). |
 | Preview section page size | Initial file sections loaded per page, more loaded on scroll (default: 50). |
 | Full-file preview limit (MB) | Largest file size for full-file preview mode (default: 1024 MB). |
+| Full-file preview render lines | Lines the full-file preview renders before a truncation notice; the editor still opens the whole file (default: 20,000). |
+| Full-file preview render characters | Character budget for the full-file preview render, also caps a single very long line (default: 1,000,000). |
+| Max rendered matches per section | Ceiling on matches a single section renders across all "Load more" expansions before directing you to the editor (default: 4,000). |
+| Max files per multi-file preview | Cap on how many checked files one "Preview all selected" prepares, keeping the preview responsive (default: 1,000). |
+| Max match references per multi-file preview | Cap on total match references prepared across a multi-file preview (default: 100,000). |
 | Built-in editor font family | Typeface used by the built-in full-file editor. |
 | Built-in editor font size | Base size used by the built-in full-file editor; zoom scales from this value. |
 | Editor gutter text | Color of line numbers in the built-in editor gutter. |
@@ -556,13 +785,17 @@ Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BM
 
 | Setting | What It Controls |
 | --- | --- |
+| Check GitHub for Yagu updates | Chooses how Yagu looks for a newer version on the official GitHub Releases page (it never sends any of your data). Pick **Automatically** (a quiet background check about once a week — you're notified only when a genuinely newer version exists, via a dismissible banner, never a pop-up on every launch), **Only when I ask** (Yagu never checks on its own; use **Check for updates now**), or **Off**. A fresh install asks you once which mode to use; you can change it here any time. The **Check for updates now** button runs an on-demand check and reports whether you're up to date. When a newer release is found, Yagu shows its release notes before asking to download; the download runs in a dedicated MultiTerm terminal, and Yagu verifies the GitHub size/SHA-256 and requires the installer and running app to have trusted Authenticode signatures from the same publisher before offering installation; a failed installer is deleted and never executed. |
 | Show memory pressure warning | Display the orange toolbar warning when memory-saving mode activates. Hidden by default. |
 | Stats for nerds | Shows files/sec, MB/s, disk throughput sparkline, and utilization percentage in the bottom status bar. |
 | Show build number in title bar | Adds the current Yagu version to the main title bar for diagnostics and screenshots. Hidden by default. |
 | Show Auto-scroll checkbox | Shows the results-toolbar Auto-scroll checkbox for testing continuously appended result rows. Hidden by default. |
+| Simulate system idle | Session-only index-maintenance test switch. While enabled, the **When idle** scheduler treats the machine as idle. Enabling it requests an immediate real maintenance check; the configured trigger and update mode plus normal pause, search, power, disk-space, and eligibility safeguards still apply. Click **Stop simulating system idle** to restore real keyboard/mouse idle detection. The switch resets when Yagu exits. |
 | Reset font contrast reminders | Allows theme/font contrast warnings to appear again after Remind me later or Don't remind me again. |
 | Reset .gitignore vs include filter warning | Re-enables the precedence prompt after you chose Don't ask again or set a fixed preference in Search Defaults. |
+| Reset index warm-up search warning | Re-enables the prompt shown when a search would pause startup index warming and run without index acceleration. |
 | Reset first-time introductory tooltips | Allows the file drawer, line-number, and preview-match introductory tooltips to appear again. |
+| Reset window style prompt (re-prompt on startup) | Shows the one-time "Choose your window style" prompt (Traditional / Compact launcher / Launcher on top) again on the next launch. |
 | Re-enable admin privilege warning | Re-enables the non-administrator warning after it was dismissed. Visible only after the warning has been suppressed. |
 | File log level | Controls file logging: None, Critical, Warning, Info, or Verbose. Verbose can degrade performance. |
 | Console log level | Controls console logging with the same levels as file logging. |
@@ -580,10 +813,37 @@ Controls Yagu's two **optional, off-by-default** diagnostics features. Both are 
 | Setting | What It Controls |
 | --- | --- |
 | Send anonymized error & performance telemetry | When on, Yagu sends a small batch of anonymized, path-scrubbed error summaries and performance measurements (e.g. startup time) to the configured proxy. No file paths, queries, contents, or personal data. Off until you opt in. |
+| Share aggregate content-index metrics | When on — **and only if you also enabled the anonymous telemetry above** — Yagu may include aggregate content-index metrics (build/refresh time, segment and compaction counts, index-used vs bypassed). Never includes folders, paths, queries, or file contents. Off by default. Also settable from the CLI via `--index-config ShareAggregateIndexTelemetry=true`. |
 | Offer to send a bug report on errors | When on, if Yagu hits a critical/unhandled error it opens a **bug-report dialog** that shows you exactly what would be submitted — the error and stack trace, GPU/NPU details, a copy of your `settings.json`, and a tail of your log file — plus an optional comment box. Nothing is sent unless you click **Submit report**. The same error is offered at most once per session. Off until you opt in. |
 | Contact email (optional) | An email address attached to bug reports you submit, so the developer can follow up. Leave blank to stay anonymous. Only sent with reports you explicitly submit. |
 
 The **What's Sent & Where** group on this tab summarizes the destination and shows whether a telemetry endpoint is configured for the current build.
+
+---
+
+## Privacy Policy
+
+Yagu's full privacy policy ships as **PRIVACY.md** in the install folder and is shown during setup. Its plain-language summary:
+
+> **Everything runs on-device.** Your files, file contents, directory names, and search queries never leave your PC. Yagu has no accounts, no sign-in, and does not sell or share personal data.
+
+**What stays on your machine (all core work is local and never transmitted):**
+
+- Search queries and results, file names, paths, directory names, and file contents.
+- **Semantic (natural-language) AI search** — a small model running locally through Microsoft Foundry Local translates your query into concrete search options; the query is never sent over the network (only the model file is downloaded once from Microsoft).
+- Image-text (OCR) and PDF-text extraction, performed on-device.
+- The optional content index and the local Yagu log file (the log is only sent if you explicitly submit a bug report).
+
+**Optional network features — all off or opt-in by default:**
+
+| Feature | Default | What it does |
+| --- | --- | --- |
+| Anonymized diagnostics (telemetry) | Off | Sends path-scrubbed, anonymized error/performance summaries to a self-hosted proxy. Never includes paths, queries, or contents; only a random install GUID. Inert if the build has no endpoint configured; CLI/headless never sends. |
+| Bug reports | Off | On a critical error, shows you exactly what would be submitted (error, stack, GPU/NPU info, your `settings.json`, a log tail) — nothing is sent until you review it and click **Submit**. |
+| Application update checks | Asks once | Contacts GitHub's public release metadata only, after a one-time prompt. No personal data. |
+| Model downloads & new-model notices | Semantic-only | The local model is downloaded once from Microsoft Foundry Local on first semantic search; an optional daily catalog check can notify you of new on-device models. No queries or personal data are sent. |
+
+All of these can be reviewed and changed at any time under **Settings ▸ Privacy** (and the update behavior under app updates). Read the complete policy any time — [open the full Privacy Policy (PRIVACY.md)](PRIVACY.md), which ships in the install folder beside this help file.
 
 ---
 
@@ -645,6 +905,7 @@ When using generated CLI commands, **Send command to terminal** first verifies t
 | **Alt+R** | Toggle regex. |
 | **Alt+M** | Toggle match across lines (multiline). |
 | **Alt+E** | Toggle exact match. |
+| **Alt** (hold) | Reveal access-key tips on the main commands, then press the letter to activate: **P** pin folder, **I** index folder, **B** Browse, **A** Advanced Options, **S** Sort, **G** Group, **F** Filter. |
 | **Double-click** (preview match) | Open built-in editor at that line. |
 
 ---
@@ -677,7 +938,7 @@ When registered, the **"Search with Yagu"** entry appears in the right-click men
 - **Right-click a folder** → **Search with Yagu** — opens Yagu targeting that folder.
 - **Right-click the background** of an open folder → **Search with Yagu** — opens Yagu targeting the current folder.
 
-If Yagu is already running, the directory is forwarded to the existing window (single-instance mode).
+If Yagu is already running, the folder is forwarded to the existing window (single-instance mode): the directory box is populated with that folder — **overriding any pinned startup directory** — and the window is brought to the foreground.
 
 ### Registering the context menu
 
@@ -703,6 +964,7 @@ When tray mode or close-to-tray is active, the system tray icon provides:
 
 - **Left-click** — Restores the window.
 - **Right-click menu:**
+  - **Quick search…** — Opens a small popup with a **search term** box and a **directory** box. Enter a term (and optionally a folder) and click **Search** (or press Enter) to run the search in the already-running Yagu window without switching to it first. Leave the directory blank to search all drives.
   - **Open (reset)** — Restores the window and clears the directory.
   - **Open (existing)** — Restores keeping the current directory.
   - **Close** — Exits the application.
@@ -749,7 +1011,7 @@ If Yagu detects access-denied errors, a banner appears:
 
 ## HDD Detection
 
-When Yagu detects the search directory is on a rotational (HDD) drive, it can automatically limit parallelism to avoid disk thrashing. A dialog informs you when this occurs. Control this with the "Limit parallelism on HDD" setting.
+When Yagu detects that a search or index root is on a rotational (HDD) drive, the **Limit disk-intensive parallelism on HDDs** setting can force content-scan CPU parallelism, OCR worker processes, and content-index query/build lanes to one. The pre-search dialog's one-run override changes only content-scan parallelism; specialized OCR/index workers remain at one while the global safeguard is enabled.
 
 ---
 
@@ -885,6 +1147,10 @@ Do not compare rates across unrelated directories — a tree of tiny source file
 
 If Everything is not available, Yagu falls back automatically and shows the reason in the status area.
 
+Before a GUI search that may use Everything, Yagu reads Everything's active `Everything.ini` and checks whether each searched root is covered by an enabled NTFS/ReFS/FAT/remote volume index or recursive folder index. For a nested directory such as `D:\a\b\c`, the warning recommends adding the **root drive (`D:`)**, not only that nested folder. An all-drives search lists every confirmed-uncovered eligible drive in one dialog. Everything keeps current settings in memory and saves them on exit; therefore, while Everything is running, a root absent from the saved INI is treated as **unknown**, not “not indexed” (it may have just been added or still be scanning). This prevents stale-INI false warnings. The warning is also skipped when Everything is not installed, when **.NET enumeration only** is selected, or when the all-drives full-scan option forces .NET enumeration. Choose **Don't warn me again** to suppress it; re-enable it under **Settings ▸ Developer Options ▸ Reminders and Warnings**.
+
+The dialog includes an explicit **Add drive(s) to Everything now** action. With consent, Yagu uses Everything's documented `-add-volumes` and `-rescan` commands, which are forwarded safely to the running instance; Yagu never edits the live INI or proprietary `Everything.db` directly. You can alternatively add the drive manually under **Everything ▸ Tools ▸ Options ▸ Indexes**. Interactive CLI searches provide equivalent choices: add automatically, confirm you already added it, ignore for now, or never warn again. Piped/non-interactive CLI runs never prompt.
+
 ---
 
 ## Native Scanner and Managed Fallback
@@ -936,7 +1202,7 @@ Log levels: None → Critical → Warning → Info → Verbose. Use Info for nor
 YaguSetup-<version>-<arch>.exe /VERBOSELOG
 ```
 
-It works with silent installs too (`YaguSetup-<version>-<arch>.exe /VERYSILENT /VERBOSELOG`). The override stays in effect until you reinstall normally (without `/VERBOSELOG`, which clears it) or uninstall Yagu.
+It works with silent installs too (`YaguSetup-<version>-<arch>.exe /VERYSILENT /VERBOSELOG`). Interactive setup displays Yagu's GPLv3 license on Inno Setup's standard agreement page and displays the consolidated third-party notices after installation, matching the MultiTerm installer flow. The override stays in effect until you reinstall normally (without `/VERBOSELOG`, which clears it) or uninstall Yagu.
 
 ---
 
@@ -1001,6 +1267,19 @@ Yagu includes a full CLI mode for scripting and pipeline integration:
 Yagu.exe --cli --directory <path> PATTERN [OPTIONS]
 ```
 
+### First-run prompts (CLI)
+
+The first time you run an interactive CLI search, Yagu shows the same one-time setup prompts as the GUI, each gated by the **same** saved setting — so answering on either surface never re-asks on the other:
+
+- **Help improve Yagu?** — opt in to anonymized telemetry and bug reports (off by default).
+- **Temporary search-result files** — pick the drive Yagu pages large result sets to.
+- **Explorer context menu** — add a "Search with Yagu" right-click entry (skipped if already registered).
+- **Content index onboarding** — optionally index one or more folders you search often, and choose which automatic build trigger(s) keep them up to date (or leave it Manual).
+- **AI search on CPU** — a warning when no GPU/NPU is present (only when AI search is enabled).
+- **New AI models** — a once-a-day notice when new on-device models appear (only after you've used AI search).
+
+These are skipped automatically when input is redirected (piped/automated runs), so scripts are never blocked. The Everything install offer and the first-run AI model check run separately. Window-style and font-contrast prompts are GUI-only and do not apply to the CLI.
+
 ### Required
 
 | Argument | Description |
@@ -1029,6 +1308,8 @@ Yagu.exe --cli --directory <path> PATTERN [OPTIONS]
 | `--multiline-engine <e>` | Native multiline backend: `regex` (default) or `grep`. Both give identical results — a performance knob (implies `--multiline`). |
 
 ### Semantic Search (local AI)
+
+A single-token `--semantic-pattern` is treated as a literal Traditional pattern immediately. This avoids loading the local model for a lone word, number, path, or symbol; Semantic translation begins only when the request contains multiple whitespace-separated tokens.
 
 Describe the search in plain language and let a local on-device model fill in the
 flags. The query never leaves the machine; the model is downloaded once via Microsoft
@@ -1068,6 +1349,10 @@ Yagu.exe --cli --semantic-pattern "find all files on C:\ with invoice2024 in the
 ```
 
 Semantic requests can also set **sorting** and **grouping** (e.g. *"sort by file name"*, *"group by directory"*). As with traditional `--sort`/`--group`, the results are collected and rendered after the scan completes rather than streamed. See [Sort (CLI)](#sort-cli) and [Group (CLI)](#group-cli) for the underlying flags.
+
+The CLI honors the same **per-model generation-parameter overrides** as the app (Temperature, TopP,
+MaxTokens, RandomSeed, FrequencyPenalty, PresencePenalty), read from `SemanticModelParameterOverrides`
+in `settings.json`. See [Advanced: per-model generation parameters](#advanced-per-model-generation-parameters).
 
 ### File Filtering
 
@@ -1123,6 +1408,7 @@ Semantic requests can also set **sorting** and **grouping** (e.g. *"sort by file
 | `--ocr-engine <name>` | OCR engine for `--image-text`: `paddle` (PaddleSharp) or `tesseract`. Default `paddle` on x64/Arm64, `tesseract` on x86 (PaddleOCR's runtime is x64-only). |
 | `--ocr-model <name>` | PaddleSharp recognition model for `--image-text`: `EnglishV3`, `EnglishV4`, `ChineseV4`, or `ChineseV5` (default). Falls back to the **OCR ▸ Recognition model** setting. Ignored by the `tesseract` engine. |
 | `--ocr-max-side <px>` | PaddleSharp detection resolution (longest side in pixels) for `--image-text`: default 960; `0` = unlimited (native resolution). Falls back to the **OCR ▸ Detection resolution** setting. Ignored by the `tesseract` engine. |
+| `--ocr-workers <0-4>` | Independent OCR worker processes. `0` = automatic (Paddle: one; Tesseract: up to two), while 1–4 is explicit. Falls back to **OCR ▸ OCR worker processes**. The saved HDD safeguard forces one for HDD roots. |
 | `--allow-ocr-download` | Consent, in advance, to the one-time download of the OCR engine runtime and/or language models that `--image-text` needs on first use (the lite installer ships without them; the OCR-bundled installer ships them so nothing downloads). Without this flag, a non-interactive run that needs the download is refused and an interactive run prompts before downloading. Consent is remembered for future runs. |
 | `--pdf-text` (aliases `--search-pdf-text`, `--pdf`) | Convert PDF files to text (via the bundled Xpdf `pdftotext`) and search the extracted text. Off by default; falls back to the **Search PDF text** setting. PDFs are processed on a background queue so the normal file scan is not blocked. Only the embedded text layer is read — scanned/image-only PDFs yield no text. |
 | `--no-pdf-text` (aliases `--no-search-pdf-text`, `--no-pdf`) | Do not convert PDFs to text (default). |
@@ -1133,6 +1419,31 @@ Semantic requests can also set **sorting** and **grouping** (e.g. *"sort by file
 | --- | --- |
 | `--max-results <n>` | Stop after N matches (default: 50000). |
 | `--line-truncation <n>` | Truncate lines to N characters (0 = no limit). |
+
+### Content Index (CLI)
+
+The content index is an **opt-in, offline accelerator** that prunes the candidate file set before the normal scanner runs. It never changes results — every retained file is still read live — and it is orthogonal to `--image-text` / `--pdf-text` / `--search-archives` (raw-file pruning never suppresses extracted content). Acceleration applies to raw text and, with `--binary`, bounded printable-ASCII runs in binary files. **Case-sensitive or ASCII case-insensitive** queries can accelerate; non-ASCII case-insensitive, regex-with-classes, oversized/unsupported binary, and unindexed files transparently live-scan. A registered ancestor index serves descendant searches (`C:\` can accelerate a `C:\src` search); exactly one physical index is selected and the normal file discovery remains scoped to the requested directory, so no duplicate files or results are introduced. When a search opts into the index, the completion summary prints a `Content index:` line (accelerated / partial / not used, with the number of files skipped) — the CLI mirror of the GUI's post-search coverage indicator. The management commands below manage the persistent index and exit without searching.
+
+| Flag | Description |
+| --- | --- |
+| `--use-index` | Use the content index for this search (default from settings). Does **not** bypass a disabled master feature; if indexing is off it reports so and live-scans. |
+| `--file-io-timeout <seconds>` | Override the per-file and low-level volume I/O deadline for this run (1–600 seconds; default 30). Timed-out files are skipped and reported; index work fails closed. |
+| `--no-index` | Force a full live scan for this search (never use the index). |
+| `--build-index [<path>]` | Build/update the index for a scope (default: current directory), print a summary, and exit. Refuses a duplicate child build when a different registered ancestor already covers the path. |
+| `--rebuild-index [<path>]` | Force a full rebuild of the index for a scope. Refuses a redundant child rebuild beneath a registered ancestor. |
+| `--index-status [<path>]` | Print the index manifest, stored content-record/layer counts, creation time, active-generation build time, true last incremental-update time (when one exists), and last-build skip/fail summary for a scope. |
+| `--delete-index <path>` | Delete the index for one scope. |
+| `--clear-indexes` | Delete all local content-index data. |
+| `--index-config` | Print every persisted Indexing setting and its value. |
+| `--index-config <key>=<value>` | Set an Indexing setting (repeatable; validated exactly like the Settings tab — unknown keys or invalid values fail without saving any change). Build-output changes print the affected roots and exact `--rebuild-index` commands. |
+| `--index-config reset` | Restore all Indexing settings to their defaults. If reset changes build output, prints rebuild recommendations without starting work automatically. |
+| `--index-list-roots` | List the folders registered for content indexing (your **Folders you index** list). |
+| `--index-add-root <path>` | Register a folder for content indexing. A covered child is not added; a broader new root consolidates narrower registrations. A newly maintained root prints its build/rebuild command. |
+| `--index-remove-root <path>` | Unregister a folder from content indexing. |
+| `--index-set-root-filter <path> [--root-include <globs>] [--root-exclude <globs>]` | Set **per-folder** build-time globs for one root. Exclude globs add to the global excludes; include globs re-admit paths a broader exclude drops (e.g. index `node_modules` under just this folder while excluding it globally). Omit both globs to clear. A semantic change prints the affected root's rebuild command. |
+| `--index-clear-root-filter <path>` | Remove a folder's per-folder glob overrides and print its rebuild command when maintained. |
+
+Management commands use stable exit codes: `0` success, `2` invalid arguments, `3` unsupported scope (e.g. a missing root), `4` cancelled, `5` build failure/corruption.
 
 ### Export (CLI)
 
@@ -1260,9 +1571,12 @@ When launching Yagu in GUI mode (without `--cli`):
 
 | Argument | Description |
 | --- | --- |
-| `--dir <path>` | Set initial search directory. |
+| `<path>` (positional) | A bare folder path sets the initial search directory (**overrides any pinned startup directory**). This is what the Explorer **Search with Yagu** context menu uses — it launches `Yagu.exe "C:\that\folder"`. Only an existing directory is matched. |
+| `--dir <path>` | Set initial search directory (takes precedence over a bare positional path). |
 | `--query <text>` | Set initial query (auto-starts search if `--dir` is also provided). |
 | `--window-mode <mode>` | Window behavior: `0`/`minimize`/`tray`, `1`/`stay-open`, `2`/`always-on-top`, `3`/`traditional`/`desktop`. |
+
+When Yagu is already running, these are forwarded to the existing instance instead of opening a second window: the directory is applied (overriding a pinned startup directory), and a `--query` runs the search in that window.
 
 ---
 
@@ -1288,13 +1602,186 @@ Then tune filters and query until the result set is manageable.
 
 ## Semantic Search Query Examples
 
-Yagu's query engine is verified by a catalog of **300 scenarios** in the test project
-(`SemanticSearchQueryCatalog`), each pairing a query with specific search options and asserting an
-exact result. They double as a comprehensive reference of *what* you can search for and *how* the
-options combine — literal / substring / whole‑word / regex matching, case sensitivity, search modes,
-include and exclude filters, size and date ranges, result and depth limits, binary / hidden / archive
-handling, and multi‑term queries. Every row below is a real, passing test case; the **Scenario** column
-is its name in the test catalog.
+These are **natural-language** queries — the kind you type into the search box with **Semantic
+Search** turned on (or pass to `--cli --semantic-pattern "…"`). The on-device model reads your
+sentence and translates it into concrete Advanced Options: file-type include globs, file-name vs
+content mode, size and date ranges, sort and grouping, a target directory/drive, and the
+hidden / archive / image-text (OCR) toggles. Everything happens **locally** — the query never
+leaves your machine (see [Semantic Search (Local AI)](#semantic-search-local-ai) and the
+[Privacy Policy](#privacy-policy)).
+
+This library is exercised end-to-end by the `SemanticEvalGoldenTests` golden test, which runs the
+committed set of natural-language queries
+(`tests/Yagu.Tests/TestData/SemanticEval/queries.txt`, **300+ queries**) through the real
+`Yagu.exe --cli --semantic-pattern` pipeline and pins each one's resolved search parameters against
+a snapshot (`expected-plans.json`). The examples below are drawn from that same library, grouped by
+the capability they exercise. Add `--explain` to any CLI query to see exactly how it was interpreted
+without running the search.
+
+> The model interprets intent, so phrasing is flexible — "modified", "changed", "updated" and
+> "edited" all mean the same thing to it, as do "folder"/"directory" and "on C:"/"C drive". Vague
+> asks ("recent code", "big logs") resolve to sensible defaults; the more specific you are, the more
+> precisely the options are filled in.
+
+### File types → include globs
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `all png files` | Include filter `*.png`, searching file names. |
+| `word documents` | Include the Word extensions (`*.doc;*.docx`). |
+| `excel spreadsheets` | Include the Excel extensions (`*.xls;*.xlsx`). |
+| `python files` | Include `*.py`. |
+| `c# files` | Include `*.cs`. |
+| `powershell scripts` | Include `*.ps1`. |
+| `zip archives` | Include archive types (`*.zip`, …). |
+| `image files` | Include the common image extensions. |
+| `source code files` | Include a broad set of programming-language extensions. |
+| `config files` | Include config-style extensions (`*.json;*.yml;*.ini;*.conf;…`). |
+
+### Content search → find text inside files
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `files that contain the word error` | Content mode, pattern `error`. |
+| `c# files containing 'async'` | Include `*.cs`, content pattern `async`. |
+| `documents mentioning budget` | Document types, content pattern `budget`. |
+| `logs that contain the word timeout` | Include `*.log`, content pattern `timeout`. |
+| `search for the phrase connection refused` | Content mode, multi-word phrase `connection refused`. |
+| `json files containing apiKey` | Include `*.json`, content pattern `apiKey`. |
+
+### Content with exclusions → "X but not Y"
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `c# files that contain 'async' but not 'Legacy'` | `*.cs`, content `async`, filtering out matches containing `Legacy`. |
+| `python files containing import but not test` | `*.py`, content `import`, excluding `test`. |
+| `config files containing password but not example` | Config types, content `password`, excluding `example`. |
+| `log files with error but without warning` | `*.log`, content `error`, excluding `warning`. |
+
+### Dates & recency
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `files modified today` | Modified-after set to the start of today. |
+| `files changed in the last 30 days` | Modified-after set to 30 days ago. |
+| `files modified after 2024-01-01` | Modified-after `2024-01-01`. |
+| `files created before March 2023` | Created-before `2023-03-01`. |
+| `documents from 2022` | Modified within the 2022 calendar year. |
+| `c# files modified this year` | `*.cs`, modified since Jan 1 of this year. |
+
+### Sizes
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `files larger than 10 MB` | Min-size `10 MB`. |
+| `files smaller than 1 KB` | Max-size `1 KB`. |
+| `files between 1 and 5 MB` | Min-size `1 MB`, max-size `5 MB`. |
+| `empty files` | Max-size `0` (zero-byte files). |
+| `png files under 50kb` | `*.png`, max-size `50 KB`. |
+| `huge log files` | `*.log`, a large min-size threshold. |
+
+### Sorting & grouping
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `png files ordered by date` | `*.png`, sort by date modified. |
+| `log files sorted by size` | `*.log`, sort by size. |
+| `c# files newest first` | `*.cs`, sort by date modified, descending. |
+| `documents sorted by name` | Document types, sort alphabetically by name. |
+| `all files grouped by folder` | Group results by directory. |
+| `images grouped by extension` | Image types, grouped by file extension. |
+
+### Directory & drive targeting
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `png files in the images folder` | `*.png`, directory `images`. |
+| `c# files in the src directory` | `*.cs`, directory `src`. |
+| `files on C drive` | Directory `C:\`. |
+| `documents on D:` | Document types, directory `D:\`. |
+| `files on my desktop` | Directory set to the Desktop. |
+| `python files in src/api` | `*.py`, directory `src\api`. |
+
+### Hidden files & dotfiles
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `including hidden files show me config files` | Config types with **search hidden files** on. |
+| `hidden files containing password` | Hidden files on, content pattern `password`. |
+| `the .env file` | Targets the `.env` dotfile (hidden included). |
+| `png files but no hidden files` | `*.png` with **search hidden files** off. |
+| `text files that are not hidden` | `*.txt`, hidden excluded. |
+
+### Office documents, archives & OCR (text in images)
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `word documents containing invoice` | Word types, content pattern `invoice`. |
+| `search inside zip archives for readme` | **Search archives** on, content pattern `readme`. |
+| `xlsx files larger than 1MB` | `*.xlsx`, min-size `1 MB`. |
+| `screenshots containing invoice` | Image types with **image-text (OCR)** on, text `invoice`. |
+| `png files with the word CUDA in them` | `*.png`, OCR on, text `CUDA`. |
+| `photos with text that says budget` | Image types, OCR on, text `budget`. |
+
+### Patterns, regex, case & whole-word
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `regex search for \bTODO\b` | Regex mode with the given expression. |
+| `case-sensitive search for 'Error'` | Content `Error`, case-sensitive on. |
+| `whole word 'id'` | Whole-word match of `id`. |
+| `the exact phrase connection refused` | Exact-match of the phrase. |
+| `find START on one line and END on a later line` | Regex + multiline, matching across lines. |
+| `files with email addresses` | Regex matching an email pattern. |
+
+### Vague & fuzzy phrasing
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `recent code` | Source-code types, recently modified. |
+| `big log files` | `*.log` with a large min-size. |
+| `anything with passwords` | Content pattern `password` across all files. |
+| `stuff from last week` | Modified within the last week. |
+| `my python scripts` | Include `*.py`. |
+| `the largest images` | Image types sorted by size, largest first. |
+
+### Search flags & scope
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `search ignoring .gitignore` | Turns **obey .gitignore** off. |
+| `search including archives for password` | **Search archives** on, content `password`. |
+| `shallow search only the current folder for config` | Depth limited to the top level. |
+| `search binary files too for MZ` | **Search binary files** on, content `MZ`. |
+| `respect gitignore and find TODO` | **Obey .gitignore** on, content `TODO`. |
+
+### Compound, multi-facet queries
+
+The model combines every dimension above in a single sentence:
+
+| Natural-language query | What Yagu resolves it to |
+| --- | --- |
+| `c# files on C:/ that contain 'async' but don't contain 'Legacy', ordered by date` | `*.cs`, directory `C:\`, content `async` excluding `Legacy`, sorted by date. |
+| `python files in src containing import modified this month sorted by size` | `*.py`, directory `src`, content `import`, modified this month, sorted by size. |
+| `large log files from last week grouped by folder` | `*.log`, large min-size, modified last week, grouped by directory. |
+| `markdown files containing TODO created this year sorted by date descending` | `*.md`, content `TODO`, created this year, sorted by date descending. |
+| `word documents modified last month containing invoice grouped by folder` | Word types, modified last month, content `invoice`, grouped by directory. |
+| `images larger than 500kb modified this month grouped by extension` | Image types, min-size `500 KB`, modified this month, grouped by extension. |
+| `config files containing password not in hidden folders sorted by name` | Config types, content `password`, hidden excluded, sorted by name. |
+
+---
+
+## Search Options Reference
+
+Yagu's **traditional** (non-AI) search engine is verified by a catalog of **300 scenarios** in the
+test project (`SemanticSearchQueryCatalog`), each pairing a literal query with specific search
+options and asserting an exact result. They double as a comprehensive reference of *what* you can
+search for and *how* the options combine — literal / substring / whole‑word / regex matching, case
+sensitivity, search modes, include and exclude filters, size and date ranges, result and depth
+limits, binary / hidden / archive handling, and multi‑term queries. Every row below is a real,
+passing test case; the **Query** column is the raw pattern you would type (no AI translation), and
+the **Scenario** column is its name in the test catalog. For the natural-language equivalents, see
+[Semantic Search Query Examples](#semantic-search-query-examples) above.
 
 ### Literal, substring, whole-word & case sensitivity (59)
 

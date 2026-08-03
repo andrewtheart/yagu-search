@@ -7,11 +7,15 @@ Yagu is a hyperfast Windows directory search tool for finding, previewing and bu
 
 The name means "Yet Another Grep Utility". The goal is the speed of command-line search with a GUI built for repeated code and log investigation: streaming results, context preview, filtering, sorting, exporting, and quick opening in your editor.
 
+**Yagu is Windows-only** — there is no macOS or Linux build, and there are no plans for one. It is deliberately a *native Windows* app rather than a cross-platform one: the GUI is built on **WinUI 3 / the Windows App SDK**, and the app is woven into Windows-specific facilities throughout — Win32/COM (folder pickers, global hotkeys), the Explorer context menu, the system tray and taskbar, Windows Error Reporting crash dumps, the NTFS change journal (USN) for indexing, and optional integration with **voidtools Everything** (itself Windows-only). It ships as a self-contained **Native AOT** build with a Rust `yagu_core.dll` compiled for Windows. Porting those pieces would mean a different UI and a different engine, so Yagu stays focused on being the fastest it can be on the one platform it targets. See [Prerequisites](#prerequisites) for supported Windows versions.
+
 For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
 > ## ⚠️ License & Legal Notice
 >
 > Yagu is free, open-source software released under the **[GNU General Public License v3.0](LICENSE)**. You are welcome to use, study, modify, and redistribute it — but **only** under the same GPL v3 terms, **with the complete corresponding source code included**.
+>
+> **⚠️ I am fortunate enough to have a lawyer, and I 100% plan on suing and taking legal action against any individuals who attempt to rebrand and sell this software without providing the source and distributing it under the exact same license, as required by the GNU General Public License v3. Violations are actively monitored and scanned for.**
 
 ## Why Yagu?
 
@@ -86,6 +90,12 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
       Send matches, file lists, or whole files out as styled HTML reports — or JSON and CSV from the CLI — ready for the next tool in your pipeline.
     </td>
   </tr>
+  <tr>
+    <td align="center" colspan="3">
+      <h3>⚙️ Persistent Content Index</h3>
+      Opt in to index folders you search repeatedly. Yagu uses compact, on-device content signatures to skip files that provably cannot match, then verifies every remaining candidate live — faster searches with identical results and automatic safe fallback whenever an index is unavailable or stale.
+    </td>
+  </tr>
 </table>
 
 ## Download Installer
@@ -96,12 +106,14 @@ To install Yagu without building from source, download the installer that matche
 
 | Installer | What it's for | Image-text (OCR) search |
 | --- | --- | --- |
-| [**x64** — YaguSetup-1.0.0.2381-x64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2381/YaguSetup-1.0.0.2381-x64.exe) (~163 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
-| [**x64 · Offline** — YaguSetup-1.0.0.2381-x64-offline.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2381/YaguSetup-1.0.0.2381-x64-offline.exe) (~538 MB) | Same as x64, but for machines that must run fully **offline** — air-gapped PCs, or to skip first-run downloads. Bundles everything needed offline: the voidtools **Everything** installer (installs with your consent, no download) and the Microsoft Edge **WebView2** runtime for the embedded terminal. | Works with **no download** — both engines ship inside the installer. **Defaults to PaddleOCR**, same as every other edition: this installer bundles PaddleOCR's full native runtime and English models, so the default engine runs completely offline with no first-run download. Tesseract is bundled too and can be selected in Settings. See the note below. |
-| [**Arm64** — YaguSetup-1.0.0.2381-arm64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2381/YaguSetup-1.0.0.2381-arm64.exe) (~162 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
-| [**x86** — YaguSetup-1.0.0.2381-x86.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2381/YaguSetup-1.0.0.2381-x86.exe) (~144 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
+| [**x64** — YaguSetup-1.0.0.2394-x64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2394/YaguSetup-1.0.0.2394-x64.exe) (~191 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
+| [**x64 · Offline** — YaguSetup-1.0.0.2394-x64-offline.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2394/YaguSetup-1.0.0.2394-x64-offline.exe) (~576 MB) | Same as x64, but for machines that must run fully **offline** — air-gapped PCs, or to skip first-run downloads. Bundles everything needed offline: the voidtools **Everything** installer (installs with your consent, no download) and the Microsoft Edge **WebView2** runtime for the embedded terminal. | Works with **no download** — both engines ship inside the installer. **Defaults to PaddleOCR**, same as every other edition: this installer bundles PaddleOCR's full native runtime and English models, so the default engine runs completely offline with no first-run download. Tesseract is bundled too and can be selected in Settings. See the note below. |
+| [**Arm64** — YaguSetup-1.0.0.2394-arm64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2394/YaguSetup-1.0.0.2394-arm64.exe) (~188 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
+| [**x86** — YaguSetup-1.0.0.2394-x86.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2394/YaguSetup-1.0.0.2394-x86.exe) (~169 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
 
 > There is no Arm64 or x86 "Offline" edition: the bundled OCR runtime is win-x64 only, so it can only be packaged offline for x64. On Arm64 and x86, image-text search still works — it downloads what it needs on first use.
+
+> **Optional setup choices.** On the installer's *Select Additional Tasks* page you can opt in to a desktop icon, an Explorer **"Search with Yagu"** context-menu entry, and **adding Yagu to the system PATH** so you can launch `yagu` (and `yagu --cli`) from any terminal. All three are your choice; the PATH entry is removed again if you uninstall.
 
 > **Which OCR engine does the Offline edition default to?** PaddleOCR — the same default as every other edition. PaddleOCR normally downloads its native runtime and recognition models on first use, but the **Offline edition bundles those directly inside the installer**, so the default engine works on a completely air-gapped machine with zero network access. On CPU — where both engines run in Yagu — PaddleOCR is faster and more accurate, so it stays the default everywhere. Tesseract is also bundled (fully self-contained) and remains available as a user-selectable alternative at any time in **Settings → OCR**.
 
@@ -163,6 +175,40 @@ To install Yagu without building from source, download the installer that matche
 
 ![Load session picker listing saved .yagu-session files with name, directory, size, and created columns](docs/images/session-load.png)
 
+## Content Indexing
+
+Yagu can build an optional, persistent **content index** for folders you search often. This is different from the optional voidtools Everything integration: Everything accelerates file discovery and filename lookup, while Yagu's content index accelerates searches *inside* files. They complement each other.
+
+The index stores compact signatures and file identity metadata, not cached search results. Before a search, Yagu uses those signatures to remove files that provably cannot contain the query. Every retained candidate is still opened and checked by the normal scanner, and any unindexed, changed, stale, unsupported, or uncertain file is searched live. An index can make a search faster; it cannot remove a valid result.
+
+### Get Started
+
+1. Put a folder in the directory box and click the **index** glyph beside it, or open **Settings → Indexing** and choose **Add folder**.
+2. Pick a useful common root. One indexed parent can accelerate searches in all of its descendants, so you do not need overlapping parent and child indexes.
+3. Optionally set build-time filters, then choose **Build now**. The build runs in an isolated worker and the app remains usable.
+4. Leave **Use the index for searches by default** enabled. You can opt out for one search through **Advanced Options → Use content index** or with `--no-index` in the CLI.
+5. Choose **Automatic incremental** maintenance if you want Yagu to keep the index current from the Windows change journal. Manual maintenance remains available through **Update index** and **Rebuild**.
+
+### What You Will See
+
+| Status | Meaning |
+| --- | --- |
+| **Index: accelerating** | The index safely reduced the candidate set for this search. |
+| **Index: partially accelerating** | Some roots or files used the index while the rest were scanned live. |
+| **Index: available · not accelerated** | A usable index exists, but this query was unsupported, too broad, or outside a safety/resource budget. Rebuilding usually does not help this state. |
+| **healthy · recent changes pending** | The committed index is valid. Newer files are being searched live until the next incremental update. |
+| **Content index needs attention** | Yagu cannot prove freshness or compatibility. Search live, update, validate, repair, or rebuild using the reason shown for that folder. |
+
+### Safety, Privacy, and Storage
+
+- **Offline and private:** index data stays on the computer. Paths, contents, and queries are never uploaded.
+- **Fail-safe:** missing sidecars, unsupported queries, journal gaps, removable-drive changes, corrupt data, and worker failures all fall back to live scanning.
+- **Crash-safe publication:** a full build writes to a private workspace and replaces the active generation only after validation. Cancellation, disk-full, a crash, or power loss leaves the previous complete index active.
+- **Incremental freshness:** updates advance their Windows change-journal checkpoint only when the matching delta commits. Interrupted updates replay from the last completed checkpoint.
+- **Explicit storage controls:** Settings exposes the index location, quota, free-space reserve, stop-when-full threshold, retained generations, cleanup, compaction, and optional PDF/OCR/format-v3 output.
+
+For the full user workflow, management actions, scheduling choices, troubleshooting table, and CLI equivalents, see [Indexing Tab](HELP.md#indexing-tab) and [Content Index (CLI)](HELP.md#content-index-cli).
+
 ## Example Queries
 
 A quick taste of the range of queries Yagu handles — literal, regex, whole‑word, filtered, sized, and dated. Each of these is a real, passing scenario in the test suite; the HELP guide lists **[all 300 examples](HELP.md#semantic-search-query-examples)**.
@@ -182,7 +228,7 @@ A quick taste of the range of queries Yagu handles — literal, regex, whole‑w
 
 ## Current Project Status
 
-Use [Yagu.sln](Yagu.sln) for current development.
+Use [Yagu.slnx](Yagu.slnx) for current development.
 
 This README is the entry point for new contributors.
 
@@ -197,6 +243,7 @@ This README is the entry point for new contributors.
 - ZIP-format archive search for ZIP, DOCX, XLSX, JAR, NUPKG, and other configured archive-like containers, including nesting and entry-size safeguards.
 - Image-text (OCR) search that finds your query inside images (PNG, JPG, BMP, TIFF, and similar) using a selectable engine — PaddleSharp (PP-OCR) or Tesseract — with configurable recognition models and quality, consent-gated first-run engine/model download, and an image preview that shows the recognized text with matches highlighted.
 - voidtools Everything support for file discovery through the in-process SDK or `es.exe`, with automatic fallback to built-in .NET enumeration.
+- Optional, on-device **content index** that accelerates repeated searches by pruning files which provably cannot contain a match before the scanner runs; every retained file is still read live, so results never change. Opt-in, with case-sensitive and ASCII case-insensitive query support, global and per-folder build filters, incremental change-journal updates, and an isolated worker process. **Crash-safe by design:** index files are checksummed and each generation is published atomically (write to a temp folder → validate → atomic rename) behind redundant pointers with the previous generation retained, and builds spill to disk in batches — so a crash or power loss while indexing leaves a valid (possibly smaller) index, and any torn or unreadable index is simply ignored in favor of a full live scan and rebuilt on demand.
 - Optional Rust native scanner for fast per-file matching, with managed C# fallback when the DLL is unavailable or a file needs the managed path.
 - Configurable result cap, hard result ceiling, per-file match cap, content-search parallelism, SDK buffer size, content file-size ceiling, and native/MMF concurrency limits.
 - Memory-pressure mode that pages result payloads to a configurable temp-file drive instead of exhausting RAM.
@@ -233,7 +280,14 @@ Yagu can translate a natural-language request (e.g. *"word documents with 'Andre
 
 ## Prerequisites
 
-Yagu is Windows-only.
+Yagu is Windows-only, by design. It is not a cross-platform app and there is no macOS or Linux version:
+
+- The desktop UI is built on **WinUI 3 (Windows App SDK)**, a Windows-native UI stack.
+- It depends on Windows-only platform facilities: Win32/COM (folder pickers, `RegisterHotKey` global hotkeys), the **Explorer right-click context menu**, the **system tray** and **taskbar** integration, **Windows Error Reporting** crash dumps, and the **NTFS change journal (USN)** for its content index.
+- Its fastest file-discovery backend integrates with **voidtools Everything**, which is itself Windows-only.
+- It is published as a self-contained **Native AOT** binary (per-architecture: x64, x86, arm64) with a Rust `yagu_core.dll` compiled for Windows.
+
+Because these pieces are Windows-specific rather than incidental, a port would effectively be a different application. Supported Windows versions are below.
 
 ### Running The Installed App
 
@@ -257,7 +311,7 @@ For contributors building, testing, or packaging Yagu from this repository:
 .\install-dev-prerequisites.ps1 -WhatIf      # dry run: report what would be installed
 ```
 
-It sets up the command-line toolchain, which is all you need to build, test, and debug Yagu from **VS Code** (or any editor) using the dotnet CLI. A full IDE is optional: to open `Yagu.sln` in the Visual Studio IDE instead, install Visual Studio 2026 (18.x) separately (see below). The individual requirements are listed here for reference:
+It sets up the command-line toolchain, which is all you need to build, test, and debug Yagu from **VS Code** (or any editor) using the dotnet CLI. A full IDE is optional: to open `Yagu.slnx` in the Visual Studio IDE instead, install Visual Studio 2026 (18.x) separately (see below). The individual requirements are listed here for reference:
 
 - Windows 10 version 1809 / build 17763 or newer.
 - .NET 10 SDK. The repo pins SDK `10.0.107` with `rollForward: latestFeature` in [global.json](global.json).
@@ -265,7 +319,7 @@ It sets up the command-line toolchain, which is all you need to build, test, and
   - The **Desktop development with C++** workload. Native AOT publishing invokes the MSVC compiler and linker, so this is required for normal builds, not just for the installer. Installing this workload also pulls in the Windows SDK.
   - The Windows SDK and WinUI / Windows App SDK components, because the main app is an unpackaged WinUI 3 application.
   - The test project avoids WinUI dependencies and can run on a normal Windows .NET SDK installation.
-  - **You do not need a full IDE — VS Code (or any editor) plus the .NET CLI is enough to build, test, and debug Yagu.** If you do prefer an IDE and want to open and develop `Yagu.sln` in Visual Studio, you must use Visual Studio 2026 (18.x) — not Visual Studio 2022. .NET 10 projects do not load in the Visual Studio 2022 (17.x) IDE, which reports `The SDK 'Microsoft.NET.Sdk' specified could not be found` for every project. The Visual Studio 2022 Build Tools / MSVC C++ toolchain listed above is still fine for command-line `dotnet build`, publishing, and the Native AOT link step; the IDE version only matters when you open the solution in Visual Studio itself.
+  - **You do not need a full IDE — VS Code (or any editor) plus the .NET CLI is enough to build, test, and debug Yagu.** If you do prefer an IDE and want to open and develop `Yagu.slnx` in Visual Studio, you must use Visual Studio 2026 (18.x) — not Visual Studio 2022. .NET 10 projects do not load in the Visual Studio 2022 (17.x) IDE, which reports `The SDK 'Microsoft.NET.Sdk' specified could not be found` for every project. The Visual Studio 2022 Build Tools / MSVC C++ toolchain listed above is still fine for command-line `dotnet build`, publishing, and the Native AOT link step; the IDE version only matters when you open the solution in Visual Studio itself.
 - C++ build tools for the target CPU architecture you build or publish. The host-architecture tools come with the C++ workload, but cross-architecture targets need their own components:
   - **arm64:** the **MSVC v143 - VS 2022 C++ ARM64/ARM64EC build tools (Latest)** individual component (Visual Studio Installer → *Individual components*, under the Desktop development with C++ workload). This is required to compile and link both the Native AOT app and the Rust `yagu_core.dll` for `win-arm64`; building the arm64 target or installer without it fails at the link step.
   - **x86:** the 32-bit C++ build tools, which the Desktop development with C++ workload includes by default.
@@ -281,15 +335,15 @@ It sets up the command-line toolchain, which is all you need to build, test, and
 git clone <repo-url>
 cd Yagu
 
-dotnet restore Yagu.sln
-dotnet build Yagu.sln -c Release
+dotnet restore Yagu.slnx
+dotnet build Yagu.slnx -c Release
 dotnet run -c Release --project src/Yagu -- --dir "D:\projects\myapp"
 ```
 
 If Rust is not installed or you want to iterate on managed code only:
 
 ```powershell
-dotnet build Yagu.sln -c Release -p:BuildRustCore=false
+dotnet build Yagu.slnx -c Release -p:BuildRustCore=false
 dotnet run -c Release --project src/Yagu -p:BuildRustCore=false -- --dir "D:\projects\myapp"
 ```
 
@@ -300,20 +354,20 @@ The C# app loader tolerates a missing `yagu_core.dll`; native search is an optim
 ### Restore
 
 ```powershell
-dotnet restore Yagu.sln
+dotnet restore Yagu.slnx
 ```
 
 ### Build
 
 ```powershell
-dotnet build Yagu.sln -c Debug
-dotnet build Yagu.sln -c Release
+dotnet build Yagu.slnx -c Debug
+dotnet build Yagu.slnx -c Release
 ```
 
 ### Build Without Rust
 
 ```powershell
-dotnet build Yagu.sln -c Release -p:BuildRustCore=false
+dotnet build Yagu.slnx -c Release -p:BuildRustCore=false
 ```
 
 ### Native AOT Is Publish-Only
@@ -496,7 +550,7 @@ The installer creates a Start Menu shortcut, optional desktop icon, optional Exp
 
 | Path | Purpose |
 | --- | --- |
-| [Yagu.sln](Yagu.sln) | Current solution for the app, tests, and benchmarks. |
+| [Yagu.slnx](Yagu.slnx) | Current solution for the app, tests, and benchmarks. |
 | [Yagu](src/Yagu/) | Main WinUI 3 application: XAML UI, view model, services, models, and native wrappers. |
 | [src/Yagu/Yagu.csproj](src/Yagu/Yagu.csproj) | App project, package references, WinUI settings, and Rust build integration. |
 | [src/Yagu/UI/Windows/MainWindow](src/Yagu/UI/Windows/MainWindow/) | Main search window XAML and partial code-behind files. |
@@ -515,31 +569,110 @@ The installer creates a Start Menu shortcut, optional desktop icon, optional Exp
 
 ## Architecture
 
-At a high level, Yagu is a WinUI shell around a streaming producer/consumer search pipeline.
+Yagu is one GUI/CLI executable over a bounded streaming pipeline. Expensive or failure-prone work is
+isolated in dedicated worker processes, while every content-index decision remains fail-safe: an
+uncertain path is scanned live rather than hidden.
 
-```text
-WinUI MainWindow
-    |
-    v
-MainViewModel
-    |
-    v
-SearchService
-    |-----------------------------|
-    v                             v
-FileLister                    ContentSearcher
-    |                             |
-    v                             v
-Everything SDK / es.exe /      Rust yagu_core.dll
-.NET fallback                  or managed C# scanner
-    |                             |
-    |------------- channels -------|
-                  |
-                  v
-        SearchResultCollection
-                  |
-                  v
-          grouped WinUI result UI
+```mermaid
+flowchart TB
+  subgraph Entry["One binary, two user surfaces"]
+    EXE["Yagu.exe<br/>Program.Main"]
+    EXE -->|GUI| APP["WinUI App → MainWindow"]
+    APP --> VM["MainViewModel"]
+    EXE -->|--cli| CLI["CliRunner"]
+  end
+
+  subgraph Planning["Configuration and optional on-device semantic planning"]
+    SETTINGS["SettingsService<br/>settings.json + CLI overrides"] --> VM
+    SETTINGS --> CLI
+    VM -->|natural-language query| SEMPROXY["WorkerSemanticQueryTranslator"]
+    SEMPROXY <--> SEMWORKER["Yagu.SemanticWorker.exe<br/>Foundry Local model"]
+    SEMWORKER --> PLAN["SemanticSearchPlan"]
+    PLAN --> APPLY["SemanticPlanApplier<br/>normalize + explain"]
+    VM --> OPTIONS["Per-root SearchOptions"]
+    CLI --> OPTIONS
+    APPLY --> OPTIONS
+  end
+
+  OPTIONS --> MANY["SearchService.SearchManyAsync<br/>multi-root aggregation"]
+  MANY --> SEARCH["SearchService.SearchAsync<br/>one root"]
+
+  subgraph Discovery["Discovery and early filtering"]
+    SEARCH --> LISTER["FileLister"]
+    LISTER --> ESDK["Everything SDK<br/>preferred in-process discovery"]
+    LISTER --> ESEXE["es.exe fallback"]
+    LISTER --> ENUM["Managed recursive enumeration<br/>cycle protection"]
+    ESDK --> FILTERS["Path / glob / size / date / hidden /<br/>gitignore / extension filters"]
+    ESEXE --> FILTERS
+    ENUM --> FILTERS
+    FILTERS -->|filename matches| NAMEBATCH["Filename MatchBatch"]
+  end
+
+  subgraph Index["Optional fail-safe content-index pruning"]
+    FILTERS --> READY["Resolve covering index<br/>trigram plan + B0 USN freshness"]
+    USN["USN change journal"] --> READY
+    READY -->|mapped worker| PRUNE["Bounded pruning pipeline"]
+    PRUNE <--> QCLIENT["IndexWorkerClient"]
+    QCLIENT <--> QWORKER["Yagu.IndexWorker.exe<br/>query role"]
+    QWORKER --> MMAP["V3 mapped base + delta segments"]
+    READY -. optional in-process fallback .-> GATE["ContentIndexSearchGate"]
+    READY -->|missing / stale / ineligible| PENDING["Bounded pending-file channel"]
+    GATE -->|member / dirty / unknown| PENDING
+    PRUNE -->|survivor| PENDING
+    PRUNE -->|provisional nonmember| SPOOL["Disk recovery spool"]
+    SPOOL --> B1["B1 reconciliation after scans drain"]
+    USN --> B1
+    B1 -->|changed or uncertain: rescue| PENDING
+  end
+
+  FILTERS -->|index disabled or special source| PENDING
+
+  subgraph Scan["Authoritative live-content lanes"]
+    PENDING --> ROUTER["Content worker routing"]
+    ROUTER --> SEARCHER["ContentSearcher"]
+    SEARCHER --> NATIVE["NativeSearcher P/Invoke"]
+    NATIVE --> RUST["Rust yagu_core.dll<br/>literal / regex / multiline"]
+    SEARCHER --> MANAGED["Managed C# fallback<br/>streams / MMF / .NET regex"]
+    ROUTER --> ARCHIVE["ZipArchiveSearcher<br/>ZIP / DOCX / XLSX / JAR entries"]
+    ROUTER --> OCR["ImageOcrSearchSession"]
+    OCR <--> OCRWORKER["Yagu.OcrWorker.exe<br/>PaddleOCR / Tesseract"]
+    ROUTER --> PDF["PdfTextSearchSession"]
+    PDF --> PDFTOOL["Bundled pdftotext.exe"]
+    RUST --> MATCHES["Bounded result channels"]
+    MANAGED --> MATCHES
+    ARCHIVE --> MATCHES
+    OCRWORKER --> MATCHES
+    PDFTOOL --> MATCHES
+  end
+
+  subgraph Delivery["Delivery, paging and user actions"]
+    NAMEBATCH --> EVENTS["Bounded SearchEvent channel"]
+    MATCHES --> FORWARD["Batch forwarders<br/>progress + completion"]
+    FORWARD --> EVENTS
+    EVENTS --> VM
+    VM --> COLLECTION["SearchResultCollection → FileGroup"]
+    COLLECTION <--> STORE["ResultStore<br/>disk eviction + hydration"]
+    COLLECTION --> UI["Grouped / filtered / virtualized results"]
+    UI --> PREVIEW["Preview + match navigation + editor"]
+    UI --> EXPORTS["Clipboard / file / HTML / JSON / CSV / sessions"]
+    EVENTS --> CLI
+    NATIVE -->|plain CLI fast path| DIRECT["DirectOutputSink → buffered stdout"]
+  end
+
+  subgraph Maintenance["Index build and maintenance"]
+    SETTINGS --> TRIGGERS["Settings / CLI / startup / schedule / watcher hints"]
+    TRIGGERS --> OPS["IndexBuildOperationFactory"]
+    OPS --> COORD["IndexBuildCoordinator"]
+    COORD --> MCLIENT["IndexMaintenanceWorkerClient"]
+    MCLIENT --> MWORKER["Ephemeral Yagu.IndexWorker.exe<br/>--maintenance"]
+    MWORKER --> EXEC["Build / refresh / compact / validate / repair"]
+    USN --> EXEC
+    EXEC --> LOCK["Single-writer mutation lock"]
+    LOCK --> TX["Staged checksummed transaction<br/>atomic pointer publication"]
+    TX --> INDEXSTORE["Base generations + deltas +<br/>v3 query data + PDF namespace"]
+    INDEXSTORE --> MMAP
+    INDEXSTORE --> READY
+  end
 ```
 
 ### Main Components
@@ -701,8 +834,8 @@ The GitHub Actions workflow in [.github/workflows/ci.yml](.github/workflows/ci.y
 4. Cache Cargo registry/git/target directories.
 5. Build `yagu-core` in release mode.
 6. Test `yagu-core` in release mode.
-7. Restore [Yagu.sln](Yagu.sln).
-8. Build [Yagu.sln](Yagu.sln) in release mode.
+7. Restore [Yagu.slnx](Yagu.slnx).
+8. Build [Yagu.slnx](Yagu.slnx) in release mode.
 9. Run [Yagu.Tests](tests/Yagu.Tests/).
 10. Upload test result artifacts.
 11. Run a short BenchmarkDotNet smoke benchmark.
@@ -724,7 +857,7 @@ The GitHub Actions workflow in [.github/workflows/ci.yml](.github/workflows/ci.y
 Build without the native fast path:
 
 ```powershell
-dotnet build Yagu.sln -c Release -p:BuildRustCore=false
+dotnet build Yagu.slnx -c Release -p:BuildRustCore=false
 ```
 
 Install Rust from https://rustup.rs/ when you want to build and test [yagu-core](src/yagu-core/).
