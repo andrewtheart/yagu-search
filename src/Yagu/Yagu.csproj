@@ -128,6 +128,22 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+  <!--
+    The build-time copy above only lands HELP.html in $(OutDir); `dotnet publish` (which is what the
+    installer stages from) would ship without it and the in-app help window would report
+    "The generated help file was not found". Publishing it explicitly keeps Help working in installs.
+  -->
+  <Target Name="AddHelpHtmlToPublish"
+          BeforeTargets="ComputeResolvedFilesToPublishList"
+          Condition="Exists('$(MSBuildThisFileDirectory)HELP.html')">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(MSBuildThisFileDirectory)HELP.html">
+        <RelativePath>HELP.html</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
   <PropertyGroup>
     <YaguWebView2Rid Condition="'$(YaguWebView2Rid)' == '' And '$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</YaguWebView2Rid>
     <YaguWebView2Rid Condition="'$(YaguWebView2Rid)' == '' And ('$(PlatformTarget)' == 'x86' Or '$(Platform)' == 'x86')">win-x86</YaguWebView2Rid>

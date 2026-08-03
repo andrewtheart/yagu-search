@@ -149,6 +149,24 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
+    public void HelpHtml_IsPublished_SoTheInAppHelpWindowWorksInInstalledBuilds()
+    {
+        string root = FindRepoRoot();
+        string csproj = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Yagu.csproj"));
+        string helpWindow = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "Help", "HelpWindow.xaml.cs"));
+
+        // The AfterTargets=Build copy only lands HELP.html in $(OutDir); `dotnet publish` (what
+        // build-installer.ps1 stages from) shipped without it, so Help said "file was not found".
+        Assert.Contains("<Target Name=\"AddHelpHtmlToPublish\"", csproj);
+        Assert.Contains("BeforeTargets=\"ComputeResolvedFilesToPublishList\"", csproj);
+        Assert.Contains("<ResolvedFileToPublish Include=\"$(MSBuildThisFileDirectory)HELP.html\">", csproj);
+        Assert.Contains("<RelativePath>HELP.html</RelativePath>", csproj);
+
+        // Help resolves the file beside the exe, which is where the publish/staging copy lands.
+        Assert.Contains("The generated help file was not found", helpWindow);
+    }
+
+    [Fact]
     public void OcrWorker_IsPublishedSelfContained_SoItRunsWithoutDotnetInstalled()
     {
         string root = FindRepoRoot();
