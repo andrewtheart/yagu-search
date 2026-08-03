@@ -8,6 +8,9 @@ pub mod ffi;
 pub mod scan;
 pub mod scan_multiline;
 
+/// Content-index trigram extraction (plan §3) — the Rust half of the persistent content index.
+pub mod index;
+
 #[cfg(feature = "grep_crates")]
 pub mod scan_grep;
 

@@ -37,6 +37,8 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.*" />
+    <!-- Engine sources compiled into this test assembly reference ILogger / [LoggerMessage]. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.*" />
   </ItemGroup>
 
   <!-- Pull in only the engine source so tests don't depend on WindowsAppSDK. -->
@@ -46,6 +48,7 @@
     <Compile Include="..\..\src\Yagu\Models\SearchResultCollection.cs" Link="Source\Models\SearchResultCollection.cs" />
     <Compile Include="..\..\src\Yagu\Models\SortCriterion.cs" Link="Source\Models\SortCriterion.cs" />
     <Compile Include="..\..\src\Yagu\Models\SearchOptions.cs" Link="Source\Models\SearchOptions.cs" />
+    <Compile Include="..\..\src\Yagu\Models\FilterPatternMode.cs" Link="Source\Models\FilterPatternMode.cs" />
     <Compile Include="..\..\src\Yagu\Models\SearchProgress.cs" Link="Source\Models\SearchProgress.cs" />
     <Compile Include="..\..\src\Yagu\Models\FileGroup.cs" Link="Source\Models\FileGroup.cs" />
     <Compile Include="..\..\src\Yagu\Models\GroupMode.cs" Link="Source\Models\GroupMode.cs" />
@@ -54,10 +57,15 @@
     <Compile Include="..\..\src\Yagu\Models\ResultRowProjection.cs" Link="Source\Models\ResultRowProjection.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\BinaryDetector.cs" Link="Source\Helpers\BinaryDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\DiskTypeDetector.cs" Link="Source\Helpers\DiskTypeDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\PowerLineStatus.cs" Link="Source\Helpers\PowerLineStatus.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\SystemIdleDetector.cs" Link="Source\Helpers\SystemIdleDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\GlobMatcher.cs" Link="Source\Helpers\GlobMatcher.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SingleFilePathQueryDetector.cs" Link="Source\Helpers\SingleFilePathQueryDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\InlineCalculator.cs" Link="Source\Helpers\InlineCalculator.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\CodeAnnotationQuery.cs" Link="Source\Helpers\CodeAnnotationQuery.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\QuickSearchPresets.cs" Link="Source\Helpers\QuickSearchPresets.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\StartupArgs.cs" Link="Source\Helpers\StartupArgs.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\SearchRequestCodec.cs" Link="Source\Helpers\SearchRequestCodec.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SemanticQueryHeuristicDetector.cs" Link="Source\Helpers\SemanticQueryHeuristicDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SearchPatternClassifier.cs" Link="Source\Helpers\SearchPatternClassifier.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\EditorSyntaxHighlightingResolver.cs" Link="Source\Helpers\EditorSyntaxHighlightingResolver.cs" />
@@ -65,6 +73,7 @@
     <Compile Include="..\..\src\Yagu\Helpers\PopOutTileLayout.cs" Link="Source\Helpers\PopOutTileLayout.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\EncodingDetector.cs" Link="Source\Helpers\EncodingDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\LineTruncator.cs" Link="Source\Helpers\LineTruncator.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\LiteralTextOperations.cs" Link="Source\Helpers\LiteralTextOperations.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\MatchNavMath.cs" Link="Source\Helpers\MatchNavMath.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\MultilineTextShadow.cs" Link="Source\Helpers\MultilineTextShadow.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\MultilinePreviewSpan.cs" Link="Source\Helpers\MultilinePreviewSpan.cs" />
@@ -74,23 +83,143 @@
     <Compile Include="..\..\src\Yagu\Helpers\SyntaxHighlighter.cs" Link="Source\Helpers\SyntaxHighlighter.cs" />
     <Compile Include="..\..\src\Yagu\Services\FileLister.cs" Link="Source\Services\FileLister.cs" />
     <Compile Include="..\..\src\Yagu\Services\EverythingAssetPaths.cs" Link="Source\Services\EverythingAssetPaths.cs" />
+    <Compile Include="..\..\src\Yagu\Services\EverythingIndexCoverageDetector.cs" Link="Source\Services\EverythingIndexCoverageDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Services\EverythingIndexConfigurator.cs" Link="Source\Services\EverythingIndexConfigurator.cs" />
     <Compile Include="..\..\src\Yagu\Services\ContentSearcher.cs" Link="Source\Services\ContentSearcher.cs" />
     <Compile Include="..\..\src\Yagu\Services\CloudFileHelper.cs" Link="Source\Services\CloudFileHelper.cs" />
     <Compile Include="..\..\src\Yagu\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />
+    <Compile Include="..\..\src\Yagu\Services\SystemMemoryProvider.cs" Link="Source\Services\SystemMemoryProvider.cs" />
     <Compile Include="..\..\src\Yagu\Services\SearchService.cs" Link="Source\Services\SearchService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\ResourceUsageMonitor.cs" Link="Source\Services\ResourceUsageMonitor.cs" />
     <Compile Include="..\..\src\Yagu\Services\SearchRegexFactory.cs" Link="Source\Services\SearchRegexFactory.cs" />
     <Compile Include="..\..\src\Yagu\Services\SearchQueryParser.cs" Link="Source\Services\SearchQueryParser.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\Trigram.cs" Link="Source\Services\Index\Trigram.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentRepresentation.cs" Link="Source\Services\Index\ContentRepresentation.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\TrigramExpression.cs" Link="Source\Services\Index\TrigramExpression.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\EffectiveSearchPattern.cs" Link="Source\Services\Index\EffectiveSearchPattern.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\TrigramQueryPlanner.cs" Link="Source\Services\Index\TrigramQueryPlanner.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexScopeIdentity.cs" Link="Source\Services\Index\IndexScopeIdentity.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\TrigramPostingIndex.cs" Link="Source\Services\Index\TrigramPostingIndex.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\TrigramQueryRpn.cs" Link="Source\Services\Index\TrigramQueryRpn.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexWorkerProtocol.cs" Link="Source\Services\Index\IndexWorkerProtocol.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\WindowsJobObject.cs" Link="Source\Services\Index\WindowsJobObject.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexPathClassification.cs" Link="Source\Services\Index\IndexPathClassification.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ExtractorFingerprint.cs" Link="Source\Services\Index\ExtractorFingerprint.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ExtractionOutcome.cs" Link="Source\Services\Index\ExtractionOutcome.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ExtendedSourcePolicy.cs" Link="Source\Services\Index\ExtendedSourcePolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ExtendedSourceNamespace.cs" Link="Source\Services\Index\ExtendedSourceNamespace.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ExtendedSourceNamespaceSerializer.cs" Link="Source\Services\Index\ExtendedSourceNamespaceSerializer.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ExtendedSourceFreshnessEvaluator.cs" Link="Source\Services\Index\ExtendedSourceFreshnessEvaluator.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ExtendedSourceSearchGate.cs" Link="Source\Services\Index\ExtendedSourceSearchGate.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ExtendedSourceStore.cs" Link="Source\Services\Index\ExtendedSourceStore.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\PdfExtractorFingerprint.cs" Link="Source\Services\Index\PdfExtractorFingerprint.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\PdfExtractionDeterminism.cs" Link="Source\Services\Index\PdfExtractionDeterminism.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\PdfExtendedSourcePopulator.cs" Link="Source\Services\Index\PdfExtendedSourcePopulator.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ImageOcrExtractorFingerprint.cs" Link="Source\Services\Index\ImageOcrExtractorFingerprint.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ImageOcrExtendedSourcePopulator.cs" Link="Source\Services\Index\ImageOcrExtendedSourcePopulator.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ArchiveEntryIdentity.cs" Link="Source\Services\Index\ArchiveEntryIdentity.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexTrustDecision.cs" Link="Source\Services\Index\IndexTrustDecision.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IContentIndexPathProvider.cs" Link="Source\Services\Index\IContentIndexPathProvider.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexIngestionPolicy.cs" Link="Source\Services\Index\IndexIngestionPolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexIngestionPolicySettings.cs" Link="Source\Services\Index\IndexIngestionPolicySettings.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexBuildReport.cs" Link="Source\Services\Index\IndexBuildReport.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\PathEligibilityEvaluator.cs" Link="Source\Services\Index\PathEligibilityEvaluator.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexFreshness.cs" Link="Source\Services\Index\IndexFreshness.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\BoundedIncrementalFileClassifier.cs" Link="Source\Services\Index\BoundedIncrementalFileClassifier.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\BoundedSynchronousIo.cs" Link="Source\Services\Index\BoundedSynchronousIo.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\BoundedFileIdPathResolver.cs" Link="Source\Services\Index\BoundedFileIdPathResolver.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\VolumeBinding.cs" Link="Source\Services\Index\VolumeBinding.cs" />
+    <Compile Include="..\..\src\Yagu\Services\DeviceVolumeChange.cs" Link="Source\Services\DeviceVolumeChange.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexFileContentReader.cs" Link="Source\Services\Index\IndexFileContentReader.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\StreamingRepresentationClassifier.cs" Link="Source\Services\Index\StreamingRepresentationClassifier.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexFileCrawler.cs" Link="Source\Services\Index\IndexFileCrawler.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexManifest.cs" Link="Source\Services\Index\IndexManifest.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexMutationFaults.cs" Link="Source\Services\Index\IndexMutationFaults.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexGeneration.cs" Link="Source\Services\Index\ContentIndexGeneration.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexBuildBatch.cs" Link="Source\Services\Index\ContentIndexBuildBatch.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexQuerySession.cs" Link="Source\Services\Index\ContentIndexQuerySession.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexGenerationSerializer.cs" Link="Source\Services\Index\ContentIndexGenerationSerializer.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexV3Format.cs" Link="Source\Services\Index\ContentIndexV3Format.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexStore.cs" Link="Source\Services\Index\ContentIndexStore.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\BinaryAsciiContentRepresentation.cs" Link="Source\Services\Index\BinaryAsciiContentRepresentation.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ChecksummedFile.cs" Link="Source\Services\Index\ChecksummedFile.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexDeltaSegment.cs" Link="Source\Services\Index\ContentIndexDeltaSegment.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexDeltaSegmentSerializer.cs" Link="Source\Services\Index\ContentIndexDeltaSegmentSerializer.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexDeltaSegmentBuilder.cs" Link="Source\Services\Index\ContentIndexDeltaSegmentBuilder.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\LayeredContentIndexQuerySession.cs" Link="Source\Services\Index\LayeredContentIndexQuerySession.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexCompactor.cs" Link="Source\Services\Index\ContentIndexCompactor.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexIncrementalUpdater.cs" Link="Source\Services\Index\ContentIndexIncrementalUpdater.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IFileIdPathResolver.cs" Link="Source\Services\Index\IFileIdPathResolver.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\FileIdPathResolver.cs" Link="Source\Services\Index\FileIdPathResolver.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexUsnChangeResolver.cs" Link="Source\Services\Index\ContentIndexUsnChangeResolver.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexIncrementalRefresher.cs" Link="Source\Services\Index\ContentIndexIncrementalRefresher.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexWatcherHints.cs" Link="Source\Services\Index\ContentIndexWatcherHints.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexRootWatcher.cs" Link="Source\Services\Index\ContentIndexRootWatcher.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexWatcherHintService.cs" Link="Source\Services\Index\ContentIndexWatcherHintService.cs" />
+
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexConfigService.cs" Link="Source\Services\Index\ContentIndexConfigService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexSettingsChangeAdvisor.cs" Link="Source\Services\Index\ContentIndexSettingsChangeAdvisor.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexManager.cs" Link="Source\Services\Index\ContentIndexManager.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexManagerSettings.cs" Link="Source\Services\Index\ContentIndexManagerSettings.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexBuildTransaction.cs" Link="Source\Services\Index\ContentIndexBuildTransaction.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexIncrementalRefresherSettings.cs" Link="Source\Services\Index\ContentIndexIncrementalRefresherSettings.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexIncrementalUpdaterSettings.cs" Link="Source\Services\Index\ContentIndexIncrementalUpdaterSettings.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexBuildOperations.cs" Link="Source\Services\Index\IndexBuildOperations.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexWorkerParallelism.cs" Link="Source\Services\Index\IndexWorkerParallelism.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexBuildOperationFactory.cs" Link="Source\Services\Index\IndexBuildOperationFactory.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexWriteLease.cs" Link="Source\Services\Index\IndexWriteLease.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexStorageRecovery.cs" Link="Source\Services\Index\IndexStorageRecovery.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexBuildExecutor.cs" Link="Source\Services\Index\IndexBuildExecutor.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexMaintenanceWorkerClient.cs" Link="Source\Services\Index\IndexMaintenanceWorkerClient.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexBuildCoordinator.cs" Link="Source\Services\Index\IndexBuildCoordinator.cs" />
+    <Compile Include="..\..\src\Yagu.IndexWorker\IndexWorkerBuildHost.cs" Link="Source\IndexWorker\IndexWorkerBuildHost.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexBuildProgressEstimate.cs" Link="Source\Services\Index\IndexBuildProgressEstimate.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexingCloseWarning.cs" Link="Source\Services\Index\IndexingCloseWarning.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexUiStatus.cs" Link="Source\Services\Index\ContentIndexUiStatus.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\UsnJournalReader.cs" Link="Source\Services\Index\UsnJournalReader.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\UsnJournalHeadroom.cs" Link="Source\Services\Index\UsnJournalHeadroom.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\FileIdentityReader.cs" Link="Source\Services\Index\FileIdentityReader.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\FileIdMap.cs" Link="Source\Services\Index\FileIdMap.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexFreshnessEvaluator.cs" Link="Source\Services\Index\ContentIndexFreshnessEvaluator.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexAccelerator.cs" Link="Source\Services\Index\ContentIndexAccelerator.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexedRootsPolicy.cs" Link="Source\Services\Index\IndexedRootsPolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexedRootFilter.cs" Link="Source\Services\Index\IndexedRootFilter.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexedRootFilterPolicy.cs" Link="Source\Services\Index\IndexedRootFilterPolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexOnboardingPlan.cs" Link="Source\Services\Index\IndexOnboardingPlan.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexAutoBuilder.cs" Link="Source\Services\Index\ContentIndexAutoBuilder.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexScheduleEvaluator.cs" Link="Source\Services\Index\ContentIndexScheduleEvaluator.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexSearchGate.cs" Link="Source\Services\Index\ContentIndexSearchGate.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IIndexCandidateSource.cs" Link="Source\Services\Index\IIndexCandidateSource.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexWorkerProcess.cs" Link="Source\Services\Index\IndexWorkerProcess.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexWorkerClient.cs" Link="Source\Services\Index\IndexWorkerClient.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexShadowClassifier.cs" Link="Source\Services\Index\ContentIndexShadowClassifier.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexRecoverySpool.cs" Link="Source\Services\Index\ContentIndexRecoverySpool.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexClassifyBatcher.cs" Link="Source\Services\Index\ContentIndexClassifyBatcher.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexShadowPipeline.cs" Link="Source\Services\Index\ContentIndexShadowPipeline.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexPruningPipeline.cs" Link="Source\Services\Index\ContentIndexPruningPipeline.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexShadowScopeBuilder.cs" Link="Source\Services\Index\ContentIndexShadowScopeBuilder.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexReadinessChecker.cs" Link="Source\Services\Index\ContentIndexReadinessChecker.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexQueryFraming.cs" Link="Source\Services\Index\IndexQueryFraming.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexQueryWorkerProtocol.cs" Link="Source\Services\Index\IndexQueryWorkerProtocol.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexWorkerQuerySource.cs" Link="Source\Services\Index\IndexWorkerQuerySource.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\V3ContentIndexCandidateSource.cs" Link="Source\Services\Index\V3ContentIndexCandidateSource.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\V3MappedQuerySession.cs" Link="Source\Services\Index\V3MappedQuerySession.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\V3MappedLayeredQuerySession.cs" Link="Source\Services\Index\V3MappedLayeredQuerySession.cs" />
     <Compile Include="..\..\src\Yagu\Services\ExcludedExtensionPredictor.cs" Link="Source\Services\ExcludedExtensionPredictor.cs" />
     <Compile Include="..\..\src\Yagu\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
     <Compile Include="..\..\src\Yagu\Services\DriveEnumerator.cs" Link="Source\Services\DriveEnumerator.cs" />
     <Compile Include="..\..\src\Yagu\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
     <Compile Include="..\..\src\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
     <Compile Include="..\..\src\Yagu\Services\AuthenticodeVerifier.cs" Link="Source\Services\AuthenticodeVerifier.cs" />
+    <Compile Include="..\..\src\Yagu\Services\AppUpdateChecker.cs" Link="Source\Services\AppUpdateChecker.cs" />
+    <Compile Include="..\..\src\Yagu\Services\MultiTermUpdateDownloader.cs" Link="Source\Services\MultiTermUpdateDownloader.cs" />
     <Compile Include="..\..\src\Yagu\Services\ZipArchiveSearcher.cs" Link="Source\Services\ZipArchiveSearcher.cs" />
     <Compile Include="..\..\src\Yagu\Services\SelectedFileExportService.cs" Link="Source\Services\SelectedFileExportService.cs" />
     <Compile Include="..\..\src\Yagu\Services\HtmlReportExportService.cs" Link="Source\Services\HtmlReportExportService.cs" />
     <Compile Include="..\..\src\Yagu\Services\ReportExportService.cs" Link="Source\Services\ReportExportService.cs" />
     <Compile Include="..\..\src\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Logging\LogServiceLogger.cs" Link="Source\Services\Logging\LogServiceLogger.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Logging\YaguLog.cs" Link="Source\Services\Logging\YaguLog.cs" />
     <Compile Include="..\..\src\Yagu\Services\OrphanedWorkerCleanup.cs" Link="Source\Services\OrphanedWorkerCleanup.cs" />
     <Compile Include="..\..\src\Yagu\Services\Telemetry\TelemetryConfig.cs" Link="Source\Services\Telemetry\TelemetryConfig.cs" />
     <Compile Include="..\..\src\Yagu\Services\Telemetry\TelemetryConfig.Defaults.cs" Link="Source\Services\Telemetry\TelemetryConfig.Defaults.cs" />
@@ -126,9 +255,12 @@
     <Compile Include="..\..\src\Yagu\Services\Ocr\OcrAssetPaths.cs" Link="Source\Services\Ocr\OcrAssetPaths.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\OcrDownloadGate.cs" Link="Source\Services\Ocr\OcrDownloadGate.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\UnavailableOcrEngine.cs" Link="Source\Services\Ocr\UnavailableOcrEngine.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\OcrWorkerProcess.cs" Link="Source\Services\Ocr\OcrWorkerProcess.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\WorkerOcrEngine.cs" Link="Source\Services\Ocr\WorkerOcrEngine.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\PaddleOcrEngine.cs" Link="Source\Services\Ocr\PaddleOcrEngine.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\TesseractOcrEngine.cs" Link="Source\Services\Ocr\TesseractOcrEngine.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\OcrWorkerParallelism.cs" Link="Source\Services\Ocr\OcrWorkerParallelism.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\OcrEnginePool.cs" Link="Source\Services\Ocr\OcrEnginePool.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\OcrEngineFactory.cs" Link="Source\Services\Ocr\OcrEngineFactory.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\ImageOcrSearchSession.cs" Link="Source\Services\Ocr\ImageOcrSearchSession.cs" />
     <!-- PDF-text search: pure-managed (Process + stdio to the bundled pdftotext), no native deps. -->
@@ -140,6 +272,8 @@
     <!-- Semantic search: pure model→SearchOptions mapping (no Foundry/WindowsAppSDK deps). -->
     <Compile Include="..\..\src\Yagu\Models\SemanticSearchPlan.cs" Link="Source\Models\SemanticSearchPlan.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\ISemanticQueryTranslator.cs" Link="Source\Services\Ai\ISemanticQueryTranslator.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticModelGenerationOverride.cs" Link="Source\Services\Ai\SemanticModelGenerationOverride.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\FoundryLoggerAdapter.cs" Link="Source\Services\Ai\FoundryLoggerAdapter.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\FoundryModelUpdateChecker.cs" Link="Source\Services\Ai\FoundryModelUpdateChecker.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\SlowSemanticModelAdvisor.cs" Link="Source\Services\Ai\SlowSemanticModelAdvisor.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\SemanticQuerySalvage.cs" Link="Source\Services\Ai\SemanticQuerySalvage.cs" />
@@ -178,6 +312,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Yagu.FakeIndexWorker\Yagu.FakeIndexWorker.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\src\Yagu.IndexWorker\Yagu.IndexWorker.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj" />
     <!-- SemanticPlanApplier (compiled into the test assembly) now uses vendored nChronic for
          natural-language date parsing, so the tests need the same reference. -->

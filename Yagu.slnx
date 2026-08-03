@@ -1,0 +1,41 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/cloud/">
+    <Project Path="src/cloud/Yagu.TelemetryFunction/Yagu.TelemetryFunction.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Yagu.IndexWorker/Yagu.IndexWorker.csproj" />
+    <Project Path="src/Yagu.SemanticWorker/Yagu.SemanticWorker.csproj" />
+  </Folder>
+  <Folder Name="/TestResults/" />
+  <Folder Name="/tests/">
+    <Project Path="tests/Yagu.FakeIndexWorker/Yagu.FakeIndexWorker.csproj" />
+  </Folder>
+  <Folder Name="/vendor/" />
+  <Folder Name="/vendor/nChronic/">
+    <Project Path="src/vendor/nChronic/Chronic/Chronic.csproj" />
+  </Folder>
+  <Folder Name="/vendor/PaddleSharp/" />
+  <Folder Name="/vendor/PaddleSharp/src/">
+    <Project Path="src/vendor/PaddleSharp/src/Sdcb.PaddleInference/Sdcb.PaddleInference.csproj" />
+    <Project Path="src/vendor/PaddleSharp/src/Sdcb.PaddleOCR.Models.Online/Sdcb.PaddleOCR.Models.Online.csproj" />
+    <Project Path="src/vendor/PaddleSharp/src/Sdcb.PaddleOCR.Models.Shared/Sdcb.PaddleOCR.Models.Shared.csproj" />
+    <Project Path="src/vendor/PaddleSharp/src/Sdcb.PaddleOCR/Sdcb.PaddleOCR.csproj" />
+  </Folder>
+  <Folder Name="/vendor/SharpSevenZip/" />
+  <Folder Name="/vendor/TextControlBox-WinUI/">
+    <Project Path="src/vendor/TextControlBox-WinUI/TextControlBox/TextControlBox.csproj" />
+  </Folder>
+  <Project Path="src/Yagu.OcrWorker/Yagu.OcrWorker.csproj">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
+  <Project Path="src/Yagu/Yagu.csproj">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
+  <Project Path="tests/Yagu.Benchmarks/Yagu.Benchmarks.csproj" />
+  <Project Path="tests/Yagu.Tests/Yagu.Tests.csproj" />
+</Solution>

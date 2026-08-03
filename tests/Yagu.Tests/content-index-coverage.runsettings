@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Content-index coverage runsettings (plan §9.1). Used by scripts/check-index-coverage.ps1 to measure
+  100% line/branch coverage of the handwritten indexing production modules.
+
+  IncludeTestAssembly=true is REQUIRED: the index engine .cs files are <Compile Include>'d directly into
+  Yagu.Tests.dll (not a ProjectReference), so coverlet's default "exclude the test assembly" would report
+  0% for all of them. See .github/instructions/testing.instructions.md.
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <IncludeTestAssembly>true</IncludeTestAssembly>
+          <!-- [ExcludeFromCodeCoverage]/generated code is genuinely non-product; nothing in
+               Services/Index uses it (the gate script also verifies no index file is attributed away). -->
+          <ExcludeByAttribute>ExcludeFromCodeCoverage,CompilerGeneratedAttribute,GeneratedCodeAttribute</ExcludeByAttribute>
+          <SkipAutoProps>true</SkipAutoProps>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

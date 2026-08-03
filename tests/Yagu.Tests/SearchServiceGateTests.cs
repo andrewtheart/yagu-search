@@ -54,6 +54,27 @@ public sealed class SearchServiceGateTests
     }
 
     [Fact]
+    public void NameFirstPass_PublishesBeforePriorityContent_AndBeforeIndexStartup()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
+
+        Assert.Contains("options.SearchMode is SearchMode.Both or SearchMode.FileNames", source);
+        Assert.Contains("&& options.SearchMode is SearchMode.Both or SearchMode.FileNames", source);
+        AssertContainsInOrder(source,
+            "await FlushFilenameBatchAsync().ConfigureAwait(false);",
+            "foreach (string path in priorityContentQueued)",
+            "await WritePendingFileAsync(path).ConfigureAwait(false);",
+            "bool runFullDiscovery = !(nameFirstPass",
+            "options.StopAfterNameFirstPass || options.SearchMode == SearchMode.FileNames",
+            "contentIndexGate = options.ContentIndexGateFactory?.Invoke();",
+            "await foreach (var path in _fileLister.ListFilesAsync(options.Directory");
+
+        Assert.Contains("options.PreEmittedFileNamePaths", source);
+        Assert.Contains("options.PreScannedContentPaths?.Contains(path) == true", source);
+        Assert.Contains("priorityContentQueued?.Contains(path) == true", source);
+    }
+
+    [Fact]
     public void StreamingScannerCancellationCleanup_FinishesBeforeDestroyingCallbacks()
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
@@ -73,32 +94,45 @@ public sealed class SearchServiceGateTests
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
 
-        Assert.Contains("LogService.Instance.Info(\"SearchService\", $\"Pipeline channels created:", source);
-        Assert.Contains("LogService.Instance.Info(\"Discovery\", $\"Progress:", source);
-        Assert.Contains("LogService.Instance.Info(\"SearchService\", $\"Discovery finished:", source);
-        Assert.Contains("LogService.Instance.Info(\"Workers\",", source);
-        Assert.Contains("$\"Streaming: pushed=", source);
-        Assert.Contains("LogService.Instance.Info(\"Forwarder\",", source);
-        Assert.Contains("$\"Throughput: forwarded=", source);
-        Assert.Contains("$\"Completed: forwarded=", source);
-        Assert.Contains("LogService.Instance.Info(\"SearchService\", $\"Search complete:", source);
+        Assert.Contains("YaguLog.For(\"SearchService\").LogInformation(\"Pipeline channels created:", source);
+        Assert.Contains("YaguLog.For(\"Discovery\").LogInformation(\"Progress:", source);
+        Assert.Contains("YaguLog.For(\"Workers\").LogInformation(", source);
+        Assert.Contains("\"Streaming: pushed=", source);
+        Assert.Contains("YaguLog.For(\"Forwarder\").LogInformation(", source);
+        Assert.Contains("\"Throughput: forwarded=", source);
+        Assert.Contains("\"Completed: forwarded=", source);
 
-        Assert.DoesNotContain("LogService.Instance.Warning(\"Discovery\", $\"Progress:", source);
-        Assert.DoesNotContain("LogService.Instance.Warning(\"SearchService\", $\"Pipeline channels created:", source);
-        Assert.DoesNotContain("LogService.Instance.Warning(\"SearchService\", $\"Discovery finished:", source);
-        Assert.DoesNotContain("LogService.Instance.Warning(\"SearchService\", $\"Search complete:", source);
+        // "Discovery finished:" is a multi-line call (YaguLog.For(...).LogInformation( on one line, template
+        // on the next), so verify the call+level via a window around the message rather than one substring.
+        int discoveryFinishedIndex = source.IndexOf("\"Discovery finished:", StringComparison.Ordinal);
+        Assert.True(discoveryFinishedIndex >= 0, "Discovery finished log not found.");
+        string discoveryFinishedWindow = source[Math.Max(0, discoveryFinishedIndex - 120)..Math.Min(source.Length, discoveryFinishedIndex + 20)];
+        Assert.Contains("YaguLog.For(\"SearchService\").LogInformation(", discoveryFinishedWindow);
+        Assert.DoesNotContain("LogWarning(", discoveryFinishedWindow);
 
-        int backpressureIndex = source.IndexOf("$\"Backpressure:", StringComparison.Ordinal);
+        // "Search complete:" is a multi-line call (YaguLog.For(...).LogInformation( on one line, template
+        // on the next), so verify the call+level via a window around the message rather than one substring.
+        int searchCompleteIndex = source.IndexOf("\"Search complete:", StringComparison.Ordinal);
+        Assert.True(searchCompleteIndex >= 0, "Search complete log not found.");
+        string searchCompleteWindow = source[Math.Max(0, searchCompleteIndex - 120)..Math.Min(source.Length, searchCompleteIndex + 20)];
+        Assert.Contains("YaguLog.For(\"SearchService\").LogInformation(", searchCompleteWindow);
+        Assert.DoesNotContain("LogWarning(", searchCompleteWindow);
+
+        Assert.DoesNotContain("YaguLog.For(\"Discovery\").LogWarning(\"Progress:", source);
+        Assert.DoesNotContain("YaguLog.For(\"SearchService\").LogWarning(\"Pipeline channels created:", source);
+        Assert.DoesNotContain("YaguLog.For(\"SearchService\").LogWarning(\"Discovery finished:", source);
+
+        int backpressureIndex = source.IndexOf("\"Backpressure:", StringComparison.Ordinal);
         Assert.True(backpressureIndex >= 0, "Forwarder backpressure log not found.");
         string backpressureWindow = source[Math.Max(0, backpressureIndex - 120)..Math.Min(source.Length, backpressureIndex + 220)];
-        Assert.Contains("LogService.Instance.Warning(\"Forwarder\",", backpressureWindow);
-        Assert.DoesNotContain("LogService.Instance.Info(\"Forwarder\",", backpressureWindow);
+        Assert.Contains("YaguLog.For(\"Forwarder\").LogWarning(", backpressureWindow);
+        Assert.DoesNotContain("YaguLog.For(\"Forwarder\").LogInformation(", backpressureWindow);
 
-        int throughputIndex = source.IndexOf("$\"Throughput:", StringComparison.Ordinal);
+        int throughputIndex = source.IndexOf("\"Throughput:", StringComparison.Ordinal);
         Assert.True(throughputIndex >= 0, "Forwarder throughput log not found.");
         string throughputWindow = source[Math.Max(0, throughputIndex - 120)..Math.Min(source.Length, throughputIndex + 220)];
-        Assert.Contains("LogService.Instance.Info(\"Forwarder\",", throughputWindow);
-        Assert.DoesNotContain("LogService.Instance.Warning(\"Forwarder\",", throughputWindow);
+        Assert.Contains("YaguLog.For(\"Forwarder\").LogInformation(", throughputWindow);
+        Assert.DoesNotContain("YaguLog.For(\"Forwarder\").LogWarning(", throughputWindow);
     }
 
     [Fact]
@@ -109,7 +143,7 @@ public sealed class SearchServiceGateTests
         Assert.Contains("private const int SourceBackedResultChannelCapacity = 65_536;", source);
         Assert.Contains("int sourceBackedCap = options.DegradedResultStore != null", source);
         Assert.Contains("new BoundedChannelOptions(sourceBackedCap)", source);
-        Assert.Contains("sourceBackedResults={sourceBackedCap}", source);
+        Assert.Contains("sourceBackedResults={SourceBackedCapacity}", source);
         Assert.Contains("const int SourceBackedBatchSize = 16_384;", source);
     }
 
@@ -188,10 +222,16 @@ public sealed class SearchServiceGateTests
 
         AssertContainsInOrder(source,
             "if (searchContent && options.SearchImageText)",
-            "ocrEngine = Ocr.OcrEngineFactory.Create(options.ImageOcrEngine, options.ImageOcrModel, options.ImageOcrMaxSide);",
+            "int ocrWorkerCount = Math.Clamp(",
+            "options.ImageOcrWorkerParallelism,",
+            "ocrEngine = options.ImageOcrEngineFactory?.Invoke()",
+            "?? Ocr.OcrEngineFactory.Create(",
+            "options.ImageOcrMaxSide,",
+            "ocrWorkerCount);",
             "Ocr.OcrTextCache.Cleanup();",
             "var ocrCache = new Ocr.OcrTextCache();",
             "imageOcr = new Ocr.ImageOcrSearchSession(",
+            "workerCount: ocrWorkerCount,",
             "shouldStop: () => Volatile.Read(ref truncated) != 0);");
     }
 
@@ -205,7 +245,8 @@ public sealed class SearchServiceGateTests
         // Image candidates are diverted to the OCR queue instead of the native/managed content scanner.
         Assert.Contains("else if (imageOcr != null && Ocr.ImageOcrSupport.IsImageCandidate(file, options.ImageOcrExtensions))", source);
         Assert.Contains("if (imageOcr != null && Ocr.ImageOcrSupport.IsImageCandidate(file, options.ImageOcrExtensions))", source);
-        Assert.Contains("imageOcr.TryEnqueue(file);", source);
+        Assert.Contains("if (imageOcr.TryEnqueue(file, ocrPrioritized))", source);
+        Assert.Contains("Interlocked.Increment(ref ocrFilesQueued);", source);
     }
 
     [Fact]
@@ -228,7 +269,7 @@ public sealed class SearchServiceGateTests
 
         AssertContainsInOrder(source,
             "if (searchContent && options.SearchPdfText)",
-            "pdfExtractor = new Pdf.PdfTextExtractor();",
+            "pdfExtractor = options.PdfTextExtractorFactory?.Invoke() ?? new Pdf.PdfTextExtractor();",
             "pdfText = new Pdf.PdfTextSearchSession(",
             "shouldStop: () => Volatile.Read(ref truncated) != 0);");
     }
@@ -241,7 +282,8 @@ public sealed class SearchServiceGateTests
         Assert.Contains("pdfText?.Start();", source);
         Assert.Contains("else if (pdfText != null && Pdf.PdfTextSupport.IsPdfCandidate(file, options.PdfTextExtensions))", source);
         Assert.Contains("if (pdfText != null && Pdf.PdfTextSupport.IsPdfCandidate(file, options.PdfTextExtensions))", source);
-        Assert.Contains("pdfText.TryEnqueue(file);", source);
+        Assert.Contains("if (pdfText.TryEnqueue(file))", source);
+        Assert.Contains("Interlocked.Increment(ref pdfFilesQueued);", source);
     }
 
     [Fact]
@@ -306,8 +348,8 @@ public sealed class SearchServiceGateTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.sln)");
+        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.slnx)");
     }
 }

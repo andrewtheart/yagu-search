@@ -1,0 +1,133 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Yagu.IndexWorker is the OUT-OF-PROCESS host for the native content-index engine.
+
+    Why it exists:
+      All index parsing / memory-mapping / native trigram querying (yagu_core.dll's `index` module) runs
+      here, isolated from the main app. A read-time fault or native access violation in the engine is
+      contained in THIS process — the app just observes the worker exit and falls back to an unpruned scan,
+      never crashing. The main Yagu.exe never P/Invokes the index FFI, keeping its Native-AOT graph clean.
+
+    How it's built:
+      This worker is NOT referenced by Yagu.csproj (a <ProjectReference> would drag it into Yagu's Native-AOT
+      publish graph). Instead Yagu.csproj builds it as an isolated child `dotnet publish` and copies the
+      output into <app>\index-worker\ — the same pattern used for Yagu.OcrWorker / Yagu.SemanticWorker. It
+      SOURCE-LINKS the shared control protocol (IndexWorkerProtocol.cs) so both sides always agree on the wire
+      shape. The native yagu_core.dll ships beside Yagu.exe one level up; NativeIndexEngine resolves it there.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Yagu.IndexWorker</RootNamespace>
+    <AssemblyName>Yagu.IndexWorker</AssemblyName>
+    <!-- Matches the app's per-arch build; the native engine (yagu_core.dll) is arch-specific. -->
+    <RuntimeIdentifiers>win-x64;win-x86;win-arm64</RuntimeIdentifiers>
+    <!-- NativeIndexEngine uses spans over native pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- This worker intentionally does NOT use Native AOT (isolation is the whole point). -->
+    <PublishAot>false</PublishAot>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    SOURCE-LINKED shared control protocol (single source of truth — this file also compiles into Yagu.dll
+    for the in-app IndexWorkerClient proxy and into Yagu.Tests). It has no WinUI dependency.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Yagu\Models\FilterPatternMode.cs" Link="Linked\Models\FilterPatternMode.cs" />
+    <Compile Include="..\Yagu\Helpers\BinaryDetector.cs" Link="Linked\Helpers\BinaryDetector.cs" />
+    <Compile Include="..\Yagu\Helpers\GlobMatcher.cs" Link="Linked\Helpers\GlobMatcher.cs" />
+    <Compile Include="..\Yagu\Services\LogService.cs" Link="Linked\Services\LogService.cs" />
+    <Compile Include="..\Yagu\Services\Logging\LogServiceLogger.cs" Link="Linked\Services\Logging\LogServiceLogger.cs" />
+    <Compile Include="..\Yagu\Services\Logging\YaguLog.cs" Link="Linked\Services\Logging\YaguLog.cs" />
+    <Compile Include="..\Yagu\Services\AuthenticodeVerifier.cs" Link="Linked\Services\AuthenticodeVerifier.cs" />
+    <Compile Include="..\Yagu\Services\Pdf\PdfTextExtractor.cs" Link="Linked\Services\Pdf\PdfTextExtractor.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\IOcrEngine.cs" Link="Linked\Services\Ocr\IOcrEngine.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\OcrDownloadGate.cs" Link="Linked\Services\Ocr\OcrDownloadGate.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\OcrAssetPaths.cs" Link="Linked\Services\Ocr\OcrAssetPaths.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\OcrWorkerProcess.cs" Link="Linked\Services\Ocr\OcrWorkerProcess.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\WorkerOcrEngine.cs" Link="Linked\Services\Ocr\WorkerOcrEngine.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\PaddleOcrEngine.cs" Link="Linked\Services\Ocr\PaddleOcrEngine.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\TesseractOcrEngine.cs" Link="Linked\Services\Ocr\TesseractOcrEngine.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\OcrEnginePool.cs" Link="Linked\Services\Ocr\OcrEnginePool.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\OcrWorkerParallelism.cs" Link="Linked\Services\Ocr\OcrWorkerParallelism.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\OcrEngineFactory.cs" Link="Linked\Services\Ocr\OcrEngineFactory.cs" />
+
+    <Compile Include="..\Yagu\Services\Index\ArchiveEntryIdentity.cs" Link="Linked\Index\ArchiveEntryIdentity.cs" />
+    <Compile Include="..\Yagu\Services\Index\BinaryAsciiContentRepresentation.cs" Link="Linked\Index\BinaryAsciiContentRepresentation.cs" />
+    <Compile Include="..\Yagu\Services\Index\BoundedIncrementalFileClassifier.cs" Link="Linked\Index\BoundedIncrementalFileClassifier.cs" />
+    <Compile Include="..\Yagu\Services\Index\BoundedSynchronousIo.cs" Link="Linked\Index\BoundedSynchronousIo.cs" />
+    <Compile Include="..\Yagu\Services\Index\BoundedFileIdPathResolver.cs" Link="Linked\Index\BoundedFileIdPathResolver.cs" />
+    <Compile Include="..\Yagu\Services\Index\VolumeBinding.cs" Link="Linked\Index\VolumeBinding.cs" />
+    <Compile Include="..\Yagu\Services\Index\ChecksummedFile.cs" Link="Linked\Index\ChecksummedFile.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexBuildTransaction.cs" Link="Linked\Index\ContentIndexBuildTransaction.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexBuildBatch.cs" Link="Linked\Index\ContentIndexBuildBatch.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexCompactor.cs" Link="Linked\Index\ContentIndexCompactor.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexDeltaSegment.cs" Link="Linked\Index\ContentIndexDeltaSegment.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexDeltaSegmentBuilder.cs" Link="Linked\Index\ContentIndexDeltaSegmentBuilder.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexDeltaSegmentSerializer.cs" Link="Linked\Index\ContentIndexDeltaSegmentSerializer.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexFreshnessEvaluator.cs" Link="Linked\Index\ContentIndexFreshnessEvaluator.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexGeneration.cs" Link="Linked\Index\ContentIndexGeneration.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexGenerationSerializer.cs" Link="Linked\Index\ContentIndexGenerationSerializer.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexIncrementalRefresher.cs" Link="Linked\Index\ContentIndexIncrementalRefresher.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexIncrementalUpdater.cs" Link="Linked\Index\ContentIndexIncrementalUpdater.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexManager.cs" Link="Linked\Index\ContentIndexManager.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexedRootsPolicy.cs" Link="Linked\Index\IndexedRootsPolicy.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexStore.cs" Link="Linked\Index\ContentIndexStore.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexV3Format.cs" Link="Linked\Index\ContentIndexV3Format.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexUsnChangeResolver.cs" Link="Linked\Index\ContentIndexUsnChangeResolver.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentRepresentation.cs" Link="Linked\Index\ContentRepresentation.cs" />
+    <Compile Include="..\Yagu\Services\Index\ExtractionOutcome.cs" Link="Linked\Index\ExtractionOutcome.cs" />
+    <Compile Include="..\Yagu\Services\Index\ExtractorFingerprint.cs" Link="Linked\Index\ExtractorFingerprint.cs" />
+    <Compile Include="..\Yagu\Services\Index\ExtendedSourceNamespace.cs" Link="Linked\Index\ExtendedSourceNamespace.cs" />
+    <Compile Include="..\Yagu\Services\Index\ExtendedSourceNamespaceSerializer.cs" Link="Linked\Index\ExtendedSourceNamespaceSerializer.cs" />
+    <Compile Include="..\Yagu\Services\Index\ExtendedSourcePolicy.cs" Link="Linked\Index\ExtendedSourcePolicy.cs" />
+    <Compile Include="..\Yagu\Services\Index\ExtendedSourceStore.cs" Link="Linked\Index\ExtendedSourceStore.cs" />
+    <Compile Include="..\Yagu\Services\Index\FileIdMap.cs" Link="Linked\Index\FileIdMap.cs" />
+    <Compile Include="..\Yagu\Services\Index\FileIdPathResolver.cs" Link="Linked\Index\FileIdPathResolver.cs" />
+    <Compile Include="..\Yagu\Services\Index\FileIdentityReader.cs" Link="Linked\Index\FileIdentityReader.cs" />
+    <Compile Include="..\Yagu\Services\Index\IContentIndexPathProvider.cs" Link="Linked\Index\IContentIndexPathProvider.cs" />
+    <Compile Include="..\Yagu\Services\Index\IFileIdPathResolver.cs" Link="Linked\Index\IFileIdPathResolver.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexBuildExecutor.cs" Link="Linked\Index\IndexBuildExecutor.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexBuildOperations.cs" Link="Linked\Index\IndexBuildOperations.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexBuildProgressEstimate.cs" Link="Linked\Index\IndexBuildProgressEstimate.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexBuildReport.cs" Link="Linked\Index\IndexBuildReport.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexFreshness.cs" Link="Linked\Index\IndexFreshness.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexFileContentReader.cs" Link="Linked\Index\IndexFileContentReader.cs" />
+    <Compile Include="..\Yagu\Services\Index\StreamingRepresentationClassifier.cs" Link="Linked\Index\StreamingRepresentationClassifier.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexFileCrawler.cs" Link="Linked\Index\IndexFileCrawler.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexIngestionPolicy.cs" Link="Linked\Index\IndexIngestionPolicy.cs" />
+    <Compile Include="..\Yagu\Services\Index\ImageOcrExtractorFingerprint.cs" Link="Linked\Index\ImageOcrExtractorFingerprint.cs" />
+    <Compile Include="..\Yagu\Services\Index\ImageOcrExtendedSourcePopulator.cs" Link="Linked\Index\ImageOcrExtendedSourcePopulator.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexManifest.cs" Link="Linked\Index\IndexManifest.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexMutationFaults.cs" Link="Linked\Index\IndexMutationFaults.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexPathClassification.cs" Link="Linked\Index\IndexPathClassification.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexQueryWorkerProtocol.cs" Link="Linked\Index\IndexQueryWorkerProtocol.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexScopeIdentity.cs" Link="Linked\Index\IndexScopeIdentity.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexStorageRecovery.cs" Link="Linked\Index\IndexStorageRecovery.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexTrustDecision.cs" Link="Linked\Index\IndexTrustDecision.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexWorkerProtocol.cs" Link="Linked\IndexWorkerProtocol.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexWorkerParallelism.cs" Link="Linked\Index\IndexWorkerParallelism.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexWriteLease.cs" Link="Linked\Index\IndexWriteLease.cs" />
+    <Compile Include="..\Yagu\Services\Index\PdfExtendedSourcePopulator.cs" Link="Linked\Index\PdfExtendedSourcePopulator.cs" />
+    <Compile Include="..\Yagu\Services\Index\PdfExtractionDeterminism.cs" Link="Linked\Index\PdfExtractionDeterminism.cs" />
+    <Compile Include="..\Yagu\Services\Index\PdfExtractorFingerprint.cs" Link="Linked\Index\PdfExtractorFingerprint.cs" />
+    <Compile Include="..\Yagu\Services\Index\Trigram.cs" Link="Linked\Index\Trigram.cs" />
+    <Compile Include="..\Yagu\Services\Index\TrigramExpression.cs" Link="Linked\Index\TrigramExpression.cs" />
+    <Compile Include="..\Yagu\Services\Index\TrigramPostingIndex.cs" Link="Linked\Index\TrigramPostingIndex.cs" />
+    <Compile Include="..\Yagu\Services\Index\TrigramQueryRpn.cs" Link="Linked\Index\TrigramQueryRpn.cs" />
+    <Compile Include="..\Yagu\Services\Index\UsnJournalHeadroom.cs" Link="Linked\Index\UsnJournalHeadroom.cs" />
+    <Compile Include="..\Yagu\Services\Index\UsnJournalReader.cs" Link="Linked\Index\UsnJournalReader.cs" />
+    <Compile Include="..\Yagu\Services\Index\V3MappedLayeredQuerySession.cs" Link="Linked\Index\V3MappedLayeredQuerySession.cs" />
+  </ItemGroup>
+
+</Project>

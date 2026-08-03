@@ -1,0 +1,16 @@
+# Whole-file 100/100/100 coverage denominator for the index-maintenance-worker migration.
+# Data-only enum/DTO auto-property files with no instrumentable source methods are not listed.
+src/Yagu/Services/Index/IndexBuildOperations.cs
+src/Yagu/Services/Index/IndexBuildOperationFactory.cs
+src/Yagu/Services/Index/IndexWriteLease.cs
+src/Yagu/Services/Index/IndexStorageRecovery.cs
+src/Yagu/Services/Index/IndexFileCrawler.cs
+src/Yagu/Services/Index/ContentIndexBuildTransaction.cs
+src/Yagu/Services/Index/IndexBuildExecutor.cs
+src/Yagu/Services/Index/IndexMaintenanceWorkerClient.cs
+src/Yagu/Services/Index/IndexBuildCoordinator.cs
+src/Yagu.IndexWorker/IndexWorkerBuildHost.cs
+src/Yagu/Services/Index/IndexIngestionPolicySettings.cs
+src/Yagu/Services/Index/ContentIndexManagerSettings.cs
+src/Yagu/Services/Index/ContentIndexIncrementalUpdaterSettings.cs
+src/Yagu/Services/Index/ContentIndexIncrementalRefresherSettings.cs

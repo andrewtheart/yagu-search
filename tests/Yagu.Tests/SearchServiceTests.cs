@@ -1,7 +1,10 @@
 using System.Text;
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Ocr;
+using Yagu.Services.Pdf;
 
 namespace Yagu.Tests;
 
@@ -52,6 +55,19 @@ public class SearchServiceTests : IDisposable
         Assert.Equal(0, SearchService.EffectiveHardCap(o));
     }
 
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData(FileListerBackend.Auto, true)]
+    [InlineData(FileListerBackend.EverythingSdk, true)]
+    [InlineData(FileListerBackend.EsExe, false)]
+    [InlineData(FileListerBackend.Managed, false)]
+    public void IsNameFirstBackendEligible_AcceptsOnlySdkCapableBackends(
+        FileListerBackend? backend,
+        bool expected)
+    {
+        Assert.Equal(expected, SearchService.IsNameFirstBackendEligible(backend));
+    }
+
     private string Write(string rel, string content)
     {
         var p = Path.Combine(_root, rel);
@@ -64,6 +80,142 @@ public class SearchServiceTests : IDisposable
     {
         File.SetCreationTime(path, created);
         File.SetLastWriteTime(path, modified);
+    }
+
+    private sealed class CannedOcrEngine(string text) : IOcrEngine
+    {
+        public string Id => "test-ocr";
+        public string DisplayName => "Test OCR";
+        public Task<OcrResult> EnsureReadyAsync(CancellationToken cancellationToken)
+            => Task.FromResult(OcrResult.Ok(string.Empty));
+        public Task<OcrResult> RecognizeAsync(string imagePath, CancellationToken cancellationToken)
+            => Task.FromResult(OcrResult.Ok(text));
+    }
+
+    private sealed class CannedPdfTextExtractor(string text) : PdfTextExtractor
+    {
+        public override Task<PdfTextResult> ExtractAsync(string pdfPath, CancellationToken cancellationToken)
+            => Task.FromResult(PdfTextResult.Ok(text));
+    }
+
+    [Fact]
+    public async Task EmptyLiteralQuery_CompletesWithoutStartingDiscovery()
+    {
+        var options = new SearchOptions
+        {
+            Directory = _root,
+            Query = "   ",
+            SearchMode = SearchMode.Content,
+        };
+
+        var events = new List<SearchEvent>();
+        await foreach (SearchEvent searchEvent in new SearchService().SearchAsync(options, default))
+            events.Add(searchEvent);
+
+        var completed = Assert.IsType<SearchEvent.Completed>(Assert.Single(events));
+        Assert.Equal(0, completed.Summary.TotalFiles);
+        Assert.Equal(0, completed.Summary.TotalMatches);
+    }
+
+    [Theory]
+    [InlineData(true, false, false, "zip")]
+    [InlineData(false, true, false, "png")]
+    [InlineData(false, false, true, "pdf")]
+    public async Task ExtendedSourceSearch_RemovesOnlyItsExtensionsFromListerSkipSet(
+        bool searchArchives,
+        bool searchImages,
+        bool searchPdfs,
+        string removedExtension)
+    {
+        var lister = new FileLister();
+        var service = new SearchService(lister, new ContentSearcher());
+        var options = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            SearchMode = SearchMode.Content,
+            SkipExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "zip", "png", "pdf", "bin" },
+            SearchInsideArchives = searchArchives,
+            ArchiveExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".zip" },
+            SearchImageText = searchImages,
+            ImageOcrExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "png" },
+            ImageOcrEngineFactory = () => new CannedOcrEngine(string.Empty),
+            SearchPdfText = searchPdfs,
+            PdfTextExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "pdf" },
+            PdfTextExtractorFactory = () => new CannedPdfTextExtractor(string.Empty),
+        };
+
+        await foreach (SearchEvent _ in service.SearchAsync(options, default))
+        {
+        }
+
+        var expected = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "zip", "png", "pdf", "bin" };
+        expected.Remove(removedExtension);
+        Assert.Equal(expected.OrderBy(extension => extension), lister.EarlySkipExtensions.OrderBy(extension => extension));
+    }
+
+    [Fact]
+    public async Task DegradedStoreAndContentIndex_AreReflectedInCompletedSummary()
+    {
+        using var store = new ResultStore(_root);
+        var options = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            SearchMode = SearchMode.Content,
+            DegradedResultStore = store,
+            UseContentIndex = true,
+        };
+
+        SearchSummary? summary = null;
+        await foreach (SearchEvent searchEvent in new SearchService().SearchAsync(options, default))
+            if (searchEvent is SearchEvent.Completed completed)
+                summary = completed.Summary;
+
+        Assert.NotNull(summary);
+        Assert.True(summary!.Degraded);
+        Assert.Equal(new IndexAccelerationInfo(1, 0, 0, 0), summary.IndexAcceleration);
+    }
+
+    [Fact]
+    public async Task OcrAndPdfWithoutFactories_UseDefaultDependencies()
+    {
+        var options = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            SearchMode = SearchMode.Content,
+            SearchImageText = true,
+            SearchPdfText = true,
+        };
+
+        SearchSummary? summary = null;
+        await foreach (SearchEvent searchEvent in new SearchService().SearchAsync(options, default))
+            if (searchEvent is SearchEvent.Completed completed)
+                summary = completed.Summary;
+
+        Assert.NotNull(summary);
+        Assert.Equal(0, summary!.TotalMatches);
+    }
+
+    [Fact]
+    public async Task DrainRemainingEventsAsync_ForwardsBufferedEventsUntilCompletion()
+    {
+        var channel = Channel.CreateUnbounded<SearchEvent>();
+        SearchEvent[] expected =
+        [
+            new SearchEvent.Progress(new SearchProgress(1, 2, 3, 4, 5, 6, TimeSpan.Zero)),
+            new SearchEvent.SearchError("expected"),
+        ];
+        foreach (SearchEvent searchEvent in expected)
+            Assert.True(channel.Writer.TryWrite(searchEvent));
+        channel.Writer.Complete();
+
+        var actual = new List<SearchEvent>();
+        await foreach (SearchEvent searchEvent in SearchService.DrainRemainingEventsAsync(channel.Reader, default))
+            actual.Add(searchEvent);
+
+        Assert.Equal(expected, actual);
     }
 
     [Fact]
@@ -134,6 +286,65 @@ public class SearchServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task EndToEnd_OcrAndPdfSessionsContributeMatchesAndSummaryCounts()
+    {
+        string imagePath = Write("scan.png", "fake image");
+        string pdfPath = Write("document.pdf", "fake pdf");
+        var options = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            SearchMode = SearchMode.Content,
+            SearchImageText = true,
+            SearchPdfText = true,
+            ImageOcrExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "png" },
+            PdfTextExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "pdf" },
+            ImageOcrWorkerParallelism = 1,
+            ImageOcrEngineFactory = () => new CannedOcrEngine("needle in image"),
+            PdfTextExtractorFactory = () => new CannedPdfTextExtractor("needle in pdf"),
+        };
+
+        var results = new List<SearchResult>();
+        SearchSummary? summary = null;
+        await foreach (SearchEvent searchEvent in new SearchService().SearchAsync(options, default))
+        {
+            if (searchEvent is SearchEvent.Match match)
+                results.Add(match.Result);
+            else if (searchEvent is SearchEvent.MatchBatch batch)
+                results.AddRange(batch.Results);
+            else if (searchEvent is SearchEvent.Completed completed)
+                summary = completed.Summary;
+        }
+
+        Assert.Contains(results, result => result.FilePath == imagePath && result.LineNumber == 1);
+        Assert.Contains(results, result => result.FilePath == pdfPath && result.LineNumber == 1);
+        Assert.NotNull(summary);
+        Assert.Equal(2, summary!.TotalMatches);
+        Assert.Equal(2, summary.FilesWithMatches);
+    }
+
+    [Fact]
+    public async Task EndToEnd_ThrowingExtendedSourceGateFailsOpen()
+    {
+        Write("plain.txt", "needle");
+        var options = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            SearchMode = SearchMode.Content,
+            ExtendedSourceGateFactory = () => throw new InvalidOperationException("gate failed"),
+        };
+
+        SearchSummary? summary = null;
+        await foreach (SearchEvent searchEvent in new SearchService().SearchAsync(options, default))
+            if (searchEvent is SearchEvent.Completed completed)
+                summary = completed.Summary;
+
+        Assert.NotNull(summary);
+        Assert.Equal(1, summary!.TotalMatches);
+    }
+
+    [Fact]
     public async Task BothMode_NameFirstPass_EmitsFilenameMatchExactlyOnce()
     {
         // File whose NAME contains the literal AND whose content also matches.
@@ -185,6 +396,17 @@ public class SearchServiceTests : IDisposable
             // content-only file are still present (the full pass scans the whole tree).
             Assert.True(reportContent, "expected a content match in the name-matched file");
             Assert.True(plainContent, "expected a content match in the content-only file");
+
+            // Filename first, then priority content for the same file. The later full discovery must
+            // not emit either result a second time.
+            int filenameIndex = results.FindIndex(r => r.LineNumber == 0);
+            int reportContentIndex = results.FindIndex(r => r.LineNumber > 0
+                && r.FilePath.EndsWith("needle-report.txt", StringComparison.Ordinal));
+            Assert.InRange(filenameIndex, 0, int.MaxValue);
+            Assert.True(reportContentIndex > filenameIndex,
+                $"expected filename result before its content upgrade (filename={filenameIndex}, content={reportContentIndex})");
+            Assert.Equal(1, results.Count(r => r.LineNumber > 0
+                && r.FilePath.EndsWith("needle-report.txt", StringComparison.Ordinal)));
         }
         finally
         {
@@ -261,6 +483,50 @@ public class SearchServiceTests : IDisposable
             if (evt is SearchEvent.Completed) completed++;
 
         Assert.Equal(1, completed);
+    }
+
+    [Fact]
+    public void SearchManyAsync_PrioritizesOnlyRepresentableNameQueries()
+    {
+        bool originalSdk = FileLister.SdkAvailable;
+        FileLister.SdkAvailable = true;
+        try
+        {
+            var service = new SearchService();
+            SearchOptions Eligible(string directory) => new()
+            {
+                Directory = directory,
+                Query = "report",
+                SearchMode = SearchMode.Both,
+            };
+            SearchOptions InvalidFilter(string directory) => new()
+            {
+                Directory = directory,
+                Query = "report final",
+                SearchMode = SearchMode.Both,
+            };
+            SearchOptions EmptyQuery(string directory) => new()
+            {
+                Directory = directory,
+                Query = "   ",
+                SearchMode = SearchMode.Both,
+            };
+
+            SearchOptions[] eligibleRoots = [Eligible("C"), Eligible("D")];
+            SearchOptions[] invalidFilterRoots = [InvalidFilter("C"), InvalidFilter("D")];
+            SearchOptions[] emptyQueryRoots = [EmptyQuery("C"), EmptyQuery("D")];
+
+            Assert.True(service.CanPrioritizeNameMatchesAcrossRoots(eligibleRoots));
+            Assert.False(service.CanPrioritizeNameMatchesAcrossRoots(invalidFilterRoots));
+            Assert.False(service.CanPrioritizeNameMatchesAcrossRoots(emptyQueryRoots));
+            Assert.NotNull(service.SearchManyAsync(eligibleRoots, default));
+            Assert.NotNull(service.SearchManyAsync(invalidFilterRoots, default));
+            Assert.NotNull(service.SearchManyAsync(emptyQueryRoots, default));
+        }
+        finally
+        {
+            FileLister.SdkAvailable = originalSdk;
+        }
     }
 
     [Fact]
@@ -1755,6 +2021,67 @@ public class SearchEventCoverageTests
 public class SearchProgressCoverageTests
 {
     [Fact]
+    public void SourceBackedTailLabel_AppearsOnlyAfterOrdinaryWorkFinishes()
+    {
+        var source = new SourceBackedSearchProgress(
+            OcrProcessed: 964,
+            OcrQueued: 43_254,
+            PdfProcessed: 0,
+            PdfQueued: 14,
+            DiscoveryComplete: true);
+
+        Assert.Null(source.BuildPhaseLabel(filesProcessed: 600_000, totalFiles: 712_634));
+        Assert.Equal($"OCR: {964:N0} / {43_254:N0} images",
+            source.BuildPhaseLabel(filesProcessed: 670_330, totalFiles: 712_634));
+        Assert.Equal($"94% [OCR: {964:N0} / {43_254:N0} images]",
+            source.BuildCombinedLabel(filesProcessed: 670_330, totalFiles: 712_634));
+        Assert.Equal(42_304, source.Remaining);
+    }
+
+    [Fact]
+    public void SourceBackedTailLabel_ShowsPdfAfterOcrCompletes_AndRequiresDiscovery()
+    {
+        var incomplete = new SourceBackedSearchProgress(10, 10, 2, 14, DiscoveryComplete: false);
+        Assert.Null(incomplete.BuildPhaseLabel(100, 100));
+
+        var source = incomplete with { DiscoveryComplete = true };
+        Assert.Equal("PDF text: 2 / 14 files", source.BuildPhaseLabel(88, 100));
+    }
+
+    [Fact]
+    public void SourceBackedTailLabel_ToleratesSmallDiscoveryTotalDrift()
+    {
+        var source = new SourceBackedSearchProgress(
+            OcrProcessed: 11_113,
+            OcrQueued: 104_000,
+            PdfProcessed: 0,
+            PdfQueued: 25,
+            DiscoveryComplete: true);
+
+        // A small mismatch between discovery's estimated total and exact queue accounting must not hide
+        // a long OCR tail behind a rounded "95%" label.
+        Assert.Equal("OCR: 11,113 / 104,000 images",
+            source.BuildPhaseLabel(filesProcessed: 1_872_380, totalFiles: 1_965_228));
+        Assert.Equal("95% [OCR: 11,113 / 104,000 images]",
+            source.BuildCombinedLabel(filesProcessed: 1_872_380, totalFiles: 1_965_228));
+    }
+
+    [Fact]
+    public void SourceBackedProgress_HandlesZeroAndOverCompleteTotals()
+    {
+        var empty = new SourceBackedSearchProgress(0, 0, 0, 0, DiscoveryComplete: true);
+        Assert.Equal(0, empty.OverallPercent(filesProcessed: 0, totalFiles: 0));
+        Assert.Null(empty.BuildPhaseLabel(filesProcessed: 0, totalFiles: 0));
+        Assert.Null(empty.BuildCombinedLabel(filesProcessed: 0, totalFiles: 0));
+
+        var queued = new SourceBackedSearchProgress(12, 10, 8, 5, DiscoveryComplete: true);
+        Assert.Equal(15, queued.Processed);
+        Assert.Equal(15, queued.OverallTotal(totalFiles: 10));
+        Assert.Equal(100, queued.OverallPercent(filesProcessed: 20, totalFiles: 10));
+        Assert.Null(queued.BuildPhaseLabel(filesProcessed: 20, totalFiles: 10));
+    }
+
+    [Fact]
     public void AllProperties_Accessible()
     {
         var elapsed = TimeSpan.FromSeconds(5);
@@ -2357,6 +2684,30 @@ public class ResolveNativeBatchTargetTests
 public class CollectForMemoryPressureIfDueTests
 {
     [Fact]
+    public void CollectionAlreadyInFlight_ReturnsWithoutCollecting()
+    {
+        var inFlight = typeof(SearchService).GetField(
+            "s_memoryPressureGcInFlight",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+        var lastCollection = typeof(SearchService).GetField(
+            "s_lastMemoryPressureGcTicks",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+        int originalInFlight = (int)inFlight.GetValue(null)!;
+        long originalLastCollection = (long)lastCollection.GetValue(null)!;
+        try
+        {
+            inFlight.SetValue(null, 1);
+            lastCollection.SetValue(null, 0L);
+            SearchService.CollectForMemoryPressureIfDue(TimeSpan.Zero);
+        }
+        finally
+        {
+            inFlight.SetValue(null, originalInFlight);
+            lastCollection.SetValue(null, originalLastCollection);
+        }
+    }
+
+    [Fact]
     public void FirstCall_DoesNotThrow()
     {
         // First call ever should succeed without error (bypasses cooldown)
@@ -2478,5 +2829,705 @@ public class DiskSpaceSnapshotBranchTests
     {
         var snap = new DiskSpaceSnapshot(root, 1000, 500);
         Assert.Equal(expected, snap.DriveDisplayName);
+    }
+}
+
+public sealed class StreamingScanSinkTests
+{
+    [Fact]
+    public unsafe void NormalMatchAndFileCompletion_UpdateResultsCountersAndMetadata()
+    {
+        const string path = @"C:\source.txt";
+        var results = Channel.CreateUnbounded<SearchResult>();
+        int cancel = 0;
+        int filesScanned = 0;
+        int totalMatches = 0;
+        int filesWithMatches = 0;
+        FileMetadataCache.Clear();
+
+        try
+        {
+            using var sink = new SearchService.StreamingScanSink(
+                [path], results.Writer,
+                maxResults: 0, currentTotalMatches: 0,
+                (IntPtr)(&cancel), &filesScanned, &totalMatches, &filesWithMatches,
+                resultStore: null, initialCapacity: 1);
+
+            byte[] line = Encoding.UTF8.GetBytes("prefix needle suffix");
+            fixed (byte* linePtr = line)
+            {
+                var view = new Native.NativeSearcher.QgMatchView
+                {
+                    LineNumber = 7,
+                    MatchStart = 7,
+                    SourceMatchStart = 7,
+                    MatchLen = 6,
+                    LinePtr = linePtr,
+                    LineLen = (nuint)line.Length,
+                };
+
+                Assert.Equal(0, sink.OnMatchForFile(0, &view));
+                Assert.Equal(1, sink.OnMatch(&view));
+            }
+
+            Assert.True(results.Reader.TryRead(out SearchResult? result));
+            Assert.Equal(path, result.FilePath);
+            Assert.Equal(7, result.LineNumber);
+            Assert.Equal("prefix needle suffix", result.MatchLine);
+            Assert.Equal(7, result.MatchStartColumn);
+            Assert.Equal(6, result.MatchLength);
+            Assert.Equal(7, result.SourceMatchStartColumn);
+            Assert.Equal(1, sink.GetEmitted(0));
+            Assert.Equal(1, sink.TotalEmitted);
+            Assert.Equal(1, totalMatches);
+            Assert.Equal(1, filesWithMatches);
+            Assert.False(sink.Truncated);
+
+            ulong lastModified = (ulong)new DateTime(2025, 1, 2, 3, 4, 5, DateTimeKind.Local).ToFileTime();
+            sink.OnFileDone(0, Native.NativeSearcher.StatusOk, 123, lastModified);
+            sink.OnFileDone(0, Native.NativeSearcher.StatusOk, 124, lastModified);
+            sink.OnFileDone(1, Native.NativeSearcher.StatusOk, 0, lastModified);
+            sink.OnFileDone(2, Native.NativeSearcher.StatusOk, 1, 0);
+            sink.OnFileDone(3, Native.NativeSearcher.StatusOk, 1, lastModified);
+            sink.OnFileDone(4, Native.NativeSearcher.StatusTooLarge, ulong.MaxValue, 0);
+
+            Assert.Equal(6, filesScanned);
+            Assert.Equal(Native.NativeSearcher.StatusOk, sink.GetStatus(0));
+            Assert.Equal(124, sink.GetFileLength(0));
+            Assert.Equal(Native.NativeSearcher.StatusTooLarge, sink.GetStatus(4));
+            Assert.Equal(long.MaxValue, sink.GetFileLength(4));
+            Assert.Equal(0, sink.GetEmitted(10));
+            Assert.Equal(0, sink.GetStatus(10));
+            Assert.Equal(0, sink.GetFileLength(10));
+            Assert.True(FileMetadataCache.TryGet(path, out FileMetadata metadata));
+            Assert.Equal(124, metadata.Length);
+        }
+        finally
+        {
+            FileMetadataCache.Clear();
+        }
+    }
+
+    [Fact]
+    public unsafe void NormalMatch_ReachesCapAndStopsSubsequentCallbacks()
+    {
+        var results = Channel.CreateUnbounded<SearchResult>();
+        int cancel = 0;
+        int filesScanned = 0;
+        int totalMatches = 0;
+        int filesWithMatches = 0;
+        using var sink = new SearchService.StreamingScanSink(
+            ["cap.txt"], results.Writer,
+            maxResults: 2, currentTotalMatches: 0,
+            (IntPtr)(&cancel), &filesScanned, &totalMatches, &filesWithMatches,
+            resultStore: null, initialCapacity: 1);
+        sink.SetDegraded(true);
+
+        byte[] line = Encoding.UTF8.GetBytes("needle");
+        fixed (byte* linePtr = line)
+        {
+            var view = new Native.NativeSearcher.QgMatchView
+            {
+                LineNumber = 1,
+                MatchStart = 0,
+                SourceMatchStart = 0,
+                MatchLen = 6,
+                LinePtr = linePtr,
+                LineLen = (nuint)line.Length,
+            };
+
+            Assert.Equal(0, sink.OnMatchForFile(0, &view));
+            sink.SetDegraded(false);
+            Assert.Equal(1, sink.OnMatchForFile(0, &view));
+            Assert.Equal(1, sink.OnMatchForFile(0, &view));
+        }
+
+        Assert.True(sink.Truncated);
+        Assert.Equal(1, cancel);
+        Assert.Equal(2, sink.TotalEmitted);
+        Assert.Equal(2, totalMatches);
+        Assert.Equal(1, filesWithMatches);
+        Assert.Equal(2, results.Reader.Count);
+    }
+
+    [Fact]
+    public unsafe void Backpressure_RetriesUntilAcceptedOrCancellationIsObserved()
+    {
+        var retryWriter = new ScriptedWriter(false, false, true);
+        using var retrySink = new SearchService.StreamingScanSink(
+            ["retry.txt"], retryWriter,
+            maxResults: 0, currentTotalMatches: 0,
+            IntPtr.Zero, null, null, null,
+            resultStore: null, initialCapacity: 1)
+        {
+            CapturedException = new InvalidOperationException("captured"),
+            ErrorMessage = "error",
+        };
+
+        byte[] line = Encoding.UTF8.GetBytes("retry");
+        fixed (byte* linePtr = line)
+        {
+            var view = new Native.NativeSearcher.QgMatchView
+            {
+                LineNumber = 1,
+                MatchLen = 5,
+                LinePtr = linePtr,
+                LineLen = (nuint)line.Length,
+            };
+            Assert.Equal(0, retrySink.OnMatchForFile(0, &view));
+        }
+        Assert.Single(retryWriter.Results);
+        Assert.NotNull(retrySink.CapturedException);
+        Assert.Equal("error", retrySink.ErrorMessage);
+
+        int cancel = 1;
+        var rejectingWriter = new ScriptedWriter(false);
+        using var cancelledSink = new SearchService.StreamingScanSink(
+            ["cancelled.txt"], rejectingWriter,
+            maxResults: 0, currentTotalMatches: 0,
+            (IntPtr)(&cancel), null, null, null,
+            resultStore: null, initialCapacity: 1);
+        fixed (byte* linePtr = line)
+        {
+            var view = new Native.NativeSearcher.QgMatchView
+            {
+                LineNumber = 1,
+                MatchLen = 5,
+                LinePtr = linePtr,
+                LineLen = (nuint)line.Length,
+            };
+            Assert.Equal(1, cancelledSink.OnMatchForFile(0, &view));
+            Assert.Equal(1, cancelledSink.OnMatchForFile(0, &view));
+        }
+        Assert.Empty(rejectingWriter.Results);
+        Assert.Equal(0, cancelledSink.TotalEmitted);
+    }
+
+    [Fact]
+    public unsafe void DegradedShortLines_WritePreEvictedAsciiAndUnicodeResults()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "yagu-streaming-sink-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDirectory);
+        try
+        {
+            using var store = new ResultStore(tempDirectory);
+            var results = Channel.CreateUnbounded<SearchResult>();
+            using var sink = new SearchService.StreamingScanSink(
+                ["degraded.txt"], results.Writer,
+                maxResults: 0, currentTotalMatches: 0,
+                IntPtr.Zero, null, null, null,
+                store, initialCapacity: 1);
+            sink.SetDegraded(true);
+
+            byte[] asciiLine = Encoding.UTF8.GetBytes("prefix needle suffix");
+            fixed (byte* linePtr = asciiLine)
+            {
+                var view = new Native.NativeSearcher.QgMatchView
+                {
+                    LineNumber = 4,
+                    MatchStart = 7,
+                    SourceMatchStart = 7,
+                    MatchLen = 6,
+                    LinePtr = linePtr,
+                    LineLen = (nuint)asciiLine.Length,
+                };
+                Assert.Equal(0, sink.OnMatchForFile(0, &view));
+            }
+
+            byte[] unicodeLine = Encoding.UTF8.GetBytes("pré needle");
+            fixed (byte* linePtr = unicodeLine)
+            {
+                var view = new Native.NativeSearcher.QgMatchView
+                {
+                    LineNumber = ulong.MaxValue,
+                    MatchStart = 5,
+                    SourceMatchStart = uint.MaxValue,
+                    MatchLen = 6,
+                    LinePtr = linePtr,
+                    LineLen = (nuint)unicodeLine.Length,
+                };
+                Assert.Equal(0, sink.OnMatchForFile(0, &view));
+            }
+
+            SearchResult asciiResult = Assert.IsType<SearchResult>(ReadResult(results));
+            SearchResult unicodeResult = Assert.IsType<SearchResult>(ReadResult(results));
+            Assert.True(asciiResult.IsEvicted);
+            Assert.Equal(("prefix needle suffix", 0, 0), ReadStoredPayload(store, asciiResult));
+            Assert.Equal(4, unicodeResult.MatchStartColumn);
+            Assert.Equal(4, unicodeResult.SourceMatchStartColumn);
+            Assert.Equal(6, unicodeResult.MatchLength);
+            Assert.Equal(int.MaxValue, unicodeResult.LineNumber);
+            Assert.Equal(("pré needle", 0, 0), ReadStoredPayload(store, unicodeResult));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public unsafe void DegradedLongLines_WindowAsciiAndUnicodeMatches()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "yagu-streaming-long-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDirectory);
+        int originalTruncatedLength = Yagu.Helpers.LineTruncator.TruncatedLength;
+        try
+        {
+            Yagu.Helpers.LineTruncator.TruncatedLength = 500;
+            using var store = new ResultStore(tempDirectory);
+            var results = Channel.CreateUnbounded<SearchResult>();
+            using var sink = new SearchService.StreamingScanSink(
+                ["long.txt"], results.Writer,
+                maxResults: 0, currentTotalMatches: 0,
+                IntPtr.Zero, null, null, null,
+                store, initialCapacity: 1);
+            sink.SetDegraded(true);
+
+            byte[] asciiLine = Encoding.UTF8.GetBytes(new string('a', 5_000));
+            fixed (byte* linePtr = asciiLine)
+            {
+                var view = new Native.NativeSearcher.QgMatchView
+                {
+                    LineNumber = 1,
+                    MatchStart = 4_990,
+                    SourceMatchStart = uint.MaxValue,
+                    MatchLen = 6,
+                    LinePtr = linePtr,
+                    LineLen = (nuint)asciiLine.Length,
+                };
+                Assert.Equal(0, sink.OnMatchForFile(0, &view));
+            }
+
+            byte[] unicodeLine = Encoding.UTF8.GetBytes(new string('é', 3_000));
+            fixed (byte* linePtr = unicodeLine)
+            {
+                var view = new Native.NativeSearcher.QgMatchView
+                {
+                    LineNumber = 2,
+                    MatchStart = 3_000,
+                    SourceMatchStart = uint.MaxValue,
+                    MatchLen = 2,
+                    LinePtr = linePtr,
+                    LineLen = (nuint)unicodeLine.Length,
+                };
+                Assert.Equal(0, sink.OnMatchForFile(0, &view));
+            }
+
+            byte[] malformedLine = Enumerable.Repeat((byte)0x80, 5_000).ToArray();
+            fixed (byte* linePtr = malformedLine)
+            {
+                var view = new Native.NativeSearcher.QgMatchView
+                {
+                    LineNumber = 3,
+                    MatchStart = 4_990,
+                    SourceMatchStart = uint.MaxValue,
+                    MatchLen = 2,
+                    LinePtr = linePtr,
+                    LineLen = (nuint)malformedLine.Length,
+                };
+                Assert.Equal(0, sink.OnMatchForFile(0, &view));
+            }
+
+            SearchResult asciiResult = ReadResult(results);
+            SearchResult unicodeResult = ReadResult(results);
+            SearchResult malformedResult = ReadResult(results);
+            Assert.Equal(4_990, asciiResult.SourceMatchStartColumn);
+            Assert.Equal(3_000, unicodeResult.SourceMatchStartColumn);
+            Assert.Equal(1, unicodeResult.MatchLength);
+            Assert.True(store.Read(asciiResult.DiskOffset).MatchLine.Length > 0);
+            Assert.True(store.Read(unicodeResult.DiskOffset).MatchLine.Length > 0);
+            Assert.Equal(string.Empty, store.Read(malformedResult.DiskOffset).MatchLine);
+        }
+        finally
+        {
+            Yagu.Helpers.LineTruncator.TruncatedLength = originalTruncatedLength;
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public unsafe void OversizedNativeScalars_AreClampedOnAnEmptyLine()
+    {
+        Assert.Equal(7, SearchService.StreamingScanSink.ClampNativeByteLength(7));
+        Assert.Equal(int.MaxValue, SearchService.StreamingScanSink.ClampNativeByteLength((nuint)int.MaxValue + 1));
+
+        var results = Channel.CreateUnbounded<SearchResult>();
+        using var sink = new SearchService.StreamingScanSink(
+            [], results.Writer,
+            maxResults: 0, currentTotalMatches: 0,
+            IntPtr.Zero, null, null, null,
+            resultStore: null, initialCapacity: 1);
+        sink.SetDegraded(true);
+        var view = new Native.NativeSearcher.QgMatchView
+        {
+            LineNumber = ulong.MaxValue,
+            MatchStart = uint.MaxValue,
+            SourceMatchStart = uint.MaxValue,
+            MatchLen = uint.MaxValue,
+            LinePtr = null,
+            LineLen = 0,
+        };
+
+        Assert.Equal(0, sink.OnMatchForFile(0, &view));
+
+        SearchResult result = ReadResult(results);
+        Assert.Equal(string.Empty, result.FilePath);
+        Assert.Equal(int.MaxValue, result.LineNumber);
+        Assert.Equal(string.Empty, result.MatchLine);
+        Assert.Equal(0, result.MatchStartColumn);
+        Assert.Equal(0, result.MatchLength);
+        Assert.Equal(0, result.SourceMatchStartColumn);
+    }
+
+    [Fact]
+    public unsafe void DegradedMatch_ReachesCapWithAndWithoutCancelPointer()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "yagu-streaming-cap-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDirectory);
+        try
+        {
+            using var store = new ResultStore(tempDirectory);
+            var results = Channel.CreateUnbounded<SearchResult>();
+            int cancel = 0;
+            int filesScanned = 0;
+            int totalMatches = 0;
+            int filesWithMatches = 0;
+            using var sink = new SearchService.StreamingScanSink(
+                ["cap.txt"], results.Writer,
+                maxResults: 2, currentTotalMatches: 0,
+                (IntPtr)(&cancel), &filesScanned, &totalMatches, &filesWithMatches,
+                store, initialCapacity: 1);
+            sink.SetDegraded(true);
+
+            byte[] line = Encoding.UTF8.GetBytes("needle");
+            fixed (byte* linePtr = line)
+            {
+                var view = new Native.NativeSearcher.QgMatchView
+                {
+                    LineNumber = 1,
+                    MatchLen = 6,
+                    LinePtr = linePtr,
+                    LineLen = (nuint)line.Length,
+                };
+                Assert.Equal(0, sink.OnMatchForFile(0, &view));
+                Assert.Equal(1, sink.OnMatchForFile(0, &view));
+                Assert.Equal(1, sink.OnMatchForFile(0, &view));
+            }
+
+            Assert.True(sink.Truncated);
+            Assert.Equal(1, cancel);
+            Assert.Equal(2, totalMatches);
+            Assert.Equal(1, filesWithMatches);
+
+            var noCancelResults = Channel.CreateUnbounded<SearchResult>();
+            using var noCancelSink = new SearchService.StreamingScanSink(
+                ["no-cancel.txt"], noCancelResults.Writer,
+                maxResults: 1, currentTotalMatches: 0,
+                IntPtr.Zero, null, null, null,
+                store, initialCapacity: 1);
+            noCancelSink.SetDegraded(true);
+            fixed (byte* linePtr = line)
+            {
+                var view = new Native.NativeSearcher.QgMatchView
+                {
+                    LineNumber = 1,
+                    MatchLen = 6,
+                    LinePtr = linePtr,
+                    LineLen = (nuint)line.Length,
+                };
+                Assert.Equal(1, noCancelSink.OnMatchForFile(0, &view));
+            }
+            Assert.True(noCancelSink.Truncated);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public unsafe void DegradedMatch_RejectedByWriterStopsTheSink()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "yagu-streaming-reject-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDirectory);
+        try
+        {
+            using var store = new ResultStore(tempDirectory);
+            int cancel = 1;
+            var writer = new ScriptedWriter(false);
+            using var sink = new SearchService.StreamingScanSink(
+                ["reject.txt"], writer,
+                maxResults: 0, currentTotalMatches: 0,
+                (IntPtr)(&cancel), null, null, null,
+                store, initialCapacity: 1);
+            sink.SetDegraded(true);
+
+            byte[] line = Encoding.UTF8.GetBytes("needle");
+            fixed (byte* linePtr = line)
+            {
+                var view = new Native.NativeSearcher.QgMatchView
+                {
+                    LineNumber = 1,
+                    MatchLen = 6,
+                    LinePtr = linePtr,
+                    LineLen = (nuint)line.Length,
+                };
+                Assert.Equal(1, sink.OnMatchForFile(0, &view));
+                Assert.Equal(1, sink.OnMatchForFile(0, &view));
+            }
+            Assert.Empty(writer.Results);
+            Assert.Equal(0, sink.TotalEmitted);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public unsafe void ConcurrentCapacityGrowth_SecondWaiterObservesTheResize()
+    {
+        var results = Channel.CreateUnbounded<SearchResult>();
+        using var sink = new SearchService.StreamingScanSink(
+            [], results.Writer,
+            maxResults: 0, currentTotalMatches: 0,
+            IntPtr.Zero, null, null, null,
+            resultStore: null, initialCapacity: 1);
+        object resizeLock = Assert.IsType<object>(typeof(SearchService.StreamingScanSink)
+            .GetField("_resizeLock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(sink));
+        var first = new Thread(() => sink.OnFileDone(4, Native.NativeSearcher.StatusTooLarge, 1, 0));
+        var second = new Thread(() => sink.OnFileDone(4, Native.NativeSearcher.StatusTooLarge, 1, 0));
+
+        Monitor.Enter(resizeLock);
+        try
+        {
+            first.Start();
+            second.Start();
+            Assert.True(SpinWait.SpinUntil(
+                () => first.ThreadState.HasFlag(ThreadState.WaitSleepJoin)
+                    && second.ThreadState.HasFlag(ThreadState.WaitSleepJoin),
+                TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            Monitor.Exit(resizeLock);
+        }
+
+        Assert.True(first.Join(TimeSpan.FromSeconds(5)));
+        Assert.True(second.Join(TimeSpan.FromSeconds(5)));
+        Assert.Equal(Native.NativeSearcher.StatusTooLarge, sink.GetStatus(4));
+    }
+
+    private static SearchResult ReadResult(Channel<SearchResult> channel)
+    {
+        Assert.True(channel.Reader.TryRead(out SearchResult? result));
+        return result;
+    }
+
+    private static (string MatchLine, int BeforeCount, int AfterCount) ReadStoredPayload(
+        ResultStore store,
+        SearchResult result)
+    {
+        var payload = store.Read(result.DiskOffset);
+        return (payload.MatchLine, payload.ContextBefore.Count, payload.ContextAfter.Count);
+    }
+
+    private sealed class ScriptedWriter(params bool[] outcomes) : ChannelWriter<SearchResult>
+    {
+        private int _nextOutcome;
+        public List<SearchResult> Results { get; } = [];
+
+        public override bool TryComplete(Exception? error = null) => true;
+
+        public override bool TryWrite(SearchResult item)
+        {
+            int outcomeIndex = Math.Min(_nextOutcome++, outcomes.Length - 1);
+            bool accepted = outcomes[outcomeIndex];
+            if (accepted)
+                Results.Add(item);
+            return accepted;
+        }
+
+        public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(true);
+    }
+}
+
+public sealed class SearchServiceFileMetadataTests : IDisposable
+{
+    private readonly string _path = Path.Combine(
+        Path.GetTempPath(),
+        "yagu-hidden-" + Guid.NewGuid().ToString("N") + ".txt");
+    private readonly long _originalCeiling = FileLister.ContentSearchFileSizeCeiling;
+
+    public SearchServiceFileMetadataTests()
+    {
+        File.WriteAllText(_path, "content");
+        FileMetadataCache.Clear();
+    }
+
+    public void Dispose()
+    {
+        FileLister.ContentSearchFileSizeCeiling = _originalCeiling;
+        FileMetadataCache.Clear();
+        try
+        {
+            if (File.Exists(_path))
+                File.SetAttributes(_path, FileAttributes.Normal);
+            File.Delete(_path);
+        }
+        catch { }
+    }
+
+    [Fact]
+    public void IsHiddenFile_ReturnsAttributeAndTreatsUnreadablePathAsVisible()
+    {
+        Assert.False(SearchService.IsHiddenFile(_path));
+        File.SetAttributes(_path, File.GetAttributes(_path) | FileAttributes.Hidden);
+        Assert.True(SearchService.IsHiddenFile(_path));
+        Assert.False(SearchService.IsHiddenFile(_path + ".missing"));
+    }
+
+    [Fact]
+    public void ShouldSkipByFileMetadata_InvalidPathFailsOpen()
+    {
+        FileLister.ContentSearchFileSizeCeiling = 0;
+        var options = new SearchOptions
+        {
+            Directory = ".",
+            Query = "x",
+            MinFileSizeBytes = 1,
+        };
+
+        Assert.False(SearchService.ShouldSkipByFileMetadata(
+            "\0", options, out bool tooLarge));
+        Assert.False(tooLarge);
+    }
+
+    [Fact]
+    public void ShouldSkipByFileMetadata_CachedFileAboveBuiltInCeilingIsTooLarge()
+    {
+        FileLister.ContentSearchFileSizeCeiling = 100;
+        FileMetadataCache.Set(_path, new FileMetadata(101, DateTime.Now, DateTime.Now));
+        var options = new SearchOptions
+        {
+            Directory = ".",
+            Query = "x",
+            MaxFileSizeBytes = 0,
+        };
+
+        Assert.True(SearchService.ShouldSkipByFileMetadata(
+            _path, options, out bool tooLarge, checkSize: false));
+        Assert.True(tooLarge);
+    }
+}
+
+public sealed class SearchServiceSystemMemoryTests : IDisposable
+{
+    private readonly ISystemMemoryProvider _originalProvider = SearchService.SystemMemoryProvider;
+    private readonly Action _originalTrimmer = SearchService.WorkingSetTrimmer;
+
+    public void Dispose()
+    {
+        SearchService.SystemMemoryProvider = _originalProvider;
+        SearchService.WorkingSetTrimmer = _originalTrimmer;
+        SetLastTrimTicks(0);
+    }
+
+    [Fact]
+    public void SuccessfulSnapshot_DrivesMemoryHelpers()
+    {
+        SearchService.SystemMemoryProvider = new StubMemoryProvider(
+            new SystemMemorySnapshot(
+                LoadPercent: 42,
+                TotalPhysicalBytes: 8UL * 1024 * 1024 * 1024,
+                AvailablePhysicalBytes: 3UL * 1024 * 1024 * 1024));
+
+        Assert.True(SearchService.TryGetSystemMemoryLoadPercent(out uint load));
+        Assert.Equal(42U, load);
+        Assert.Contains("system=42%", SearchService.GetMemoryDiagnostics());
+        Assert.Equal(768L * 1024 * 1024, SearchService.AutoProcessMemoryCap());
+        Assert.Equal(3L * 1024 * 1024 * 1024, SearchService.GetAvailablePhysicalMemoryBytes());
+        Assert.False(SearchService.IsMemoryPressureHigh(long.MaxValue, 50));
+        Assert.True(SearchService.IsMemoryPressureRelieved(long.MaxValue, 50));
+    }
+
+    [Fact]
+    public void UnavailableSnapshot_UsesFallbackBehavior()
+    {
+        SearchService.SystemMemoryProvider = new StubMemoryProvider();
+
+        Assert.False(SearchService.TryGetSystemMemoryLoadPercent(out uint load));
+        Assert.Equal(0U, load);
+        Assert.Contains("process WS=", SearchService.GetMemoryDiagnostics());
+        Assert.Equal(768L * 1024 * 1024, SearchService.AutoProcessMemoryCap());
+        Assert.Equal(2L * 1024 * 1024 * 1024, SearchService.GetAvailablePhysicalMemoryBytes());
+        _ = SearchService.IsMemoryPressureHigh(long.MaxValue, 50);
+        _ = SearchService.IsMemoryPressureRelieved(long.MaxValue, 50);
+    }
+
+    [Fact]
+    public void ThrowingSnapshotProvider_IsContainedByMemoryHelpers()
+    {
+        SearchService.SystemMemoryProvider = new StubMemoryProvider(
+            new InvalidOperationException("memory status failed"));
+
+        Assert.False(SearchService.IsMemoryPressureHigh(0, 50));
+        Assert.False(SearchService.IsMemoryPressureRelieved(0, 50));
+        Assert.Equal("unknown", SearchService.GetMemoryDiagnostics());
+        Assert.Equal(768L * 1024 * 1024, SearchService.AutoProcessMemoryCap());
+        Assert.Equal(2L * 1024 * 1024 * 1024, SearchService.GetAvailablePhysicalMemoryBytes());
+    }
+
+    [Fact]
+    public void TrimProcessWorkingSet_DebouncesAndContainsTrimmerFailure()
+    {
+        int calls = 0;
+        SearchService.WorkingSetTrimmer = () => calls++;
+        SetLastTrimTicks(0);
+
+        SearchService.TrimProcessWorkingSet();
+        SearchService.TrimProcessWorkingSet();
+
+        Assert.Equal(1, calls);
+        SetLastTrimTicks(0);
+        SearchService.WorkingSetTrimmer = () => throw new InvalidOperationException("trim failed");
+        SearchService.TrimProcessWorkingSet();
+    }
+
+    private static void SetLastTrimTicks(long value)
+        => typeof(SearchService)
+            .GetField("s_lastTrimTicks", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(null, value);
+
+    private sealed class StubMemoryProvider : ISystemMemoryProvider
+    {
+        private readonly bool _success;
+        private readonly SystemMemorySnapshot _snapshot;
+        private readonly Exception? _exception;
+
+        public StubMemoryProvider()
+        {
+        }
+
+        public StubMemoryProvider(SystemMemorySnapshot snapshot)
+        {
+            _success = true;
+            _snapshot = snapshot;
+        }
+
+        public StubMemoryProvider(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        public bool TryGetSnapshot(out SystemMemorySnapshot snapshot)
+        {
+            if (_exception is not null)
+                throw _exception;
+            snapshot = _snapshot;
+            return _success;
+        }
     }
 }

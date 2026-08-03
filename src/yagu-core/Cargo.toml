@@ -13,6 +13,9 @@ memchr = "2"
 memmap2 = "0.9"
 regex = "1"
 bstr = { version = "1", default-features = false, features = ["std"] }
+# SHA-256 for verifying the content-index on-disk format's per-file digests (plan §3.4), matching the
+# managed reference's trailing-SHA-256 checksum. Pure Rust, MIT/Apache-2.0.
+sha2 = "0.10"
 
 # Phase 6 spike: optional adoption of ripgrep's library crates as an alternative
 # scan path. Pinned to exact versions because the `grep-*` crates are

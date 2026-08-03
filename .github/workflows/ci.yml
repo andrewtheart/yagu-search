@@ -38,10 +38,10 @@ jobs:
         run: cargo test --release
 
       - name: Restore
-        run: dotnet restore Yagu.sln
+        run: dotnet restore Yagu.slnx
 
       - name: Build (Release)
-        run: dotnet build Yagu.sln -c Release --no-restore
+        run: dotnet build Yagu.slnx -c Release --no-restore
 
       # Exclude Slow + GPU tests: they need a GPU + local Foundry model (SemanticEvalGoldenTests is
       # tagged both Category=Slow and Category=GPU), or are timing/large-corpus perf regression guards

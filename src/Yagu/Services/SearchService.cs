@@ -1,11 +1,12 @@
-using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
 using Yagu.Helpers;
 using Yagu.Models;
+using Yagu.Services.Logging;
 using System.Runtime.CompilerServices;
 
 namespace Yagu.Services;
@@ -33,6 +34,10 @@ public sealed class SearchService
 
     private static int s_memoryPressureGcInFlight;
     private static long s_lastMemoryPressureGcTicks;
+    private static readonly object s_trimLock = new();
+
+    internal static ISystemMemoryProvider SystemMemoryProvider = new WindowsSystemMemoryProvider();
+    internal static Action WorkingSetTrimmer = ProcessMemoryTrimmer.TrimCurrentProcess;
 
     private readonly IFileLister _fileLister;
     private readonly ContentSearcher _searcher;
@@ -59,7 +64,267 @@ public sealed class SearchService
     public IAsyncEnumerable<SearchEvent> SearchManyAsync(
         IReadOnlyList<SearchOptions> perRootOptions,
         CancellationToken cancellationToken)
-        => AggregateManyAsync(perRootOptions, SearchAsync, cancellationToken);
+    {
+        return CanPrioritizeNameMatchesAcrossRoots(perRootOptions)
+            ? PrioritizeNameMatchesAcrossRootsAsync(perRootOptions, SearchAsync, cancellationToken)
+            : AggregateManyAsync(perRootOptions, SearchAsync, cancellationToken);
+    }
+
+    internal bool CanPrioritizeNameMatchesAcrossRoots(IReadOnlyList<SearchOptions> perRootOptions) =>
+        perRootOptions is { Count: > 1 }
+            && _fileLister is FileLister
+            && FileLister.SdkAvailable
+            && perRootOptions.Any(IsNameFirstQueryEligible);
+
+    /// <summary>
+    /// True when an Everything filename query can safely represent this search's literal name predicate.
+    /// Regex and operator-bearing/whitespace terms fall back to the normal complete discovery path.
+    /// </summary>
+    internal static bool IsNameFirstBackendEligible(FileListerBackend? backend) =>
+        backend is null or FileListerBackend.Auto or FileListerBackend.EverythingSdk;
+
+    private static bool IsNameFirstQueryEligible(SearchOptions options)
+    {
+        if (options.SearchMode is not (SearchMode.Both or SearchMode.FileNames)
+            || options.UseRegex
+            || !IsNameFirstBackendEligible(options.FileListerBackendOverride))
+            return false;
+
+        IReadOnlyList<string> terms = SearchQueryParser.ParseLiteralTerms(options.Query, options.ExactMatch);
+        return terms.Count > 0 && FileLister.BuildEverythingFileNameFilter(terms) is not null;
+    }
+
+    /// <summary>
+    /// All-drives two-phase search. Phase 1 performs the fast Everything name query for EVERY eligible
+    /// root before any full content sweep. In Both mode each name-hit path is also content-scanned by that
+    /// prepass, so its existing filename-only group is upgraded with content matches immediately. Phase 2
+    /// runs the normal roots sequentially (preserving the no-parallel-drives I/O contract), suppressing the
+    /// already-emitted filename rows and already-scanned priority paths.
+    /// </summary>
+    internal static async IAsyncEnumerable<SearchEvent> PrioritizeNameMatchesAcrossRootsAsync(
+        IReadOnlyList<SearchOptions> perRootOptions,
+        Func<SearchOptions, CancellationToken, IAsyncEnumerable<SearchEvent>> runRoot,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (perRootOptions.Count == 0)
+        {
+            yield return new SearchEvent.Completed(new SearchSummary(0, 0, 0, 0, 0, 0, TimeSpan.Zero, false, false, false, null));
+            yield break;
+        }
+
+        var overall = Stopwatch.StartNew();
+        int hardCap = EffectiveHardCap(perRootOptions[0]);
+        int priorityMatches = 0;
+        long priorityBytesScanned = 0;
+        bool priorityDegraded = false;
+        bool priorityCancelled = false;
+        bool priorityTruncated = false;
+        var priorityMatchFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var preEmittedFileNamePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var preScannedContentPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var namePathsByRoot = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        string? recordingNameRoot = null;
+
+        bool RecordResult(SearchResult result)
+        {
+            if (hardCap > 0 && priorityMatches >= hardCap)
+            {
+                priorityTruncated = true;
+                return false;
+            }
+
+            priorityMatches++;
+            priorityMatchFiles.Add(result.FilePath);
+            if (result.LineNumber == 0)
+            {
+                preEmittedFileNamePaths.Add(result.FilePath);
+                if (recordingNameRoot is not null)
+                {
+                    if (!namePathsByRoot.TryGetValue(recordingNameRoot, out HashSet<string>? paths))
+                    {
+                        paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        namePathsByRoot[recordingNameRoot] = paths;
+                    }
+                    paths.Add(result.FilePath);
+                }
+            }
+            return true;
+        }
+
+        async IAsyncEnumerable<SearchEvent> RunPriorityPass(
+            SearchOptions passOptions,
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            await foreach (SearchEvent ev in runRoot(passOptions, ct).ConfigureAwait(false))
+            {
+                switch (ev)
+                {
+                    case SearchEvent.Match m when RecordResult(m.Result):
+                        yield return ev;
+                        break;
+                    case SearchEvent.Match:
+                        break;
+                    case SearchEvent.MatchBatch mb:
+                    {
+                        var accepted = new List<SearchResult>(mb.Results.Count);
+                        foreach (SearchResult result in mb.Results)
+                        {
+                            if (!RecordResult(result)) break;
+                            accepted.Add(result);
+                        }
+                        if (accepted.Count > 0)
+                            yield return new SearchEvent.MatchBatch(accepted);
+                        break;
+                    }
+                    case SearchEvent.SourceBackedMatchBatch sb:
+                    {
+                        // Source-backed matches are content matches. A priority name row for the same path
+                        // was already recorded before the path was queued, so only cap/count and forward here.
+                        var accepted = new List<SourceBackedMatch>(sb.Results.Count);
+                        foreach (SourceBackedMatch result in sb.Results)
+                        {
+                            if (hardCap > 0 && priorityMatches >= hardCap)
+                            {
+                                priorityTruncated = true;
+                                break;
+                            }
+                            priorityMatches++;
+                            priorityMatchFiles.Add(result.FilePath);
+                            accepted.Add(result);
+                        }
+                        if (accepted.Count > 0)
+                            yield return new SearchEvent.SourceBackedMatchBatch(accepted);
+                        break;
+                    }
+                    case SearchEvent.Completed c:
+                        priorityBytesScanned += c.Summary.BytesScanned;
+                        priorityDegraded |= c.Summary.Degraded;
+                        priorityCancelled |= c.Summary.Cancelled;
+                        priorityTruncated |= c.Summary.Truncated;
+                        break;
+                    case SearchEvent.ScanCompleted or SearchEvent.DiscoveryComplete or SearchEvent.Progress or SearchEvent.Fallback:
+                        break;
+                    default:
+                        yield return ev;
+                        break;
+                }
+            }
+        }
+
+        // Phase 1A: filename results from EVERY drive first. SearchMode.FileNames uses the Everything-only
+        // fast path and cannot be held up by content reads or index initialization.
+        foreach (SearchOptions rootOptions in perRootOptions)
+        {
+            if (cancellationToken.IsCancellationRequested || (hardCap > 0 && priorityMatches >= hardCap))
+                break;
+            if (!IsNameFirstQueryEligible(rootOptions))
+                continue;
+
+            int remaining = hardCap > 0 ? Math.Max(1, hardCap - priorityMatches) : rootOptions.MaxResults;
+            SearchOptions nameOptions = CopyOptions(
+                rootOptions,
+                maxResults: remaining,
+                searchMode: SearchMode.FileNames,
+                useContentIndex: false,
+                stopAfterNameFirstPass: true,
+                suppressNameFirstPass: false,
+                preEmittedFileNamePaths: null,
+                preScannedContentPaths: null);
+            recordingNameRoot = rootOptions.Directory;
+            await foreach (SearchEvent ev in RunPriorityPass(nameOptions, cancellationToken).ConfigureAwait(false))
+                yield return ev;
+            recordingNameRoot = null;
+        }
+
+        bool filenameOnly = perRootOptions.All(options => options.SearchMode == SearchMode.FileNames);
+        bool hardCapReached = hardCap > 0 && priorityMatches >= hardCap;
+        if (filenameOnly || hardCapReached || priorityTruncated || cancellationToken.IsCancellationRequested)
+        {
+            var summary = new SearchSummary(
+                TotalFiles: preEmittedFileNamePaths.Count,
+                FilesScanned: filenameOnly ? preEmittedFileNamePaths.Count : preScannedContentPaths.Count,
+                FilesSkipped: 0,
+                FilesWithMatches: priorityMatchFiles.Count,
+                TotalMatches: priorityMatches,
+                BytesScanned: priorityBytesScanned,
+                Elapsed: overall.Elapsed,
+                Cancelled: priorityCancelled || cancellationToken.IsCancellationRequested,
+                Truncated: hardCapReached || priorityTruncated,
+                Degraded: priorityDegraded,
+                FallbackReason: null);
+            yield return new SearchEvent.ScanCompleted(summary);
+            yield return new SearchEvent.Completed(summary);
+            yield break;
+        }
+
+        // Phase 1B: now that filename rows from every drive are visible, content-scan only those
+        // name-hit files. FileNameThenContent pushes the same literal name predicate into Everything,
+        // emits no duplicate filename rows, and completes before the sequential full sweeps start.
+        foreach (SearchOptions rootOptions in perRootOptions)
+        {
+            if (cancellationToken.IsCancellationRequested || (hardCap > 0 && priorityMatches >= hardCap))
+                break;
+            if (rootOptions.SearchMode != SearchMode.Both
+                || !namePathsByRoot.TryGetValue(rootOptions.Directory, out HashSet<string>? namePaths))
+                continue;
+
+            int remaining = hardCap > 0 ? Math.Max(1, hardCap - priorityMatches) : rootOptions.MaxResults;
+            SearchOptions contentPriorityOptions = CopyOptions(
+                rootOptions,
+                maxResults: remaining,
+                searchMode: SearchMode.FileNameThenContent,
+                useContentIndex: false,
+                stopAfterNameFirstPass: false,
+                suppressNameFirstPass: true,
+                preEmittedFileNamePaths: preEmittedFileNamePaths,
+                preScannedContentPaths: null);
+            await foreach (SearchEvent ev in RunPriorityPass(contentPriorityOptions, cancellationToken).ConfigureAwait(false))
+                yield return ev;
+
+            // That narrowed pass has completed; the later full sweep can safely skip these paths.
+            preScannedContentPaths.UnionWith(namePaths);
+        }
+
+        int remainingForFull = hardCap > 0 ? Math.Max(1, hardCap - priorityMatches) : perRootOptions[0].MaxResults;
+        var fullOptions = new List<SearchOptions>(perRootOptions.Count);
+        foreach (SearchOptions rootOptions in perRootOptions)
+        {
+            fullOptions.Add(IsNameFirstQueryEligible(rootOptions)
+                ? CopyOptions(
+                    rootOptions,
+                    maxResults: remainingForFull,
+                    suppressNameFirstPass: true,
+                    preEmittedFileNamePaths: preEmittedFileNamePaths,
+                    preScannedContentPaths: preScannedContentPaths)
+                : rootOptions);
+        }
+
+        SearchSummary AugmentSummary(SearchSummary summary)
+            => summary with
+            {
+                FilesWithMatches = Math.Min(summary.TotalFiles, summary.FilesWithMatches + priorityMatchFiles.Count),
+                TotalMatches = summary.TotalMatches > int.MaxValue - priorityMatches
+                    ? int.MaxValue
+                    : summary.TotalMatches + priorityMatches,
+                BytesScanned = summary.BytesScanned > long.MaxValue - priorityBytesScanned
+                    ? long.MaxValue
+                    : summary.BytesScanned + priorityBytesScanned,
+                Elapsed = overall.Elapsed,
+                Cancelled = summary.Cancelled || priorityCancelled,
+                Truncated = summary.Truncated || priorityTruncated,
+                Degraded = summary.Degraded || priorityDegraded,
+            };
+
+        await foreach (SearchEvent ev in AggregateManyAsync(fullOptions, runRoot, cancellationToken).ConfigureAwait(false))
+        {
+            if (ev is SearchEvent.ScanCompleted scanCompleted)
+                yield return new SearchEvent.ScanCompleted(AugmentSummary(scanCompleted.Summary));
+            else if (ev is SearchEvent.Completed completed)
+                yield return new SearchEvent.Completed(AugmentSummary(completed.Summary));
+            else
+                yield return ev;
+        }
+    }
 
     /// <summary>
     /// Pure orchestration core for <see cref="SearchManyAsync"/>: aggregates the per-root event
@@ -96,6 +361,7 @@ public sealed class SearchService
         long bytesScanned = 0;
         bool truncated = false, degraded = false, cancelled = false;
         string? fallbackReason = null;
+        int idxRequestedRoots = 0, idxAcceleratedRoots = 0, idxFilesPruned = 0, idxFilesRescued = 0;
 
         foreach (var rootOptions in perRootOptions)
         {
@@ -122,6 +388,13 @@ public sealed class SearchService
                         degraded |= s.Degraded;
                         cancelled |= s.Cancelled;
                         fallbackReason ??= s.FallbackReason;
+                        if (s.IndexAcceleration is { } ia)
+                        {
+                            idxRequestedRoots += ia.RequestedRoots;
+                            idxAcceleratedRoots += ia.AcceleratedRoots;
+                            idxFilesPruned += ia.FilesPruned;
+                            idxFilesRescued += ia.FilesRescued;
+                        }
                         break;
                     case SearchEvent.Fallback:
                         // Per-root fallback notices (e.g. one empty drive reporting "Everything SDK
@@ -158,9 +431,20 @@ public sealed class SearchService
 
         var summary = new SearchSummary(
             totalFiles, filesScanned, filesSkipped, filesWithMatches, totalMatches,
-            bytesScanned, sw.Elapsed, cancelled, truncated, degraded, fallbackReason);
+            bytesScanned, sw.Elapsed, cancelled, truncated, degraded, fallbackReason,
+            IndexAcceleration: idxRequestedRoots > 0
+                ? new IndexAccelerationInfo(idxRequestedRoots, idxAcceleratedRoots, idxFilesPruned, idxFilesRescued)
+                : null);
         yield return new SearchEvent.ScanCompleted(summary);
         yield return new SearchEvent.Completed(summary);
+    }
+
+    internal static async IAsyncEnumerable<SearchEvent> DrainRemainingEventsAsync(
+        ChannelReader<SearchEvent> reader,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (SearchEvent searchEvent in reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            yield return searchEvent;
     }
 
     /// <summary>
@@ -197,17 +481,11 @@ public sealed class SearchService
         if (options.UseRegex)
         {
             try { regex = SearchRegexFactory.Build(options.Query, options); }
-            catch (ArgumentException ex) { regexError = $"Invalid regex: {ex.Message}"; LogService.Instance.Warning("SearchService", regexError); }
+            catch (ArgumentException ex) { regexError = $"Invalid regex: {ex.Message}"; YaguLog.For("SearchService").LogWarning("Invalid regex: {Error}", ex.Message); }
         }
         else
         {
             literalTerms = SearchQueryParser.ParseLiteralTerms(options.Query, options.ExactMatch);
-            if (literalTerms.Count == 0)
-            {
-                yield return new SearchEvent.Completed(new SearchSummary(0, 0, 0, 0, 0, 0, TimeSpan.Zero, false, false, false, null));
-                yield break;
-            }
-
             if (options.ExactMatch)
             {
                 // Whole-word match: wrap the literal query in word boundaries and
@@ -310,7 +588,6 @@ public sealed class SearchService
                 : Array.Empty<string>();
             concreteLister.EarlyFileNameLiteralTerms = options.SearchMode == SearchMode.FileNameThenContent
                 && !options.UseRegex
-                && !options.CaseSensitive
                 ? literalTerms
                 : [];
             concreteLister.SdkChannelBufferSize = options.SdkChannelBufferSize;
@@ -345,15 +622,17 @@ public sealed class SearchService
         bool emitFileNameMatches = options.SearchMode is SearchMode.Both or SearchMode.FileNames;
         bool requireFileNameMatchForContent = options.SearchMode == SearchMode.FileNameThenContent;
 
-        // Name-first pass (Both mode only): before the full content scan, run a quick Everything
+        // Name-first pass (Both + filename-only modes): before the full content scan, run a quick Everything
         // name-filtered query so filename matches surface immediately instead of waiting for the
         // whole tree to be content-scanned. This preserves Both semantics — the full discovery
-        // below still queues every file for content scanning; the pass only front-loads the cheap
-        // filename hits. Skipped for regex/empty queries and when the backend can't push the term.
-        bool nameFirstPass = options.SearchMode == SearchMode.Both
+        // below still queues every other file for content scanning; the pass front-loads filename hits
+        // and their own content scans. Filename-only mode ends after this query instead of enumerating
+        // the entire root. Skipped for regex/empty queries and when the backend can't push the term.
+        bool nameFirstPass = !options.SuppressNameFirstPass
+            && options.SearchMode is SearchMode.Both or SearchMode.FileNames
             && _fileLister is FileLister
             && FileLister.SdkAvailable
-            && options.FileListerBackendOverride is null or FileListerBackend.Auto or FileListerBackend.EverythingSdk
+            && IsNameFirstBackendEligible(options.FileListerBackendOverride)
             && literalTerms.Count >= 1
             && FileLister.BuildEverythingFileNameFilter(literalTerms) is not null;
 
@@ -396,7 +675,7 @@ public sealed class SearchService
             SingleWriter = false,
             FullMode = BoundedChannelFullMode.Wait,
         });
-        LogService.Instance.Info("SearchService", $"Pipeline channels created: events={EventChannelCapacity}, pending={PendingFileChannelCapacity}, contentResults={contentCap}, sourceBackedResults={sourceBackedCap}");
+        YaguLog.For("SearchService").LogInformation("Pipeline channels created: events={EventCapacity}, pending={PendingCapacity}, contentResults={ContentCapacity}, sourceBackedResults={SourceBackedCapacity}", EventChannelCapacity, PendingFileChannelCapacity, contentCap, sourceBackedCap);
 
         int filesScanned = 0;
         int filesSkipped = 0;
@@ -407,6 +686,13 @@ public sealed class SearchService
         int truncated = 0;
         int degraded = options.DegradedResultStore != null ? 1 : 0; // start degraded immediately when a result store is available
         int everDegraded = degraded;   // 1 once memory-saving mode was used during this search
+        // Content-index acceleration accounting for this root (plan §6.2). Set once at the end of
+        // discovery from the pruning gate; read only when the final summary is built (after discovery
+        // joins), so no volatile access is needed. Pure diagnostics — never affects results.
+        int indexAccelerationRequested = options.UseContentIndex ? 1 : 0;
+        int indexGateEngaged = 0;
+        int indexFilesPruned = 0;
+        int indexFilesRescued = 0;
         int evictionInFlight = 0;    // 1 while an eviction event is being processed by the UI
         int pressureCycles = 0;      // total number of memory pressure events emitted
         int consecutiveFutileEvictions = 0; // eviction cycles that freed 0 — used to stop futile loops
@@ -418,12 +704,20 @@ public sealed class SearchService
         string? fallbackReason = null;
         // Skip-reason tallies
         int skipBinary = 0, skipAccessDenied = 0, skipIOError = 0, skipTooLarge = 0;
+        int skipIoTimeout = 0;
         int skipNotFound = 0, skipEncoding = 0, skipOther = 0, skipByExtension = 0, skipDirectories = 0;
         int skipGlobExcluded = 0;
         int skipSizeFiltered = 0;
         int skipCloudOnly = 0;
         int skipOcrCache = 0;
         int skipMultiline = 0; // multiline over-cap + per-file timeout + unsupported-surface skips
+        int ocrFilesQueued = 0, ocrFilesProcessed = 0;
+        int pdfFilesQueued = 0, pdfFilesProcessed = 0;
+        int discoveryCompleted = 0;
+        // 1 while the fast filename name-first pass (and its brief priority content scan) runs, before the
+        // full-drive scan total is established. Surfaced on each progress snapshot so the UI keeps the bar
+        // indeterminate through this phase instead of flashing to 100% against the tiny name-first total.
+        int nameFirstPhaseActive = 0;
         // Fresh provider-liveness decisions per search (a provider may have been
         // installed/uninstalled/signed-out since the last run).
         CloudFileHelper.ResetProviderCache();
@@ -478,7 +772,8 @@ public sealed class SearchService
                 Volatile.Read(ref skipGlobExcluded) + Volatile.Read(ref skipOcrCache),
                 _fileLister.GitignoreSkipped,
                 CurrentCloudOnlySkips(),
-                Volatile.Read(ref skipMultiline));
+                Volatile.Read(ref skipMultiline),
+                Volatile.Read(ref skipIoTimeout));
             int currentTotalMatches;
             int currentFilesWithMatches;
             unsafe
@@ -490,7 +785,7 @@ public sealed class SearchService
                     ? Volatile.Read(ref *(int*)activeFilesWithMatchesPtr)
                     : Volatile.Read(ref filesWithMatches);
             }
-            return new(
+            return new SearchProgress(
                 CurrentFilesProcessed(),
                 CurrentTotalFiles(),
                 currentTotalMatches,
@@ -499,7 +794,16 @@ public sealed class SearchService
                 Volatile.Read(ref bytesScanned),
                 sw.Elapsed,
                 accessDenied,
-                breakdown);
+                breakdown)
+            {
+                SourceBacked = new SourceBackedSearchProgress(
+                    Volatile.Read(ref ocrFilesProcessed),
+                    Volatile.Read(ref ocrFilesQueued),
+                    Volatile.Read(ref pdfFilesProcessed),
+                    Volatile.Read(ref pdfFilesQueued),
+                    Volatile.Read(ref discoveryCompleted) != 0),
+                NameFirstPhase = Volatile.Read(ref nameFirstPhaseActive) != 0,
+            };
         }
 
         SearchSummary CreateSummarySnapshot(TimeSpan elapsed)
@@ -529,7 +833,8 @@ public sealed class SearchService
                 skipGlobExcluded + Volatile.Read(ref skipOcrCache),
                 _fileLister.GitignoreSkipped,
                 CurrentCloudOnlySkips(),
-                skipMultiline);
+                skipMultiline,
+                skipIoTimeout);
             return new SearchSummary(
                 TotalFiles: totalFiles,                FilesScanned: CurrentFilesProcessed(),
                 FilesSkipped: totalSkipped,
@@ -541,7 +846,10 @@ public sealed class SearchService
                 Truncated: wasTruncated,
                 Degraded: wasDegraded,
                 FallbackReason: fallbackReason,
-                SkipReasons: skipReasons);
+                SkipReasons: skipReasons,
+                IndexAcceleration: indexAccelerationRequested != 0
+                    ? new IndexAccelerationInfo(1, indexGateEngaged, indexFilesPruned, indexFilesRescued)
+                    : null);
         }
 
         // Captures the search locals directly so workers and the progress timer can
@@ -560,8 +868,15 @@ public sealed class SearchService
                 if ((lastHb == 0 || (double)(nowHb - lastHb) / Stopwatch.Frequency >= MemoryHeartbeatSeconds)
                     && Interlocked.CompareExchange(ref memHeartbeatTicks, nowHb, lastHb) == lastHb)
                 {
-                    LogService.Instance.Info("SearchService",
-                        $"Memory heartbeat: {GetMemoryDiagnostics()}, scanned={filesScanned:N0}, matches={totalMatches:N0}");
+                    YaguLog.For("SearchService").LogInformation(
+                        "Memory heartbeat: {Diagnostics}, scanned={Scanned:N0}, matches={Matches:N0}, OCR={OcrProcessed:N0}/{OcrQueued:N0}, PDF={PdfProcessed:N0}/{PdfQueued:N0}",
+                        GetMemoryDiagnostics(),
+                        filesScanned,
+                        totalMatches,
+                        Volatile.Read(ref ocrFilesProcessed),
+                        Volatile.Read(ref ocrFilesQueued),
+                        Volatile.Read(ref pdfFilesProcessed),
+                        Volatile.Read(ref pdfFilesQueued));
                 }
             }
 
@@ -571,15 +886,18 @@ public sealed class SearchService
                 Volatile.Write(ref everDegraded, 1);
                 activeStreamingSink?.SetDegraded(true);
 
-                // Immediately trim WS on every pressure check to release soft-faulted
-                // mmap pages. This is cheap (no-op if pages are actively used) and keeps
-                // WS below target between GC collection cooldown windows.
-                TrimProcessWorkingSet();
+                // Trim WS to release soft-faulted mmap pages — but back off once evictions keep freeing
+                // nothing (consecutiveFutileEvictions >= 3). That "futile" state means the resident memory
+                // is non-sheddable (e.g. a large content-index deserialize is in flight): trimming then only
+                // soft-faults pages that are immediately re-touched, which dramatically slows the very
+                // operation causing the pressure (a cold layered-index open ballooned to ~53s this way).
+                int futile = Volatile.Read(ref consecutiveFutileEvictions);
+                if (futile < 3)
+                    TrimProcessWorkingSet();
 
                 // After several consecutive evictions that freed nothing, slow down
                 // pressure events to avoid futile GC churn. But use a short cooldown
                 // so we don't let memory grow unchecked for long.
-                int futile = Volatile.Read(ref consecutiveFutileEvictions);
                 if (futile >= 3)
                 {
                     long now = Stopwatch.GetTimestamp();
@@ -594,8 +912,8 @@ public sealed class SearchService
                     Volatile.Write(ref lastPressureCheckTicks, Stopwatch.GetTimestamp());
                     int cycle = Interlocked.Increment(ref pressureCycles);
                     string diagnostics = GetMemoryDiagnostics();
-                    LogService.Instance.Warning("SearchService",
-                        $"Memory pressure cycle #{cycle}: {diagnostics} - shedding Yagu memory (scanned={filesScanned:N0}, matches={totalMatches:N0})");
+                    YaguLog.For("SearchService").LogWarning(
+                        "Memory pressure cycle #{Cycle}: {Diagnostics} - shedding Yagu memory (scanned={Scanned:N0}, matches={Matches:N0})", cycle, diagnostics, filesScanned, totalMatches);
                     try
                     {
                         var memoryPressureEvent = new SearchEvent.MemoryPressure(
@@ -605,8 +923,8 @@ public sealed class SearchService
                                     Interlocked.Increment(ref consecutiveFutileEvictions);
                                 else
                                     Volatile.Write(ref consecutiveFutileEvictions, 0);
-                                LogService.Instance.Warning("SearchService",
-                                    $"Eviction acknowledged: freed {evictedCount}; continuing in memory-saving mode");
+                                YaguLog.For("SearchService").LogWarning(
+                                    "Eviction acknowledged: freed {EvictedCount}; continuing in memory-saving mode", evictedCount);
                                 if (evictedCount > 0)
                                     _ = Task.Run(() => CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(3)));
                                 Volatile.Write(ref evictionInFlight, 0);
@@ -641,8 +959,8 @@ public sealed class SearchService
                 Volatile.Write(ref degraded, 0);
                 activeStreamingSink?.SetDegraded(false);
                 string diagnostics = GetMemoryDiagnostics();
-                LogService.Instance.Warning("SearchService",
-                    $"Memory pressure relieved: {diagnostics} - leaving memory-saving mode");
+                YaguLog.For("SearchService").LogWarning(
+                    "Memory pressure relieved: {Diagnostics} - leaving memory-saving mode", diagnostics);
                 var relievedEvent = new SearchEvent.MemoryPressureRelieved(diagnostics);
                 if (!events.Writer.TryWrite(relievedEvent))
                 {
@@ -656,8 +974,16 @@ public sealed class SearchService
         }
 
         // ── Discovery ──
+        // The content-index pruning gate (plan §5) is declared here in method scope — though it is created
+        // at barrier B0 inside the discovery task below (off the UI thread) — so the after-scan-drain B1
+        // reconciliation (plan §5.4, option (b)) in the content-workers task can rescue any pruned path that
+        // changed before the whole search ends, not merely before discovery ended.
+        Services.Index.ContentIndexSearchGate? contentIndexGate = null;
+        Services.Index.IContentIndexPruningScan? pruningScan = null;
         var discovery = Task.Run(async () =>
         {
+            Services.Index.IContentIndexShadowScan? shadowScan = null;
+
             // Filename-match batch buffer. Filename hits can fire millions of times against
             // a 2M-file Everything index; emitting one event per hit saturates the UI dispatcher.
             // We coalesce into batches of FilenameBatchSize so the consumer pays one dispatch
@@ -669,6 +995,14 @@ public sealed class SearchService
                 if (filenameBatch is null || filenameBatch.Count == 0) return;
                 var batch = filenameBatch;
                 filenameBatch = null;
+                if (options.DirectOutputStream is not null && options.DirectOutputLock is not null)
+                {
+                    DirectOutputSink.WriteFileNameMatches(
+                        options.DirectOutputStream,
+                        options.DirectOutputColor,
+                        batch,
+                        options.DirectOutputLock);
+                }
                 await events.Writer.WriteAsync(new SearchEvent.MatchBatch(batch), cancellationToken).ConfigureAwait(false);
             }
 
@@ -697,15 +1031,21 @@ public sealed class SearchService
                 // never under the cache text file's path.
                 string ocrCacheDirPrefix = Ocr.OcrTextCache.DefaultBaseDirectory() + Path.DirectorySeparatorChar;
 
-                // ── Name-first pass (Both mode) ──
+                // ── Name-first pass (Both + filename-only modes) ──
                 // Run a quick name-filtered Everything query first so filename matches appear
-                // immediately, then fall through to the full discovery that content-scans the
-                // whole tree. Paths emitted here are recorded so the full pass below doesn't
-                // re-emit the same filename match (it still queues them for content scanning).
-                HashSet<string>? nameFirstEmitted = null;
+                // immediately. In Both mode, queue each name-hit path for content scanning NOW — before
+                // the full root enumeration — so its filename-only group is upgraded with content hits
+                // first. Paths emitted/scanned by an all-roots priority prepass seed these sets so the
+                // later full sweep neither emits nor scans them twice.
+                HashSet<string>? nameFirstEmitted = options.PreEmittedFileNamePaths is { Count: > 0 }
+                    ? new HashSet<string>(options.PreEmittedFileNamePaths, StringComparer.OrdinalIgnoreCase)
+                    : null;
+                HashSet<string>? priorityContentQueued = null;
                 if (nameFirstPass)
                 {
-                    nameFirstEmitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    Volatile.Write(ref nameFirstPhaseActive, 1);
+                    nameFirstEmitted ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    priorityContentQueued = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     int nameFirstCap = options.MaxResults > 0 ? Math.Min(options.MaxResults, 50_000) : 50_000;
                     var nameFirstLister = (FileLister)_fileLister;
                     var nameFirstBackendOverride = nameFirstLister.BackendOverride;
@@ -759,10 +1099,30 @@ public sealed class SearchService
                                     { SourceMatchStartColumn = fnStart });
                                     if (filenameBatch.Count >= FilenameBatchSize)
                                         await FlushFilenameBatchAsync().ConfigureAwait(false);
+
+                                    if (searchContent)
+                                        priorityContentQueued.Add(path);
+
+                                    if (!searchContent)
+                                    {
+                                        Interlocked.Increment(ref filesScanned);
+                                        Interlocked.Increment(ref filesWithMatches);
+                                        int n = Interlocked.Increment(ref totalMatches);
+                                        if (options.MaxResults > 0 && n >= options.MaxResults)
+                                            Volatile.Write(ref truncated, 1);
+                                    }
                                 }
                             }
                         }
                         await FlushFilenameBatchAsync().ConfigureAwait(false);
+                        // Filename rows are now in the event stream. Only after publishing them, queue
+                        // the same paths for priority content scans so the UI always creates the file-name
+                        // group first and then upgrades it as content matches arrive.
+                        if (priorityContentQueued is not null)
+                        {
+                            foreach (string path in priorityContentQueued)
+                                await WritePendingFileAsync(path).ConfigureAwait(false);
+                        }
                     }
                     finally
                     {
@@ -770,13 +1130,44 @@ public sealed class SearchService
                         nameFirstLister.BackendOverride = nameFirstBackendOverride;
                         nameFirstLister.EarlySuppressHiddenAttributeFilter = false;
                     }
-                    LogService.Instance.Info("Discovery",
-                        $"Name-first pass: emitted {nameFirstEmitted.Count:N0} filename match(es) in {sw.Elapsed.TotalSeconds:F2}s");
+                    YaguLog.For("Discovery").LogInformation(
+                        "Name-first pass: emitted {Emitted:N0} filename match(es) in {ElapsedSeconds:F2}s", nameFirstEmitted.Count, sw.Elapsed.TotalSeconds);
                 }
 
+                bool runFullDiscovery = !(nameFirstPass
+                    && (options.StopAfterNameFirstPass || options.SearchMode == SearchMode.FileNames));
+                // No full content scan follows (filename-only / name-first-only), so the name-first result
+                // IS the final result — leave the determinate bar alone (nothing will re-base the total).
+                if (!runFullDiscovery)
+                    Volatile.Write(ref nameFirstPhaseActive, 0);
+                if (runFullDiscovery)
+                {
+                    // Content-index setup deliberately happens AFTER the Everything name pass. A cold/mapped
+                    // index open can take seconds; it must never delay a filename hit already known to Everything.
+                    try { contentIndexGate = options.ContentIndexGateFactory?.Invoke(); }
+                    catch (Exception ex) when (ex is not OutOfMemoryException) { YaguLog.For("ContentIndex").LogWarning(ex, "Search gate init failed; live-scanning"); }
+
+                    try { shadowScan = options.ContentIndexShadowScanFactory?.Invoke(); }
+                    catch (Exception ex) when (ex is not OutOfMemoryException) { YaguLog.For("ContentIndex").LogDebug(ex, "Shadow pipeline init failed; skipping shadow."); }
+
+                    try
+                    {
+                        pruningScan = options.ContentIndexPruningScanFactory?.Invoke((p, _) => WritePendingFileAsync(p));
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException) { YaguLog.For("ContentIndex").LogDebug(ex, "Worker pruning pipeline init failed; not pruning via worker."); }
+                    if (pruningScan is not null)
+                        contentIndexGate = null;
+                }
+
+                if (runFullDiscovery)
                 await foreach (var path in _fileLister.ListFilesAsync(options.Directory, includeExts, maxFiles: 0, cancellationToken).WithCancellation(cancellationToken))
                 {
                     if (Volatile.Read(ref truncated) != 0) break;
+                    // The full-drive total is now established (Everything returns it before the first yield),
+                    // so the name-first phase is over — let the UI switch from the indeterminate bar to the
+                    // determinate one, which now climbs 0→100% against the real total exactly once.
+                    if (Volatile.Read(ref nameFirstPhaseActive) != 0)
+                        Volatile.Write(ref nameFirstPhaseActive, 0);
                     Interlocked.Increment(ref totalDiscovered);
 
                     if (path.StartsWith(ocrCacheDirPrefix, StringComparison.OrdinalIgnoreCase))
@@ -853,10 +1244,80 @@ public sealed class SearchService
                         }
                     }
 
-                    if (searchContent)
+                    bool scannedByEarlierAllRootsPass = options.PreScannedContentPaths?.Contains(path) == true;
+                    bool queuedByThisNamePass = priorityContentQueued?.Contains(path) == true;
+                    if (scannedByEarlierAllRootsPass)
+                    {
+                        // The priority pass completed before this full sweep started. Count this path once
+                        // for progress/summary, but do not emit duplicate content matches.
+                        Interlocked.Increment(ref filesScanned);
+                    }
+                    else if (queuedByThisNamePass)
+                    {
+                        // Its content worker is already running in THIS search and owns the processed count.
+                    }
+                    else if (searchContent)
                     {
                         if (!requireFileNameMatchForContent || fileNameMatched)
-                            await WritePendingFileAsync(path).ConfigureAwait(false);
+                        {
+                            // Stage-3 shadow (plan §5.3): offer this content-scan candidate to the mapped-worker
+                            // classifier. It never prunes → the scan below still processes every path → result
+                            // unchanged; a shadow fault disables shadow, never the search. Cancellation propagates.
+                            string? normalizedForIndex = null;
+                            if (shadowScan is not null)
+                            {
+                                normalizedForIndex = Services.Index.IndexScopeIdentity.NormalizePath(path);
+                                try { await shadowScan.OfferAsync(normalizedForIndex, cancellationToken).ConfigureAwait(false); }
+                                catch (OperationCanceledException) { throw; }
+                                catch (Exception ex) when (ex is not OutOfMemoryException)
+                                {
+                                    shadowScan = null;
+                                    YaguLog.For("ContentIndex").LogDebug(ex, "Shadow offer failed; disabling shadow.");
+                                }
+                            }
+
+                            // Content-index pruning (plan §5): skip ordinary-text files the index proves
+                            // cannot match. NormalizePath is only evaluated when a gate/pipeline is active, so a
+                            // disabled search keeps its exact current cost. A pruned file still counts as
+                            // processed for progress.
+                            bool handledByPruning = false;
+                            if (RequiresAuthoritativeSpecialSourceScan(path, options))
+                            {
+                                // Raw-file trigrams (including the bounded binary ASCII representation)
+                                // cannot prove absence inside an archive entry, OCR output, or extracted PDF
+                                // text. Always forward these candidates to the authoritative extractor lane.
+                                await WritePendingFileAsync(path).ConfigureAwait(false);
+                                handledByPruning = true;
+                            }
+                            else if (pruningScan is not null)
+                            {
+                                // Stage-4 worker pruning: offer (original path, normalized path). The pipeline
+                                // forwards survivors to WritePendingFileAsync (its sink) and prunes nonmembers;
+                                // pruned files are counted as processed at B1. Any offer fault → scan this path
+                                // live but KEEP the pipeline so its B1 spool replay still rescues earlier prunes.
+                                normalizedForIndex ??= Services.Index.IndexScopeIdentity.NormalizePath(path);
+                                try
+                                {
+                                    await pruningScan.OfferAsync(path, normalizedForIndex, cancellationToken).ConfigureAwait(false);
+                                }
+                                catch (OperationCanceledException) { throw; }
+                                catch (Exception ex) when (ex is not OutOfMemoryException)
+                                {
+                                    YaguLog.For("ContentIndex").LogDebug(ex, "Worker pruning offer failed; scanning this path live.");
+                                    await WritePendingFileAsync(path).ConfigureAwait(false);
+                                }
+                                handledByPruning = true;
+                            }
+
+                            if (!handledByPruning)
+                            {
+                                if (contentIndexGate is null
+                                    || contentIndexGate.ShouldContentScan(path, normalizedForIndex ??= Services.Index.IndexScopeIdentity.NormalizePath(path)))
+                                    await WritePendingFileAsync(path).ConfigureAwait(false);
+                                else
+                                    Interlocked.Increment(ref filesScanned);
+                            }
+                        }
                         else
                             Interlocked.Increment(ref filesScanned);
                     }
@@ -869,27 +1330,61 @@ public sealed class SearchService
                     discoveryLogCounter++;
                     if (discoveryLogCounter % 100_000 == 0 || discoveryLogTimer.ElapsedMilliseconds >= 5000)
                     {
-                        LogService.Instance.Info("Discovery", $"Progress: {discoveryLogCounter:N0} files enumerated, {Volatile.Read(ref totalDiscovered):N0} discovered, elapsed={sw.Elapsed.TotalSeconds:F1}s");
+                        YaguLog.For("Discovery").LogInformation("Progress: {Enumerated:N0} files enumerated, {Discovered:N0} discovered, elapsed={ElapsedSeconds:F1}s", discoveryLogCounter, Volatile.Read(ref totalDiscovered), sw.Elapsed.TotalSeconds);
                         discoveryLogTimer.Restart();
                     }
                 }
                 await FlushFilenameBatchAsync().ConfigureAwait(false);
+
+                // Content-index B1 reconciliation (plan §5.4, option (b)) is deferred to the content-workers
+                // task's finally — it runs AFTER the pending-scan channel drains, so a pruned file edited
+                // during the content scan (not merely during discovery) is still rescued before the search
+                // ends. Feeding rescue paths into `pending` here would fix the barrier too early (at end of
+                // discovery, while content scans are still running).
+
                 Volatile.Write(ref skipDirectories, _fileLister.SkippedDirectories);
                 fallbackReason = _fileLister.FallbackReason;
                 if (fallbackReason is not null)
                 {
                     await events.Writer.WriteAsync(new SearchEvent.Fallback(fallbackReason), cancellationToken).ConfigureAwait(false);
                 }
+                Volatile.Write(ref discoveryCompleted, 1);
                 await events.Writer.WriteAsync(new SearchEvent.DiscoveryComplete(CurrentTotalFiles()), cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { LogService.Instance.Warning("SearchService", "Discovery cancelled"); }
-            catch (Exception ex) { LogService.Instance.Warning("SearchService", "Discovery failed", ex); }
+            catch (OperationCanceledException) { YaguLog.For("SearchService").LogWarning("Discovery cancelled"); }
+            catch (Exception ex) { YaguLog.For("SearchService").LogWarning(ex, "Discovery failed"); }
             finally
             {
-                LogService.Instance.Info("SearchService", $"Discovery finished: {Volatile.Read(ref totalDiscovered):N0} files discovered, total={CurrentTotalFiles():N0}, {sw.Elapsed.TotalSeconds:F2}s elapsed");
+                // Stage-3 shadow (plan §5.3): drain + close the shadow classifier once discovery ends (even on
+                // cancel/error). Fail-safe — CompleteAsync never throws — and it never touched the result set.
+                if (shadowScan is not null)
+                    await shadowScan.CompleteAsync(cancellationToken).ConfigureAwait(false);
+                // Stage-4 worker pruning (plan §5.3): drain the pruning classifier so every survivor is forwarded
+                // to the pending-scan channel BEFORE it is completed below. Fail-safe — never throws; a pump
+                // fault leaves the B1 spool replay to rescue anything pruned before it.
+                if (pruningScan is not null)
+                    await pruningScan.CompleteOfferingAsync().ConfigureAwait(false);
+                YaguLog.For("SearchService").LogInformation(
+                    "Discovery finished: {Discovered:N0} files discovered, total={Total:N0}, OCR queued={OcrQueued:N0}, PDF queued={PdfQueued:N0}, {ElapsedSeconds:F2}s elapsed",
+                    Volatile.Read(ref totalDiscovered),
+                    CurrentTotalFiles(),
+                    Volatile.Read(ref ocrFilesQueued),
+                    Volatile.Read(ref pdfFilesQueued),
+                    sw.Elapsed.TotalSeconds);
                 pending.Writer.TryComplete();
             }
         }, CancellationToken.None);
+
+        // ── Extended-source (archive/PDF/OCR) pruning gate ──
+        // The §7 Phase 4 analogue of the content-index gate, in method scope so the content-workers
+        // task can consult it before enqueuing an image/PDF candidate. Null unless an extended-source
+        // namespace exists for this scope; when present it only skips a deterministic (PDF/archive)
+        // source a required-superset trigram query provably cannot match and USN proves unchanged.
+        // OCR/changed/mismatched sources always extract, and its end-of-discovery B1 reconciliation
+        // re-extracts anything that changed after B0 — so a match can never be silently hidden.
+        Services.Index.ExtendedSourceSearchGate? extendedSourceGate = null;
+        try { extendedSourceGate = options.ExtendedSourceGateFactory?.Invoke(); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { YaguLog.For("ContentIndex").LogWarning(ex, "Extended-source gate init failed; extracting all sources"); }
 
         // ── Image-text (OCR) search session ──
         // When enabled, images discovered during the scan are routed to a background OCR
@@ -900,12 +1395,20 @@ public sealed class SearchService
         Ocr.IOcrEngine? ocrEngine = null;
         if (searchContent && options.SearchImageText)
         {
-            ocrEngine = Ocr.OcrEngineFactory.Create(options.ImageOcrEngine, options.ImageOcrModel, options.ImageOcrMaxSide);
+            int ocrWorkerCount = Math.Clamp(
+                options.ImageOcrWorkerParallelism,
+                Ocr.OcrWorkerParallelism.Minimum,
+                Ocr.OcrWorkerParallelism.Maximum);
+            ocrEngine = options.ImageOcrEngineFactory?.Invoke()
+                ?? Ocr.OcrEngineFactory.Create(
+                    options.ImageOcrEngine,
+                    options.ImageOcrModel,
+                    options.ImageOcrMaxSide,
+                    ocrWorkerCount);
             // Clear OCR text left over from crashed/older runs before this search starts writing fresh
             // entries, so a previous run's partial output can never be mistaken for this search's results.
             Ocr.OcrTextCache.Cleanup();
             var ocrCache = new Ocr.OcrTextCache();
-            int ocrWorkerCount = Math.Max(1, Math.Min(4, Environment.ProcessorCount / 2));
             imageOcr = new Ocr.ImageOcrSearchSession(
                 ocrEngine,
                 ocrCache,
@@ -915,7 +1418,11 @@ public sealed class SearchService
                 options.ContextLines,
                 options.MaxMatchesPerFile,
                 contentResults.Writer,
-                onFileProcessed: () => Interlocked.Increment(ref filesScanned),
+                onFileProcessed: () =>
+                {
+                    Interlocked.Increment(ref ocrFilesProcessed);
+                    Interlocked.Increment(ref filesScanned);
+                },
                 onFileMatched: matchCount =>
                 {
                     Interlocked.Increment(ref filesWithMatches);
@@ -926,9 +1433,14 @@ public sealed class SearchService
                 workerCount: ocrWorkerCount,
                 cancellationToken: cancellationToken,
                 shouldStop: () => Volatile.Read(ref truncated) != 0);
-            LogService.Instance.Info("SearchService",
-                $"Image-text OCR enabled: engine={ocrEngine.Id}, workers={ocrWorkerCount}, extensions={options.ImageOcrExtensions.Count}");
+            YaguLog.For("SearchService").LogInformation(
+                "Image-text OCR enabled: engine={Engine}, workers={Workers}, extensions={Extensions}", ocrEngine.Id, ocrWorkerCount, options.ImageOcrExtensions.Count);
         }
+
+        static bool RequiresAuthoritativeSpecialSourceScan(string path, SearchOptions options) =>
+            (options.SearchInsideArchives && ZipArchiveSearcher.HasArchiveExtension(path, options.ArchiveExtensions)) ||
+            (options.SearchImageText && Ocr.ImageOcrSupport.IsImageCandidate(path, options.ImageOcrExtensions)) ||
+            (options.SearchPdfText && Pdf.PdfTextSupport.IsPdfCandidate(path, options.PdfTextExtensions));
 
         // ── PDF-text search session ──
         // When enabled, PDFs discovered during the scan are routed to a background queue that runs
@@ -939,7 +1451,7 @@ public sealed class SearchService
         Pdf.PdfTextExtractor? pdfExtractor = null;
         if (searchContent && options.SearchPdfText)
         {
-            pdfExtractor = new Pdf.PdfTextExtractor();
+            pdfExtractor = options.PdfTextExtractorFactory?.Invoke() ?? new Pdf.PdfTextExtractor();
             // Extracted PDF text is cached under the same PID-scoped, discovery-excluded cache dir as
             // OCR text, keyed by the pdftotext engine id so it never collides with image OCR entries.
             Ocr.OcrTextCache.Cleanup();
@@ -954,7 +1466,11 @@ public sealed class SearchService
                 options.ContextLines,
                 options.MaxMatchesPerFile,
                 contentResults.Writer,
-                onFileProcessed: () => Interlocked.Increment(ref filesScanned),
+                onFileProcessed: () =>
+                {
+                    Interlocked.Increment(ref pdfFilesProcessed);
+                    Interlocked.Increment(ref filesScanned);
+                },
                 onFileMatched: matchCount =>
                 {
                     Interlocked.Increment(ref filesWithMatches);
@@ -965,8 +1481,8 @@ public sealed class SearchService
                 workerCount: pdfWorkerCount,
                 cancellationToken: cancellationToken,
                 shouldStop: () => Volatile.Read(ref truncated) != 0);
-            LogService.Instance.Info("SearchService",
-                $"PDF-text search enabled: workers={pdfWorkerCount}, extensions={options.PdfTextExtensions.Count}");
+            YaguLog.For("SearchService").LogInformation(
+                "PDF-text search enabled: workers={Workers}, extensions={Extensions}", pdfWorkerCount, options.PdfTextExtensions.Count);
         }
 
         // ── Content workers ──
@@ -998,7 +1514,7 @@ public sealed class SearchService
                                 ? Math.Max(1, Math.Min(64, Environment.ProcessorCount * 2))
                                 : Math.Max(1, Math.Min(16, Environment.ProcessorCount));
                     }
-                    LogService.Instance.Info("SearchService", $"Content scan parallelism = {parallelism}{(options.Multiline ? " (multiline)" : "")}");
+                    YaguLog.For("SearchService").LogInformation("Content scan parallelism = {Parallelism}{MultilineSuffix}", parallelism, options.Multiline ? " (multiline)" : "");
 
                     // Pre-compute the degraded options once so we don't allocate a new
                     // SearchOptions per file inside the hot loop.
@@ -1022,11 +1538,11 @@ public sealed class SearchService
 
                             if (streamSession == null)
                             {
-                                LogService.Instance.Warning("SearchService", "Native session creation failed — falling back to managed per-file path");
+                                YaguLog.For("SearchService").LogWarning("Native session creation failed — falling back to managed per-file path");
                                 goto managedFallback;
                             }
 
-                            LogService.Instance.Info("SearchService", "Streaming native scanning enabled");
+                            YaguLog.For("SearchService").LogInformation("Streaming native scanning enabled");
 
                             IntPtr cancelPtr = Marshal.AllocHGlobal(sizeof(int));
                             try
@@ -1070,7 +1586,7 @@ public sealed class SearchService
                                     catch (OperationCanceledException) { }
                                     catch (Exception ex)
                                     {
-                                        LogService.Instance.Warning("SearchService", $"Managed ZIP scan failed for {zipFile}", ex);
+                                        YaguLog.For("SearchService").LogWarning(ex, "Managed ZIP scan failed for {ZipFile}", zipFile);
                                         Interlocked.Increment(ref filesScanned);
                                         Interlocked.Increment(ref filesSkipped);
                                         Interlocked.Increment(ref skipOther);
@@ -1112,14 +1628,15 @@ public sealed class SearchService
                                                 options.DirectOutputStream, options.DirectOutputColor,
                                                 pathsByIndex, EffectiveHardCap(options), Volatile.Read(ref totalMatches),
                                                 cancelPtr, (int*)filesScannedAlloc,
-                                                contextEnabled: options.ContextLines > 0);
+                                                contextEnabled: options.ContextLines > 0,
+                                                outputLock: options.DirectOutputLock);
                                             sinkInstance = directSink;
                                         }
                                         else
                                         {
                                             streamingSink = new StreamingScanSink(
                                                 pathsByIndex,
-                                                contentResults.Writer, sourceBackedResults.Writer, EffectiveHardCap(options), Volatile.Read(ref totalMatches),
+                                                contentResults.Writer, EffectiveHardCap(options), Volatile.Read(ref totalMatches),
                                                 cancelPtr, (int*)filesScannedAlloc,
                                                 (int*)totalMatchesAlloc, (int*)filesWithMatchesAlloc,
                                                 options.DegradedResultStore);
@@ -1155,7 +1672,7 @@ public sealed class SearchService
                                     int oversubscription = SearchOptions.ResolveIoOversubscriptionMultiplier(
                                         options.IoOversubscriptionIndex, targetIsHardDisk);
                                     int streamingWorkers = Math.Min(64, Math.Max(1, parallelism) * oversubscription);
-                                    LogService.Instance.Info("SearchService", $"Streaming scanner IO workers = {streamingWorkers} (cpu parallelism {parallelism}, oversubscription {oversubscription}x, mode {options.IoOversubscriptionIndex})");
+                                    YaguLog.For("SearchService").LogInformation("Streaming scanner IO workers = {Workers} (cpu parallelism {Parallelism}, oversubscription {Oversubscription}x, mode {Mode})", streamingWorkers, parallelism, oversubscription, options.IoOversubscriptionIndex);
                                     IntPtr scanner;
                                     GCHandle sinkHandle;
                                     unsafe
@@ -1166,7 +1683,7 @@ public sealed class SearchService
 
                                     if (scanner == IntPtr.Zero)
                                     {
-                                        LogService.Instance.Warning("SearchService", "Streaming scanner creation failed — falling back to managed path");
+                                        YaguLog.For("SearchService").LogWarning("Streaming scanner creation failed — falling back to managed path");
                                         if (sinkHandle.IsAllocated) sinkHandle.Free();
                                         streamingFailed = true;
                                     }
@@ -1199,13 +1716,28 @@ public sealed class SearchService
                                                     {
                                                         // Route images to the background OCR queue instead of the
                                                         // native content scanner; matches stream in asynchronously.
-                                                        imageOcr.TryEnqueue(file);
+                                                        // The extended-source gate can prune only a proven-fresh
+                                                        // deterministic nonmember (never OCR) → short-circuits harmlessly here.
+                                                        bool ocrPrioritized = false;
+                                                        if (extendedSourceGate is null || extendedSourceGate.ShouldExtract(Services.Index.SpecialSourceKind.ImageOcr, file, out ocrPrioritized))
+                                                        {
+                                                            if (imageOcr.TryEnqueue(file, ocrPrioritized))
+                                                                Interlocked.Increment(ref ocrFilesQueued);
+                                                        }
+                                                        else
+                                                            Interlocked.Increment(ref filesScanned);
                                                     }
                                                     else if (pdfText != null && Pdf.PdfTextSupport.IsPdfCandidate(file, options.PdfTextExtensions))
                                                     {
                                                         // Route PDFs to the background pdftotext queue instead of the
                                                         // native content scanner; matches stream in asynchronously.
-                                                        pdfText.TryEnqueue(file);
+                                                        if (extendedSourceGate is null || extendedSourceGate.ShouldExtract(Services.Index.SpecialSourceKind.PdfText, file))
+                                                        {
+                                                            if (pdfText.TryEnqueue(file))
+                                                                Interlocked.Increment(ref pdfFilesQueued);
+                                                        }
+                                                        else
+                                                            Interlocked.Increment(ref filesScanned);
                                                     }
                                                     else
                                                     {
@@ -1230,12 +1762,9 @@ public sealed class SearchService
                                                     {
                                                         lastLogTicks = now;
                                                         string memDiag = GetMemoryDiagnostics();
-                                                        LogService.Instance.Info("Workers",
-                                                            $"Streaming: pushed={fileIndexCounter:N0} | " +
-                                                            $"scanned={CurrentFilesScanned():N0}, matches={Volatile.Read(ref totalMatches):N0}, " +
-                                                            $"withMatches={Volatile.Read(ref filesWithMatches):N0}, skipped={Volatile.Read(ref filesSkipped):N0}, " +
-                                                            $"degraded={Volatile.Read(ref degraded) != 0}, parallelism={parallelism}, " +
-                                                            $"elapsed={sw.Elapsed.TotalSeconds:F1}s, {memDiag}");
+                                                        YaguLog.For("Workers").LogInformation(
+                                                            "Streaming: pushed={Pushed:N0} | scanned={Scanned:N0}, matches={Matches:N0}, withMatches={WithMatches:N0}, skipped={Skipped:N0}, degraded={Degraded}, parallelism={Parallelism}, elapsed={ElapsedSeconds:F1}s, {Diagnostics}",
+                                                            fileIndexCounter, CurrentFilesScanned(), Volatile.Read(ref totalMatches), Volatile.Read(ref filesWithMatches), Volatile.Read(ref filesSkipped), Volatile.Read(ref degraded) != 0, parallelism, sw.Elapsed.TotalSeconds, memDiag);
                                                     }
                                                     continue;
                                                 }
@@ -1295,6 +1824,9 @@ public sealed class SearchService
                                                             case Native.NativeSearcher.StatusOpenFailed:
                                                                 Interlocked.Increment(ref skipAccessDenied);
                                                                 break;
+                                                            case Native.NativeSearcher.StatusIoTimeout:
+                                                                Interlocked.Increment(ref skipIoTimeout);
+                                                                break;
                                                             case Native.NativeSearcher.StatusTooLarge:
                                                                 Interlocked.Increment(ref skipTooLarge);
                                                                 break;
@@ -1324,7 +1856,7 @@ public sealed class SearchService
                                                 }
                                                 catch (Exception ex)
                                                 {
-                                                    LogService.Instance.Warning("SearchService", "Streaming scanner finish during cleanup failed", ex);
+                                                    YaguLog.For("SearchService").LogWarning(ex, "Streaming scanner finish during cleanup failed");
                                                 }
                                             }
                                             Native.NativeSearcher.DestroyStreamingScanner(scanner);
@@ -1397,15 +1929,29 @@ public sealed class SearchService
                             if (imageOcr != null && Ocr.ImageOcrSupport.IsImageCandidate(file, options.ImageOcrExtensions))
                             {
                                 // Route images to the background OCR queue; the session counts
-                                // them and emits any matches asynchronously.
-                                imageOcr.TryEnqueue(file);
+                                // them and emits any matches asynchronously. The extended-source gate
+                                // can prune only a proven-fresh deterministic nonmember (never OCR).
+                                bool ocrPrioritized = false;
+                                if (extendedSourceGate is null || extendedSourceGate.ShouldExtract(Services.Index.SpecialSourceKind.ImageOcr, file, out ocrPrioritized))
+                                {
+                                    if (imageOcr.TryEnqueue(file, ocrPrioritized))
+                                        Interlocked.Increment(ref ocrFilesQueued);
+                                }
+                                else
+                                    Interlocked.Increment(ref filesScanned);
                                 return;
                             }
                             if (pdfText != null && Pdf.PdfTextSupport.IsPdfCandidate(file, options.PdfTextExtensions))
                             {
                                 // Route PDFs to the background pdftotext queue; the session counts
                                 // them and emits any matches asynchronously.
-                                pdfText.TryEnqueue(file);
+                                if (extendedSourceGate is null || extendedSourceGate.ShouldExtract(Services.Index.SpecialSourceKind.PdfText, file))
+                                {
+                                    if (pdfText.TryEnqueue(file))
+                                        Interlocked.Increment(ref pdfFilesQueued);
+                                }
+                                else
+                                    Interlocked.Increment(ref filesScanned);
                                 return;
                             }
                             var effectiveOptions = Volatile.Read(ref degraded) != 0 ? degradedOptions : patternOptions;
@@ -1419,7 +1965,7 @@ public sealed class SearchService
                             catch (OperationCanceledException) { throw; }
                             catch (Exception ex)
                             {
-                                LogService.Instance.Warning("SearchService", $"Scan failed for {file}", ex);
+                                YaguLog.For("SearchService").LogWarning(ex, "Scan failed for {File}", file);
                                 Interlocked.Increment(ref filesScanned);
                                 Interlocked.Increment(ref filesSkipped);
                                 Interlocked.Increment(ref skipOther);
@@ -1434,9 +1980,10 @@ public sealed class SearchService
                                     case ContentSearcher.SkipBinary: Interlocked.Increment(ref skipBinary); break;
                                     case ContentSearcher.SkipAccessDenied:
                                         Interlocked.Increment(ref skipAccessDenied);
-                                        LogService.Instance.Verbose("ContentSearcher", $"Access denied: {file}");
+                                        YaguLog.For("ContentSearcher").LogDebug("Access denied: {File}", file);
                                         break;
                                     case ContentSearcher.SkipIOError: Interlocked.Increment(ref skipIOError); break;
+                                    case ContentSearcher.SkipIoTimeout: Interlocked.Increment(ref skipIoTimeout); break;
                                     case ContentSearcher.SkipTooLarge: Interlocked.Increment(ref skipTooLarge); break;
                                     case ContentSearcher.SkipTooSmall: Interlocked.Increment(ref skipSizeFiltered); break;
                                     case ContentSearcher.SkipNotFound: Interlocked.Increment(ref skipNotFound); break;
@@ -1478,10 +2025,139 @@ public sealed class SearchService
 
                     workersDone:;
                 }
-                catch (OperationCanceledException) { LogService.Instance.Warning("SearchService", "Content workers cancelled"); }
-                catch (Exception ex) { LogService.Instance.Warning("SearchService", "Content workers failed", ex); }
+                catch (OperationCanceledException) { YaguLog.For("SearchService").LogWarning("Content workers cancelled"); }
+                catch (Exception ex) { YaguLog.For("SearchService").LogWarning(ex, "Content workers failed"); }
                 finally
                 {
+                    // ── Content-index B1 reconciliation (plan §5.4, option (b)) ──
+                    // Now that the pending-scan channel has fully drained, replay the USN journal over
+                    // [B0, now) and live-scan any pruned path whose content changed since B0 — INCLUDING an
+                    // edit made during the content scan, not merely during discovery. A bounded
+                    // rescue-and-re-drain loop repeats until a pass finds no newly-dirty pruned path (or the
+                    // pass budget is reached), so "changed during the search" is caught right up to the end of
+                    // the whole search. Rescue sets are normally empty for a selective query, so the added
+                    // work is negligible. Any error or uncertainty makes the gate return every pruned path.
+                    if (contentIndexGate is not null || pruningScan is not null)
+                    {
+                        // The pruned file was already counted as processed (filesScanned) at prune time, so a
+                        // B1 rescue re-scans it for matches without re-counting it. The hot-loop degraded
+                        // options are scoped to the try block above, so rebuild the effective options here.
+                        var rescueOptions = Volatile.Read(ref degraded) != 0 && patternOptions.ContextLines > 0
+                            ? CopyOptions(patternOptions, contextLines: 0)
+                            : patternOptions;
+
+                        async ValueTask RescueContentScanAsync(string file)
+                        {
+                            FileSearchOutcome outcome;
+                            try
+                            {
+                                outcome = await ContentSearcher.SearchFileWithStatsAsync(
+                                    file, regex, literal, cmp, rescueOptions, contentResults.Writer, session: null, cancellationToken).ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch (Exception ex) when (ex is not OutOfMemoryException)
+                            {
+                                YaguLog.For("SearchService").LogWarning(ex, "B1 rescue scan failed for {File}", file);
+                                return;
+                            }
+                            if (outcome.MatchCount > 0)
+                            {
+                                Interlocked.Add(ref bytesScanned, outcome.BytesScanned);
+                                Interlocked.Increment(ref filesWithMatches);
+                                int newTotal = Interlocked.Add(ref totalMatches, outcome.MatchCount);
+                                if (options.MaxResults > 0 && newTotal >= options.MaxResults)
+                                    Volatile.Write(ref truncated, 1);
+                            }
+                        }
+
+                        int rescued = 0;
+                        const int MaxB1RescuePasses = 4;
+                        if (contentIndexGate is not null)
+                        {
+                            try
+                            {
+                                for (int pass = 0; pass < MaxB1RescuePasses; pass++)
+                                {
+                                    if (Volatile.Read(ref truncated) != 0) break;
+                                    Services.Index.B1RescuePass b1 = contentIndexGate.ReconcileB1Pass();
+                                    foreach (string rescuePath in b1.PathsToScan)
+                                    {
+                                        if (Volatile.Read(ref truncated) != 0) break;
+                                        await RescueContentScanAsync(rescuePath).ConfigureAwait(false);
+                                        rescued++;
+                                    }
+                                    if (!b1.MorePassesUseful) break;
+                                }
+                            }
+                            catch (OperationCanceledException) { }
+                            catch (Exception ex) when (ex is not OutOfMemoryException)
+                            {
+                                YaguLog.For("ContentIndex").LogWarning(ex, "Content-index B1 rescue loop failed.");
+                            }
+
+                            int grossPruned = contentIndexGate.TotalPruned;
+                            int netPruned = Math.Max(0, grossPruned - rescued);
+                            indexGateEngaged = netPruned > 0 ? 1 : 0;
+                            indexFilesPruned = netPruned;
+                            indexFilesRescued = rescued;
+                            if (LogService.Instance.IsVerboseEnabled)
+                                YaguLog.For("ContentIndex").LogDebug(
+                                    "Content index evaluated '{Directory}': grossPruned={GrossPruned}, rescued={Rescued}, netPruned={NetPruned}, pruningDisabled={PruningDisabled}.",
+                                    options.Directory, grossPruned, rescued, netPruned, contentIndexGate.PruningDisabled);
+                        }
+                        else
+                        {
+                            // ── Stage-4 worker pruning B1 (plan §5.5) ──
+                            // Reconcile once: the worker replays [B0, now) over its provisional prune set (or the
+                            // pipeline replays its whole recovery spool on any fault / uncertainty), returning the
+                            // paths to live-scan. The pruned files were not scanned, so count them as processed
+                            // here (once); a re-scanned rescue path is not re-counted, matching the gate path.
+                            try
+                            {
+                                Services.Index.PruningScanResult result = await pruningScan!.ReconcileAtB1Async(cancellationToken).ConfigureAwait(false);
+                                foreach (string rescuePath in result.RescuePaths)
+                                {
+                                    if (Volatile.Read(ref truncated) != 0) break;
+                                    await RescueContentScanAsync(rescuePath).ConfigureAwait(false);
+                                }
+                                if (result.GrossPruned > 0)
+                                    Interlocked.Add(ref filesScanned, (int)result.GrossPruned);
+                                indexGateEngaged = result.NetPruned > 0 ? 1 : 0;
+                                indexFilesPruned = (int)result.NetPruned;
+                                indexFilesRescued = (int)result.Rescued;
+                                if (LogService.Instance.IsVerboseEnabled)
+                                    YaguLog.For("ContentIndex").LogDebug(
+                                        "Worker pruning evaluated '{Directory}': grossPruned={GrossPruned}, rescued={Rescued}, netPruned={NetPruned}, accelerated={Accelerated}.",
+                                        options.Directory, result.GrossPruned, result.Rescued, result.NetPruned, result.Accelerated);
+                            }
+                            catch (OperationCanceledException) { }
+                            catch (Exception ex) when (ex is not OutOfMemoryException)
+                            {
+                                YaguLog.For("ContentIndex").LogWarning(ex, "Worker pruning B1 reconcile failed.");
+                            }
+                        }
+                    }
+
+                    // Barrier B1 for extended sources: re-extract any pruned image/PDF whose backing file
+                    // changed after B0 (or all pruned, on any journal discontinuity), before the extractor
+                    // queues are closed. Route each rescued path back to its kind's session by extension.
+                    if (extendedSourceGate is not null && (imageOcr != null || pdfText != null))
+                    {
+                        foreach (string rescue in extendedSourceGate.GetSourcesToRescan())
+                        {
+                            if (imageOcr != null && Ocr.ImageOcrSupport.IsImageCandidate(rescue, options.ImageOcrExtensions))
+                            {
+                                if (imageOcr.TryEnqueue(rescue))
+                                    Interlocked.Increment(ref ocrFilesQueued);
+                            }
+                            else if (pdfText != null && Pdf.PdfTextSupport.IsPdfCandidate(rescue, options.PdfTextExtensions))
+                            {
+                                if (pdfText.TryEnqueue(rescue))
+                                    Interlocked.Increment(ref pdfFilesQueued);
+                            }
+                        }
+                    }
+
                     // Finish OCR before closing the content channel so all OCR matches are
                     // flushed into the results stream. The OCR queue ran alongside the scan;
                     // signal no-more-images and await the workers draining the backlog.
@@ -1490,7 +2166,7 @@ public sealed class SearchService
                         imageOcr.Complete();
                         try { await imageOcr.DrainAsync().ConfigureAwait(false); }
                         catch (OperationCanceledException) { }
-                        catch (Exception ex) { LogService.Instance.Warning("SearchService", "OCR drain failed", ex); }
+                        catch (Exception ex) { YaguLog.For("SearchService").LogWarning(ex, "OCR drain failed"); }
                     }
 
                     // Likewise finish PDF-text extraction before closing the content channel so all
@@ -1500,27 +2176,25 @@ public sealed class SearchService
                         pdfText.Complete();
                         try { await pdfText.DrainAsync().ConfigureAwait(false); }
                         catch (OperationCanceledException) { }
-                        catch (Exception ex) { LogService.Instance.Warning("SearchService", "PDF-text drain failed", ex); }
+                        catch (Exception ex) { YaguLog.For("SearchService").LogWarning(ex, "PDF-text drain failed"); }
                     }
 
                     // Release the OCR engine after draining (terminates the out-of-process worker, if any).
                     if (ocrEngine is IAsyncDisposable ocrEngineAsyncDisposable)
                     {
                         try { await ocrEngineAsyncDisposable.DisposeAsync().ConfigureAwait(false); }
-                        catch (Exception ex) { LogService.Instance.Warning("SearchService", "OCR engine dispose failed", ex); }
+                        catch (Exception ex) { YaguLog.For("SearchService").LogWarning(ex, "OCR engine dispose failed"); }
                     }
                     else if (ocrEngine is IDisposable ocrEngineDisposable)
                     {
                         try { ocrEngineDisposable.Dispose(); }
-                        catch (Exception ex) { LogService.Instance.Warning("SearchService", "OCR engine dispose failed", ex); }
+                        catch (Exception ex) { YaguLog.For("SearchService").LogWarning(ex, "OCR engine dispose failed"); }
                     }
 
                     string finishMemDiag = GetMemoryDiagnostics();
-                    LogService.Instance.Info("SearchService",
-                        $"Content workers finished: scanned={filesScanned:N0}, withMatches={filesWithMatches:N0}, " +
-                        $"totalMatches={totalMatches:N0}, skipped={Volatile.Read(ref filesSkipped):N0}, " +
-                        $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={Volatile.Read(ref pressureCycles)}, " +
-                        $"elapsed={sw.Elapsed.TotalSeconds:F2}s, {finishMemDiag}");
+                    YaguLog.For("SearchService").LogInformation(
+                        "Content workers finished: scanned={Scanned:N0}, withMatches={WithMatches:N0}, totalMatches={TotalMatches:N0}, skipped={Skipped:N0}, batches={Batches}, pressureCycles={PressureCycles}, elapsed={ElapsedSeconds:F2}s, {Diagnostics}",
+                        filesScanned, filesWithMatches, totalMatches, Volatile.Read(ref filesSkipped), Volatile.Read(ref nativeBatchesProcessed), Volatile.Read(ref pressureCycles), sw.Elapsed.TotalSeconds, finishMemDiag);
                     contentResults.Writer.TryComplete();
                     sourceBackedResults.Writer.TryComplete();
                 }
@@ -1561,9 +2235,9 @@ public sealed class SearchService
                     // Log if the write took a long time (events channel full — UI not draining fast enough)
                     if (stallMs > 500)
                     {
-                        LogService.Instance.Warning("Forwarder",
-                            $"Backpressure: WriteAsync to events channel took {stallMs}ms " +
-                            $"(batch={batch.Count} items, totalForwarded={Volatile.Read(ref forwarderItemsForwarded):N0})");
+                        YaguLog.For("Forwarder").LogWarning(
+                            "Backpressure: WriteAsync to events channel took {StallMs}ms (batch={BatchCount} items, totalForwarded={TotalForwarded:N0})",
+                            stallMs, batch.Count, Volatile.Read(ref forwarderItemsForwarded));
                     }
 
                     // Periodic throughput log
@@ -1571,10 +2245,9 @@ public sealed class SearchService
                     if ((now - fwdLogLastTicks) >= Stopwatch.Frequency * FwdLogIntervalSec)
                     {
                         fwdLogLastTicks = now;
-                        LogService.Instance.Info("Forwarder",
-                            $"Throughput: forwarded={Volatile.Read(ref forwarderItemsForwarded):N0}, " +
-                            $"batchesFlushed={fwdBatchesFlushed}, cumulativeStallMs={Volatile.Read(ref forwarderWriteStallMs)}, " +
-                            $"elapsed={sw.Elapsed.TotalSeconds:F1}s");
+                        YaguLog.For("Forwarder").LogInformation(
+                            "Throughput: forwarded={Forwarded:N0}, batchesFlushed={BatchesFlushed}, cumulativeStallMs={StallMs}, elapsed={ElapsedSeconds:F1}s",
+                            Volatile.Read(ref forwarderItemsForwarded), fwdBatchesFlushed, Volatile.Read(ref forwarderWriteStallMs), sw.Elapsed.TotalSeconds);
                     }
                 }
 
@@ -1631,13 +2304,12 @@ public sealed class SearchService
                 }
 
                 await FlushContentBatchAsync().ConfigureAwait(false);
-                LogService.Instance.Info("Forwarder",
-                    $"Completed: forwarded={Volatile.Read(ref forwarderItemsForwarded):N0}, " +
-                    $"batchesFlushed={fwdBatchesFlushed}, cumulativeStallMs={Volatile.Read(ref forwarderWriteStallMs)}, " +
-                    $"elapsed={sw.Elapsed.TotalSeconds:F1}s");
+                YaguLog.For("Forwarder").LogInformation(
+                    "Completed: forwarded={Forwarded:N0}, batchesFlushed={BatchesFlushed}, cumulativeStallMs={StallMs}, elapsed={ElapsedSeconds:F1}s",
+                    Volatile.Read(ref forwarderItemsForwarded), fwdBatchesFlushed, Volatile.Read(ref forwarderWriteStallMs), sw.Elapsed.TotalSeconds);
             }
-            catch (OperationCanceledException) { LogService.Instance.Warning("Forwarder", "Cancelled"); }
-            catch (Exception ex) { LogService.Instance.Warning("Forwarder", "Failed", ex); }
+            catch (OperationCanceledException) { YaguLog.For("Forwarder").LogWarning("Cancelled"); }
+            catch (Exception ex) { YaguLog.For("Forwarder").LogWarning(ex, "Failed"); }
         }, CancellationToken.None);
 
         var sourceBackedForwarder = Task.Run(async () =>
@@ -1666,19 +2338,18 @@ public sealed class SearchService
 
                     if (stallMs > 500)
                     {
-                        LogService.Instance.Warning("SourceBackedForwarder",
-                            $"Backpressure: WriteAsync to events channel took {stallMs}ms " +
-                            $"(batch={batch.Count} items, totalForwarded={Volatile.Read(ref forwarderItemsForwarded):N0})");
+                        YaguLog.For("SourceBackedForwarder").LogWarning(
+                            "Backpressure: WriteAsync to events channel took {StallMs}ms (batch={BatchCount} items, totalForwarded={TotalForwarded:N0})",
+                            stallMs, batch.Count, Volatile.Read(ref forwarderItemsForwarded));
                     }
 
                     long now = Stopwatch.GetTimestamp();
                     if ((now - fwdLogLastTicks) >= Stopwatch.Frequency * FwdLogIntervalSec)
                     {
                         fwdLogLastTicks = now;
-                        LogService.Instance.Info("SourceBackedForwarder",
-                            $"Throughput: forwarded={Volatile.Read(ref forwarderItemsForwarded):N0}, " +
-                            $"batchesFlushed={fwdBatchesFlushed}, cumulativeStallMs={Volatile.Read(ref forwarderWriteStallMs)}, " +
-                            $"elapsed={sw.Elapsed.TotalSeconds:F1}s");
+                        YaguLog.For("SourceBackedForwarder").LogInformation(
+                            "Throughput: forwarded={Forwarded:N0}, batchesFlushed={BatchesFlushed}, cumulativeStallMs={StallMs}, elapsed={ElapsedSeconds:F1}s",
+                            Volatile.Read(ref forwarderItemsForwarded), fwdBatchesFlushed, Volatile.Read(ref forwarderWriteStallMs), sw.Elapsed.TotalSeconds);
                     }
                 }
 
@@ -1724,12 +2395,12 @@ public sealed class SearchService
                 }
 
                 await FlushSourceBackedBatchAsync().ConfigureAwait(false);
-                LogService.Instance.Info("SourceBackedForwarder",
-                    $"Completed: batchesFlushed={fwdBatchesFlushed}, " +
-                    $"cumulativeStallMs={Volatile.Read(ref forwarderWriteStallMs)}, elapsed={sw.Elapsed.TotalSeconds:F1}s");
+                YaguLog.For("SourceBackedForwarder").LogInformation(
+                    "Completed: batchesFlushed={BatchesFlushed}, cumulativeStallMs={StallMs}, elapsed={ElapsedSeconds:F1}s",
+                    fwdBatchesFlushed, Volatile.Read(ref forwarderWriteStallMs), sw.Elapsed.TotalSeconds);
             }
-            catch (OperationCanceledException) { LogService.Instance.Warning("SourceBackedForwarder", "Cancelled"); }
-            catch (Exception ex) { LogService.Instance.Warning("SourceBackedForwarder", "Failed", ex); }
+            catch (OperationCanceledException) { YaguLog.For("SourceBackedForwarder").LogWarning("Cancelled"); }
+            catch (Exception ex) { YaguLog.For("SourceBackedForwarder").LogWarning(ex, "Failed"); }
         }, CancellationToken.None);
 
         var scanComplete = new TaskCompletionSource<SearchSummary>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1755,7 +2426,7 @@ public sealed class SearchService
                 }
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { LogService.Instance.Verbose("SearchService", "Progress emitter stopped", ex); }
+            catch (Exception ex) { YaguLog.For("SearchService").LogDebug(ex, "Progress emitter stopped"); }
         }, CancellationToken.None);
 
         // Close the events channel once everything upstream is done.
@@ -1766,74 +2437,65 @@ public sealed class SearchService
                 await Task.WhenAll(discovery, workers).ConfigureAwait(false);
                 var summary = CreateSummarySnapshot(sw.Elapsed);
                 scanComplete.TrySetResult(summary);
-                LogService.Instance.Info("SearchService",
-                    $"Scan complete: scanned={summary.FilesScanned:N0}, matches={summary.TotalMatches:N0}, " +
-                    $"elapsed={summary.Elapsed.TotalSeconds:F2}s; result batches are finalizing");
+                YaguLog.For("SearchService").LogInformation(
+                    "Scan complete: scanned={Scanned:N0}, matches={Matches:N0}, elapsed={ElapsedSeconds:F2}s; result batches are finalizing",
+                    summary.FilesScanned, summary.TotalMatches, summary.Elapsed.TotalSeconds);
                 await Task.WhenAll(forwarder, sourceBackedForwarder).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 scanComplete.TrySetResult(CreateSummarySnapshot(sw.Elapsed));
-                LogService.Instance.Verbose("SearchService", "Pipeline task exception", ex);
+                YaguLog.For("SearchService").LogDebug(ex, "Pipeline task exception");
             }
             finally
             {
+                if (pruningScan is not null)
+                    await pruningScan.CleanupAsync().ConfigureAwait(false);
                 scanComplete.TrySetResult(CreateSummarySnapshot(sw.Elapsed));
                 try { await progressEmitter.ConfigureAwait(false); }
-                catch (Exception ex) { LogService.Instance.Verbose("SearchService", "Progress emitter completion failed", ex); }
+                catch (Exception ex) { YaguLog.For("SearchService").LogDebug(ex, "Progress emitter completion failed"); }
                 events.Writer.TryComplete();
             }
         }, CancellationToken.None);
 
         // 3. Stream events to caller. Progress snapshots are emitted by a timer so
         // quiet no-match stretches still update the UI.
-        bool scanCompletedYielded = false;
-        while (true)
+        while (!scanComplete.Task.IsCompletedSuccessfully)
         {
-            if (!scanCompletedYielded && scanComplete.Task.IsCompletedSuccessfully)
-            {
-                scanCompletedYielded = true;
-                yield return new SearchEvent.ScanCompleted(scanComplete.Task.Result);
-                continue;
-            }
-
             if (events.Reader.TryRead(out var evt))
             {
                 yield return evt;
-                continue;
             }
-
-            if (scanCompletedYielded)
+            else
             {
-                if (!await events.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
-                    break;
-                continue;
+                using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                Task<bool> waitForEventTask = events.Reader.WaitToReadAsync(waitCts.Token).AsTask();
+                Task completedTask = await Task.WhenAny(waitForEventTask, scanComplete.Task).ConfigureAwait(false);
+                if (ReferenceEquals(completedTask, scanComplete.Task))
+                {
+                    waitCts.Cancel();
+                    try { await waitForEventTask.ConfigureAwait(false); }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+                }
+                else
+                {
+                    await waitForEventTask.ConfigureAwait(false);
+                }
             }
-
-            using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            Task<bool> waitForEventTask = events.Reader.WaitToReadAsync(waitCts.Token).AsTask();
-            Task completedTask = await Task.WhenAny(waitForEventTask, scanComplete.Task).ConfigureAwait(false);
-            if (ReferenceEquals(completedTask, scanComplete.Task))
-            {
-                waitCts.Cancel();
-                try { await waitForEventTask.ConfigureAwait(false); }
-                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
-                continue;
-            }
-
-            if (!await waitForEventTask.ConfigureAwait(false))
-                break;
         }
 
-        var completedSummary = scanComplete.Task.IsCompletedSuccessfully
-            ? scanComplete.Task.Result
-            : CreateSummarySnapshot(sw.Elapsed);
-        LogService.Instance.Info("SearchService", $"Search complete: {completedSummary.TotalMatches} matches in {completedSummary.FilesWithMatches} files, {completedSummary.FilesScanned} scanned, {completedSummary.FilesSkipped} skipped ({completedSummary.SkipReasons}), earlyFiltered={completedSummary.SkipReasons?.EarlyFiltered ?? 0}, degraded={completedSummary.Degraded}, truncated={completedSummary.Truncated}, " +
-            $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={pressureCycles}, forwarderItems={Volatile.Read(ref forwarderItemsForwarded):N0}, forwarderStallMs={Volatile.Read(ref forwarderWriteStallMs)}, {sw.Elapsed.TotalSeconds:F2}s");
+        yield return new SearchEvent.ScanCompleted(scanComplete.Task.Result);
+        await foreach (SearchEvent searchEvent in DrainRemainingEventsAsync(events.Reader, cancellationToken).ConfigureAwait(false))
+            yield return searchEvent;
+
+        SearchSummary completedSummary = scanComplete.Task.Result;
+        YaguLog.For("SearchService").LogInformation(
+            "Search complete: {TotalMatches} matches in {FilesWithMatches} files, {FilesScanned} scanned, {FilesSkipped} skipped ({SkipReasons}), earlyFiltered={EarlyFiltered}, degraded={Degraded}, truncated={Truncated}, batches={Batches}, pressureCycles={PressureCycles}, forwarderItems={ForwarderItems:N0}, forwarderStallMs={ForwarderStallMs}, {ElapsedSeconds:F2}s",
+            completedSummary.TotalMatches, completedSummary.FilesWithMatches, completedSummary.FilesScanned, completedSummary.FilesSkipped, completedSummary.SkipReasons, completedSummary.SkipReasons!.EarlyFiltered, completedSummary.Degraded, completedSummary.Truncated, Volatile.Read(ref nativeBatchesProcessed), pressureCycles, Volatile.Read(ref forwarderItemsForwarded), Volatile.Read(ref forwarderWriteStallMs), sw.Elapsed.TotalSeconds);
         yield return new SearchEvent.Completed(completedSummary);
     }
 
-    private static bool IsHiddenFile(string path)
+    internal static bool IsHiddenFile(string path)
     {
         try
         {
@@ -1846,7 +2508,7 @@ public sealed class SearchService
         }
     }
 
-    private static bool ShouldSkipByFileMetadata(
+    internal static bool ShouldSkipByFileMetadata(
         string path,
         SearchOptions options,
         out bool tooLarge,
@@ -1885,7 +2547,7 @@ public sealed class SearchService
             try { fileInfo = new FileInfo(path); }
             catch (Exception ex)
             {
-                LogService.Instance.Verbose("SearchService", $"Cannot stat file for size filter: {path}", ex);
+                YaguLog.For("SearchService").LogDebug(ex, "Cannot stat file for size filter: {Path}", path);
                 return false;
             }
             if (!fileInfo.Exists)
@@ -1942,7 +2604,13 @@ public sealed class SearchService
         string? query = null,
         bool? useRegex = null,
         int? contextLines = null,
-        int? maxResults = null)
+        int? maxResults = null,
+        SearchMode? searchMode = null,
+        bool? useContentIndex = null,
+        bool? stopAfterNameFirstPass = null,
+        bool? suppressNameFirstPass = null,
+        IReadOnlySet<string>? preEmittedFileNamePaths = null,
+        IReadOnlySet<string>? preScannedContentPaths = null)
         => new()
         {
             Directory = options.Directory,
@@ -1955,7 +2623,11 @@ public sealed class SearchService
             MaxMultilineBytes = options.MaxMultilineBytes,
             MultilineEngine = options.MultilineEngine,
             ContextLines = contextLines ?? options.ContextLines,
-            SearchMode = options.SearchMode,
+            SearchMode = searchMode ?? options.SearchMode,
+            StopAfterNameFirstPass = stopAfterNameFirstPass ?? options.StopAfterNameFirstPass,
+            SuppressNameFirstPass = suppressNameFirstPass ?? options.SuppressNameFirstPass,
+            PreEmittedFileNamePaths = preEmittedFileNamePaths ?? options.PreEmittedFileNamePaths,
+            PreScannedContentPaths = preScannedContentPaths ?? options.PreScannedContentPaths,
             IncludeGlobs = options.IncludeGlobs,
             ExcludeGlobs = options.ExcludeGlobs,
             IncludeFilterMode = options.IncludeFilterMode,
@@ -1971,19 +2643,41 @@ public sealed class SearchService
             MaxMatchesPerLine = options.MaxMatchesPerLine,
             AbsoluteMaxResults = options.AbsoluteMaxResults,
             SkipBinary = options.SkipBinary,
+            AvoidSourceMemoryMap = options.AvoidSourceMemoryMap,
+            FileIoTimeoutSeconds = options.FileIoTimeoutSeconds,
+            UseContentIndex = useContentIndex ?? options.UseContentIndex,
+            ContentIndexGateFactory = useContentIndex == false ? null : options.ContentIndexGateFactory,
+            ContentIndexShadowScanFactory = useContentIndex == false ? null : options.ContentIndexShadowScanFactory,
+            ContentIndexPruningScanFactory = useContentIndex == false ? null : options.ContentIndexPruningScanFactory,
+            ExtendedSourceGateFactory = options.ExtendedSourceGateFactory,
             SearchHiddenFiles = options.SearchHiddenFiles,
+            SearchOnlineOnlyFiles = options.SearchOnlineOnlyFiles,
+            MaxSearchDepth = options.MaxSearchDepth,
             ObeyGitignore = options.ObeyGitignore,
             GitignoreTakesPrecedence = options.GitignoreTakesPrecedence,
             MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
             FileListerBackendOverride = options.FileListerBackendOverride,
+            IoOversubscriptionIndex = options.IoOversubscriptionIndex,
             MaxProcessMemoryBytes = options.MaxProcessMemoryBytes,
             MemoryPressurePercent = options.MemoryPressurePercent,
             SkipExtensions = options.SkipExtensions,
             SearchInsideArchives = options.SearchInsideArchives,
             ArchiveExtensions = options.ArchiveExtensions,
+            SearchImageText = options.SearchImageText,
+            ImageOcrExtensions = options.ImageOcrExtensions,
+            ImageOcrEngine = options.ImageOcrEngine,
+            ImageOcrModel = options.ImageOcrModel,
+            ImageOcrMaxSide = options.ImageOcrMaxSide,
+            ImageOcrWorkerParallelism = options.ImageOcrWorkerParallelism,
+            SearchPdfText = options.SearchPdfText,
+            PdfTextExtensions = options.PdfTextExtensions,
             SdkChannelBufferSize = options.SdkChannelBufferSize,
             ExcludeAdminProtectedPaths = options.ExcludeAdminProtectedPaths,
             AdminProtectedPathSegments = options.AdminProtectedPathSegments,
+            DirectOutputStream = options.DirectOutputStream,
+            DirectOutputColor = options.DirectOutputColor,
+            DirectOutputLock = options.DirectOutputLock,
+            DegradedResultStore = options.DegradedResultStore,
         };
 
     internal static List<string> ExtractExtensions(IReadOnlyList<string> includeGlobs)
@@ -2024,10 +2718,10 @@ public sealed class SearchService
         {
             var gcInfo = GC.GetGCMemoryInfo();
             long managedHeap = GC.GetTotalMemory(false);
-            LogService.Instance.Info("SearchService",
-                $"GC diag: managedHeap={managedHeap / (1024*1024)}MB, committed={gcInfo.TotalCommittedBytes / (1024*1024)}MB, " +
-                $"heapSize={gcInfo.HeapSizeBytes / (1024*1024)}MB, gen0={GC.CollectionCount(0)}, gen1={GC.CollectionCount(1)}, gen2={GC.CollectionCount(2)}");
-            LogService.Instance.Info("SearchService", "Requesting GC for memory pressure relief");
+            YaguLog.For("SearchService").LogInformation(
+                "GC diag: managedHeap={ManagedHeapMB}MB, committed={CommittedMB}MB, heapSize={HeapSizeMB}MB, gen0={Gen0}, gen1={Gen1}, gen2={Gen2}",
+                managedHeap / (1024*1024), gcInfo.TotalCommittedBytes / (1024*1024), gcInfo.HeapSizeBytes / (1024*1024), GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
+            YaguLog.For("SearchService").LogInformation("Requesting GC for memory pressure relief");
             GC.Collect(2, GCCollectionMode.Optimized, blocking: false, compacting: false);
             TrimProcessWorkingSet();
             Volatile.Write(ref s_lastMemoryPressureGcTicks, Stopwatch.GetTimestamp());
@@ -2153,10 +2847,9 @@ public sealed class SearchService
 
     internal static bool TryGetSystemMemoryLoadPercent(out uint systemLoadPercent)
     {
-        var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
-        if (GlobalMemoryStatusEx(ref status))
+        if (SystemMemoryProvider.TryGetSnapshot(out SystemMemorySnapshot snapshot))
         {
-            systemLoadPercent = status.dwMemoryLoad;
+            systemLoadPercent = snapshot.LoadPercent;
             return true;
         }
 
@@ -2177,13 +2870,12 @@ public sealed class SearchService
         try
         {
             long wsMB = Environment.WorkingSet / (1024 * 1024);
-            var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
-            if (GlobalMemoryStatusEx(ref status))
+            if (SystemMemoryProvider.TryGetSnapshot(out SystemMemorySnapshot snapshot))
             {
-                long availMB = (long)(status.ullAvailPhys / (1024UL * 1024));
-                long totalMB = (long)(status.ullTotalPhys / (1024UL * 1024));
+                long availMB = (long)(snapshot.AvailablePhysicalBytes / (1024UL * 1024));
+                long totalMB = (long)(snapshot.TotalPhysicalBytes / (1024UL * 1024));
                 long autoCapMB = AutoProcessMemoryCap() / (1024 * 1024);
-                return $"system={status.dwMemoryLoad}% ({availMB:N0}/{totalMB:N0} MB avail), process WS={wsMB:N0} MB, autoCap={autoCapMB:N0} MB";
+                return $"system={snapshot.LoadPercent}% ({availMB:N0}/{totalMB:N0} MB avail), process WS={wsMB:N0} MB, autoCap={autoCapMB:N0} MB";
             }
             return $"process WS={wsMB:N0} MB";
         }
@@ -2196,9 +2888,8 @@ public sealed class SearchService
     {
         try
         {
-            var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
-            if (GlobalMemoryStatusEx(ref status))
-                return ComputeAutoProcessMemoryCap(status.ullTotalPhys);
+            if (SystemMemoryProvider.TryGetSnapshot(out SystemMemorySnapshot snapshot))
+                return ComputeAutoProcessMemoryCap(snapshot.TotalPhysicalBytes);
         }
         catch { }
         return AutoProcessMemoryCapFallback;
@@ -2222,21 +2913,12 @@ public sealed class SearchService
     {
         try
         {
-            var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
-            if (GlobalMemoryStatusEx(ref status))
-                return (long)status.ullAvailPhys;
+            if (SystemMemoryProvider.TryGetSnapshot(out SystemMemorySnapshot snapshot))
+                return (long)snapshot.AvailablePhysicalBytes;
         }
         catch { }
         return 2L * 1024 * 1024 * 1024;
     }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
-
-    [DllImport("psapi.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool EmptyWorkingSet(IntPtr hProcess);
 
     // Debounce TrimProcessWorkingSet — Iter 14 profile showed 1420 inclusive samples
     // (2.1% of process CPU) from this called on every memory-pressure check. EmptyWorkingSet
@@ -2253,272 +2935,29 @@ public sealed class SearchService
     /// </summary>
     internal static void TrimProcessWorkingSet()
     {
-        long now = Stopwatch.GetTimestamp();
-        long last = Volatile.Read(ref s_lastTrimTicks);
-        if (last != 0 && (now - last) < TrimMinIntervalTicks)
-            return;
-        if (Interlocked.CompareExchange(ref s_lastTrimTicks, now, last) != last)
-            return;
+        lock (s_trimLock)
+        {
+            long now = Stopwatch.GetTimestamp();
+            long last = s_lastTrimTicks;
+            if (last != 0 && (now - last) < TrimMinIntervalTicks)
+                return;
+            s_lastTrimTicks = now;
+        }
         try
         {
-            using var proc = Process.GetCurrentProcess();
-            EmptyWorkingSet(proc.Handle);
+            WorkingSetTrimmer();
         }
         catch { /* best-effort */ }
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MEMORYSTATUSEX
-    {
-        public uint dwLength;
-        public uint dwMemoryLoad;          // % of physical memory in use
-        public ulong ullTotalPhys;
-        public ulong ullAvailPhys;
-        public ulong ullTotalPageFile;
-        public ulong ullAvailPageFile;
-        public ulong ullTotalVirtual;
-        public ulong ullAvailVirtual;
-        public ulong ullAvailExtendedVirtual;
-    }
-
-    // ── Batch native scanning ──────────────────────────────────────
-
     /// <summary>
-    /// Process a batch of files through the Rust parallel scanner, then update all
-    /// stats counters. One cancel-int, one GCHandle, no Task.Run per file.
-    /// </summary>
-
-    internal static unsafe void ProcessNativeBatch(
-        IReadOnlyList<string> batch,
-        Native.NativeSession batchSession,
-        Native.NativeSession? degradedSession,
-        int parallelism,
-        IntPtr cancelPtr,
-        SearchOptions options,
-        ChannelWriter<SearchResult> contentWriter,
-        ref int filesScanned, ref int filesSkipped, ref int filesWithMatches,
-        ref int totalMatches, ref long bytesScanned, ref int truncated,
-        ref int degraded,
-        ref int skipBinary, ref int skipAccessDenied, ref int skipIOError,
-        ref int skipTooLarge, ref int skipNotFound, ref int skipOther)
-    {
-        var session = (Volatile.Read(ref degraded) != 0 && degradedSession != null)
-            ? degradedSession
-            : batchSession;
-
-        fixed (int* filesScannedPtr = &filesScanned)
-        {
-        using var sink = new BatchScanSink(batch, contentWriter, EffectiveHardCap(options), Volatile.Read(ref totalMatches), cancelPtr, filesScannedPtr);
-
-        Native.NativeSearcher.ScanPathsParallel(
-            session, batch, parallelism, (int*)cancelPtr, sink);
-
-        // Apply sink results back to the outer counters.
-        if (sink.TotalEmitted > 0)
-            Interlocked.Add(ref totalMatches, sink.TotalEmitted);
-        if (sink.Truncated)
-            Volatile.Write(ref truncated, 1);
-        // Post-batch: reconcile per-file stats (filesScanned already incremented in OnFileDone).
-        for (int i = 0; i < batch.Count; i++)
-        {
-            int status = sink.GetStatus(i);
-            int emitted = sink.GetEmitted(i);
-
-            if (status != Native.NativeSearcher.StatusOk)
-            {
-                Interlocked.Increment(ref filesSkipped);
-                switch (status)
-                {
-                    case Native.NativeSearcher.StatusBinarySkipped:
-                        Interlocked.Increment(ref skipBinary);
-                        LogService.Instance.Verbose("ContentSearcher", $"Binary detected (batch native): {batch[i]}");
-                        break;
-                    case Native.NativeSearcher.StatusOpenFailed:
-                        Interlocked.Increment(ref skipAccessDenied);
-                        LogService.Instance.Verbose("ContentSearcher", $"Access denied (batch native): {batch[i]}");
-                        break;
-                    case Native.NativeSearcher.StatusTooLarge: Interlocked.Increment(ref skipTooLarge); break;
-                    case Native.NativeSearcher.StatusInvalidPath: Interlocked.Increment(ref skipNotFound); break;
-                    default: Interlocked.Increment(ref skipOther); break;
-                }
-            }
-            else if (emitted > 0)
-            {
-                Interlocked.Increment(ref filesWithMatches);
-                Interlocked.Add(ref bytesScanned, sink.GetFileLength(i));
-            }
-        }
-        } // fixed (filesScannedPtr)
-    }
-
-    /// <summary>
-    /// Sink for the batch native parallel scanner. The Rust side serialises callbacks
-    /// under a mutex, so this does not need to be thread-safe.
-    /// Per-file counters are rented from ArrayPool, and matches are written through
-    /// the bounded result channel immediately so a single match-heavy file cannot
-    /// accumulate an unbounded managed buffer before backpressure applies.
-    /// </summary>
-
-    internal sealed class BatchScanSink : Native.NativeSearcher.IParallelSink, IDisposable
-    {
-        private readonly IReadOnlyList<string> _paths;
-        private readonly ChannelWriter<SearchResult> _writer;
-        private readonly int _maxResults;
-        private readonly int _count;
-        private readonly int[] _emitted;
-        private readonly int[] _statuses;
-        private readonly long[] _fileLength;
-        private readonly unsafe int* _cancelPtr; // Rust cancel flag — checked during backpressure waits
-        private readonly unsafe int* _filesScannedPtr; // incremented per file for live progress
-        private int _runningTotal; // starts from outer totalMatches at batch start
-        private bool _stopped;
-        private int _totalEmitted;
-
-        public bool Truncated { get; private set; }
-        public int TotalEmitted => _totalEmitted;
-        public Exception? CapturedException { get; set; }
-        public string? ErrorMessage { get; set; }
-
-        public unsafe BatchScanSink(
-            IReadOnlyList<string> paths,
-            ChannelWriter<SearchResult> writer,
-            int maxResults,
-            int currentTotalMatches,
-            IntPtr cancelPtr,
-            int* filesScannedPtr)
-        {
-            _paths = paths;
-            _writer = writer;
-            _maxResults = maxResults;
-            _count = paths.Count;
-            _runningTotal = currentTotalMatches;
-            _cancelPtr = (int*)cancelPtr;
-            _filesScannedPtr = filesScannedPtr;
-            _emitted = ArrayPool<int>.Shared.Rent(paths.Count);
-            _statuses = ArrayPool<int>.Shared.Rent(paths.Count);
-            _fileLength = ArrayPool<long>.Shared.Rent(paths.Count);
-            Array.Clear(_emitted, 0, paths.Count);
-            Array.Clear(_statuses, 0, paths.Count);
-            Array.Clear(_fileLength, 0, paths.Count);
-        }
-
-        public void Dispose()
-        {
-            ArrayPool<int>.Shared.Return(_emitted);
-            ArrayPool<int>.Shared.Return(_statuses);
-            ArrayPool<long>.Shared.Return(_fileLength);
-        }
-
-        public int GetEmitted(int i) => _emitted[i];
-        public int GetStatus(int i) => _statuses[i];
-        public long GetFileLength(int i) => _fileLength[i];
-
-        // IStreamingSink.OnMatch — not used in parallel path.
-        public unsafe int OnMatch(Native.NativeSearcher.QgMatchView* m) => 1;
-
-        public unsafe int OnMatchForFile(uint fileIndex, Native.NativeSearcher.QgMatchView* m)
-        {
-            if (_stopped) return 1;
-
-            int idx = (int)fileIndex;
-            string filePath = _paths[idx];
-
-            var view = *m;
-            int lineBytes = view.LineLen > (nuint)int.MaxValue ? int.MaxValue : (int)view.LineLen;
-            int matchStartBytes = view.MatchStart > int.MaxValue ? lineBytes : (int)view.MatchStart;
-            int? sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? (int?)null : (int)view.SourceMatchStart;
-            int matchLenBytes = view.MatchLen > int.MaxValue ? 0 : (int)view.MatchLen;
-            var matchLine = ContentSearcher.NativeMatchDecoder.DecodeMatchLine(
-                view.LinePtr, lineBytes, matchStartBytes, matchLenBytes, sourceMatchStartBytes);
-            var before = ContentSearcher.NativeMatchDecoder.UnpackLinesTruncated(
-                view.CtxBeforePtr, view.CtxBeforeBytes, view.CtxBeforeCount);
-            var after = ContentSearcher.NativeMatchDecoder.UnpackLinesTruncated(
-                view.CtxAfterPtr, view.CtxAfterBytes, view.CtxAfterCount);
-
-            int lineNum = view.LineNumber > int.MaxValue ? int.MaxValue : (int)view.LineNumber;
-
-            var result = new SearchResult(
-                FilePath: filePath,
-                LineNumber: lineNum,
-                MatchLine: matchLine.Line,
-                MatchStartColumn: matchLine.MatchStart,
-                MatchLength: matchLine.MatchLength,
-                ContextBefore: before,
-                ContextAfter: after)
-            { SourceMatchStartColumn = matchLine.SourceMatchStart };
-
-            if (!TryWriteWithBackpressure(result))
-            {
-                _stopped = true;
-                return 1;
-            }
-
-            _emitted[idx]++;
-            Interlocked.Increment(ref _totalEmitted);
-            int total = Interlocked.Increment(ref _runningTotal);
-            if (_maxResults > 0 && total >= _maxResults)
-            {
-                Truncated = true;
-                _stopped = true;
-                if (_cancelPtr != null) *_cancelPtr = 1; // global hard stop across all native workers
-                return 1;
-            }
-            return 0;
-        }
-
-        private unsafe bool TryWriteWithBackpressure(SearchResult result)
-        {
-            if (_writer.TryWrite(result))
-                return true;
-
-            var spinWait = new SpinWait();
-            while (true)
-            {
-                if (_cancelPtr != null && Volatile.Read(ref *_cancelPtr) != 0)
-                    return false;
-
-                spinWait.SpinOnce(sleep1Threshold: 2);
-                if (_writer.TryWrite(result))
-                    return true;
-            }
-        }
-
-        public void OnFileDone(uint fileIndex, int status, ulong fileLength, ulong lastModifiedFileTime)
-        {
-            int idx = (int)fileIndex;
-            _statuses[idx] = status;
-            _fileLength[idx] = fileLength > long.MaxValue ? long.MaxValue : (long)fileLength;
-
-            // Increment filesScanned immediately so the progress bar updates per-file
-            // rather than waiting until the entire batch completes.
-            unsafe
-            {
-                if (_filesScannedPtr != null)
-                    Interlocked.Increment(ref *_filesScannedPtr);
-            }
-
-            // Pre-populate the metadata cache so FileGroup.BeginLoadMetadata
-            // gets a synchronous hit and skips the secondary FileInfo syscall.
-            if (status == Native.NativeSearcher.StatusOk && fileLength > 0 && lastModifiedFileTime > 0)
-            {
-                var lastMod = DateTime.FromFileTime((long)lastModifiedFileTime);
-                var created = FileMetadataCache.TryGet(_paths[idx], out var cached) ? cached.Created : default;
-                FileMetadataCache.Set(_paths[idx], new FileMetadata((long)fileLength, lastMod, created));
-            }
-
-        }
-    }
-
-    /// <summary>
-    /// Sink for the streaming scanner. Unlike <see cref="BatchScanSink"/> which
-    /// pre-allocates arrays for a known batch size, this grows dynamically as
+    /// Sink for the streaming scanner. Per-file tracking grows dynamically as
     /// new paths are pushed to the scanner.
     /// </summary>
     internal sealed class StreamingScanSink : Native.NativeSearcher.IParallelSink, IDisposable
     {
         private readonly List<string> _paths; // shared reference; grows as paths pushed
         private readonly ChannelWriter<SearchResult> _writer;
-        private readonly ChannelWriter<SourceBackedMatch> _sourceBackedWriter;
         private readonly int _maxResults;
         private readonly unsafe int* _cancelPtr;
         private readonly unsafe int* _filesScannedPtr;
@@ -2546,7 +2985,6 @@ public sealed class SearchService
         public unsafe StreamingScanSink(
             List<string> paths,
             ChannelWriter<SearchResult> writer,
-            ChannelWriter<SourceBackedMatch> sourceBackedWriter,
             int maxResults,
             int currentTotalMatches,
             IntPtr cancelPtr,
@@ -2558,7 +2996,6 @@ public sealed class SearchService
         {
             _paths = paths;
             _writer = writer;
-            _sourceBackedWriter = sourceBackedWriter;
             _maxResults = maxResults;
             _runningTotal = currentTotalMatches;
             _cancelPtr = (int*)cancelPtr;
@@ -2609,7 +3046,7 @@ public sealed class SearchService
             string filePath = idx < _paths.Count ? _paths[idx] : string.Empty;
 
             var view = *m;
-            int lineBytes = view.LineLen > (nuint)int.MaxValue ? int.MaxValue : (int)view.LineLen;
+            int lineBytes = ClampNativeByteLength(view.LineLen);
             int matchStartBytes = view.MatchStart > int.MaxValue ? lineBytes : (int)view.MatchStart;
             int? sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? (int?)null : (int)view.SourceMatchStart;
             int matchLenBytes = view.MatchLen > int.MaxValue ? 0 : (int)view.MatchLen;
@@ -2657,8 +3094,6 @@ public sealed class SearchService
                     int contextBytes = Math.Max(0, (windowBytes - matchLenBytes) / 2);
                     int windowStart = Math.Max(0, matchStartBytes - contextBytes);
                     int windowEnd = Math.Min(lineBytes, windowStart + windowBytes);
-                    int minEnd = Math.Min(lineBytes, matchStartBytes + matchLenBytes);
-                    if (windowEnd < minEnd) windowEnd = minEnd;
                     if (windowEnd - windowStart < windowBytes)
                         windowStart = Math.Max(0, windowEnd - windowBytes);
                     while (windowStart < lineBytes && (view.LinePtr[windowStart] & 0xC0) == 0x80)
@@ -2771,6 +3206,9 @@ public sealed class SearchService
             return 0;
         }
 
+        internal static int ClampNativeByteLength(nuint length)
+            => length > (nuint)int.MaxValue ? int.MaxValue : (int)length;
+
         private unsafe bool TryWriteWithBackpressure(SearchResult result)
         {
             if (_writer.TryWrite(result))
@@ -2784,23 +3222,6 @@ public sealed class SearchService
 
                 spinWait.SpinOnce(sleep1Threshold: 2);
                 if (_writer.TryWrite(result))
-                    return true;
-            }
-        }
-
-        private unsafe bool TryWriteSourceBackedWithBackpressure(SourceBackedMatch result)
-        {
-            if (_sourceBackedWriter.TryWrite(result))
-                return true;
-
-            var spinWait = new SpinWait();
-            while (true)
-            {
-                if (_cancelPtr != null && Volatile.Read(ref *_cancelPtr) != 0)
-                    return false;
-
-                spinWait.SpinOnce(sleep1Threshold: 2);
-                if (_sourceBackedWriter.TryWrite(result))
                     return true;
             }
         }
