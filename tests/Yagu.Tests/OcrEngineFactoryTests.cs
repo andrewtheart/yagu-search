@@ -67,6 +67,20 @@ public sealed class OcrEngineFactoryTests
     }
 
     [Fact]
+    public async Task Create_WithWorkerCount_CreatesBoundedIndependentEnginePool()
+    {
+        IOcrEngine single = OcrEngineFactory.Create("paddle", "ChineseV5", 960, workerCount: 1);
+        Assert.IsType<PaddleOcrEngine>(single);
+        ((IDisposable)single).Dispose();
+
+        IOcrEngine parallel = OcrEngineFactory.Create("tesseract", null, -1, workerCount: 3);
+        var pool = Assert.IsType<OcrEnginePool>(parallel);
+        Assert.Equal(3, pool.WorkerCount);
+        Assert.Equal(OcrEngineFactory.TesseractId, pool.Id);
+        await pool.DisposeAsync();
+    }
+
+    [Fact]
     public async Task TesseractEngine_DegradesGracefully_WhenWorkerMissing()
     {
         // Authoritative bogus worker path → the engine must report "not installed" instead of

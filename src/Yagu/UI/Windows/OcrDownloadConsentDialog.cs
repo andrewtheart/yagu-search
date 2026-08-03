@@ -1,8 +1,10 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Yagu.Helpers;
 using Yagu.Services;
+using Yagu.Services.Logging;
 using Yagu.Services.Ocr;
 
 namespace Yagu;
@@ -39,7 +41,7 @@ internal static class OcrDownloadConsentDialog
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("OcrConsent", $"Consent dialog failed: {ex.Message}", ex);
+                YaguLog.For("OcrConsent").LogWarning(ex, "Consent dialog failed: {Error}", ex.Message);
                 tcs.TrySetResult(false);
             }
         });
@@ -98,7 +100,7 @@ internal static class OcrDownloadConsentDialog
             catch (Exception ex)
             {
                 // Consent still applies this session even if persistence fails.
-                LogService.Instance.Warning("OcrConsent", $"Unable to persist OCR download consent: {ex.Message}", ex);
+                YaguLog.For("OcrConsent").LogWarning(ex, "Unable to persist OCR download consent: {Error}", ex.Message);
             }
 
             return true;

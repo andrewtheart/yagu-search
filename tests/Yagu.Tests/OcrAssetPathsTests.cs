@@ -15,8 +15,16 @@ public sealed class OcrAssetPathsTests
     public void BundledRoot_IsOcrPayloadBesideApp()
     {
         Assert.Equal(
-            Path.Combine(AppContext.BaseDirectory, "ocr-payload"),
+            Path.Combine(OcrAssetPaths.ResolveAppDirectory(AppContext.BaseDirectory), "ocr-payload"),
             OcrAssetPaths.BundledRoot);
+    }
+
+    [Fact]
+    public void ResolveAppDirectory_IndexWorkerUsesParentDirectory()
+    {
+        string app = Path.Combine(Path.GetTempPath(), "YaguApp");
+        Assert.Equal(app, OcrAssetPaths.ResolveAppDirectory(Path.Combine(app, "index-worker")));
+        Assert.Equal(app, OcrAssetPaths.ResolveAppDirectory(app));
     }
 
     [Theory]

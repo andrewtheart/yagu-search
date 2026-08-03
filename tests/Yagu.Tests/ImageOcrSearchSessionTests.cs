@@ -220,6 +220,144 @@ public sealed class ImageOcrSearchSessionTests : IDisposable
     }
 
     [Fact]
+    public async Task Session_PrioritizedImageRunsBeforeNormallyQueuedImage()
+    {
+        string normal = WriteImage("normal.png");
+        string priority = WriteImage("priority.png");
+        var engine = new FakeOcrEngine(new Dictionary<string, string>
+        {
+            [normal] = "normal needle",
+            [priority] = "priority needle",
+        });
+        var sink = Channel.CreateUnbounded<SearchResult>();
+        var session = CreateSession(engine, sink, () => { }, _ => { });
+
+        Assert.True(session.TryEnqueue(normal, prioritized: false));
+        Assert.True(session.TryEnqueue(priority, prioritized: true));
+        session.Start();
+        session.Complete();
+        await session.DrainAsync();
+        sink.Writer.TryComplete();
+
+        var paths = new List<string>();
+        await foreach (SearchResult result in sink.Reader.ReadAllAsync())
+            paths.Add(result.FilePath);
+        Assert.Equal([priority, normal], paths);
+    }
+
+    [Fact]
+    public void Session_PrioritizedEnqueueAfterCompletionIsRejected()
+    {
+        var engine = new FakeOcrEngine(new Dictionary<string, string>());
+        var sink = Channel.CreateUnbounded<SearchResult>();
+        var session = CreateSession(engine, sink, () => { }, _ => { });
+        session.Complete();
+
+        Assert.False(session.TryEnqueue("closed.png", prioritized: true));
+        Assert.False(session.TryEnqueue("closed.png", prioritized: false));
+    }
+
+    [Fact]
+    public async Task WaitForNextPathAsync_PrefersPriorityAndReportsDequeue()
+    {
+        var priority = Channel.CreateUnbounded<string>();
+        var normal = Channel.CreateUnbounded<string>();
+        Assert.True(normal.Writer.TryWrite("normal.png"));
+        Assert.True(priority.Writer.TryWrite("priority.png"));
+        int dequeued = 0;
+
+        string? path = await ImageOcrSearchSession.WaitForNextPathAsync(
+            priority.Reader, normal.Reader, () => dequeued++, CancellationToken.None);
+
+        Assert.Equal("priority.png", path);
+        Assert.Equal(1, dequeued);
+    }
+
+    [Fact]
+    public async Task WaitForNextPathAsync_ReadsRemainingChannelAfterOtherCompletes()
+    {
+        var completedPriority = Channel.CreateUnbounded<string>();
+        completedPriority.Writer.TryComplete();
+        var normal = Channel.CreateUnbounded<string>();
+        Task<string?> normalRead = ImageOcrSearchSession.WaitForNextPathAsync(
+            completedPriority.Reader, normal.Reader, () => { }, CancellationToken.None).AsTask();
+        Assert.False(normalRead.IsCompleted);
+        Assert.True(normal.Writer.TryWrite("normal.png"));
+
+        Assert.Equal("normal.png", await normalRead);
+
+        var priority = Channel.CreateUnbounded<string>();
+        var completedNormal = Channel.CreateUnbounded<string>();
+        completedNormal.Writer.TryComplete();
+        Task<string?> priorityRead = ImageOcrSearchSession.WaitForNextPathAsync(
+            priority.Reader, completedNormal.Reader, () => { }, CancellationToken.None).AsTask();
+        Assert.False(priorityRead.IsCompleted);
+        Assert.True(priority.Writer.TryWrite("priority.png"));
+
+        Assert.Equal("priority.png", await priorityRead);
+    }
+
+    [Fact]
+    public async Task WaitForNextPathAsync_OpenChannelsWaitForPriorityTurn()
+    {
+        var priority = Channel.CreateUnbounded<string>();
+        var normal = Channel.CreateUnbounded<string>();
+        int dequeued = 0;
+        Task<string?> read = ImageOcrSearchSession.WaitForNextPathAsync(
+            priority.Reader, normal.Reader, () => dequeued++, CancellationToken.None).AsTask();
+        Assert.False(read.IsCompleted);
+        Assert.True(priority.Writer.TryWrite("priority.png"));
+
+        Assert.Equal("priority.png", await read);
+        Assert.Equal(1, dequeued);
+    }
+
+    [Fact]
+    public async Task WaitForNextPathAsync_ReturnsNullWhenChannelsCompleteWithoutItems()
+    {
+        var priority = Channel.CreateUnbounded<string>();
+        var normal = Channel.CreateUnbounded<string>();
+        priority.Writer.TryComplete();
+        normal.Writer.TryComplete();
+
+        Assert.Null(await ImageOcrSearchSession.WaitForNextPathAsync(
+            priority.Reader, normal.Reader, () => { }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task WaitForNextPathAsync_ReturnsNullWhenRemainingChannelCompletesWhileWaiting()
+    {
+        var completedPriority = Channel.CreateUnbounded<string>();
+        completedPriority.Writer.TryComplete();
+        var normal = Channel.CreateUnbounded<string>();
+        Task<string?> normalRead = ImageOcrSearchSession.WaitForNextPathAsync(
+            completedPriority.Reader, normal.Reader, () => { }, CancellationToken.None).AsTask();
+        normal.Writer.TryComplete();
+        Assert.Null(await normalRead);
+
+        var priority = Channel.CreateUnbounded<string>();
+        var completedNormal = Channel.CreateUnbounded<string>();
+        completedNormal.Writer.TryComplete();
+        Task<string?> priorityRead = ImageOcrSearchSession.WaitForNextPathAsync(
+            priority.Reader, completedNormal.Reader, () => { }, CancellationToken.None).AsTask();
+        priority.Writer.TryComplete();
+        Assert.Null(await priorityRead);
+    }
+
+    [Fact]
+    public async Task WaitForNextPathAsync_CancellationInterruptsOpenChannels()
+    {
+        var priority = Channel.CreateUnbounded<string>();
+        var normal = Channel.CreateUnbounded<string>();
+        using var cts = new CancellationTokenSource();
+        Task<string?> read = ImageOcrSearchSession.WaitForNextPathAsync(
+            priority.Reader, normal.Reader, () => { }, cts.Token).AsTask();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+    }
+
+    [Fact]
     public async Task Session_CachesRecognizedTextForReuse()
     {
         string img = WriteImage("f.png");
@@ -306,6 +444,30 @@ public sealed class ImageOcrSearchSessionTests : IDisposable
     }
 
     [Fact]
+    public void Session_DrainBeforeStartIsAlreadyCompleted()
+    {
+        var engine = new FakeOcrEngine(new Dictionary<string, string>());
+        var sink = Channel.CreateUnbounded<SearchResult>();
+        var session = CreateSession(engine, sink, () => { }, _ => { });
+
+        Assert.True(session.DrainAsync().IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task Session_EmptyRecognizedTextProducesNoResults()
+    {
+        string img = WriteImage("empty-text.png");
+        var engine = new FakeOcrEngine(new Dictionary<string, string> { [img] = string.Empty });
+        var sink = Channel.CreateUnbounded<SearchResult>();
+
+        var session = CreateSession(engine, sink, () => { }, _ => { });
+        var results = await DrainSinkAsync(session, sink, new[] { img });
+
+        Assert.Empty(results);
+        Assert.Equal(1, engine.RecognizeCalls);
+    }
+
+    [Fact]
     public async Task Session_PreCancelledToken_StopsWorkerViaOuterCatch()
     {
         string img = WriteImage("cancel.png");
@@ -329,5 +491,24 @@ public sealed class ImageOcrSearchSessionTests : IDisposable
         // the outer catch swallows — DrainAsync must complete without faulting.
         var ex = await Record.ExceptionAsync(() => session.DrainAsync());
         Assert.Null(ex);
+    }
+
+    [Fact]
+    public async Task Session_CancellationWhileIdleStopsWorkerViaOuterCatch()
+    {
+        var engine = new FakeOcrEngine(new Dictionary<string, string>());
+        var sink = Channel.CreateUnbounded<SearchResult>();
+        using var cts = new CancellationTokenSource();
+        var session = new ImageOcrSearchSession(
+            engine, _cache, regex: null, literal: "needle",
+            comparison: StringComparison.OrdinalIgnoreCase,
+            contextLines: 0, maxMatchesPerFile: 0,
+            sink: sink.Writer, onFileProcessed: () => { }, onFileMatched: _ => { },
+            workerCount: 1, cancellationToken: cts.Token, shouldStop: null);
+
+        session.Start();
+        cts.Cancel();
+
+        Assert.Null(await Record.ExceptionAsync(() => session.DrainAsync()));
     }
 }

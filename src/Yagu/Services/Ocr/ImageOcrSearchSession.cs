@@ -1,6 +1,8 @@
 using System.Threading.Channels;
 using Yagu.Models;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Ocr;
 
@@ -30,10 +32,12 @@ public sealed class ImageOcrSearchSession
     private readonly int _workerCount;
     private readonly CancellationToken _cancellationToken;
 
+    private readonly Channel<string> _priorityPaths;
     private readonly Channel<string> _paths;
     private readonly List<Task> _workers = new();
     private readonly object _ensureLock = new();
     private Task<OcrResult>? _ensureTask;
+    private int _priorityQueued;
     private volatile bool _started;
 
     public ImageOcrSearchSession(
@@ -67,12 +71,15 @@ public sealed class ImageOcrSearchSession
 
         // Unbounded so the scan loop's enqueue never blocks on OCR back-pressure; entries are just
         // path strings. The worker pool drains them off the scan threads.
-        _paths = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
+        _priorityPaths = CreatePathChannel();
+        _paths = CreatePathChannel();
+    }
+
+    private static Channel<string> CreatePathChannel() => Channel.CreateUnbounded<string>(new UnboundedChannelOptions
         {
             SingleReader = false,
             SingleWriter = false,
         });
-    }
 
     public string EngineId => _engine.Id;
 
@@ -88,8 +95,24 @@ public sealed class ImageOcrSearchSession
     /// <summary>Enqueues an image for OCR. Non-blocking; returns false once completed.</summary>
     public bool TryEnqueue(string imagePath) => _paths.Writer.TryWrite(imagePath);
 
+    /// <summary>Enqueues an image. Positive image-text-index candidates use the priority queue; every
+    /// other image still runs OCR through the normal queue.</summary>
+    public bool TryEnqueue(string imagePath, bool prioritized)
+    {
+        if (prioritized)
+            Interlocked.Increment(ref _priorityQueued);
+        bool written = (prioritized ? _priorityPaths.Writer : _paths.Writer).TryWrite(imagePath);
+        if (!written && prioritized)
+            Interlocked.Decrement(ref _priorityQueued);
+        return written;
+    }
+
     /// <summary>Signals that no more images will be enqueued.</summary>
-    public void Complete() => _paths.Writer.TryComplete();
+    public void Complete()
+    {
+        _priorityPaths.Writer.TryComplete();
+        _paths.Writer.TryComplete();
+    }
 
     /// <summary>Awaits completion of all OCR workers (call after <see cref="Complete"/>).</summary>
     public Task DrainAsync() => _workers.Count == 0 ? Task.CompletedTask : Task.WhenAll(_workers);
@@ -98,7 +121,7 @@ public sealed class ImageOcrSearchSession
     {
         try
         {
-            await foreach (string path in _paths.Reader.ReadAllAsync(_cancellationToken).ConfigureAwait(false))
+            while (await WaitForNextPathAsync().ConfigureAwait(false) is { } path)
             {
                 if (_cancellationToken.IsCancellationRequested) break;
                 if (_shouldStop?.Invoke() == true)
@@ -117,7 +140,7 @@ public sealed class ImageOcrSearchSession
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Verbose("OcrSearch", $"OCR failed for {path}: {ex.Message}");
+                    YaguLog.For("OcrSearch").LogDebug("OCR failed for {Path}: {Error}", path, ex.Message);
                 }
                 finally
                 {
@@ -128,6 +151,52 @@ public sealed class ImageOcrSearchSession
         catch (OperationCanceledException)
         {
             // Normal on cancellation.
+        }
+    }
+
+    private ValueTask<string?> WaitForNextPathAsync()
+        => WaitForNextPathAsync(
+            _priorityPaths.Reader,
+            _paths.Reader,
+            () => Interlocked.Decrement(ref _priorityQueued),
+            _cancellationToken);
+
+    internal static async ValueTask<string?> WaitForNextPathAsync(
+        ChannelReader<string> priorityPaths,
+        ChannelReader<string> paths,
+        Action priorityDequeued,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            if (priorityPaths.TryRead(out string? priority))
+            {
+                priorityDequeued();
+                return priority;
+            }
+            if (paths.TryRead(out string? normal))
+                return normal;
+            if (priorityPaths.Completion.IsCompleted && paths.Completion.IsCompleted)
+                return null;
+
+            if (priorityPaths.Completion.IsCompleted)
+            {
+                if (!await paths.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                    return null;
+                continue;
+            }
+            if (paths.Completion.IsCompleted)
+            {
+                if (!await priorityPaths.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                    return null;
+                continue;
+            }
+
+            // A short bounded turn avoids allocating two abandoned WaitToRead tasks whenever the
+            // non-winning channel completes later. It also gives indexed positives first chance.
+            Task priorityTurn = priorityPaths.WaitToReadAsync(cancellationToken).AsTask();
+            await Task.WhenAny(priorityTurn, Task.Delay(10, cancellationToken)).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
         }
     }
 
@@ -142,7 +211,7 @@ public sealed class ImageOcrSearchSession
             OcrResult recognized = await _engine.RecognizeAsync(path, _cancellationToken).ConfigureAwait(false);
             if (!recognized.Success)
             {
-                LogService.Instance.Verbose("OcrSearch", $"OCR engine '{_engine.Id}' could not read {path}: {recognized.Error}");
+                YaguLog.For("OcrSearch").LogDebug("OCR engine '{EngineId}' could not read {Path}: {Error}", _engine.Id, path, recognized.Error);
                 return;
             }
 

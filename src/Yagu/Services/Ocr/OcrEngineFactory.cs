@@ -31,6 +31,22 @@ public static class OcrEngineFactory
         };
     }
 
+    /// <summary>Creates one engine process per requested worker lane. A single lane returns the
+    /// concrete engine directly; larger values return an <see cref="OcrEnginePool"/> that performs
+    /// true process-level recognition in parallel. The count is defensively clamped to the supported
+    /// OCR process range; HDD policy must already have been resolved by the per-root caller.</summary>
+    public static IOcrEngine Create(string? engineId, string? model, int maxSide, int workerCount)
+    {
+        int count = Math.Clamp(workerCount, OcrWorkerParallelism.Minimum, OcrWorkerParallelism.Maximum);
+        if (count == 1)
+            return Create(engineId, model, maxSide);
+
+        IOcrEngine[] engines = new IOcrEngine[count];
+        for (int i = 0; i < engines.Length; i++)
+            engines[i] = Create(engineId, model, maxSide);
+        return new OcrEnginePool(engines);
+    }
+
     private static string Normalize(string? engineId)
     {
         if (string.IsNullOrWhiteSpace(engineId)) return PaddleId;

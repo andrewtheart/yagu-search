@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using Yagu.Services;
 
@@ -16,7 +17,8 @@ public sealed class OrphanedWorkerCleanupTests
     {
         Assert.Contains("Yagu.SemanticWorker", OrphanedWorkerCleanup.WorkerProcessNames);
         Assert.Contains("Yagu.OcrWorker", OrphanedWorkerCleanup.WorkerProcessNames);
-        Assert.Equal(2, OrphanedWorkerCleanup.WorkerProcessNames.Length);
+        Assert.Contains("Yagu.IndexWorker", OrphanedWorkerCleanup.WorkerProcessNames);
+        Assert.Equal(3, OrphanedWorkerCleanup.WorkerProcessNames.Length);
     }
 
     [Theory]
@@ -61,23 +63,75 @@ public sealed class OrphanedWorkerCleanupTests
         string src = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "OrphanedWorkerCleanup.cs"));
 
         // Only kills workers from our own install directory.
-        Assert.Contains("IsWorkerFromInstall(TryGetModulePath(proc), baseDir)", src);
+        Assert.Contains("IsWorkerFromInstall(getModulePath(proc), baseDir)", src);
         // Spares a worker whose parent is a currently-running Yagu.exe (e.g. a concurrent --cli run).
-        Assert.Contains("GetParentProcessId(proc.Id)", src);
+        Assert.Contains("getParentProcessId(proc.Id)", src);
         Assert.Contains("liveYaguPids.Contains(parentPid)", src);
         Assert.Contains("Process.GetProcessesByName(\"Yagu\")", src);
         // Kills the whole worker subtree.
-        Assert.Contains("proc.Kill(entireProcessTree: true)", src);
+        Assert.Contains("proc => proc.Kill(entireProcessTree: true)", src);
         // Parent PID is read via the ntdll basic-information query (AOT-safe P/Invoke).
         Assert.Contains("NtQueryInformationProcess", src);
         Assert.Contains("InheritedFromUniqueProcessId", src);
     }
 
+    [Fact]
+    public void KillOrphanedWorkers_CoreKillsOnlyOwnInstallOrphans()
+    {
+        const string baseDir = @"C:\Program Files\Yagu";
+        int killed = 0;
+
+        RunCore(@"C:\Other\Yagu.OcrWorker.exe", parentPid: -1, new HashSet<int>(), _ => killed++);
+        RunCore(Path.Combine(baseDir, "Yagu.OcrWorker.exe"), parentPid: 42, new HashSet<int> { 42 }, _ => killed++);
+        RunCore(Path.Combine(baseDir, "Yagu.OcrWorker.exe"), parentPid: -1, new HashSet<int>(), _ => killed++);
+
+        Assert.Equal(1, killed);
+
+        void RunCore(string modulePath, int parentPid, IReadOnlySet<int> livePids, Action<Process> kill)
+        {
+            OrphanedWorkerCleanup.KillOrphanedWorkers(
+                baseDir,
+                livePids,
+                name => name == "Yagu.OcrWorker" ? [Process.GetCurrentProcess()] : [],
+                _ => modulePath,
+                _ => parentPid,
+                kill);
+        }
+    }
+
+    [Fact]
+    public void KillOrphanedWorkers_CoreSwallowsEnumerationInspectionAndKillFailures()
+    {
+        Assert.Null(Record.Exception(() => OrphanedWorkerCleanup.KillOrphanedWorkers(
+            AppContext.BaseDirectory,
+            new HashSet<int>(),
+            _ => throw new InvalidOperationException("enumeration failed"),
+            _ => null,
+            _ => -1,
+            _ => { })));
+
+        Assert.Null(Record.Exception(() => OrphanedWorkerCleanup.KillOrphanedWorkers(
+            AppContext.BaseDirectory,
+            new HashSet<int>(),
+            name => name == "Yagu.OcrWorker" ? [Process.GetCurrentProcess()] : [],
+            _ => throw new InvalidOperationException("inspection failed"),
+            _ => -1,
+            _ => throw new InvalidOperationException("kill failed"))));
+
+        Assert.Null(Record.Exception(() => OrphanedWorkerCleanup.KillOrphanedWorkers(
+            AppContext.BaseDirectory,
+            new HashSet<int>(),
+            name => name == "Yagu.OcrWorker" ? [Process.GetCurrentProcess()] : [],
+            _ => Path.Combine(AppContext.BaseDirectory, "Yagu.OcrWorker.exe"),
+            _ => -1,
+            _ => throw new InvalidOperationException("kill failed"))));
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("Could not locate repo root (Yagu.sln).");
+        return dir?.FullName ?? throw new InvalidOperationException("Could not locate repo root (Yagu.slnx).");
     }
 }

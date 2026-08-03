@@ -1,16 +1,20 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services;
 
 /// <summary>
-/// Terminates leftover Yagu worker processes — the out-of-process semantic (<c>Yagu.SemanticWorker.exe</c>)
-/// and OCR (<c>Yagu.OcrWorker.exe</c>) hosts — that are still running from a PREVIOUS Yagu run. When Yagu
-/// crashes or is force-killed, its worker children can be orphaned and keep holding VRAM / RAM / CPU. This is
-/// run ONCE by the primary single-instance at startup, before this instance spawns any of its own workers.
+/// Terminates leftover Yagu worker processes — the out-of-process semantic (<c>Yagu.SemanticWorker.exe</c>),
+/// OCR (<c>Yagu.OcrWorker.exe</c>) and content-index (<c>Yagu.IndexWorker.exe</c>) hosts — that are still
+/// running from a PREVIOUS Yagu run. When Yagu crashes or is force-killed, its worker children can be
+/// orphaned and keep holding VRAM / RAM / CPU. This is run ONCE by the primary single-instance at startup,
+/// before this instance spawns any of its own workers.
 /// </summary>
 /// <remarks>
 /// A worker is treated as an orphan (and killed) only when BOTH hold, so a legitimately busy worker is never
@@ -27,7 +31,7 @@ namespace Yagu.Services;
 internal static class OrphanedWorkerCleanup
 {
     /// <summary>Process names (without the <c>.exe</c> extension) of the out-of-process Yagu workers.</summary>
-    internal static readonly string[] WorkerProcessNames = { "Yagu.SemanticWorker", "Yagu.OcrWorker" };
+    internal static readonly string[] WorkerProcessNames = { "Yagu.SemanticWorker", "Yagu.OcrWorker", "Yagu.IndexWorker" };
 
     private const int PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
     private const int ProcessBasicInformation = 0;
@@ -44,18 +48,34 @@ internal static class OrphanedWorkerCleanup
     }
 
     /// <summary>Finds and kills orphaned worker processes from this install. Best-effort; never throws.</summary>
+    [ExcludeFromCodeCoverage]
     public static void KillOrphanedWorkers()
     {
         string baseDir;
         try { baseDir = AppContext.BaseDirectory; }
         catch { return; }
 
-        HashSet<int> liveYaguPids = GetLiveYaguProcessIds();
+        KillOrphanedWorkers(
+            baseDir,
+            GetLiveYaguProcessIds(),
+            Process.GetProcessesByName,
+            TryGetModulePath,
+            GetParentProcessId,
+            proc => proc.Kill(entireProcessTree: true));
+    }
 
+    internal static void KillOrphanedWorkers(
+        string baseDir,
+        IReadOnlySet<int> liveYaguPids,
+        Func<string, Process[]> getProcessesByName,
+        Func<Process, string?> getModulePath,
+        Func<int, int> getParentProcessId,
+        Action<Process> killProcess)
+    {
         foreach (string name in WorkerProcessNames)
         {
             Process[] processes;
-            try { processes = Process.GetProcessesByName(name); }
+            try { processes = getProcessesByName(name); }
             catch { continue; }
 
             foreach (Process proc in processes)
@@ -63,18 +83,18 @@ internal static class OrphanedWorkerCleanup
                 try
                 {
                     // Only touch workers launched from our own install directory.
-                    if (!IsWorkerFromInstall(TryGetModulePath(proc), baseDir))
+                    if (!IsWorkerFromInstall(getModulePath(proc), baseDir))
                         continue;
 
                     // Leave alone a worker whose parent is still a live Yagu.exe (e.g. a concurrent --cli run).
-                    int parentPid = GetParentProcessId(proc.Id);
+                    int parentPid = getParentProcessId(proc.Id);
                     if (parentPid > 0 && liveYaguPids.Contains(parentPid))
                         continue;
 
-                    proc.Kill(entireProcessTree: true);
-                    LogService.Instance.Warning(
-                        "Startup",
-                        $"Terminated orphaned worker {name} (pid {SafeId(proc)}, parent {parentPid}) left over from a previous run.");
+                    killProcess(proc);
+                    YaguLog.For("Startup").LogWarning(
+                        "Terminated orphaned worker {Name} (pid {Pid}, parent {ParentPid}) left over from a previous run.",
+                        name, SafeId(proc), parentPid);
                 }
                 catch
                 {
@@ -117,7 +137,10 @@ internal static class OrphanedWorkerCleanup
         catch { return -1; }
     }
 
-    private static int GetParentProcessId(int pid)
+    /// <summary>Returns the parent process id of <paramref name="pid"/>, or -1 when it can't be read. Used
+    /// both to spare a worker whose Yagu parent is still alive and to attribute a worker's RAM to THIS
+    /// Yagu instance for the status-bar resource indicator.</summary>
+    internal static int GetParentProcessId(int pid)
     {
         nint handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
         if (handle == nint.Zero)

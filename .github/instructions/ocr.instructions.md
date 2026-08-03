@@ -20,6 +20,21 @@ because the native OCR stack (paddle_inference / OpenCvSharpExtern) is **not** N
 - Anything that writes to stdout pollutes the protocol — the worker captures the real stdout first,
   then `Console.SetOut(Console.Error)` so library writes (download progress) go to stderr.
 
+## Worker parallelism
+
+- One `Yagu.OcrWorker.exe` reads and recognizes protocol requests sequentially. Several host queue
+  tasks sharing one `WorkerOcrEngine` are NOT real OCR parallelism.
+- `ImageOcrWorkerParallelism` is persisted and exposed under Settings ▸ OCR ▸ Worker Resources:
+  `0` = automatic, explicit range `1–4`. Effective values above one use `OcrEnginePool`, where each
+  lane owns an independent worker process/model instance.
+- Automatic is deliberately conservative: Paddle = 1 (oneDNN already parallelizes internally and
+  each model process can use hundreds of MB); Tesseract = up to 2 on machines with at least 8 logical
+  processors. Secondary processes initialize only after the primary has staged/loaded assets, avoiding
+  concurrent first-use download/extraction races.
+- The existing `LimitParallelismOnHdd` setting is authoritative per root: an HDD search uses one OCR
+  process even when the OCR setting explicitly requests more. The same setting also limits content
+  scanning and index query/build lanes; do not create a second OCR-specific HDD toggle.
+
 ## Build & deployment
 
 - The worker auto-builds via `Yagu.csproj` targets `BuildOcrWorker` / `CopyOcrWorkerToOutput` /

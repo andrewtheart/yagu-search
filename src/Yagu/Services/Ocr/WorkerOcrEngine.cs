@@ -3,8 +3,12 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Ocr;
+
+internal delegate bool OcrWorkerTrustVerifier(string workerPath, out string failure);
 
 /// <summary>
 /// Base class for OCR engines hosted in a separate <c>Yagu.OcrWorker.exe</c> process.
@@ -57,19 +61,29 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
 
     private readonly string? _workerPathOverride;
     private readonly bool _hasWorkerPathOverride;
+    private readonly Func<ProcessStartInfo, IOcrWorkerProcess> _processFactory;
+    private readonly OcrWorkerTrustVerifier _trustVerifier;
+    private readonly TimeSpan _readyTimeout;
+    private readonly TimeSpan _shutdownTimeout;
     private readonly object _gate = new();
     private readonly ConcurrentDictionary<int, TaskCompletionSource<OcrResult>> _pending = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly TaskCompletionSource<OcrResult> _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private Task<OcrResult>? _initTask;
-    private Process? _process;
-    private TextWriter? _stdin;
+    private IOcrWorkerProcess? _process;
     private volatile bool _ready;
     private volatile bool _disposed;
     private int _nextId;
 
     protected WorkerOcrEngine()
+        : this(
+            workerPathOverride: null,
+            hasWorkerPathOverride: false,
+            OcrWorkerProcessFactory.Create,
+            AuthenticodeVerifier.IsWorkerTrustedForHost,
+            TimeSpan.FromMinutes(30),
+            TimeSpan.FromSeconds(3))
     {
     }
 
@@ -79,9 +93,40 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
     /// standard locations).
     /// </summary>
     protected WorkerOcrEngine(string? workerPathOverride)
+        : this(
+            workerPathOverride,
+            hasWorkerPathOverride: true,
+            OcrWorkerProcessFactory.Create,
+            AuthenticodeVerifier.IsWorkerTrustedForHost,
+            TimeSpan.FromMinutes(30),
+            TimeSpan.FromSeconds(3))
+    {
+    }
+
+    internal WorkerOcrEngine(
+        bool hasWorkerPathOverride,
+        Func<ProcessStartInfo, IOcrWorkerProcess> processFactory,
+        OcrWorkerTrustVerifier trustVerifier,
+        TimeSpan readyTimeout,
+        TimeSpan shutdownTimeout)
+        : this(null, hasWorkerPathOverride, processFactory, trustVerifier, readyTimeout, shutdownTimeout)
+    {
+    }
+
+    private WorkerOcrEngine(
+        string? workerPathOverride,
+        bool hasWorkerPathOverride,
+        Func<ProcessStartInfo, IOcrWorkerProcess> processFactory,
+        OcrWorkerTrustVerifier trustVerifier,
+        TimeSpan readyTimeout,
+        TimeSpan shutdownTimeout)
     {
         _workerPathOverride = workerPathOverride;
-        _hasWorkerPathOverride = true;
+        _hasWorkerPathOverride = hasWorkerPathOverride;
+        _processFactory = processFactory;
+        _trustVerifier = trustVerifier;
+        _readyTimeout = readyTimeout;
+        _shutdownTimeout = shutdownTimeout;
     }
 
     public abstract string Id { get; }
@@ -147,9 +192,8 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             return ready;
         }
 
-        Process? process = _process;
-        TextWriter? stdin = _stdin;
-        if (process is null || stdin is null || process.HasExited)
+        IOcrWorkerProcess process = _process!;
+        if (process.HasExited)
         {
             return OcrResult.Fail("OCR worker is not running.");
         }
@@ -160,11 +204,18 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
 
         string requestLine = BuildRequestLine(id, imagePath);
 
-        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        bool writeLockTaken = false;
         try
         {
-            await stdin.WriteLineAsync(requestLine.AsMemory(), cancellationToken).ConfigureAwait(false);
-            await stdin.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            writeLockTaken = true;
+            await process.StandardInput.WriteLineAsync(requestLine.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _pending.TryRemove(id, out _);
+            return OcrResult.Fail("OCR canceled.");
         }
         catch (Exception ex)
         {
@@ -173,18 +224,15 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
         }
         finally
         {
-            _writeLock.Release();
+            if (writeLockTaken)
+            {
+                _writeLock.Release();
+            }
         }
 
-        await using CancellationTokenRegistration registration = cancellationToken.Register(static state =>
-        {
-            (ConcurrentDictionary<int, TaskCompletionSource<OcrResult>> pending, int requestId, CancellationToken token) =
-                ((ConcurrentDictionary<int, TaskCompletionSource<OcrResult>>, int, CancellationToken))state!;
-            if (pending.TryRemove(requestId, out TaskCompletionSource<OcrResult>? pendingTcs))
-            {
-                pendingTcs.TrySetCanceled(token);
-            }
-        }, (_pending, id, cancellationToken));
+        using CancellationTokenRegistration registration = cancellationToken.Register(
+            static state => ((TaskCompletionSource<OcrResult>)state!).TrySetCanceled(),
+            tcs);
 
         try
         {
@@ -192,6 +240,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
         }
         catch (OperationCanceledException)
         {
+            _pending.TryRemove(id, out _);
             return OcrResult.Fail("OCR canceled.");
         }
     }
@@ -212,12 +261,11 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
         // the check is a no-op and the freshly-built (unsigned) worker launches normally. The
         // _hasWorkerPathOverride seam is the internal test/diagnostics constructor only (never set by
         // the production factory), so exempting it does not weaken the shipped app.
-        if (!_hasWorkerPathOverride
-            && !AuthenticodeVerifier.IsWorkerTrustedForHost(workerPath, out string trustFailure))
+        if (!_hasWorkerPathOverride && !_trustVerifier(workerPath, out string trustFailure))
         {
-            LogService.Instance.Warning(
-                LogSource,
-                $"Refusing to launch OCR worker \"{workerPath}\": {trustFailure}. Image-text search is unavailable.");
+            YaguLog.For(LogSource).LogWarning(
+                "Refusing to launch OCR worker \"{WorkerPath}\": {TrustFailure}. Image-text search is unavailable.",
+                workerPath, trustFailure);
             return OcrResult.Fail("OCR worker failed signature verification.");
         }
 
@@ -234,7 +282,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
                 string components = requirement.MissingComponents.Count > 0
                     ? " (" + string.Join(", ", requirement.MissingComponents) + ")"
                     : string.Empty;
-                LogService.Instance.Verbose(LogSource, "OCR download not approved; image-text search is unavailable until the assets are downloaded.");
+                YaguLog.For(LogSource).LogDebug("OCR download not approved; image-text search is unavailable until the assets are downloaded.");
                 return OcrResult.Fail(
                     $"Image-text (OCR) search needs a one-time download of about {requirement.ApproxMb} MB{components}, which was not approved.");
             }
@@ -261,7 +309,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             // wrong — "no external download without consent" is enforced at the actual download site.
             startInfo.Environment[AllowDownloadEnvVar] = OcrDownloadGate.ConsentGranted ? "1" : "0";
 
-            Process process = new() { StartInfo = startInfo, EnableRaisingEvents = true };
+            IOcrWorkerProcess process = _processFactory(startInfo);
             process.Exited += OnProcessExited;
 
             if (!process.Start())
@@ -270,13 +318,12 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             }
 
             _process = process;
-            _stdin = process.StandardInput;
 
             _ = Task.Run(() => PumpStandardErrorAsync(process.StandardError));
             _ = Task.Run(() => ReadLoopAsync(process.StandardOutput));
 
             // First run downloads the native runtime + models, which can be slow; cap it generously.
-            using CancellationTokenSource timeout = new(TimeSpan.FromMinutes(30));
+            using CancellationTokenSource timeout = new(_readyTimeout);
             OcrResult ready;
             try
             {
@@ -290,7 +337,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             _ready = ready.Success;
             if (!ready.Success)
             {
-                LogService.Instance.Verbose(LogSource, "OCR worker init failed: " + ready.Error);
+                YaguLog.For(LogSource).LogDebug("OCR worker init failed: {Error}", ready.Error);
             }
 
             return ready;
@@ -318,7 +365,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose(LogSource, "OCR worker read loop ended: " + ex.Message);
+            YaguLog.For(LogSource).LogDebug("OCR worker read loop ended: {Error}", ex.Message);
         }
         finally
         {
@@ -375,7 +422,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose(LogSource, "OCR worker emitted an unparseable line: " + ex.Message);
+            YaguLog.For(LogSource).LogDebug("OCR worker emitted an unparseable line: {Error}", ex.Message);
         }
     }
 
@@ -388,7 +435,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             {
                 if (line.Length != 0)
                 {
-                    LogService.Instance.Verbose(LogSource, line);
+                    YaguLog.For(LogSource).LogDebug("{Line}", line);
                 }
             }
         }
@@ -407,12 +454,10 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
 
     private void FailAllPending(string reason)
     {
-        foreach (int key in _pending.Keys)
+        foreach (KeyValuePair<int, TaskCompletionSource<OcrResult>> pair in _pending)
         {
-            if (_pending.TryRemove(key, out TaskCompletionSource<OcrResult>? tcs))
-            {
-                tcs.TrySetResult(OcrResult.Fail(reason));
-            }
+            _pending.TryRemove(pair.Key, out _);
+            pair.Value.TrySetResult(OcrResult.Fail(reason));
         }
     }
 
@@ -430,22 +475,34 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    private string? ResolveWorkerPath()
+    protected virtual string? ResolveWorkerPath()
+        => ResolveWorkerPath(
+            _workerPathOverride,
+            _hasWorkerPathOverride,
+            Environment.GetEnvironmentVariable(WorkerPathEnvVar),
+            AppContext.BaseDirectory,
+            File.Exists);
+
+    internal static string? ResolveWorkerPath(
+        string? workerPathOverride,
+        bool hasWorkerPathOverride,
+        string? environmentOverride,
+        string baseDirectory,
+        Func<string, bool> fileExists)
     {
         // An explicit override (tests/diagnostics) is authoritative.
-        if (_hasWorkerPathOverride)
+        if (hasWorkerPathOverride)
         {
-            return !string.IsNullOrEmpty(_workerPathOverride) && File.Exists(_workerPathOverride)
-                ? _workerPathOverride
+            return !string.IsNullOrEmpty(workerPathOverride) && fileExists(workerPathOverride)
+                ? workerPathOverride
                 : null;
         }
 
         // An explicit environment override is also authoritative: a wrong path means "no worker"
         // rather than silently falling back to a different binary.
-        string? overridePath = Environment.GetEnvironmentVariable(WorkerPathEnvVar);
-        if (!string.IsNullOrEmpty(overridePath))
+        if (!string.IsNullOrEmpty(environmentOverride))
         {
-            return File.Exists(overridePath) ? overridePath : null;
+            return fileExists(environmentOverride) ? environmentOverride : null;
         }
 
         // SECURITY (binary planting): load the worker ONLY from the app's own install directory. We
@@ -455,8 +512,8 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
         // process tree on the next image search — a trust-laundering / persistence vector. The install
         // directory is protected by its own ACLs; an attacker able to write there could already replace
         // Yagu.exe itself, so it is no weaker than the app's own trust boundary.
-        string besideApp = Path.Combine(AppContext.BaseDirectory, "ocr-worker", "Yagu.OcrWorker.exe");
-        if (File.Exists(besideApp))
+        string besideApp = ResolveBundledWorkerPath(baseDirectory);
+        if (fileExists(besideApp))
         {
             return besideApp;
         }
@@ -476,12 +533,23 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             return;
         }
 
-        string besideApp = Path.Combine(AppContext.BaseDirectory, "ocr-worker", "Yagu.OcrWorker.exe");
-        LogService.Instance.Warning(
-            LogSource,
+        string besideApp = ResolveBundledWorkerPath(AppContext.BaseDirectory);
+        YaguLog.For(LogSource).LogWarning(
             "Image-text (OCR) search is unavailable: Yagu.OcrWorker.exe was not found, so image files " +
-            "cannot be scanned and OCR searches will return no matches. Probed: " + WorkerPathEnvVar +
-            " environment variable and \"" + besideApp + "\".");
+            "cannot be scanned and OCR searches will return no matches. Probed: {EnvVar} " +
+            "environment variable and \"{BesideApp}\".",
+            WorkerPathEnvVar, besideApp);
+    }
+
+    internal static string ResolveBundledWorkerPath(string baseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+        string normalized = Path.GetFullPath(baseDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string appDirectory = string.Equals(Path.GetFileName(normalized), "index-worker", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFullPath(Path.Combine(normalized, ".."))
+            : normalized;
+        return Path.Combine(appDirectory, "ocr-worker", "Yagu.OcrWorker.exe");
     }
 
     public void Dispose()
@@ -493,10 +561,11 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
 
         GC.SuppressFinalize(this);
         _disposed = true;
-        Process? process = _process;
+        IOcrWorkerProcess? process = _process;
         _process = null;
         if (process is null)
         {
+            _writeLock.Dispose();
             return;
         }
 
@@ -504,7 +573,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
         {
             try
             {
-                _stdin?.Dispose();
+                process.StandardInput.Dispose();
             }
             catch
             {
@@ -515,7 +584,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             {
                 try
                 {
-                    process.Kill(entireProcessTree: true);
+                    process.Kill();
                 }
                 catch
                 {
@@ -540,7 +609,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
 
         GC.SuppressFinalize(this);
         _disposed = true;
-        Process? process = _process;
+        IOcrWorkerProcess? process = _process;
         _process = null;
         if (process is null)
         {
@@ -553,7 +622,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             // Closing stdin signals the worker to drain and exit cleanly.
             try
             {
-                _stdin?.Dispose();
+                process.StandardInput.Dispose();
             }
             catch
             {
@@ -562,7 +631,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
 
             if (!process.HasExited)
             {
-                using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(3));
+                using CancellationTokenSource timeout = new(_shutdownTimeout);
                 try
                 {
                     await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
@@ -577,7 +646,7 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             {
                 try
                 {
-                    process.Kill(entireProcessTree: true);
+                    process.Kill();
                 }
                 catch
                 {

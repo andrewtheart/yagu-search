@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Globalization;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Ocr;
 
@@ -148,12 +150,12 @@ public sealed class OcrTextCache
             }
             catch (Exception ex)
             {
-                LogService.Instance.Verbose("OcrCache", $"Could not delete stale OCR text file '{file}': {ex.Message}");
+                YaguLog.For("OcrCache").LogDebug("Could not delete stale OCR text file '{File}': {Error}", file, ex.Message);
             }
         }
 
         if (deleted > 0)
-            LogService.Instance.Info("OcrCache", $"Cleaned up {deleted} stale OCR text file(s) from '{dir}'.");
+            YaguLog.For("OcrCache").LogInformation("Cleaned up {Deleted} stale OCR text file(s) from '{Dir}'.", deleted, dir);
     }
 
     private static HashSet<int> GetLiveYaguProcessIds()

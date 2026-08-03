@@ -36,7 +36,17 @@ public static class OcrAssetPaths
     private const string ModelParamsFile = "inference.pdiparams";
 
     /// <summary>Root of the optional bundled OCR payload pre-staged by the OCR-bundled installer.</summary>
-    public static string BundledRoot => Path.Combine(AppContext.BaseDirectory, "ocr-payload");
+    public static string BundledRoot => Path.Combine(ResolveAppDirectory(AppContext.BaseDirectory), "ocr-payload");
+
+    internal static string ResolveAppDirectory(string baseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+        string normalized = Path.GetFullPath(baseDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.Equals(Path.GetFileName(normalized), "index-worker", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFullPath(Path.Combine(normalized, ".."))
+            : normalized;
+    }
 
     private static string BundledPaddleNativeDir => Path.Combine(BundledRoot, "paddle", "native");
     private static string BundledPaddleModelDir => Path.Combine(BundledRoot, "paddle", "models");
