@@ -51,6 +51,14 @@
                     <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePointerOver" Color="#00000000" />
                     <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePressed" Color="#00000000" />
                     <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminateDisabled" Color="#00000000" />
+
+                    <!-- Admin-elevation banner: a caution/amber strip that must stay yellow AND legible in
+                         every theme. The foreground is set explicitly because the banner background is a
+                         fixed colour, so the inherited theme text brush would be unreadable in one theme. -->
+                    <SolidColorBrush x:Key="YaguAdminBannerBackgroundBrush" Color="#4A3A0E" />
+                    <SolidColorBrush x:Key="YaguAdminBannerBorderBrush" Color="#7A611A" />
+                    <SolidColorBrush x:Key="YaguAdminBannerForegroundBrush" Color="#FFF4CE" />
+                    <SolidColorBrush x:Key="YaguAdminBannerIconBrush" Color="#FFD54F" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked" Color="#80149DCE" />
@@ -88,6 +96,12 @@
                     <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePointerOver" Color="#00000000" />
                     <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePressed" Color="#00000000" />
                     <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminateDisabled" Color="#00000000" />
+
+                    <!-- Admin-elevation banner (light theme): pale yellow strip with near-black text. -->
+                    <SolidColorBrush x:Key="YaguAdminBannerBackgroundBrush" Color="#FFF1C1" />
+                    <SolidColorBrush x:Key="YaguAdminBannerBorderBrush" Color="#E0B93A" />
+                    <SolidColorBrush x:Key="YaguAdminBannerForegroundBrush" Color="#2B2100" />
+                    <SolidColorBrush x:Key="YaguAdminBannerIconBrush" Color="#8A5300" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="HighContrast">
                     <StaticResource x:Key="CheckBoxCheckBackgroundStrokeUnchecked" ResourceKey="SystemColorButtonTextColorBrush" />
@@ -127,6 +141,12 @@
                     <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminatePointerOver" ResourceKey="SystemColorHighlightTextColorBrush" />
                     <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminatePressed" ResourceKey="SystemColorHighlightColorBrush" />
                     <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminateDisabled" ResourceKey="SystemColorWindowColorBrush" />
+
+                    <!-- Admin-elevation banner: system colours so the strip honours the HC palette. -->
+                    <StaticResource x:Key="YaguAdminBannerBackgroundBrush" ResourceKey="SystemColorWindowColorBrush" />
+                    <StaticResource x:Key="YaguAdminBannerBorderBrush" ResourceKey="SystemColorWindowTextColorBrush" />
+                    <StaticResource x:Key="YaguAdminBannerForegroundBrush" ResourceKey="SystemColorWindowTextColorBrush" />
+                    <StaticResource x:Key="YaguAdminBannerIconBrush" ResourceKey="SystemColorWindowTextColorBrush" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 

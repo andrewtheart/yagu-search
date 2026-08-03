@@ -434,10 +434,10 @@ public sealed partial class MainWindow
         // stutter under load. The fixed 16px icon slot also prevents percentage-width layout jumps.
         if (_indexBuildSpinRunning)
             return;
-        if (IndexStatusIcon is null || IndexStatusProgressRing is null)
+        if (IndexStatusGlyphHost is null || IndexStatusProgressRing is null)
             return;
 
-        IndexStatusIcon.Visibility = Visibility.Collapsed;
+        IndexStatusGlyphHost.Visibility = Visibility.Collapsed;
         IndexStatusProgressRing.Visibility = Visibility.Visible;
         IndexStatusProgressRing.IsActive = true;
         _indexBuildSpinRunning = true;
@@ -446,11 +446,11 @@ public sealed partial class MainWindow
     private void StopIndexBuildSpin()
     {
         _indexBuildSpinRunning = false;
-        if (IndexStatusIcon is null || IndexStatusProgressRing is null)
+        if (IndexStatusGlyphHost is null || IndexStatusProgressRing is null)
             return;
         IndexStatusProgressRing.IsActive = false;
         IndexStatusProgressRing.Visibility = Visibility.Collapsed;
-        IndexStatusIcon.Visibility = Visibility.Visible;
+        IndexStatusGlyphHost.Visibility = Visibility.Visible;
     }
 
     /// <summary>Context-menu request on the index indicator (mouse right-click OR the keyboard Menu /

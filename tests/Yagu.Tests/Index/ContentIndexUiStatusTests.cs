@@ -663,6 +663,43 @@ public sealed class ContentIndexUiStatusTests
         Assert.True(root.NeedsAttention);
     }
 
+    // ── Status-bar label clamp (the fixed-width slot showed a mid-word ellipsis) ──
+
+    [Theory]
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    [InlineData("Index: ready", "Index: ready")]
+    [InlineData("Index: freshness unavailable", "Index: freshness unavailable")]
+    public void TrimStatusLabel_LeavesFittingLabelsUntouched(string? label, string expected)
+        => Assert.Equal(expected, ContentIndexUiStatus.TrimStatusLabel(label));
+
+    [Fact]
+    public void TrimStatusLabel_ClampsOverlongLabelAtAWordBoundary()
+    {
+        string trimmed = ContentIndexUiStatus.TrimStatusLabel("Index: 3 freshness checks unavailable");
+
+        Assert.Equal("Index: 3 freshness checks\u2026", trimmed);
+        Assert.True(trimmed.Length <= ContentIndexUiStatus.StatusLabelMaxLength);
+    }
+
+    [Fact]
+    public void TrimStatusLabel_ClampsSingleLongTokenWithoutOverflowing()
+    {
+        string trimmed = ContentIndexUiStatus.TrimStatusLabel(new string('x', 80));
+
+        Assert.EndsWith("\u2026", trimmed, StringComparison.Ordinal);
+        Assert.True(trimmed.Length <= ContentIndexUiStatus.StatusLabelMaxLength);
+    }
+
+    [Fact]
+    public void StatusWarningGlyph_IsTheCautionTriangleUsedByAttentionStates()
+    {
+        var root = new IndexRootHealthEntry(@"D:\", IndexRootHealthKind.RebuildRequired, "attention");
+
+        Assert.Equal("\uE7BA", ContentIndexUiStatus.StatusWarningGlyph);
+        Assert.Equal(ContentIndexUiStatus.StatusWarningGlyph, ContentIndexUiStatus.AllDriveHealthGlyph([root]));
+    }
+
     [Theory]
     [InlineData(IndexRootHealthKind.RebuildRequired, "Index: 2 rebuilds required")]
     [InlineData(IndexRootHealthKind.BuildRequired, "Index: 2 drives need build")]

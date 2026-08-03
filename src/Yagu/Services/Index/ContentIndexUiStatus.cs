@@ -200,6 +200,28 @@ public static class ContentIndexUiStatus
     public static bool ShouldShowStatus(bool enableContentIndex, bool showStatusSetting)
         => enableContentIndex && showStatusSetting;
 
+    /// <summary>The caution triangle used by every attention-needed status; the indicator paints this
+    /// glyph amber, so producers must use this exact value rather than repeating the code point.</summary>
+    public const string StatusWarningGlyph = "\uE7BA";
+
+    /// <summary>Characters the fixed-width status-bar index label can render before the layout has to
+    /// ellipsize it (Consolas 12 in a 210px slot).</summary>
+    public const int StatusLabelMaxLength = 31;
+
+    /// <summary>Clamps a status-bar index label to <see cref="StatusLabelMaxLength"/>, preferring a word
+    /// boundary so an over-long label degrades to whole words instead of a mid-word cut.</summary>
+    public static string TrimStatusLabel(string? label)
+    {
+        if (string.IsNullOrEmpty(label) || label.Length <= StatusLabelMaxLength)
+            return label ?? string.Empty;
+
+        int cut = StatusLabelMaxLength - 1; // leave room for the ellipsis
+        int lastSpace = label.LastIndexOf(' ', cut - 1);
+        if (lastSpace > StatusLabelMaxLength / 2)
+            cut = lastSpace;
+        return string.Concat(label.AsSpan(0, cut).TrimEnd(), "\u2026");
+    }
+
     /// <summary>Classifies a ready drive/root that is no longer in the maintained-root list. Physical
     /// residue is surfaced honestly for cleanup, but is informational and never a freshness warning.</summary>
     internal static IndexRootHealthEntry UnregisteredRootHealth(string root, bool hasStoredIndex)
@@ -276,7 +298,7 @@ public static class ContentIndexUiStatus
     {
         ArgumentNullException.ThrowIfNull(roots);
         if (roots.Any(static root => root.NeedsAttention))
-            return "\uE7BA"; // warning
+            return StatusWarningGlyph;
         return roots.Any(static root => root.HasStoredIndex)
             ? "\uE9F5" // speedometer
             : "\uEA39"; // outline circle

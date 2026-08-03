@@ -2255,8 +2255,36 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// index exists for the folder(s) the current search covers. It is presence-only and never implies
     /// acceleration — the tooltip states files are still read live in this build. Updated per search by
     /// <see cref="RefreshIndexStatusAsync"/>; hidden unless the feature and its status setting are on.</summary>
-    [ObservableProperty] public partial string IndexStatusText { get; set; } = string.Empty;
-    [ObservableProperty] public partial string IndexStatusGlyph { get; set; } = string.Empty;
+    private string _indexStatusText = string.Empty;
+    public string IndexStatusText
+    {
+        get => _indexStatusText;
+        // The status bar gives this label a fixed slot, so clamp centrally instead of trusting every
+        // caller to keep its wording short enough to avoid a mid-word ellipsis.
+        set
+        {
+            if (SetProperty(ref _indexStatusText, ContentIndexUiStatus.TrimStatusLabel(value)))
+                OnPropertyChanged(nameof(IndexHealthyCheckVisibility));
+        }
+    }
+
+    /// <summary>The status glyph. When it is the caution triangle the indicator paints an amber variant
+    /// (<see cref="IndexStatusWarningVisibility"/>) instead of the muted default-coloured glyph.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IndexStatusWarningVisibility))]
+    [NotifyPropertyChangedFor(nameof(IndexStatusNormalGlyphVisibility))]
+    public partial string IndexStatusGlyph { get; set; } = string.Empty;
+
+    public Microsoft.UI.Xaml.Visibility IndexStatusWarningVisibility =>
+        string.Equals(IndexStatusGlyph, ContentIndexUiStatus.StatusWarningGlyph, StringComparison.Ordinal)
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    public Microsoft.UI.Xaml.Visibility IndexStatusNormalGlyphVisibility =>
+        string.Equals(IndexStatusGlyph, ContentIndexUiStatus.StatusWarningGlyph, StringComparison.Ordinal)
+            ? Microsoft.UI.Xaml.Visibility.Collapsed
+            : Microsoft.UI.Xaml.Visibility.Visible;
+
     public Microsoft.UI.Xaml.Visibility IndexHealthyCheckVisibility =>
         string.Equals(IndexStatusText, "Indexes: all healthy", StringComparison.Ordinal)
             ? Microsoft.UI.Xaml.Visibility.Visible
@@ -2653,9 +2681,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         ShowIndexStatus
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
-
-    partial void OnIndexStatusTextChanged(string value) =>
-        OnPropertyChanged(nameof(IndexHealthyCheckVisibility));
 
     public Microsoft.UI.Xaml.Visibility AllDriveIndexStatusVisibility =>
         string.IsNullOrWhiteSpace(AllDriveIndexStatusText)
@@ -3715,7 +3740,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         if (freshnessFailures.Length > 0)
         {
             int rebuildCount = freshnessFailures.Count(static pair => pair.Value.RequiresRebuild);
-            IndexStatusGlyph = "\uE7BA"; // Warning
+            IndexStatusGlyph = ContentIndexUiStatus.StatusWarningGlyph;
             IndexStatusText = rebuildCount switch
             {
                 1 => "Index: rebuild required",
@@ -5630,7 +5655,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             ShowIndexBuildPercent = false;
             if (_indexDiskFullMessage is { } diskFull)
             {
-                IndexStatusGlyph = "\uE7BA"; // caution triangle
+                IndexStatusGlyph = ContentIndexUiStatus.StatusWarningGlyph;
                 IndexStatusText = "Index: disk full";
                 IndexStatusTooltip = diskFull + BuildIndexDateDetails();
                 ShowIndexStatus = true;

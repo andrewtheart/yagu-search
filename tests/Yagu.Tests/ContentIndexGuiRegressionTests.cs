@@ -804,7 +804,9 @@ public sealed class ContentIndexGuiRegressionTests
     [Fact]
     public void MainViewModel_DeclaresIndexStatusObservableProperties()
     {
-        Assert.Contains("public partial string IndexStatusText { get; set; }", MainViewModelSource);
+        // IndexStatusText is hand-written (not [ObservableProperty]) so its setter can clamp the label
+        // to the fixed status-bar slot; the rest stay generated.
+        Assert.Contains("public string IndexStatusText", MainViewModelSource);
         Assert.Contains("public partial string IndexStatusGlyph { get; set; }", MainViewModelSource);
         Assert.Contains("public partial string IndexStatusTooltip { get; set; }", MainViewModelSource);
         Assert.Contains("public partial bool ShowIndexStatus { get; set; }", MainViewModelSource);
@@ -859,12 +861,34 @@ public sealed class ContentIndexGuiRegressionTests
         string indicator = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusIndicator\"", 4500);
         Assert.Contains("<Grid Width=\"230\" VerticalAlignment=\"Center\">", indicator);
         Assert.Contains("HorizontalAlignment=\"Left\" VerticalAlignment=\"Center\">", indicator);
-        Assert.Contains("<Grid Width=\"36\" Height=\"16\" VerticalAlignment=\"Center\">", indicator);
+        // The healthy check is a sibling, not a reserved column: a hidden check must leave no dead gap
+        // between the status glyph and the label.
+        Assert.DoesNotContain("<Grid Width=\"36\" Height=\"16\"", indicator);
         Assert.Contains("x:Name=\"IndexHealthyCheckIcon\"", indicator);
         Assert.Contains("Glyph=\"&#xE930;\" Foreground=\"LimeGreen\"", indicator);
         Assert.Contains("Visibility=\"{x:Bind ViewModel.IndexHealthyCheckVisibility, Mode=OneWay}\"", indicator);
-        Assert.Contains("Width=\"190\" TextTrimming=\"CharacterEllipsis\"", indicator);
+        Assert.DoesNotContain("HorizontalAlignment=\"Right\"", indicator);
+        Assert.Contains("MaxWidth=\"210\" TextTrimming=\"CharacterEllipsis\"", indicator);
         Assert.Contains("string.Equals(IndexStatusText, \"Indexes: all healthy\", StringComparison.Ordinal)", MainViewModelSource);
+    }
+
+    [Fact]
+    public void IndexStatusWarningGlyph_IsAmber_AndTheLabelIsLengthClamped()
+    {
+        string indicator = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusIndicator\"", 4500);
+
+        // A caution status must read as a warning, so the triangle gets its own amber element instead of
+        // the muted default-coloured glyph.
+        Assert.Contains("x:Name=\"IndexStatusWarningIcon\"", indicator);
+        Assert.Contains("Foreground=\"{ThemeResource SystemFillColorCautionBrush}\"", indicator);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.IndexStatusWarningVisibility, Mode=OneWay}\"", indicator);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.IndexStatusNormalGlyphVisibility, Mode=OneWay}\"", indicator);
+
+        // Both variants sit in one host so the build-spin ring keeps swapping them as a unit.
+        Assert.Contains("x:Name=\"IndexStatusGlyphHost\"", indicator);
+
+        Assert.Contains("ContentIndexUiStatus.StatusWarningGlyph", MainViewModelSource);
+        Assert.Contains("SetProperty(ref _indexStatusText, ContentIndexUiStatus.TrimStatusLabel(value))", MainViewModelSource);
     }
 
     [Fact]
@@ -880,7 +904,7 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("Text=\"{x:Bind ViewModel.IndexStatusTooltip, Mode=OneWay}\"", hover);
         Assert.Contains("<Grid Width=\"230\" VerticalAlignment=\"Center\">", hover);
         Assert.Contains("HorizontalAlignment=\"Left\" VerticalAlignment=\"Center\">", hover);
-        Assert.Contains("Width=\"190\" TextTrimming=\"CharacterEllipsis\"", hover);
+        Assert.Contains("MaxWidth=\"210\" TextTrimming=\"CharacterEllipsis\"", hover);
 
         Assert.DoesNotContain("<FlyoutBase.AttachedFlyout>", hover);
         Assert.DoesNotContain("IndexStatusHoverFlyout", IndexOnboardingSource);
@@ -1290,7 +1314,7 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("StartIndexBuildSpin();", IndexOnboardingSource);
         Assert.Contains("StopIndexBuildSpin();", IndexOnboardingSource);
         Assert.Contains("if (_indexBuildSpinRunning)", IndexOnboardingSource);
-        Assert.Contains("IndexStatusIcon.Visibility = Visibility.Collapsed;", IndexOnboardingSource);
+        Assert.Contains("IndexStatusGlyphHost.Visibility = Visibility.Collapsed;", IndexOnboardingSource);
         Assert.Contains("IndexStatusProgressRing.Visibility = Visibility.Visible;", IndexOnboardingSource);
         Assert.Contains("IndexStatusProgressRing.IsActive = true;", IndexOnboardingSource);
         Assert.Contains("IndexStatusProgressRing.IsActive = false;", IndexOnboardingSource);

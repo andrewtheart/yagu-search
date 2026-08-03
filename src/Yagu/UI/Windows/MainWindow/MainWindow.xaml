@@ -362,9 +362,15 @@
         <!-- Row 1 banners (both collapsed by default): admin-elevation notice, then the non-modal
              app-update notification. Stacked so they never overlap if both are shown at once. -->
         <StackPanel Grid.Row="1" Spacing="0">
-        <!-- Admin elevation banner (hidden when running elevated) -->
+        <!-- Admin elevation banner (hidden when running elevated). Background/foreground come from the
+             theme-aware Yagu*AdminBanner* brushes in App.xaml so the strip stays yellow AND legible in
+             light, dark, and high-contrast themes (a hard-coded dark background left the inherited
+             black text invisible in light theme). -->
         <Border x:Name="AdminBanner" Visibility="Collapsed"
-                Background="#332000" Padding="10,4,10,4">
+                Background="{ThemeResource YaguAdminBannerBackgroundBrush}"
+                BorderBrush="{ThemeResource YaguAdminBannerBorderBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="10,4,10,4">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -373,8 +379,9 @@
                 </Grid.ColumnDefinitions>
                 <!-- Warning icon + text -->
                 <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                    <FontIcon Glyph="&#xE7BA;" FontSize="14" Foreground="#FFD54F" VerticalAlignment="Center" />
-                    <TextBlock FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center">
+                    <FontIcon Glyph="&#xE7BA;" FontSize="14" Foreground="{ThemeResource YaguAdminBannerIconBrush}" VerticalAlignment="Center" />
+                    <TextBlock FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                               Foreground="{ThemeResource YaguAdminBannerForegroundBrush}">
                         <Run Text="Limited access" />
                         <Run Text="  " />
                         <Run Text="Some files may not be readable without administrator privileges." FontWeight="Normal" />
@@ -390,8 +397,9 @@
                 <!-- Close button -->
                 <Button Grid.Column="2" Click="OnAdminBannerCloseClick"
                         Background="Transparent" BorderThickness="0" Padding="6,2"
+                        Foreground="{ThemeResource YaguAdminBannerForegroundBrush}"
                         VerticalAlignment="Center">
-                    <FontIcon Glyph="&#xE711;" FontSize="12" />
+                    <FontIcon Glyph="&#xE711;" FontSize="12" Foreground="{ThemeResource YaguAdminBannerForegroundBrush}" />
                 </Button>
             </Grid>
         </Border>
@@ -2707,27 +2715,34 @@
                                  HorizontalAlignment="Left" VerticalAlignment="Center">
                             <!-- During index activity the native ProgressRing is compositor-animated;
                                  rotating a tiny rasterized FontIcon visibly pixel-snaps/hitches. -->
-                                <Grid Width="36" Height="16" VerticalAlignment="Center">
-                                <Grid Width="16" Height="16" HorizontalAlignment="Left">
+                            <Grid Width="16" Height="16" VerticalAlignment="Center">
+                                <!-- Both glyph variants share one host so the build-spin ring swaps them as a unit. -->
+                                <Grid x:Name="IndexStatusGlyphHost">
                                     <FontIcon x:Name="IndexStatusIcon"
                                         Glyph="{x:Bind ViewModel.IndexStatusGlyph, Mode=OneWay}"
                                         FontSize="12" Opacity="0.7"
+                                        Visibility="{x:Bind ViewModel.IndexStatusNormalGlyphVisibility, Mode=OneWay}"
                                         HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    <ProgressRing x:Name="IndexStatusProgressRing"
-                                           Width="14" Height="14"
-                                           IsActive="False" Visibility="Collapsed"
-                                           Opacity="0.8"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    <FontIcon x:Name="IndexStatusWarningIcon"
+                                        Glyph="&#xE7BA;" FontSize="12"
+                                        Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                        Visibility="{x:Bind ViewModel.IndexStatusWarningVisibility, Mode=OneWay}"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Grid>
-                                <FontIcon x:Name="IndexHealthyCheckIcon"
-                                      Glyph="&#xE930;" Foreground="LimeGreen"
-                                      FontSize="12" VerticalAlignment="Center"
-                                      HorizontalAlignment="Right"
-                                      Visibility="{x:Bind ViewModel.IndexHealthyCheckVisibility, Mode=OneWay}" />
+                                <ProgressRing x:Name="IndexStatusProgressRing"
+                                       Width="14" Height="14"
+                                       IsActive="False" Visibility="Collapsed"
+                                       Opacity="0.8"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Grid>
+                            <!-- Sibling (not a reserved column) so a hidden check leaves no gap before the label. -->
+                            <FontIcon x:Name="IndexHealthyCheckIcon"
+                                  Glyph="&#xE930;" Foreground="LimeGreen"
+                                  FontSize="12" VerticalAlignment="Center"
+                                  Visibility="{x:Bind ViewModel.IndexHealthyCheckVisibility, Mode=OneWay}" />
                             <TextBlock x:Name="IndexStatusTextBlock"
                                      Text="{x:Bind ViewModel.IndexStatusText, Mode=OneWay}"
-                                     Width="190" TextTrimming="CharacterEllipsis"
+                                     MaxWidth="210" TextTrimming="CharacterEllipsis"
                                      Style="{StaticResource StatusBarMutedTextStyle}" />
                         </StackPanel>
                     </Grid>
