@@ -505,7 +505,7 @@ public sealed class ContentIndexUiStatusTests
             new(@"D:\", IndexRootHealthKind.Healthy, "healthy"),
         ];
 
-        Assert.Equal("Index: all drives healthy", ContentIndexUiStatus.AllDriveHealthLabel(roots));
+        Assert.Equal("Indexes: all healthy", ContentIndexUiStatus.AllDriveHealthLabel(roots));
         Assert.Equal("\uE9F5", ContentIndexUiStatus.AllDriveHealthGlyph(roots));
         Assert.Contains("Every ready local drive", ContentIndexUiStatus.AllDriveHealthSummary(roots));
     }
@@ -562,7 +562,7 @@ public sealed class ContentIndexUiStatusTests
             new(@"F:\", IndexRootHealthKind.LeftoverIndex, "leftover index — not maintained"),
         ];
 
-        Assert.Equal("Index: all maintained indexes healthy", ContentIndexUiStatus.AllDriveHealthLabel(roots));
+        Assert.Equal("Indexes: all healthy", ContentIndexUiStatus.AllDriveHealthLabel(roots));
         Assert.Equal("\uE9F5", ContentIndexUiStatus.AllDriveHealthGlyph(roots));
         Assert.DoesNotContain(roots, static root => root.NeedsAttention);
         Assert.Contains("Every maintained index included in overall health is healthy", ContentIndexUiStatus.AllDriveHealthSummary(roots));
@@ -689,7 +689,7 @@ public sealed class ContentIndexUiStatusTests
             new(@"D:\", IndexRootHealthKind.Healthy, "up to date"),
         ];
 
-        Assert.Equal("Index: all drives healthy", ContentIndexUiStatus.AllDriveHealthLabel(roots));
+        Assert.Equal("Indexes: all healthy", ContentIndexUiStatus.AllDriveHealthLabel(roots));
         Assert.Equal("\uE9F5", ContentIndexUiStatus.AllDriveHealthGlyph(roots));
         Assert.Contains("journal-proven changes", ContentIndexUiStatus.AllDriveHealthSummary(roots));
         Assert.True(roots[0].IsHealthy);
@@ -707,7 +707,7 @@ public sealed class ContentIndexUiStatusTests
             new(@"F:\", IndexRootHealthKind.NotIndexed, "not indexed — not maintained"),
         ];
 
-        Assert.Equal("Index: all maintained indexes healthy", ContentIndexUiStatus.AllDriveHealthLabel(roots));
+        Assert.Equal("Indexes: all healthy", ContentIndexUiStatus.AllDriveHealthLabel(roots));
         Assert.Equal("\uE9F5", ContentIndexUiStatus.AllDriveHealthGlyph(roots));
         Assert.False(roots[3].NeedsAttention);
         Assert.False(roots[3].HasStoredIndex);

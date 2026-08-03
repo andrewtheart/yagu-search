@@ -265,7 +265,7 @@ public static class ContentIndexUiStatus
 
         int healthy = roots.Count(static root => root.IsHealthy);
         if (healthy == healthRootCount)
-            return healthRootCount < roots.Count ? "Index: all maintained indexes healthy" : "Index: all drives healthy";
+            return "Indexes: all healthy";
         if (healthy == 0)
             return "Index: no maintained indexes";
         return $"Index: {healthy}/{healthRootCount} drives healthy";

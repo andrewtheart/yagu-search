@@ -29,6 +29,7 @@ public sealed class SettingsServiceExtendedCoverageTests : IDisposable
         Assert.NotNull(settings);
         Assert.Equal(3, settings.ContextLines);
         Assert.Equal(AppSettings.DefaultExcludeGlobs, settings.ExcludeGlobs);
+        Assert.False(settings.ShowResourceUsageInStatusBar);
     }
 
     [Fact]
@@ -41,12 +42,14 @@ public sealed class SettingsServiceExtendedCoverageTests : IDisposable
             CaseSensitive = true,
             MultilineSearchDefault = true,
             ContextLines = 5,
+            ShowResourceUsageInStatusBar = true,
         };
         service.Save(settings);
 
         var loaded = service.Load();
         Assert.Equal(@"C:\test", loaded.LastDirectory);
         Assert.Equal(5, loaded.ContextLines);
+        Assert.True(loaded.ShowResourceUsageInStatusBar);
         // CaseSensitive is [JsonIgnore] so should NOT persist
         Assert.False(loaded.CaseSensitive);
         // MultilineSearchDefault is [JsonIgnore] too: the search-box multiline toggle is session-only
@@ -63,6 +66,7 @@ public sealed class SettingsServiceExtendedCoverageTests : IDisposable
             LastDirectory = @"D:\projects",
             ContextLines = 7,
             EditorCommand = "code -g {file}:{line}",
+            ShowResourceUsageInStatusBar = true,
         };
         await service.SaveAsync(settings);
 
@@ -70,6 +74,7 @@ public sealed class SettingsServiceExtendedCoverageTests : IDisposable
         Assert.Equal(@"D:\projects", loaded.LastDirectory);
         Assert.Equal(7, loaded.ContextLines);
         Assert.Equal("code -g {file}:{line}", loaded.EditorCommand);
+        Assert.True(loaded.ShowResourceUsageInStatusBar);
     }
 
     [Fact]

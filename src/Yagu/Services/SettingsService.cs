@@ -608,6 +608,9 @@ public sealed class AppSettings
     public bool ShowMemoryPressureWarningLabel { get; set; }
     /// <summary>When true, show throughput labels and disk utilization sparkline in the bottom status bar.</summary>
     public bool ShowStatsForNerds { get; set; }
+    /// <summary>When true, show result-temp, content-index storage, and Yagu/worker RAM usage in the
+    /// bottom status bar. Hidden by default and configurable under Developer Options.</summary>
+    public bool ShowResourceUsageInStatusBar { get; set; }
     /// <summary>When true, append the app version/build number to the main title bar.</summary>
     public bool ShowBuildNumberInTitleBar { get; set; }
     /// <summary>When true, show the Auto-scroll checkbox in the results toolbar. Hidden by default.</summary>
@@ -702,8 +705,8 @@ public sealed class AppSettings
     /// assets (no download is ever needed). Persisted so the warning is shown at most once.</summary>
     public bool OcrDownloadConsented { get; set; }
     // ── Content index (plan §6.1 "Indexing" tab) ──
-    /// <summary>Master opt-in for the persistent content index. Default false: disabling stops new
-    /// build/update work but does not silently delete existing data (plan §6.1).</summary>
+    /// <summary>Master switch for the persistent content index. Default true, but no folder is indexed
+    /// until the user adds one. Disabling stops new build/update work without deleting existing data.</summary>
     public bool EnableContentIndex { get; set; } = DefaultEnableContentIndex;
     /// <summary>Whether GUI and CLI searches use the index by default. Effectively false while
     /// <see cref="EnableContentIndex"/> is off; per-search <c>--no-index</c>/<c>--use-index</c> can
@@ -739,10 +742,10 @@ public sealed class AppSettings
     /// Produce the additive <b>format-v3 query structures</b> (plan §5.1) during an index build — the
     /// query-ready, memory-map-friendly inverted postings + collision-verified path/tombstone indexes +
     /// reverse identity index consumed by mapped out-of-process query sessions and the optional in-process
-    /// v3 reader. Default FALSE and EXPERIMENTAL. Enabling it adds build work and disk sidecars; every
+    /// v3 reader. Default TRUE. Enabling it adds build work and disk sidecars; every
     /// active layer must have them before the all-v3 mapped worker can serve a scope.
     /// </summary>
-    public bool IndexProduceV3QueryStructures { get; set; }
+    public bool IndexProduceV3QueryStructures { get; set; } = true;
     /// <summary>
     /// Consume the additive <b>format-v3 query structures</b> (plan §5.1) in-process during search: when a
     /// generation has the v3 sidecars, the candidate content-id set is produced by the memory-mapped
@@ -756,12 +759,15 @@ public sealed class AppSettings
     /// User-selectable gate for the out-of-process <b>mapped query worker</b> (plan §5.8).
     /// When on, eligible scopes are actively pruned in the isolated worker over memory-mapped format-v3
     /// structures (base + segments), with B1 rescue and fail-closed live-scan fallback. The main process
-    /// holds no index postings. Default FALSE; all active layers require v3 sidecars and tombstone coverage.
+    /// holds no index postings. Default TRUE; all active layers require v3 sidecars and tombstone coverage.
     /// It is separate from <see cref="IndexUseNativeWorker"/>, whose default candidate-offload path queries
     /// content.bin rather than opening a mapped per-path session. Exposed in Settings ▸ Indexing ▸
     /// Query Acceleration and through <c>--index-config IndexUseWorkerQuerySessions=true</c>.
     /// </summary>
-    public bool IndexUseWorkerQuerySessions { get; set; }
+    public bool IndexUseWorkerQuerySessions { get; set; } = true;
+    /// <summary>One-time migration guard for the former format-v3/mapped-worker false/false defaults.
+    /// Once set, later user changes to either persisted toggle are preserved.</summary>
+    public bool IndexMappedWorkerDefaultsMigrated { get; set; }
     /// <summary>Maximum foreground worker open/catch-up/planning budget before a search bypasses the
     /// index. Normalized to [25, 2000] ms; default 200. Discovery never waits for it (plan §6.1).</summary>
     public int IndexQueryStartupBudgetMs { get; set; } = DefaultIndexQueryStartupBudgetMs;
@@ -1283,6 +1289,7 @@ public sealed class SettingsService
             MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
             MigrateLegacyAppUpdateChecks(settings);
+            MigrateIndexMappedWorkerDefaults(settings);
             NormalizeFilterModeSettings(settings);
             NormalizeThemeSettings(settings);
             NormalizePreviewTextFontSettings(settings);
@@ -1334,6 +1341,7 @@ public sealed class SettingsService
             MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
             MigrateLegacyAppUpdateChecks(settings);
+            MigrateIndexMappedWorkerDefaults(settings);
             NormalizeFilterModeSettings(settings);
             NormalizeThemeSettings(settings);
             NormalizePreviewTextFontSettings(settings);
@@ -1364,6 +1372,20 @@ public sealed class SettingsService
         // Off; everyone else stays at the Prompt default so they get the improved one-time consent once.
         if (settings.AppUpdateCheckMode == AppUpdateCheckMode.Prompt && !settings.AppUpdateChecksEnabled)
             settings.AppUpdateCheckMode = AppUpdateCheckMode.Off;
+    }
+
+    private static void MigrateIndexMappedWorkerDefaults(AppSettings settings)
+    {
+        if (settings.IndexMappedWorkerDefaultsMigrated)
+            return;
+
+        if (!settings.IndexProduceV3QueryStructures && !settings.IndexUseWorkerQuerySessions)
+        {
+            settings.IndexProduceV3QueryStructures = true;
+            settings.IndexUseWorkerQuerySessions = true;
+        }
+
+        settings.IndexMappedWorkerDefaultsMigrated = true;
     }
 
     private static void MigrateLegacyWindowFocusBehavior(AppSettings settings)

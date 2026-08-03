@@ -41,7 +41,7 @@ public sealed partial class MainWindow
         });
         panel.Children.Add(new TextBlock
         {
-            Text = "You can change this any time under Settings \u25b8 Developer Options \u25b8 Application Updates.",
+            Text = "You can change this any time under Settings \u25b8 Updates.",
             TextWrapping = TextWrapping.Wrap,
             FontSize = 11,
             Opacity = 0.6,

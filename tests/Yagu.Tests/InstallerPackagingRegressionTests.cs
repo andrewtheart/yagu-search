@@ -481,28 +481,36 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
-    public void InstallerPush_ReviewsPendingHunksAndScopesReleaseCommitPaths()
+    public void InstallerPush_DelegatesToCanonicalReviewedReleaseWorkflow()
     {
         string root = FindRepoRoot();
         string buildAll = File.ReadAllText(Path.Combine(root, "build-all-installers.ps1"));
         string buildInstaller = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
         string gitHelper = File.ReadAllText(Path.Combine(root, "scripts", "installer-git-commits.ps1"));
 
-        foreach (string script in new[] { buildAll, buildInstaller })
-        {
-            Assert.Contains("Invoke-YaguFocusedPendingCommits -RepoRoot $repoRoot", script);
-            Assert.Contains("Invoke-YaguInstallerReleaseCommit -RepoRoot $repoRoot", script);
-            Assert.DoesNotContain("& git -C $repoRoot add -A", script);
-        }
+        Assert.Contains("Invoke-YaguFocusedPendingCommits -RepoRoot $repoRoot", buildAll);
+        Assert.Contains("Invoke-YaguInstallerReleaseCommit -RepoRoot $repoRoot", buildAll);
+        Assert.DoesNotContain("& git -C $repoRoot add -A", buildAll);
 
         Assert.True(
             buildAll.IndexOf("Invoke-YaguFocusedPendingCommits", StringComparison.Ordinal)
                 < buildAll.IndexOf("$versionFile =", StringComparison.Ordinal),
             "Pending changes must be organized before the release version is incremented.");
+        Assert.Contains("$canonicalReleaseScript = Join-Path $repoRoot 'build-all-installers.ps1'", buildInstaller);
+        Assert.Contains("& $canonicalReleaseScript @releaseParams", buildInstaller);
+        Assert.Contains("if ($SkipBuild) { $releaseParams['SkipBuild'] = $true }", buildInstaller);
+        Assert.Contains("if ($SkipVersionIncrement) { $releaseParams['KeepVersion'] = $true }", buildInstaller);
+        Assert.Contains("if ($SkipRelease) { $releaseParams['SkipRelease'] = $true }", buildInstaller);
+        Assert.Contains("if (-not [string]::IsNullOrWhiteSpace($CopilotPath)) { $releaseParams['CopilotPath'] = $CopilotPath }", buildInstaller);
+        Assert.Contains("@('x64-offline')", buildInstaller);
         Assert.True(
-            buildInstaller.IndexOf("Invoke-YaguFocusedPendingCommits", StringComparison.Ordinal)
-                < buildInstaller.IndexOf("foreach ($arch in $architectures)", StringComparison.Ordinal),
-            "Pending changes must be organized before the single-installer build starts.");
+            buildInstaller.IndexOf("if ($Push)", StringComparison.Ordinal)
+                < buildInstaller.IndexOf("$prereqHelper =", StringComparison.Ordinal),
+            "Single-installer publishing must delegate before loading build prerequisites or mutating files.");
+        Assert.DoesNotContain("Invoke-YaguFocusedPendingCommits", buildInstaller);
+        Assert.DoesNotContain("Invoke-YaguInstallerReleaseCommit", buildInstaller);
+        Assert.DoesNotContain("gh release", buildInstaller);
+        Assert.DoesNotContain("--generate-notes", buildInstaller);
 
         Assert.Contains("& git -C $RepoRoot add --patch", gitHelper);
         Assert.Contains("add --intent-to-add -- @batch", gitHelper);
@@ -515,6 +523,24 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("& git -C $RepoRoot add -A -- @releaseChanges", gitHelper);
         Assert.Contains("commit --only -m $Message -- @releaseChanges", gitHelper);
         Assert.Contains("'README.md'", buildAll);
+
+        // WhatIf exits before release-tool preflight so dry-runs never require gh/copilot.
+        Assert.True(
+            buildAll.IndexOf("if ($WhatIfPreference)", StringComparison.Ordinal)
+                < buildAll.IndexOf("if ($Push -and -not $SkipRelease)", StringComparison.Ordinal),
+            "WhatIf must return before GitHub/Copilot preflight checks.");
+
+        // Push release preflight now requires both gh and copilot up front.
+        Assert.Contains("[string]$CopilotPath", buildAll);
+        Assert.Contains("Resolve-CopilotCliPath", buildAll);
+        Assert.Contains("Assert-CopilotCliAvailable", buildAll);
+        Assert.Contains("& $CopilotCli --version *> $null", buildAll);
+
+        // Release notes are prepared before git push so failures block mutation.
+        Assert.True(
+            buildAll.IndexOf("$preparedReleaseNotes = Add-ReleaseCompareLink", StringComparison.Ordinal)
+                < buildAll.IndexOf("Write-Host \"Pushing (git push)...\"", StringComparison.Ordinal),
+            "Prepared release notes must be finalized before git push.");
     }
 
     [Fact]
@@ -529,11 +555,41 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("https://github.com/$RepositorySlug/compare/$range", buildAll);
         Assert.Contains("function Get-PreviousGitHubReleaseTag", buildAll);
         Assert.Contains("Where-Object { -not $_.isDraft -and $_.tagName -ne $CurrentTag }", buildAll);
-        Assert.Contains("repos/$RepositorySlug/releases/generate-notes", buildAll);
-        Assert.Contains("previous_tag_name=$PreviousReleaseTag", buildAll);
+
+        // Release notes are Copilot-generated from bounded local context, normalized, then deterministically augmented.
+        Assert.Contains("function Get-ReleaseChangeContext", buildAll);
+        Assert.Contains("git -C $RepoRoot log --no-merges", buildAll);
+        Assert.Contains("src/Yagu/HELP.html", buildAll);
+        Assert.Contains("src/Yagu/Properties/AppInfo.g.cs", buildAll);
+        Assert.Contains("src/Yagu/Properties/build-version.txt", buildAll);
+        Assert.Contains("function Normalize-CopilotReleaseNotes", buildAll);
+        Assert.Contains("Copilot release notes must start with '## What's changed'.", buildAll);
+        Assert.Contains("function New-CopilotReleaseNotes", buildAll);
+        Assert.Contains("--deny-tool', 'shell'", buildAll);
+        Assert.Contains("--deny-tool', 'write'", buildAll);
+        Assert.Contains("--no-custom-instructions", buildAll);
+        Assert.Contains("--no-ask", buildAll);
+        Assert.Contains("function Add-DeterministicReleaseSections", buildAll);
+        Assert.Contains("## Assets", buildAll);
+        Assert.Contains("## Validation", buildAll);
+        Assert.Contains("## Installation", buildAll);
+        Assert.Contains("SHA-256", buildAll);
+        Assert.Contains("freshness-checked and size-checked", buildAll);
+
+        // Existing releases are refreshed with prepared notes; new releases are created with the same prepared notes.
         Assert.Contains("--notes-file", buildAll);
-        Assert.Contains("Get-GitHubGeneratedReleaseNotes", buildAll);
-        Assert.Contains("-Notes (@($existingNotes) -join [Environment]::NewLine)", buildAll);
+        Assert.Contains("if ($releaseExists)", buildAll);
+        Assert.Contains("Get-RemoteReleaseTagTarget -RepoRoot $repoRoot -Tag $tag", buildAll);
+        Assert.Contains("release upload $tag @($releaseAssets.FullName) --clobber", buildAll);
+        Assert.Contains("Assert-GitHubReleaseMatchesBuild", buildAll);
+        Assert.Contains("release notes are missing required heading", buildAll);
+
+        // GitHub generated-notes API must not be used.
+        Assert.DoesNotContain("releases/generate-notes", buildAll);
+        Assert.DoesNotContain("Get-GitHubGeneratedReleaseNotes", buildAll);
+
+        // Full changelog is appended exactly once by Add-ReleaseCompareLink.
+        Assert.Contains("if ($notesWithLink.Contains($compareUrl)) { return $notesWithLink }", buildAll);
     }
 
     [Fact]

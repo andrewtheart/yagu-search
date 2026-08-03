@@ -692,6 +692,13 @@ public sealed class AppUpdateWiringRegressionTests
         Assert.Contains("Content = \"Check for updates now\"", settings);
         Assert.Contains("_checkForUpdatesNow?.Invoke(_settingsHwnd)", settings);
 
+        int updatesTab = settings.IndexOf("AddTab(\"Updates\")", StringComparison.Ordinal);
+        int updateMode = settings.IndexOf("var appUpdateMode = new ComboBox", StringComparison.Ordinal);
+        int developerTab = settings.IndexOf("AddTab(\"Developer Options\")", StringComparison.Ordinal);
+        Assert.True(updatesTab >= 0 && updateMode > updatesTab && developerTab > updateMode,
+            "Application update controls must live in the Updates tab before Developer Options.");
+        Assert.Contains("\"Updates\" => \"\\uE895\"", settings);
+
         // Load migrates a legacy opt-out to Off but leaves everyone else at the Prompt default.
         Assert.Contains("MigrateLegacyAppUpdateChecks(settings)", settingsSvc);
         Assert.Contains("settings.AppUpdateCheckMode = AppUpdateCheckMode.Off;", settingsSvc);

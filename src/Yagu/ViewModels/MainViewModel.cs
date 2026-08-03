@@ -375,6 +375,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(_settings.LowDiskSpaceWarningPercent);
         ShowMemoryPressureWarningLabel = _settings.ShowMemoryPressureWarningLabel;
         ShowStatsForNerds = _settings.ShowStatsForNerds;
+        ShowResourceUsageInStatusBar = _settings.ShowResourceUsageInStatusBar;
         ShowBuildNumberInTitleBar = _settings.ShowBuildNumberInTitleBar;
         ShowAutoScrollResultsCheckbox = _settings.ShowAutoScrollResultsCheckbox;
         SdkChannelBufferSize = _settings.SdkChannelBufferSize;
@@ -1325,6 +1326,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial int LowDiskSpaceWarningPercent { get; set; } = AppSettings.DefaultLowDiskSpaceWarningPercent;
     [ObservableProperty] public partial bool ShowMemoryPressureWarningLabel { get; set; }
     [ObservableProperty] public partial bool ShowStatsForNerds { get; set; }
+    [ObservableProperty] public partial bool ShowResourceUsageInStatusBar { get; set; }
     [ObservableProperty] public partial bool ShowBuildNumberInTitleBar { get; set; }
     [ObservableProperty] public partial bool ShowAutoScrollResultsCheckbox { get; set; }
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
@@ -2255,6 +2257,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// <see cref="RefreshIndexStatusAsync"/>; hidden unless the feature and its status setting are on.</summary>
     [ObservableProperty] public partial string IndexStatusText { get; set; } = string.Empty;
     [ObservableProperty] public partial string IndexStatusGlyph { get; set; } = string.Empty;
+    public Microsoft.UI.Xaml.Visibility IndexHealthyCheckVisibility =>
+        string.Equals(IndexStatusText, "Indexes: all healthy", StringComparison.Ordinal)
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IndexStatusAccessibleHelpText))]
     public partial string IndexStatusTooltip { get; set; } = string.Empty;
@@ -2633,6 +2639,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
+    public Microsoft.UI.Xaml.Visibility ResourceUsageStatusVisibility =>
+        ShowResourceUsageInStatusBar
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
     public Microsoft.UI.Xaml.Visibility SkippedCountVisibility =>
         HasPerformedSearch
             ? Microsoft.UI.Xaml.Visibility.Visible
@@ -2642,6 +2653,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         ShowIndexStatus
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    partial void OnIndexStatusTextChanged(string value) =>
+        OnPropertyChanged(nameof(IndexHealthyCheckVisibility));
 
     public Microsoft.UI.Xaml.Visibility AllDriveIndexStatusVisibility =>
         string.IsNullOrWhiteSpace(AllDriveIndexStatusText)
@@ -2749,6 +2763,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     partial void OnDegradedNoticeTextChanged(string value) => OnPropertyChanged(nameof(MemoryPressureWarningVisibility));
     partial void OnShowMemoryPressureWarningLabelChanged(bool value) => OnPropertyChanged(nameof(MemoryPressureWarningVisibility));
     partial void OnShowStatsForNerdsChanged(bool value) => OnPropertyChanged(nameof(StatsForNerdsVisibility));
+    partial void OnShowResourceUsageInStatusBarChanged(bool value) => OnPropertyChanged(nameof(ResourceUsageStatusVisibility));
     partial void OnShowAutoScrollResultsCheckboxChanged(bool value) => OnPropertyChanged(nameof(AutoScrollResultsCheckboxVisibility));
     partial void OnHasPerformedSearchChanged(bool value) => OnPropertyChanged(nameof(SkippedCountVisibility));
     partial void OnShowIndexStatusChanged(bool value) => OnPropertyChanged(nameof(IndexStatusVisibility));
@@ -8009,6 +8024,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(LowDiskSpaceWarningPercent);
         _settings.ShowMemoryPressureWarningLabel = ShowMemoryPressureWarningLabel;
         _settings.ShowStatsForNerds = ShowStatsForNerds;
+        _settings.ShowResourceUsageInStatusBar = ShowResourceUsageInStatusBar;
         _settings.ShowBuildNumberInTitleBar = ShowBuildNumberInTitleBar;
         _settings.ShowAutoScrollResultsCheckbox = ShowAutoScrollResultsCheckbox;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;

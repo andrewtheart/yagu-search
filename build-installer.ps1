@@ -35,11 +35,9 @@
   staged worker.
 
 .PARAMETER Push
-  Before building, interactively organize pending changes into reviewed, focused commits.
-  After one installer builds successfully, commit only the known release-generated
-  version files, push the current branch, then prompt whether its GitHub release should
-  remain a draft or be published officially. Ambiguous or unexpected changes stop the
-  workflow. Push is restricted to one architecture per invocation.
+  Delegate publishing to build-all-installers.ps1, the canonical release workflow.
+  The requested architecture/edition is preserved while commit review, version pinning,
+  release notes, upload protection, and live verification stay identical for every release.
 
 .PARAMETER ReleaseMode
   GitHub release publication mode used with Push: Prompt (the default), Draft, or
@@ -48,6 +46,10 @@
 
 .PARAMETER SkipRelease
   With Push, commit and push but do not create or refresh a GitHub release.
+
+.PARAMETER CopilotPath
+  Optional explicit path to the Copilot CLI used by the canonical workflow for
+  comprehensive release-note generation.
 #>
 [CmdletBinding()]
 param(
@@ -60,6 +62,7 @@ param(
   [string]$OcrPayloadCacheDir = (Join-Path $env:LOCALAPPDATA 'Yagu\ocr-runtime'),
   [switch]$Push,
   [switch]$SkipRelease,
+  [string]$CopilotPath,
   [ValidateSet('Prompt', 'Draft', 'Published')]
   [string]$ReleaseMode = 'Prompt'
 )
@@ -67,12 +70,36 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = $PSScriptRoot
-$gitCommitHelper = Join-Path $repoRoot 'scripts\installer-git-commits.ps1'
 if ($Push) {
-  if (-not (Test-Path -LiteralPath $gitCommitHelper)) {
-    throw "Installer Git commit helper not found: $gitCommitHelper"
+  $canonicalReleaseScript = Join-Path $repoRoot 'build-all-installers.ps1'
+  if (-not (Test-Path -LiteralPath $canonicalReleaseScript)) {
+    throw "Canonical release script not found: $canonicalReleaseScript"
   }
-  . $gitCommitHelper
+
+  [string[]]$variants = if ($IncludeOcr) {
+    @('x64-offline')
+  }
+  elseif ($Architecture -eq 'all') {
+    @('x64', 'x86', 'arm64')
+  }
+  else {
+    @($Architecture)
+  }
+
+  $releaseParams = @{
+    Variant = $variants
+    Push = $true
+    ReleaseMode = $ReleaseMode
+  }
+  if ($SkipBuild) { $releaseParams['SkipBuild'] = $true }
+  if ($SkipVersionIncrement) { $releaseParams['KeepVersion'] = $true }
+  if ($SkipRelease) { $releaseParams['SkipRelease'] = $true }
+  if (-not [string]::IsNullOrWhiteSpace($InnoSetupPath)) { $releaseParams['InnoSetupPath'] = $InnoSetupPath }
+  if (-not [string]::IsNullOrWhiteSpace($OcrPayloadCacheDir)) { $releaseParams['OcrPayloadCacheDir'] = $OcrPayloadCacheDir }
+  if (-not [string]::IsNullOrWhiteSpace($CopilotPath)) { $releaseParams['CopilotPath'] = $CopilotPath }
+
+  & $canonicalReleaseScript @releaseParams
+  return
 }
 $projectPath = Join-Path $repoRoot 'src\Yagu\Yagu.csproj'
 $projectDir = Join-Path $repoRoot 'src\Yagu'
@@ -90,29 +117,10 @@ $webView2PrereqHelper = Join-Path $repoRoot 'scripts\webview2-prereq.ps1'
 if (Test-Path -LiteralPath $webView2PrereqHelper) {
   . $webView2PrereqHelper
 }
-
 $everythingPrereqHelper = Join-Path $repoRoot 'scripts\everything-prereq.ps1'
 if (Test-Path -LiteralPath $everythingPrereqHelper) {
   . $everythingPrereqHelper
 }
-
-function Resolve-ReleaseMode {
-  if ($ReleaseMode -ne 'Prompt') { return $ReleaseMode }
-
-  while ($true) {
-    Write-Host ""
-    Write-Host "How should the GitHub release be created?" -ForegroundColor Cyan
-    Write-Host "  [D] Draft - upload it for review without publishing"
-    Write-Host "  [P] Publish - publish it officially and mark it latest"
-    $choice = (Read-Host 'Choose D or P').Trim().ToLowerInvariant()
-    switch ($choice) {
-      { $_ -in @('d', 'draft') } { return 'Draft' }
-      { $_ -in @('p', 'publish', 'published') } { return 'Published' }
-      default { Write-Warning "Invalid choice '$choice'. Enter D for Draft or P for Publish." }
-    }
-  }
-}
-
 # Read version from build-version.txt
 $versionFile = Join-Path $projectDir 'Properties\build-version.txt'
 function Get-YaguBuildVersion {
@@ -139,7 +147,6 @@ if ([string]::IsNullOrWhiteSpace($InnoSetupPath)) {
     }
   }
 }
-
 if ([string]::IsNullOrWhiteSpace($InnoSetupPath) -or -not (Test-Path -LiteralPath $InnoSetupPath)) {
   throw "Could not find ISCC.exe. Install Inno Setup 6 from https://jrsoftware.org/isdl.php or pass -InnoSetupPath."
 }
@@ -165,14 +172,6 @@ if ($IncludeOcr) {
     Write-Warning "-IncludeOcr bundles the win-x64-only OCR runtime; ignoring requested architecture(s): $($nonX64 -join ', '). Building x64 only."
   }
   $architectures = @('x64')
-}
-
-if ($Push -and $architectures.Count -ne 1) {
-  throw '-Push on build-installer.ps1 requires exactly one architecture. Use build-all-installers.ps1 to publish a multi-installer release.'
-}
-
-if ($Push) {
-  Invoke-YaguFocusedPendingCommits -RepoRoot $repoRoot
 }
 
 Write-Host "Architectures: $($architectures -join ', ')"
@@ -290,86 +289,5 @@ foreach ($arch in $architectures) {
     Write-Host "File size: $([math]::Round((Get-Item $installerExe).Length / 1MB, 2)) MB"
   } else {
     Write-Warning "Expected installer not found at $installerExe - check Inno Setup output above."
-  }
-}
-
-if ($Push) {
-  if ($builtInstallers.Count -ne 1) { throw 'Push requested, but exactly one installer was not produced.' }
-  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git was not found on PATH." }
-
-  $restoreNativePref = $false
-  $savedNativePref = $null
-  if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
-    $savedNativePref = $PSNativeCommandUseErrorActionPreference
-    $PSNativeCommandUseErrorActionPreference = $false
-    $restoreNativePref = $true
-  }
-  try {
-    $branch = ("$(& git -C $repoRoot rev-parse --abbrev-ref HEAD)").Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($branch) -or $branch -eq 'HEAD') {
-      throw 'Cannot push from a detached HEAD or resolve the current branch.'
-    }
-
-    $variantName = if ($IncludeOcr) { 'x64-offline' } else { $architectures[0] }
-    $commitMessage = "Build installer v$version ($variantName)"
-    Invoke-YaguInstallerReleaseCommit -RepoRoot $repoRoot -Message $commitMessage -AllowedPaths @(
-      'src/Yagu/Properties/build-version.txt',
-      'src/Yagu/Properties/AppInfo.g.cs'
-    )
-
-    Write-Host "Pushing '$branch' to origin..." -ForegroundColor Cyan
-    & git -C $repoRoot push origin $branch
-    if ($LASTEXITCODE -ne 0) { throw "git push failed for branch '$branch' (exit $LASTEXITCODE)." }
-    Write-Host 'Pushed.' -ForegroundColor Green
-
-    if (-not $SkipRelease) {
-      $gh = Get-Command gh -ErrorAction SilentlyContinue
-      if (-not $gh) { throw "GitHub CLI (gh) not found. Install it and run 'gh auth login', or use -SkipRelease." }
-
-      $resolvedReleaseMode = Resolve-ReleaseMode
-      $tag = "v$version"
-      $asset = $builtInstallers[0]
-      $originUrl = (& git -C $repoRoot remote get-url origin 2>$null)
-      $repoArgs = @()
-      if ("$originUrl" -match 'github\.com[:/](?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?/?$') {
-        $repoArgs = @('--repo', "$($Matches.owner)/$($Matches.repo)")
-      }
-      $headSha = ("$(& git -C $repoRoot rev-parse HEAD)").Trim()
-
-      & $gh.Source release view $tag @repoArgs *> $null
-      if ($LASTEXITCODE -eq 0) {
-        Write-Host "GitHub release $tag exists - refreshing $([IO.Path]::GetFileName($asset))..." -ForegroundColor Cyan
-        & $gh.Source release upload $tag $asset --clobber @repoArgs
-        if ($LASTEXITCODE -ne 0) { throw "GitHub release asset upload failed (exit $LASTEXITCODE)." }
-        if ($resolvedReleaseMode -eq 'Draft') {
-          & $gh.Source release edit $tag --draft @repoArgs
-        }
-        else {
-          & $gh.Source release edit $tag --draft=false --latest @repoArgs
-        }
-        if ($LASTEXITCODE -ne 0) { throw "Asset upload succeeded, but applying $resolvedReleaseMode mode to release $tag failed (exit $LASTEXITCODE)." }
-        if ($resolvedReleaseMode -eq 'Draft') { Write-Host "Release $tag is saved as a draft for review." -ForegroundColor Green }
-        else { Write-Host "Release $tag is published officially as latest." -ForegroundColor Green }
-      }
-      else {
-        Write-Host "Creating $($resolvedReleaseMode.ToLowerInvariant()) GitHub release $tag..." -ForegroundColor Cyan
-        $createArgs = @('release', 'create', $tag,
-          '--title', "Yagu $version",
-          '--generate-notes',
-          '--target', $headSha)
-        if ($resolvedReleaseMode -eq 'Draft') { $createArgs += '--draft' }
-        else { $createArgs += '--latest' }
-        $createArgs += @($asset) + $repoArgs
-        & $gh.Source @createArgs
-        if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed (exit $LASTEXITCODE)." }
-        if ($resolvedReleaseMode -eq 'Draft') {
-          Write-Host "Draft release $tag created for review." -ForegroundColor Green
-        }
-        else { Write-Host "Release $tag published officially as latest." -ForegroundColor Green }
-      }
-    }
-  }
-  finally {
-    if ($restoreNativePref) { $PSNativeCommandUseErrorActionPreference = $savedNativePref }
   }
 }

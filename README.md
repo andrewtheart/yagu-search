@@ -205,7 +205,7 @@ The index stores compact signatures and file identity metadata, not cached searc
 - **Fail-safe:** missing sidecars, unsupported queries, journal gaps, removable-drive changes, corrupt data, and worker failures all fall back to live scanning.
 - **Crash-safe publication:** a full build writes to a private workspace and replaces the active generation only after validation. Cancellation, disk-full, a crash, or power loss leaves the previous complete index active.
 - **Incremental freshness:** updates advance their Windows change-journal checkpoint only when the matching delta commits. Interrupted updates replay from the last completed checkpoint.
-- **Explicit storage controls:** Settings exposes the index location, quota, free-space reserve, stop-when-full threshold, retained generations, cleanup, compaction, and optional PDF/OCR/format-v3 output.
+- **Explicit storage controls:** Settings exposes the index location, quota, free-space reserve, stop-when-full threshold, retained generations, cleanup, compaction, optional PDF/OCR output, and the default format-v3 mapped-query structures.
 
 For the full user workflow, management actions, scheduling choices, troubleshooting table, and CLI equivalents, see [Indexing Tab](HELP.md#indexing-tab) and [Content Index (CLI)](HELP.md#content-index-cli).
 

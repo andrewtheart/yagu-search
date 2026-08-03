@@ -67,7 +67,6 @@ public sealed class IndexBuildOperationTests : IDisposable
             IndexMaxDiskUsagePercent = 88,
             IndexBuildPdfTextExtendedSource = true,
             IndexBuildImageTextExtendedSource = true,
-            IndexProduceV3QueryStructures = true,
             IndexMaxFileSizeMB = 12,
             IndexExcludedGlobs = "**/obj/**",
         };

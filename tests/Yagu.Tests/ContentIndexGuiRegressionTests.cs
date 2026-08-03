@@ -849,18 +849,22 @@ public sealed class ContentIndexGuiRegressionTests
     }
 
     [Fact]
-    public void MainWindowXaml_IndexStatusIsCenteredBetweenResourceStatsAndSkippedCount()
+    public void MainWindowXaml_IndexStatusHasStableLeftAnchoredSlotBetweenResourcesAndSkippedCount()
     {
         Assert.True(MainWindowXaml.IndexOf("x:Name=\"RamUsageBlock\"", StringComparison.Ordinal)
             < MainWindowXaml.IndexOf("x:Name=\"IndexStatusIndicator\"", StringComparison.Ordinal));
         Assert.True(MainWindowXaml.IndexOf("x:Name=\"IndexStatusIndicator\"", StringComparison.Ordinal)
             < MainWindowXaml.IndexOf("x:Name=\"SkipCountBlock\"", StringComparison.Ordinal));
 
-        string indicator = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusIndicator\"", 3000);
+        string indicator = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusIndicator\"", 4500);
         Assert.Contains("<Grid Width=\"230\" VerticalAlignment=\"Center\">", indicator);
-        Assert.Contains("HorizontalAlignment=\"Center\" VerticalAlignment=\"Center\">", indicator);
-        Assert.Contains("MaxWidth=\"210\" TextTrimming=\"CharacterEllipsis\"", indicator);
-        Assert.DoesNotContain("Text=\"{x:Bind ViewModel.IndexStatusText, Mode=OneWay}\"\r\n                             Width=\"210\"", indicator);
+        Assert.Contains("HorizontalAlignment=\"Left\" VerticalAlignment=\"Center\">", indicator);
+        Assert.Contains("<Grid Width=\"36\" Height=\"16\" VerticalAlignment=\"Center\">", indicator);
+        Assert.Contains("x:Name=\"IndexHealthyCheckIcon\"", indicator);
+        Assert.Contains("Glyph=\"&#xE930;\" Foreground=\"LimeGreen\"", indicator);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.IndexHealthyCheckVisibility, Mode=OneWay}\"", indicator);
+        Assert.Contains("Width=\"190\" TextTrimming=\"CharacterEllipsis\"", indicator);
+        Assert.Contains("string.Equals(IndexStatusText, \"Indexes: all healthy\", StringComparison.Ordinal)", MainViewModelSource);
     }
 
     [Fact]
@@ -875,8 +879,8 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("Orientation=\"Horizontal\" Spacing=\"8\" HorizontalAlignment=\"Right\"", hover);
         Assert.Contains("Text=\"{x:Bind ViewModel.IndexStatusTooltip, Mode=OneWay}\"", hover);
         Assert.Contains("<Grid Width=\"230\" VerticalAlignment=\"Center\">", hover);
-        Assert.Contains("HorizontalAlignment=\"Center\" VerticalAlignment=\"Center\">", hover);
-        Assert.Contains("MaxWidth=\"210\" TextTrimming=\"CharacterEllipsis\"", hover);
+        Assert.Contains("HorizontalAlignment=\"Left\" VerticalAlignment=\"Center\">", hover);
+        Assert.Contains("Width=\"190\" TextTrimming=\"CharacterEllipsis\"", hover);
 
         Assert.DoesNotContain("<FlyoutBase.AttachedFlyout>", hover);
         Assert.DoesNotContain("IndexStatusHoverFlyout", IndexOnboardingSource);

@@ -2011,6 +2011,7 @@ public sealed partial class SettingsWindow : Window
         "Shortcuts & History" => "\uE765",
         "AI" => "\uE99A",
         "Indexing" => "\uE8F1",
+        "Updates" => "\uE895",
         _ => "\uE7FC",
     };
 
@@ -3622,14 +3623,10 @@ public sealed partial class SettingsWindow : Window
             AddTerminalEmulationSetting(workingDirectoryGroup);
         }
 
-        // ── Developer Options ──
+        // ── Updates ──
         {
-            var g = AddTab("Developer Options");
+            var g = AddTab("Updates");
             var updatesGroup = AddSettingsGroupBox(g, "Application Updates");
-            var diagnosticsGroup = AddSettingsGroupBox(g, "Diagnostics UI");
-            var indexTestingGroup = AddSettingsGroupBox(g, "Index Maintenance Testing");
-            var remindersGroup = AddSettingsGroupBox(g, "Reminders and Warnings");
-            var loggingGroup = AddSettingsGroupBox(g, "Logging");
 
             updatesGroup.Children.Add(new TextBlock { Text = "Check GitHub for Yagu updates:", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
             var appUpdateMode = new ComboBox { MinWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
@@ -3667,6 +3664,15 @@ public sealed partial class SettingsWindow : Window
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,
             });
+        }
+
+        // ── Developer Options ──
+        {
+            var g = AddTab("Developer Options");
+            var diagnosticsGroup = AddSettingsGroupBox(g, "Diagnostics UI");
+            var indexTestingGroup = AddSettingsGroupBox(g, "Index Maintenance Testing");
+            var remindersGroup = AddSettingsGroupBox(g, "Reminders and Warnings");
+            var loggingGroup = AddSettingsGroupBox(g, "Logging");
 
             var showMemoryPressureLabel = new CheckBox
             {
@@ -3695,6 +3701,22 @@ public sealed partial class SettingsWindow : Window
             diagnosticsGroup.Children.Add(new TextBlock
             {
                 Text = "Shows the files/second and MB/s text, plus the disk throughput sparkline, MB/s, and utilization percentage in the bottom status bar.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var showResourceUsageInStatusBar = new CheckBox
+            {
+                Content = "Show resource usage in status bar",
+                IsChecked = _viewModel.ShowResourceUsageInStatusBar,
+            };
+            showResourceUsageInStatusBar.Checked += (_, _) => _viewModel.ShowResourceUsageInStatusBar = true;
+            showResourceUsageInStatusBar.Unchecked += (_, _) => _viewModel.ShowResourceUsageInStatusBar = false;
+            diagnosticsGroup.Children.Add(showResourceUsageInStatusBar);
+            diagnosticsGroup.Children.Add(new TextBlock
+            {
+                Text = "Shows result-temp disk usage, total content-index storage, and RAM used by Yagu plus its worker processes. Hidden by default.",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,

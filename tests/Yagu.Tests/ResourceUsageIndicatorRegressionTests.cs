@@ -17,6 +17,8 @@ public sealed class ResourceUsageIndicatorRegressionTests
 
     private static readonly string MainViewModelSource = Read("src", "Yagu", "ViewModels", "MainViewModel.cs");
     private static readonly string MainWindowXaml = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml");
+    private static readonly string SettingsServiceSource = Read("src", "Yagu", "Services", "SettingsService.cs");
+    private static readonly string SettingsWindowSource = Read("src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs");
     private static readonly string OrphanedWorkerCleanupSource = Read("src", "Yagu", "Services", "OrphanedWorkerCleanup.cs");
 
     [Fact]
@@ -89,6 +91,10 @@ public sealed class ResourceUsageIndicatorRegressionTests
     [Fact]
     public void MainWindowXaml_HasTempIndexAndRamStatusBarIndicators()
     {
+        Assert.Contains("x:Name=\"ResourceUsageStatusCluster\" ColumnSpacing=\"12\"", MainWindowXaml);
+        Assert.Contains("<ColumnDefinition Width=\"104\" />", MainWindowXaml);
+        Assert.Contains("<ColumnDefinition Width=\"108\" />", MainWindowXaml);
+        Assert.Contains("<ColumnDefinition Width=\"220\" />", MainWindowXaml);
         Assert.Contains("x:Name=\"TempUsageBlock\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.TempUsageText, Mode=OneWay}\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.TempUsageTooltip, Mode=OneWay}\"", MainWindowXaml);
@@ -98,6 +104,27 @@ public sealed class ResourceUsageIndicatorRegressionTests
         Assert.Contains("x:Name=\"RamUsageBlock\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.RamUsageText, Mode=OneWay}\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.RamUsageTooltip, Mode=OneWay}\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"SkipCountBlock\" Width=\"88\"", MainWindowXaml);
+        Assert.Contains("TextAlignment=\"Right\" TextTrimming=\"CharacterEllipsis\"", MainWindowXaml);
+    }
+
+    [Fact]
+    public void DeveloperOptions_HidesResourceUsageClusterByDefault_AndPersistsTheFlag()
+    {
+        Assert.Contains("public bool ShowResourceUsageInStatusBar { get; set; }", SettingsServiceSource);
+        Assert.DoesNotContain("ShowResourceUsageInStatusBar { get; set; } = true", SettingsServiceSource);
+        Assert.Contains("ShowResourceUsageInStatusBar = _settings.ShowResourceUsageInStatusBar;", MainViewModelSource);
+        Assert.Contains("_settings.ShowResourceUsageInStatusBar = ShowResourceUsageInStatusBar;", MainViewModelSource);
+        Assert.Contains("ResourceUsageStatusVisibility =>", MainViewModelSource);
+        Assert.Contains("OnShowResourceUsageInStatusBarChanged", MainViewModelSource);
+
+        Assert.Contains("Content = \"Show resource usage in status bar\"", SettingsWindowSource);
+        Assert.Contains("IsChecked = _viewModel.ShowResourceUsageInStatusBar", SettingsWindowSource);
+        Assert.Contains("_viewModel.ShowResourceUsageInStatusBar = true", SettingsWindowSource);
+        Assert.Contains("_viewModel.ShowResourceUsageInStatusBar = false", SettingsWindowSource);
+
+        Assert.Contains("x:Name=\"ResourceUsageStatusCluster\"", MainWindowXaml);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.ResourceUsageStatusVisibility, Mode=OneWay}\"", MainWindowXaml);
     }
 
     private static string FindRepoRoot()

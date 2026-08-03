@@ -2375,7 +2375,7 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void BottomStatusBar_IsApproximatelyTwentyPercentShorter()
     {
-        string statusBar = ExtractXamlWindow("x:Name=\"BottomStatusBar\"", 1800);
+        string statusBar = ExtractXamlWindow("x:Name=\"BottomStatusBar\"", 3200);
 
         // Old maximum: 20 px gauge + 8/10 padding = 38 px. New maximum: 16 + 6/8 = 30 px
         // (about 21% shorter), while the 12 px labels and 16 px status glyph still fit unchanged.

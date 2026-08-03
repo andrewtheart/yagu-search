@@ -539,6 +539,7 @@ Tab</a></li>
 <li><a href="#interaction-tab" id="toc-interaction-tab">Interaction
 Tab</a></li>
 <li><a href="#terminal-emulator-tab" id="toc-terminal-emulator-tab">Terminal Emulator Tab</a></li>
+<li><a href="#updates-tab" id="toc-updates-tab">Updates Tab</a></li>
 <li><a href="#developer-options-tab" id="toc-developer-options-tab">Developer Options Tab</a></li>
 <li><a href="#privacy-tab" id="toc-privacy-tab">Privacy Tab</a></li>
 </ul></li>
@@ -757,13 +758,13 @@ line to preview it.</li>
 results.</li>
 </ol>
 <p>The status bar shows progress during a search. When the search
-finishes or is canceled, it shows elapsed time. Its right side also
-shows Yagu’s current result-temp usage, the total disk space occupied by
-all content-index data, and RAM used by Yagu plus its worker processes.
-Hover any resource value for its location and measurement details.
-Enable <strong>Stats for nerds</strong> in Settings -&gt; Developer
-Options to show files processed per second and a real-time throughput
-sparkline.</p>
+finishes or is canceled, it shows elapsed time. Enable <strong>Show
+resource usage in status bar</strong> in Settings -&gt; Developer
+Options to add Yagu’s current result-temp usage, total content-index
+storage, and RAM used by Yagu plus its worker processes; these metrics
+are hidden by default, and each has a detailed hover tooltip. Enable
+<strong>Stats for nerds</strong> separately to show files processed per
+second and a real-time throughput sparkline.</p>
 <h2 id="main-screen">Main Screen</h2>
 <p>The main screen has seven working areas:</p>
 <table>
@@ -2696,22 +2697,22 @@ compaction, validation, PDF population, and legacy candidate-set
 evaluation to worker processes, but that legacy search path still
 opens/classifies the index inside Yagu and remains subject to the
 <strong>in-process size limit</strong> (default 2048 MB). <strong>Use
-memory-mapped worker query sessions (format-v3)</strong> is the separate
-full-query mode: it moves candidate/path classification and pruning into
-the long-lived worker, avoids opening the index in Yagu’s process, and
-uses the <strong>mapped worker query size limit</strong> instead
-(default 30720 MB / 30 GB). It requires format-v3 sidecars in every
-active layer; missing sidecars or any worker/freshness failure safely
-live-scans. <strong>Query worker parallelism</strong> controls mapped
-candidate/path-classification lanes: 0 (default) selects a conservative
-logical-core-based degree, while 1–32 sets an explicit cap; the HDD
-safeguard overrides it to one lane for rotational roots. This group also
-includes query startup, candidate-percentage, and query-memory budgets.
-When the legacy path has a usable index within its in-process limit,
-Yagu warms it and shows <strong>Indexing: preparing…</strong>; starting
-a search can pause that warm-up. Case-insensitive searches accelerate
-when the query is ASCII; non-ASCII case-insensitive queries
-live-scan.</td>
+memory-mapped worker query sessions (format-v3)</strong> is also on by
+default: it moves candidate/path classification and pruning into the
+long-lived worker, avoids opening the index in Yagu’s process, and uses
+the <strong>mapped worker query size limit</strong> instead (default
+30720 MB / 30 GB). It requires format-v3 sidecars in every active layer;
+new builds produce them by default, while missing sidecars or any
+worker/freshness failure safely live-scan. <strong>Query worker
+parallelism</strong> controls mapped candidate/path-classification
+lanes: 0 (default) selects a conservative logical-core-based degree,
+while 1–32 sets an explicit cap; the HDD safeguard overrides it to one
+lane for rotational roots. This group also includes query startup,
+candidate-percentage, and query-memory budgets. When the legacy path has
+a usable index within its in-process limit, Yagu warms it and shows
+<strong>Indexing: preparing…</strong>; starting a search can pause that
+warm-up. Case-insensitive searches accelerate when the query is ASCII;
+non-ASCII case-insensitive queries live-scan.</td>
 </tr>
 <tr>
 <td>Scope &amp; Ingestion</td>
@@ -2909,11 +2910,11 @@ it is excluded from overall health totals and warnings: it says
 <strong>not indexed — not maintained</strong> when no index data
 remains, or <strong>leftover index — not maintained</strong> when files
 remain on disk. Therefore, three healthy maintained indexes plus an
-unindexed F: report <strong>Index: all maintained indexes
-healthy</strong>, not <strong>Index: 3/4 drives healthy</strong>. Add a
-folder back to resume maintenance, or use <strong>Delete this
-index</strong> to remove leftover data. Deleting an index or clearing
-all indexes also refreshes the status panel immediately.</p>
+unindexed F: report <strong>Indexes: all healthy</strong>, not
+<strong>Index: 3/4 drives healthy</strong>. Add a folder back to resume
+maintenance, or use <strong>Delete this index</strong> to remove
+leftover data. Deleting an index or clearing all indexes also refreshes
+the status panel immediately.</p>
 <p><strong>New files and incremental updates.</strong> For a whole-drive
 index, the change-journal check treats every new file identity as
 pending maintenance even though that identity was not present in the
@@ -3612,7 +3613,7 @@ used again.</td>
 </tr>
 </tbody>
 </table>
-<h3 id="developer-options-tab">Developer Options Tab</h3>
+<h3 id="updates-tab">Updates Tab</h3>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -3643,6 +3644,21 @@ size/SHA-256 and requires the installer and running app to have trusted
 Authenticode signatures from the same publisher before offering
 installation; a failed installer is deleted and never executed.</td>
 </tr>
+</tbody>
+</table>
+<h3 id="developer-options-tab">Developer Options Tab</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What It Controls</th>
+</tr>
+</thead>
+<tbody>
 <tr>
 <td>Show memory pressure warning</td>
 <td>Display the orange toolbar warning when memory-saving mode
@@ -3652,6 +3668,11 @@ activates. Hidden by default.</td>
 <td>Stats for nerds</td>
 <td>Shows files/sec, MB/s, disk throughput sparkline, and utilization
 percentage in the bottom status bar.</td>
+</tr>
+<tr>
+<td>Show resource usage in status bar</td>
+<td>Shows result-temp disk usage, total content-index storage, and RAM
+used by Yagu plus its worker processes. Hidden by default.</td>
 </tr>
 <tr>
 <td>Show build number in title bar</td>

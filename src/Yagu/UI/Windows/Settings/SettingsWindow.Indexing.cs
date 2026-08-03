@@ -188,7 +188,7 @@ public sealed partial class SettingsWindow
             "Use memory-mapped worker query sessions (format-v3)",
             s => s.IndexUseWorkerQuerySessions,
             (s, v) => s.IndexUseWorkerQuerySessions = v,
-            "Moves the complete candidate/path-classification and pruning session into the long-lived isolated worker, so large indexes do not have to be opened in Yagu's process and are governed by the mapped-worker size limit instead of the in-process limit. Requires format-v3 structures in every active layer; enable Produce format-v3 query structures below and rebuild existing indexes. Missing sidecars or any worker/freshness failure safely live-scans. Default off.");
+            "Moves the complete candidate/path-classification and pruning session into the long-lived isolated worker, so large indexes do not have to be opened in Yagu's process and are governed by the mapped-worker size limit instead of the in-process limit. Requires format-v3 structures in every active layer, which new builds produce by default. Missing sidecars or any worker/freshness failure safely live-scans. Default on.");
 
         AddIndexNumber(accelerationGroup, "Query startup budget (ms):",
             s => s.IndexQueryStartupBudgetMs,
@@ -236,9 +236,9 @@ public sealed partial class SettingsWindow
         AddIndexToggle(scopeGroup, "Build an image-text index to prioritize likely OCR matches",
             s => s.IndexBuildImageTextExtendedSource, (s, v) => s.IndexBuildImageTextExtendedSource = v,
             "Off by default. A full index build runs the selected OCR engine over eligible images and stores only positive trigram postings — never recognized text. Because OCR output is non-deterministic, this index prioritizes likely candidates but never skips OCR for a non-matching, changed, unknown, or fingerprint-mismatched image. Enabling it recommends rebuilding existing indexes and can make whole-drive builds substantially longer.");
-        var produceV3Toggle = AddIndexToggle(scopeGroup, "Produce format-v3 query structures (experimental)",
+        var produceV3Toggle = AddIndexToggle(scopeGroup, "Produce format-v3 query structures",
             s => s.IndexProduceV3QueryStructures, (s, v) => s.IndexProduceV3QueryStructures = v,
-            "Off by default and experimental. Builds write memory-map-friendly postings, path/identity, and tombstone sidecars for each layer. They are actively consumed by mapped isolated-worker query sessions, and can also feed the optional in-process v3 reader. Cost: additional build I/O/time and disk space; every active layer needs sidecars, so older indexes require rebuilding before the all-v3 worker path can serve them.");
+            "On by default. Builds write memory-map-friendly postings, path/identity, and tombstone sidecars for each layer. They are actively consumed by mapped isolated-worker query sessions, and can also feed the optional in-process v3 reader. Cost: additional build I/O/time and disk space; every active layer needs sidecars, so older indexes require rebuilding before the all-v3 worker path can serve them.");
         var useV3Toggle = AddIndexToggle(scopeGroup, "Use format-v3 reader for in-process queries (experimental)",
             s => s.IndexUseV3QueryReader, (s, v) => s.IndexUseV3QueryReader = v,
             "Controls only the in-process candidate reader. When on, candidates come from memory-mapped v3 postings instead of a deserialized posting index, reducing host allocations. The isolated mapped query-worker path uses v3 independently of this switch. Missing/incompatible sidecars or any read fault safely fall back or live-scan; results are identical.");

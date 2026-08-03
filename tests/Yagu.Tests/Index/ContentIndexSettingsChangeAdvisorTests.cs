@@ -85,6 +85,7 @@ public sealed class ContentIndexSettingsChangeAdvisorTests
     public void AdditiveBuildOutput_EnablingRecommendsRebuild_DisablingDoesNot(string key)
     {
         AppSettings settings = Settings(@"C:\");
+        Assert.True(ContentIndexConfigService.Set(settings, key, "false").Success);
         ContentIndexSettingsSnapshot disabled = ContentIndexSettingsChangeAdvisor.Capture(settings);
         Assert.True(ContentIndexConfigService.Set(settings, key, "true").Success);
         ContentIndexSettingsSnapshot enabled = ContentIndexSettingsChangeAdvisor.Capture(settings);

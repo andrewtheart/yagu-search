@@ -1,5 +1,5 @@
 ---
-description: "Yagu installer & packaging conventions — tri-arch/offline Inno Setup builds, self-contained Native AOT, Windows App Runtime staging, Git LFS, and version churn. Use when: build installer, build-installer.ps1, build-all-installers.ps1, Inno Setup, .iss, yagu-installer.iss, offline installer, prerequisite staging, WebView2, Everything bundle, Windows App Runtime, WAR, publish installer, LFS installer."
+description: "Yagu installer & packaging conventions — tri-arch/offline Inno Setup builds, self-contained Native AOT, Windows App Runtime staging, verified GitHub release assets, and version churn. Use when: build installer, build-installer.ps1, build-all-installers.ps1, Inno Setup, .iss, yagu-installer.iss, offline installer, prerequisite staging, WebView2, Everything bundle, Windows App Runtime, WAR, publish installer."
 applyTo: "installer/**, build-installer.ps1, build-all-installers.ps1, scripts/*prereq*.ps1, scripts/install-windows-app-runtime.ps1"
 ---
 
@@ -36,17 +36,15 @@ Runtime, which the installer bundles and installs. Building from source needs th
   Smart App Control enforce gate (`InitializeSetup` cancels setup when SAC is enforcing), and
   context-menu registry cleanup on uninstall.
 
-## Git LFS & the pre-commit policy
+## Release assets
 
-- Installer EXEs exceed GitHub's 100 MB raw limit and are tracked via **Git LFS** (`.gitattributes`:
-  `*.exe filter=lfs`). A committed installer must be an LFS pointer (first line
-  `version https://git-lfs.github.com/spec/v1`), not a raw blob.
-- `scripts/git-hooks/pre-commit` enforces **latest-per-arch/edition**: it keeps only the
-  highest-version installer for each of x64 / x86 / arm64 / x64-ocr and untracks the rest. Install or
-  refresh it with [scripts/install-git-hooks.ps1](../../scripts/install-git-hooks.ps1) (copies into
-  `.git/hooks/`).
-- `build-installer.ps1` deletes the same-arch previous root installer, so a tracked LFS installer can
-  vanish from the working tree after a build — restore with `git lfs checkout`.
+- Root installer outputs (`installer/YaguSetup-*.exe`) are ignored by Git and uploaded directly to
+  GitHub Releases. Do not stage or commit them even though the repository has a general `*.exe` LFS rule.
+- The canonical workflow records the exact expected output for every selected variant, requires it to
+  be non-empty and freshly written by that invocation, and uploads those exact paths. Never replace this
+  with wildcard re-discovery that could pick up stale installers.
+- `build-installer.ps1 -Push` delegates to `build-all-installers.ps1`; all release modes share one
+  implementation for commit review, version pinning, notes, tag protection, and live verification.
 
 ## Commit/push safety
 
@@ -57,6 +55,12 @@ Runtime, which the installer bundles and installs. Building from source needs th
   workflow before push.
 - After a successful build, only the explicit release-generated version/README paths may be staged.
   Never restore catch-all `git add -A` behavior to either publish path.
+- Publish preflight requires authenticated `gh` and Copilot CLI before commits/version mutation unless
+  `-SkipRelease` is explicit. Release notes are comprehensive, user-facing, and generated read-only from
+  bounded context, with deterministic Assets/Validation/Installation/Full changelog sections.
+- Refreshing an existing release is allowed only when its remote tag targets current HEAD. After create
+  or refresh, verify the live body, state, tag target, exact asset names/sizes, and SHA-256 digests when
+  GitHub exposes them. Any mismatch fails the release.
 
 ## Version churn
 

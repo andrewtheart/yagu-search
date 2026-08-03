@@ -30,9 +30,9 @@ public sealed class ContentIndexSettingsTests
         Assert.Equal(0, s.IndexQueryWorkerParallelism); // logical-core-based automatic mode
         Assert.False(s.IndexBuildPdfTextExtendedSource); // PDF-text extended-source pruning is opt-in (off by default)
         Assert.False(s.IndexBuildImageTextExtendedSource); // OCR positive-candidate indexing is opt-in
-        Assert.False(s.IndexProduceV3QueryStructures); // format-v3 query structures are experimental/opt-in (off by default)
+        Assert.True(s.IndexProduceV3QueryStructures); // new indexes include mapped-query structures by default
         Assert.False(s.IndexUseV3QueryReader); // consuming format-v3 during search is experimental/opt-in (off by default)
-        Assert.False(s.IndexUseWorkerQuerySessions); // user-selectable mapped-query-worker mode is off by default
+        Assert.True(s.IndexUseWorkerQuerySessions); // mapped worker keeps large index postings out of Yagu's process
         Assert.Equal(AppSettings.DefaultIndexQueryStartupBudgetMs, s.IndexQueryStartupBudgetMs);
         Assert.Equal(AppSettings.DefaultIndexMaxCandidatePercent, s.IndexMaxCandidatePercent);
         Assert.Equal(AppSettings.DefaultIndexMaxFileSizeMB, s.IndexMaxFileSizeMB);
@@ -391,6 +391,36 @@ public sealed class ContentIndexSettingsTests
             Assert.Equal(3, loaded.IndexRetainedGenerationCount);
             // IndexedRoots normalize + de-dup (case-insensitive, trailing sep) + drop blanks on load.
             Assert.Equal(new[] { @"C:\Projects", @"D:\Data" }, loaded.IndexedRoots);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Load_MigratesFormerMappedWorkerDefaultsOnce_ThenPreservesUserChoice(bool asyncLoad)
+    {
+        string tmp = Path.Combine(Path.GetTempPath(), "qg-index-v3-defaults-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp,
+                "{\"IndexProduceV3QueryStructures\":false,\"IndexUseWorkerQuerySessions\":false}");
+            var svc = new SettingsService(tmp);
+
+            AppSettings migrated = asyncLoad ? await svc.LoadAsync() : svc.Load();
+
+            Assert.True(migrated.IndexProduceV3QueryStructures);
+            Assert.True(migrated.IndexUseWorkerQuerySessions);
+            Assert.True(migrated.IndexMappedWorkerDefaultsMigrated);
+
+            migrated.IndexProduceV3QueryStructures = false;
+            migrated.IndexUseWorkerQuerySessions = false;
+            svc.Save(migrated);
+
+            AppSettings reloaded = asyncLoad ? await svc.LoadAsync() : svc.Load();
+            Assert.False(reloaded.IndexProduceV3QueryStructures);
+            Assert.False(reloaded.IndexUseWorkerQuerySessions);
+            Assert.True(reloaded.IndexMappedWorkerDefaultsMigrated);
         }
         finally { try { File.Delete(tmp); } catch { } }
     }

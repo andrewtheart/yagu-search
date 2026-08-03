@@ -2606,6 +2606,18 @@
           <Grid x:Name="BottomStatusBar" Grid.Row="6" Padding="20,6,20,8"
               Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
               BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" ColumnSpacing="16">
+            <Grid.Resources>
+                <Style x:Key="StatusBarTextStyle" TargetType="TextBlock">
+                    <Setter Property="FontFamily" Value="Consolas" />
+                    <Setter Property="FontSize" Value="12" />
+                    <Setter Property="VerticalAlignment" Value="Center" />
+                    <Setter Property="MaxLines" Value="1" />
+                </Style>
+                <Style x:Key="StatusBarMutedTextStyle" TargetType="TextBlock"
+                       BasedOn="{StaticResource StatusBarTextStyle}">
+                    <Setter Property="Opacity" Value="0.7" />
+                </Style>
+            </Grid.Resources>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" MinWidth="420" />
@@ -2614,8 +2626,10 @@
             </Grid.ColumnDefinitions>
             <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}"
                      Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}"
-                     Opacity="0.6" FontSize="12" FontFamily="Consolas" />
-            <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.8" FontSize="12" FontFamily="Consolas" />
+                     Style="{StaticResource StatusBarMutedTextStyle}" Opacity="0.6" />
+            <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+                       Style="{StaticResource StatusBarTextStyle}" Opacity="0.8"
+                       TextTrimming="CharacterEllipsis" />
             <Grid Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Stretch" Height="16"
                 Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}">
                 <!-- Background utilization gauge -->
@@ -2624,19 +2638,27 @@
                 <Polyline x:Name="ThroughputSparkline" Stroke="CornflowerBlue" StrokeThickness="1.2"
                           VerticalAlignment="Center" HorizontalAlignment="Stretch" Opacity="0.7" />
                 <TextBlock x:Name="DiskGaugeLabel" VerticalAlignment="Center" HorizontalAlignment="Right"
-                           FontFamily="Consolas" FontSize="11" Opacity="0.75" Margin="0,0,6,0" />
+                           Style="{StaticResource StatusBarTextStyle}" Opacity="0.75" Margin="0,0,6,0" />
             </Grid>
             <!-- Right-aligned status cluster: resource usage, then the content-index status (+ a truncated
                  warning), then the skipped-count — in that order, flush to the right edge. Each item hides
                  independently, so the cluster adapts to whatever is present; the search stats stay far left
                  and the stretch column between keeps this group pinned to the right. -->
-            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
                 <!-- Yagu resource stats (disk temp + cached index storage + Yagu/worker RAM).
                      Measurement is off-thread; index size refreshes at most once per minute and never
-                     while a search is active. -->
-                <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                     while a search is active. Fixed columns prevent changing values from shifting
+                     neighboring indicators; oversized values trim while their tooltips retain full detail. -->
+                    <Grid x:Name="ResourceUsageStatusCluster" ColumnSpacing="12" VerticalAlignment="Center"
+                        Visibility="{x:Bind ViewModel.ResourceUsageStatusVisibility, Mode=OneWay}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="104" />
+                        <ColumnDefinition Width="108" />
+                        <ColumnDefinition Width="220" />
+                    </Grid.ColumnDefinitions>
                     <TextBlock x:Name="TempUsageBlock" Text="{x:Bind ViewModel.TempUsageText, Mode=OneWay}"
-                               FontSize="12" FontFamily="Consolas" Opacity="0.7" VerticalAlignment="Center"
+                               Style="{StaticResource StatusBarMutedTextStyle}"
+                               TextAlignment="Right" TextTrimming="CharacterEllipsis"
                                AutomationProperties.Name="Yagu temporary disk usage">
                         <ToolTipService.ToolTip>
                             <ToolTip>
@@ -2644,8 +2666,10 @@
                             </ToolTip>
                         </ToolTipService.ToolTip>
                     </TextBlock>
-                    <TextBlock x:Name="IndexUsageBlock" Text="{x:Bind ViewModel.IndexUsageText, Mode=OneWay}"
-                               FontSize="12" FontFamily="Consolas" Opacity="0.7" VerticalAlignment="Center"
+                          <TextBlock x:Name="IndexUsageBlock" Grid.Column="1"
+                               Text="{x:Bind ViewModel.IndexUsageText, Mode=OneWay}"
+                               Style="{StaticResource StatusBarMutedTextStyle}"
+                               TextAlignment="Right" TextTrimming="CharacterEllipsis"
                                AutomationProperties.Name="Yagu content index disk usage">
                         <ToolTipService.ToolTip>
                             <ToolTip>
@@ -2653,8 +2677,10 @@
                             </ToolTip>
                         </ToolTipService.ToolTip>
                     </TextBlock>
-                    <TextBlock x:Name="RamUsageBlock" Text="{x:Bind ViewModel.RamUsageText, Mode=OneWay}"
-                               FontSize="12" FontFamily="Consolas" Opacity="0.7" VerticalAlignment="Center"
+                          <TextBlock x:Name="RamUsageBlock" Grid.Column="2"
+                               Text="{x:Bind ViewModel.RamUsageText, Mode=OneWay}"
+                               Style="{StaticResource StatusBarMutedTextStyle}"
+                               TextAlignment="Right" TextTrimming="CharacterEllipsis"
                                AutomationProperties.Name="Yagu memory usage">
                         <ToolTipService.ToolTip>
                             <ToolTip>
@@ -2662,7 +2688,7 @@
                             </ToolTip>
                         </ToolTipService.ToolTip>
                     </TextBlock>
-                </StackPanel>
+                </Grid>
                 <StackPanel x:Name="IndexStatusIndicator" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
                             Visibility="{x:Bind ViewModel.IndexStatusVisibility, Mode=OneWay}"
                             IsTabStop="True"
@@ -2674,35 +2700,45 @@
                             PointerEntered="OnIndexStatusPointerEntered"
                             PointerExited="OnIndexStatusPointerExited">
                     <!-- Keep a stable slot so changing status/percent text cannot move the neighboring
-                         resource and Skipped labels, but center the visible icon+text inside that slot. -->
+                        resource and Skipped labels. The content is left-anchored so different status
+                        lengths do not visibly drift within the slot. -->
                     <Grid Width="230" VerticalAlignment="Center">
                         <StackPanel Orientation="Horizontal" Spacing="4"
-                                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                                 HorizontalAlignment="Left" VerticalAlignment="Center">
                             <!-- During index activity the native ProgressRing is compositor-animated;
                                  rotating a tiny rasterized FontIcon visibly pixel-snaps/hitches. -->
-                            <Grid Width="16" Height="16" VerticalAlignment="Center">
-                                <FontIcon x:Name="IndexStatusIcon"
+                                <Grid Width="36" Height="16" VerticalAlignment="Center">
+                                <Grid Width="16" Height="16" HorizontalAlignment="Left">
+                                    <FontIcon x:Name="IndexStatusIcon"
                                         Glyph="{x:Bind ViewModel.IndexStatusGlyph, Mode=OneWay}"
                                         FontSize="12" Opacity="0.7"
                                         HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                <ProgressRing x:Name="IndexStatusProgressRing"
+                                    <ProgressRing x:Name="IndexStatusProgressRing"
                                            Width="14" Height="14"
                                            IsActive="False" Visibility="Collapsed"
                                            Opacity="0.8"
                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Grid>
+                                <FontIcon x:Name="IndexHealthyCheckIcon"
+                                      Glyph="&#xE930;" Foreground="LimeGreen"
+                                      FontSize="12" VerticalAlignment="Center"
+                                      HorizontalAlignment="Right"
+                                      Visibility="{x:Bind ViewModel.IndexHealthyCheckVisibility, Mode=OneWay}" />
                             </Grid>
                             <TextBlock x:Name="IndexStatusTextBlock"
                                      Text="{x:Bind ViewModel.IndexStatusText, Mode=OneWay}"
-                                     MaxWidth="210" TextTrimming="CharacterEllipsis"
-                                     FontSize="12" Opacity="0.7" VerticalAlignment="Center" />
+                                     Width="190" TextTrimming="CharacterEllipsis"
+                                     Style="{StaticResource StatusBarMutedTextStyle}" />
                         </StackPanel>
                     </Grid>
                 </StackPanel>
-                <TextBlock Foreground="DarkOrange" FontSize="12" VerticalAlignment="Center"
+                <TextBlock Foreground="DarkOrange" Style="{StaticResource StatusBarTextStyle}"
+                           MaxWidth="190" TextTrimming="CharacterEllipsis"
                            Visibility="{x:Bind ViewModel.Truncated, Mode=OneWay}"
                            Text="Results truncated — refine your query" />
-                <TextBlock FontSize="12" Opacity="0.6" x:Name="SkipCountBlock"
-                           FontFamily="Consolas"
+                <TextBlock x:Name="SkipCountBlock" Width="88"
+                           Style="{StaticResource StatusBarMutedTextStyle}" Opacity="0.6"
+                           TextAlignment="Right" TextTrimming="CharacterEllipsis"
                            Visibility="{x:Bind ViewModel.SkippedCountVisibility, Mode=OneWay}"
                            Tapped="OnSkipCountTapped" PointerEntered="OnSkipCountPointerEntered"
                            PointerExited="OnSkipCountPointerExited">
