@@ -9,6 +9,27 @@ public class DriveEnumeratorTests
     private static DriveDescriptor Drive(string root, DriveType type, bool ready = true, bool cloud = false)
         => new(root, type, ready, cloud);
 
+    [Theory]
+    [InlineData("C", @"C:\")]
+    [InlineData("c", @"C:\")]
+    [InlineData("D:", @"D:\")]
+    [InlineData(@" E:\src ", @"E:\src")]
+    [InlineData("é", "é")]
+    [InlineData("", "")]
+    [InlineData(null, "")]
+    public void NormalizeSearchRoot_CanonicalizesDriveShorthand(string? input, string expected)
+    {
+        Assert.Equal(expected, DriveEnumerator.NormalizeSearchRoot(input));
+    }
+    [Theory]
+    [InlineData(DriveType.Removable, true)]
+    [InlineData(DriveType.CDRom, true)]
+    [InlineData(DriveType.Fixed, false)]
+    [InlineData(DriveType.Network, false)]
+    [InlineData(DriveType.Unknown, false)]
+    public void ShouldAvoidSourceMemoryMap_OnlyForDisconnectableMedia(DriveType type, bool expected)
+        => Assert.Equal(expected, DriveEnumerator.ShouldAvoidSourceMemoryMap(type));
+
     [Fact]
     public void SelectRoots_FixedDrivesAlwaysIncluded_OthersOffByDefault()
     {
@@ -150,6 +171,49 @@ public class DriveEnumeratorTests
     public void IsLikelyCloudDrive_NullDrive_ReturnsFalse()
     {
         Assert.False(DriveEnumerator.IsLikelyCloudDrive(null!));
+    }
+
+    [Fact]
+    public void GetDriveTypeForPath_SystemDirectory_ReturnsContainingVolumeType()
+    {
+        string root = Assert.IsType<string>(Path.GetPathRoot(Environment.SystemDirectory));
+
+        DriveType actual = DriveEnumerator.GetDriveTypeForPath(Environment.SystemDirectory);
+
+        Assert.Equal(new DriveInfo(root).DriveType, actual);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("relative-path")]
+    [InlineData("invalid\0path")]
+    public void GetDriveTypeForPath_MissingOrMalformedRoot_ReturnsUnknown(string? path)
+    {
+        Assert.Equal(DriveType.Unknown, DriveEnumerator.GetDriveTypeForPath(path));
+    }
+
+    [Fact]
+    public void GetDriveTypeForPath_CoreUsesResolvedRoot()
+    {
+        Assert.Equal(DriveType.Network, DriveEnumerator.GetDriveTypeForPath(
+            @"Z:\folder\file.txt",
+            _ => @"Z:\",
+            root => root == @"Z:\" ? DriveType.Network : DriveType.Unknown));
+    }
+
+    [Fact]
+    public void GetDriveTypeForPath_CoreReturnsUnknownForBlankRootOrProbeFailure()
+    {
+        Assert.Equal(DriveType.Unknown, DriveEnumerator.GetDriveTypeForPath("x", _ => null, _ => DriveType.Fixed));
+        Assert.Equal(DriveType.Unknown, DriveEnumerator.GetDriveTypeForPath(
+            "x",
+            _ => throw new IOException("root failed"),
+            _ => DriveType.Fixed));
+        Assert.Equal(DriveType.Unknown, DriveEnumerator.GetDriveTypeForPath(
+            "x",
+            _ => @"C:\",
+            _ => throw new IOException("drive failed")));
     }
 
     [Fact]

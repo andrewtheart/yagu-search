@@ -1,6 +1,8 @@
 using System;
+using Microsoft.Extensions.Logging;
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Logging;
 
 namespace Yagu;
 
@@ -55,8 +57,8 @@ public sealed partial class MainWindow
         uint loadAfter = SearchService.TryGetSystemMemoryLoadPercent(out uint measured) ? measured : load;
         if (loadAfter < ResultsCriticalMemoryLoadPercent)
         {
-            LogService.Instance.Info("Results",
-                $"Memory guard recovered before {context}: load {load}% -> {loadAfter}% ({SearchService.GetMemoryDiagnostics()})");
+            YaguLog.For("Results").LogInformation(
+                "Memory guard recovered before {Context}: load {Load}% -> {LoadAfter}% ({MemoryDiagnostics})", context, load, loadAfter, SearchService.GetMemoryDiagnostics());
             return true;
         }
 
@@ -71,8 +73,8 @@ public sealed partial class MainWindow
     /// </summary>
     private void HandleResultsOutOfMemory(string context, FileGroup? group, OutOfMemoryException ex)
     {
-        LogService.Instance.Warning("Results",
-            $"Out of memory during {context}; recovering ({SearchService.GetMemoryDiagnostics()})", ex);
+        YaguLog.For("Results").LogWarning(ex,
+            "Out of memory during {Context}; recovering ({MemoryDiagnostics})", context, SearchService.GetMemoryDiagnostics());
         try
         {
             SearchService.TrimProcessWorkingSet();
@@ -92,11 +94,12 @@ public sealed partial class MainWindow
         var now = DateTime.UtcNow;
         bool throttled = (now - _lastResultsMemoryGuardNoticeUtc) < ResultsMemoryGuardNoticeInterval;
 
-        LogService.Instance.Warning("Results",
-            $"Memory guard paused {context}" +
-            (group is null ? string.Empty : $" for '{group.FilePath}' ({group.Count:N0} matches)") +
-            (loadPercent is uint p ? $" at system load {p}%" : string.Empty) +
-            $" ({SearchService.GetMemoryDiagnostics()})");
+        YaguLog.For("Results").LogWarning(
+            "Memory guard paused {Context}{GroupInfo}{LoadInfo} ({MemoryDiagnostics})",
+            context,
+            group is null ? string.Empty : string.Format(System.Globalization.CultureInfo.InvariantCulture, " for '{0}' ({1:N0} matches)", group.FilePath, group.Count),
+            loadPercent is uint p ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " at system load {0}%", p) : string.Empty,
+            SearchService.GetMemoryDiagnostics());
 
         if (throttled)
             return;

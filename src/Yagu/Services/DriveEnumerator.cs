@@ -28,6 +28,21 @@ public static class DriveEnumerator
     ];
 
     /// <summary>
+    /// Canonicalizes the directory-box shorthand for a drive root. A single drive letter such as
+    /// <c>C</c>, or the Windows drive-relative spelling <c>C:</c>, means <c>C:\</c> in Yagu's search UI.
+    /// Other paths are trimmed but otherwise preserved.
+    /// </summary>
+    public static string NormalizeSearchRoot(string? path)
+    {
+        string normalized = path?.Trim() ?? string.Empty;
+        if (normalized.Length == 1 && char.IsAsciiLetter(normalized[0]))
+            return $"{char.ToUpperInvariant(normalized[0])}:\\";
+        if (normalized.Length == 2 && char.IsAsciiLetter(normalized[0]) && normalized[1] == ':')
+            return $"{char.ToUpperInvariant(normalized[0])}:\\";
+        return normalized;
+    }
+
+    /// <summary>
     /// Pure selection: given a set of drive descriptors and the user's opt-in toggles, returns the
     /// distinct root paths (e.g. <c>C:\</c>) that should be searched. Cloud-detected drives are
     /// included only when <paramref name="includeCloud"/> is set, regardless of their underlying
@@ -73,6 +88,31 @@ public static class DriveEnumerator
     /// <summary>Queries the live machine and returns the root paths to search for an all-drives run.</summary>
     public static List<string> GetSearchRoots(bool includeNetwork, bool includeRemovable, bool includeCloud)
         => SelectRoots(EnumerateDrives(), includeNetwork, includeRemovable, includeCloud);
+
+    /// <summary>Returns the drive type for the volume containing a root without probing labels, readiness,
+    /// or free space. Unknown is the safe fallback for malformed/unavailable paths.</summary>
+    public static DriveType GetDriveTypeForPath(string? path)
+        => GetDriveTypeForPath(path, Path.GetPathRoot, root => new DriveInfo(root).DriveType);
+
+    internal static DriveType GetDriveTypeForPath(
+        string? path,
+        Func<string?, string?> getPathRoot,
+        Func<string, DriveType> getDriveType)
+    {
+        try
+        {
+            string? root = getPathRoot(path);
+            return string.IsNullOrWhiteSpace(root) ? DriveType.Unknown : getDriveType(root);
+        }
+        catch
+        {
+            return DriveType.Unknown;
+        }
+    }
+
+    /// <summary>Removable and optical media use owned reads so a device loss cannot fault a mapped page.</summary>
+    public static bool ShouldAvoidSourceMemoryMap(DriveType driveType)
+        => driveType is DriveType.Removable or DriveType.CDRom;
 
     /// <summary>Snapshots every drive the OS reports, classifying readiness, type, and best-effort cloud status.</summary>
     public static IReadOnlyList<DriveDescriptor> EnumerateDrives()

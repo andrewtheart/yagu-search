@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
+
 namespace Yagu.Services;
 
 internal readonly record struct DiskSpaceSnapshot(string RootPath, long TotalBytes, long AvailableBytes)
@@ -65,7 +68,7 @@ internal static class LowDiskSpaceMonitor
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("LowDiskSpaceMonitor", $"Disk-space monitor failed for temp file '{tempFilePath}'", ex);
+                YaguLog.For("LowDiskSpaceMonitor").LogWarning(ex, "Disk-space monitor failed for temp file '{TempFilePath}'", tempFilePath);
             }
         }, CancellationToken.None);
     }
