@@ -4,6 +4,7 @@
     <DataCollectors>
       <DataCollector friendlyName="XPlat Code Coverage">
         <Configuration>
+          <IncludeTestAssembly>true</IncludeTestAssembly>
           <ExcludeByAttribute>ExcludeFromCodeCoverage,CompilerGeneratedAttribute,GeneratedCodeAttribute</ExcludeByAttribute>
           <SkipAutoProps>true</SkipAutoProps>
         </Configuration>

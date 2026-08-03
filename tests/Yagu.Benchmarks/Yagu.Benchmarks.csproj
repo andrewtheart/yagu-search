@@ -20,6 +20,10 @@
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.14.*" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.*" />
+    <!-- The engine's structured logging (YaguLog + source-generated [LoggerMessage] methods on
+         SearchService/ContentSearcher/ZipArchiveSearcher/the content-index code) needs the abstractions
+         package (which also ships the LoggerMessage source generator). -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.*" />
   </ItemGroup>
 
   <!-- xUnit test support for the throughput benchmarks (PerformanceBenchmarkTests). -->
@@ -35,6 +39,7 @@
   <ItemGroup>
     <Compile Include="..\..\src\Yagu\Models\SearchResult.cs" Link="Source\Models\SearchResult.cs" />
     <Compile Include="..\..\src\Yagu\Models\SearchOptions.cs" Link="Source\Models\SearchOptions.cs" />
+    <Compile Include="..\..\src\Yagu\Models\FilterPatternMode.cs" Link="Source\Models\FilterPatternMode.cs" />
     <Compile Include="..\..\src\Yagu\Models\SearchProgress.cs" Link="Source\Models\SearchProgress.cs" />
     <Compile Include="..\..\src\Yagu\Models\FileGroup.cs" Link="Source\Models\FileGroup.cs" />
     <Compile Include="..\..\src\Yagu\Models\BatchObservableCollection.cs" Link="Source\Models\BatchObservableCollection.cs" />
@@ -47,9 +52,12 @@
     <Compile Include="..\..\src\Yagu\Services\FileLister.cs" Link="Source\Services\FileLister.cs" />
     <Compile Include="..\..\src\Yagu\Services\ContentSearcher.cs" Link="Source\Services\ContentSearcher.cs" />
     <Compile Include="..\..\src\Yagu\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />
+    <Compile Include="..\..\src\Yagu\Services\SystemMemoryProvider.cs" Link="Source\Services\SystemMemoryProvider.cs" />
     <Compile Include="..\..\src\Yagu\Services\SearchService.cs" Link="Source\Services\SearchService.cs" />
     <Compile Include="..\..\src\Yagu\Services\SearchRegexFactory.cs" Link="Source\Services\SearchRegexFactory.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticModelGenerationOverride.cs" Link="Source\Services\Ai\SemanticModelGenerationOverride.cs" />
     <Compile Include="..\..\src\Yagu\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\AppUpdateChecker.cs" Link="Source\Services\AppUpdateChecker.cs" />
     <Compile Include="..\..\src\Yagu\Services\CloudFileHelper.cs" Link="Source\Services\CloudFileHelper.cs" />
     <Compile Include="..\..\src\Yagu\Services\TerminalShellKind.cs" Link="Source\Services\TerminalShellKind.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\DiskTypeDetector.cs" Link="Source\Helpers\DiskTypeDetector.cs" />
@@ -57,6 +65,7 @@
          Authenticode signature, so AuthenticodeVerifier.cs must be compiled in too. -->
     <Compile Include="..\..\src\Yagu\Services\AuthenticodeVerifier.cs" Link="Source\Services\AuthenticodeVerifier.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\*.cs" Link="Source\Services\Ocr\%(Filename)%(Extension)" />
+    <Compile Include="..\..\src\Yagu\Services\Pdf\*.cs" Link="Source\Services\Pdf\%(Filename)%(Extension)" />
     <Compile Include="..\..\src\Yagu\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
     <Compile Include="..\..\src\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
     <Compile Include="..\..\src\Yagu\Services\ZipArchiveSearcher.cs" Link="Source\Services\ZipArchiveSearcher.cs" />
@@ -65,10 +74,19 @@
     <Compile Include="..\..\src\Yagu\Services\SearchQueryParser.cs" Link="Source\Services\SearchQueryParser.cs" />
     <Compile Include="..\..\src\Yagu\Services\FileWatchDiagnostics.cs" Link="Source\Services\FileWatchDiagnostics.cs" />
     <Compile Include="..\..\src\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Logging\*.cs" Link="Source\Services\Logging\%(Filename)%(Extension)" />
     <Compile Include="..\..\src\Yagu\Services\DirectOutputSink.cs" Link="Source\Services\DirectOutputSink.cs" />
     <Compile Include="..\..\src\Yagu\Services\ResultStoreTempLocationService.cs" Link="Source\Services\ResultStoreTempLocationService.cs" />
     <Compile Include="..\..\src\Yagu\Native\NativeSearcher.cs" Link="Source\Native\NativeSearcher.cs" />
     <Compile Include="..\..\src\Yagu\Native\EverythingSdk.cs" Link="Source\Native\EverythingSdk.cs" />
+    <!-- Content-index engine (plan §3/§5/§11.4). SearchOptions/FileGroup reference the gate + provenance
+         types, so the whole engine must compile in. IndexTelemetry.cs is excluded (it needs the full
+         TelemetryService HTTP chain, which the benchmark host does not compile). -->
+    <Compile Include="..\..\src\Yagu\Services\Index\*.cs"
+             Exclude="..\..\src\Yagu\Services\Index\IndexTelemetry.cs"
+             Link="Source\Services\Index\%(Filename)%(Extension)" />
+    <Compile Include="..\..\src\Yagu\Helpers\PowerLineStatus.cs" Link="Source\Helpers\PowerLineStatus.cs" />
+    <Compile Include="..\..\src\Yagu\Services\OrphanedWorkerCleanup.cs" Link="Source\Services\OrphanedWorkerCleanup.cs" />
   </ItemGroup>
 
   <ItemGroup>

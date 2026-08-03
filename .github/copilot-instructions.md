@@ -10,7 +10,7 @@ discovery. See [README.md](../README.md) for the feature tour and build prerequi
 
 - **Retain feature parity between the UI and CLI.** The GUI and CLI are the same binary, and every user-facing search/behavior capability should be reachable from both. When you add, change, or remove a feature in one surface, make the equivalent change in the other (or explain why it's intentionally surface-specific) — a new Advanced Option needs a matching CLI flag, and a new CLI flag needs a matching UI affordance. Keep `HELP.md` and the `--help` output in sync when parity changes (see the CLI Documentation Rules and the cli-command-generator instruction).
 
-## Projects (Yagu.sln)
+## Projects (Yagu.slnx)
 
 - **Yagu** — the app. Same binary is both the WinUI 3 GUI and the CLI; [Program.cs](../Yagu/Program.cs) / [App.xaml.cs](../Yagu/App.xaml.cs) dispatch to GUI vs [CliRunner.cs](../Yagu/CliRunner.cs) (CLI mode via `--cli`).
 - **Yagu.Tests** — xUnit. It does **not** reference the Yagu project; instead it `<Compile Include="..\Yagu\...">`'s the engine source files **directly into the test assembly** so `internal` members are testable and coverage works (`IncludeTestAssembly=true`). Adding a new engine/helper `.cs` that a test needs requires adding a matching `<Compile Include>` line to [Yagu.Tests.csproj](../tests/Yagu.Tests/Yagu.Tests.csproj).
@@ -46,9 +46,11 @@ discovery. See [README.md](../README.md) for the feature tour and build prerequi
 - [.github/instructions/terminal.instructions.md](instructions/terminal.instructions.md) — WebView2 + xterm.js over redirected `cmd.exe`, page-side input, WebView2 prerequisite (applies to the terminal service, `MainWindow.Terminal.cs`, `terminal.html`).
 - [.github/instructions/preview-editor.instructions.md](instructions/preview-editor.instructions.md) — preview/editor native-crash guards, search-time highlighting, source-pin brittleness (applies under the `MainWindow.Preview*`/`.MatchNav` partials, vendored TextControlBox).
 - [.github/instructions/performance.instructions.md](instructions/performance.instructions.md) — search hot-path regression guards: Rust scanner/`utf16_col`, FFI/ABI, Everything pushdown, result-eviction, throughput measuring (applies under `src/yagu-core/`, the hot-path services/models, `tests/Yagu.Benchmarks/`).
+- [.github/instructions/indexing.instructions.md](instructions/indexing.instructions.md) — content-index atomicity, interruption/checkpoint semantics, freshness safety, worker isolation, storage recovery, query fallbacks, and UI/CLI parity (applies under `Services/Index`, indexing UI/CLI surfaces, indexing tests, and `HELP.md`).
 - [.github/instructions/winui-conventions.instructions.md](instructions/winui-conventions.instructions.md) — WinUI/XAML conventions: checkbox circles + indeterminate-glyph theme fix, themed dialog surfaces, wrapping-text layout, Native-AOT COM/folder-picker, non-blocking Settings build (applies under `src/Yagu/UI/`, `App.xaml`, `AppThemeService`).
 - [.github/instructions/settings-persistence.instructions.md](instructions/settings-persistence.instructions.md) — settings persistence & search-scope: session-only vs persisted `[JsonIgnore]` toggles, `BinaryExtensions` skip-list, empty exclude/directory contracts, semantic snapshot leak guard (applies to `SettingsService.cs`, `MainViewModel.cs`).
 - [.github/instructions/security.instructions.md](instructions/security.instructions.md) — security invariants: Authenticode-verify downloaded installers, telemetry offline-by-default + build-time secret injection, Function input sanitization, constant-time token compare (applies to `AuthenticodeVerifier`, `Services/Telemetry/`, `Yagu.TelemetryFunction/`, download/exec paths).
+- [.github/instructions/profiling-debugging.instructions.md](instructions/profiling-debugging.instructions.md) — GUI startup self-relaunch: why a profiler/diagnostics session detaches on its own, the `--yagu-gui-child` in-process flag + single-instance mutex, how to attach to the real GUI process (applies to `Program.cs`, `App.xaml.cs`).
 
 ## Azure
 

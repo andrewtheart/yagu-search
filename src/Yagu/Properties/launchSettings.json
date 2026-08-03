@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "Yagu": {
+      "commandName": "Project"
+    },
+    "Yagu (Profiling)": {
+      "commandName": "Project",
+      "commandLineArgs": "--yagu-gui-child"
+    }
+  }
+}

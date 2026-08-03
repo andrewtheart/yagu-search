@@ -39,6 +39,14 @@ default to the iterative `--filter "Category!=Slow&Category!=GPU&Category!=Heade
   substrings / ordering. Pin the actual `return "…"` / statement text (not a bare phrase that might
   also appear in a comment), and widen the scrape window if the anchor has comments before the token.
 
+## Failing-test triage
+
+Treat every failing test as a real product regression until the production behavior has been traced
+and proven correct. Fix production code first whenever behavior changed incorrectly. Update a test
+only after concrete evidence shows that its assertion is stale (for example, a source pin requires an
+obsolete statement shape while equivalent guarded behavior is still present); then preserve the
+original behavioral invariant with the narrowest robust assertion rather than weakening coverage.
+
 ## Adding a source file a test needs
 
 New `.cs` files are NOT auto-included. If a test references a new engine/helper type and fails with
