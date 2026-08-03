@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Ai;
 
@@ -28,11 +29,10 @@ internal sealed class FoundryLoggerAdapter : ILogger
     {
         if (logLevel == Microsoft.Extensions.Logging.LogLevel.None) return false;
 
-        var svc = LogService.Instance;
         return logLevel switch
         {
-            Microsoft.Extensions.Logging.LogLevel.Trace or Microsoft.Extensions.Logging.LogLevel.Debug => svc.IsVerboseEnabled,
-            Microsoft.Extensions.Logging.LogLevel.Information => svc.IsInfoEnabled,
+            Microsoft.Extensions.Logging.LogLevel.Trace or Microsoft.Extensions.Logging.LogLevel.Debug => LogService.Instance.IsVerboseEnabled,
+            Microsoft.Extensions.Logging.LogLevel.Information => LogService.Instance.IsInfoEnabled,
             // Warning and above always pass the default file level (Warning), so let them through.
             _ => true,
         };
@@ -53,21 +53,21 @@ internal sealed class FoundryLoggerAdapter : ILogger
 
         if (string.IsNullOrEmpty(message) && exception is null) return;
 
-        var svc = LogService.Instance;
+        var svc = YaguLog.For(LogSource);
         switch (logLevel)
         {
             case Microsoft.Extensions.Logging.LogLevel.Critical:
-                svc.Critical(LogSource, message, exception);
+                svc.LogCritical(exception, "{Message}", message);
                 break;
             case Microsoft.Extensions.Logging.LogLevel.Error:
             case Microsoft.Extensions.Logging.LogLevel.Warning:
-                svc.Warning(LogSource, message, exception);
+                svc.LogWarning(exception, "{Message}", message);
                 break;
             case Microsoft.Extensions.Logging.LogLevel.Information:
-                svc.Info(LogSource, message);
+                svc.LogInformation("{Message}", message);
                 break;
             default: // Trace, Debug
-                svc.Verbose(LogSource, message, exception);
+                svc.LogDebug(exception, "{Message}", message);
                 break;
         }
     }

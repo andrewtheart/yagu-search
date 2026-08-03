@@ -71,7 +71,7 @@ public sealed class LogService : IDisposable
         set { _installerFileFloor = value; _fileLevel = ClampToInstallerFloor(_fileLevel); }
     }
 
-    public LogService() : this(DefaultLogPath()) { }
+    public LogService() : this(ResolveInstanceLogPath()) { }
 
     public LogService(string logPath)
     {
@@ -79,10 +79,30 @@ public sealed class LogService : IDisposable
         _flushTimer = new Timer(async _ => await FlushAsync(), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
     }
 
+    /// <summary>Absolute path this instance writes to. Exposed so tests can assert the process-wide
+    /// singleton has been isolated away from the real application log during a test run.</summary>
+    internal string LogFilePath => _logPath;
+
+    /// <summary>The default application log path: <c>%APPDATA%\Yagu\yagu.log</c>.</summary>
     public static string DefaultLogPath() =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "Yagu", "yagu.log");
+
+    /// <summary>Environment variable that overrides where the process-wide <see cref="Instance"/>
+    /// singleton writes. The Yagu <b>test suite</b> sets this (via a module initializer) to an
+    /// isolated per-run temp file so a test run never pollutes the real application log at
+    /// <see cref="DefaultLogPath"/>. Support/CI can also set it to capture logs elsewhere.</summary>
+    internal const string LogFileOverrideEnvVar = "YAGU_LOG_FILE";
+
+    /// <summary>Resolves the path the <see cref="Instance"/> singleton writes to: the
+    /// <see cref="LogFileOverrideEnvVar"/> override when set, otherwise <see cref="DefaultLogPath"/>.
+    /// <see cref="DefaultLogPath"/> itself is intentionally left pure (always the AppData path).</summary>
+    internal static string ResolveInstanceLogPath()
+    {
+        string? overridePath = Environment.GetEnvironmentVariable(LogFileOverrideEnvVar);
+        return string.IsNullOrWhiteSpace(overridePath) ? DefaultLogPath() : overridePath;
+    }
 
     public static void Init(LogLevel level)
     {
@@ -171,6 +191,19 @@ public sealed class LogService : IDisposable
 
     public bool IsVerboseEnabled => (_fileLevel != LogLevel.None && LogLevel.Verbose <= _fileLevel)
                                  || (_consoleLevel != LogLevel.None && LogLevel.Verbose <= _consoleLevel);
+
+    /// <summary>True when an entry at <paramref name="level"/> would be written to the file or console
+    /// sink. Used by the Microsoft.Extensions.Logging bridge to gate work before rendering a message
+    /// template (and by source-generated <c>[LoggerMessage]</c> methods via that bridge).</summary>
+    public bool IsEnabled(LogLevel level) =>
+        (_fileLevel != LogLevel.None && level <= _fileLevel)
+        || (_consoleLevel != LogLevel.None && level <= _consoleLevel);
+
+    /// <summary>Structured-logging entry point used by the <c>ILogger</c> bridge (LogServiceLogger). The
+    /// <paramref name="message"/> is already rendered from its template; level gating, the Critical event,
+    /// and the async file queue are shared with the classic string API via <see cref="Write"/>.</summary>
+    internal void WriteStructured(LogLevel level, string source, string message, Exception? ex)
+        => Write(level, source, message, ex);
 
     public void Verbose(string source, string message)
         => Write(LogLevel.Verbose, source, message, null);

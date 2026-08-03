@@ -3,6 +3,15 @@
     <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <!--
+      Structured logging via Microsoft.Extensions.Logging ILogger: we intentionally use plain
+      LogInformation/LogWarning/... off the hot path and reserve source-generated [LoggerMessage]
+      for the performance-critical paths only. Suppress the analyzers that would otherwise flag
+      EVERY plain structured call across the ~800 log sites: CA1848 ("use the LoggerMessage
+      delegates") and CA1873 ("avoid potentially expensive logging" — argument evaluation is
+      acceptable off the hot path). (Matches the pre-existing suppression in Yagu.TelemetryFunction.)
+    -->
+    <NoWarn>$(NoWarn);CA1848;CA1873</NoWarn>
   </PropertyGroup>
 
   <!--

@@ -112,8 +112,8 @@ public sealed class VerboseLogOverrideRegressionTests
         string app = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "App.xaml.cs"));
         string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
-        Assert.Contains("LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);", app);
-        Assert.Contains("LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, LogLevel.Critical);", cli);
+        Assert.Contains("LogService.InitFromSettings((YaguLogLevel)settings.LogLevelIndex, (YaguLogLevel)settings.ConsoleLogLevelIndex);", app);
+        Assert.Contains("LogService.InitFromSettings((YaguLogLevel)settings.LogLevelIndex, YaguLogLevel.Critical);", cli);
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public sealed class VerboseLogOverrideRegressionTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
         return dir?.FullName ?? Directory.GetCurrentDirectory();
     }

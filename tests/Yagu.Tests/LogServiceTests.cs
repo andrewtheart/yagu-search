@@ -28,6 +28,39 @@ public class LogServiceTests : IDisposable
     }
 
     [Fact]
+    public void ResolveInstanceLogPath_HonorsOverrideEnvVar_ElseDefaultsToAppData()
+    {
+        var saved = Environment.GetEnvironmentVariable(LogService.LogFileOverrideEnvVar);
+        try
+        {
+            var custom = Path.Combine(_logDir, "override.log");
+            Environment.SetEnvironmentVariable(LogService.LogFileOverrideEnvVar, custom);
+            Assert.Equal(custom, LogService.ResolveInstanceLogPath());
+
+            Environment.SetEnvironmentVariable(LogService.LogFileOverrideEnvVar, null);
+            Assert.Equal(LogService.DefaultLogPath(), LogService.ResolveInstanceLogPath());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(LogService.LogFileOverrideEnvVar, saved);
+        }
+    }
+
+    [Fact]
+    public void TestSuite_DoesNotLogToRealApplicationLog()
+    {
+        // TestLogIsolation's module initializer must have redirected the process-wide singleton away
+        // from %APPDATA%\Yagu\yagu.log so a test run never pollutes the app's diagnostic log.
+        Assert.False(
+            string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(LogService.LogFileOverrideEnvVar)),
+            "Test suite must set YAGU_LOG_FILE so LogService.Instance never targets the real app log.");
+        Assert.NotEqual(
+            LogService.DefaultLogPath(),
+            LogService.Instance.LogFilePath,
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Write_BelowLevel_IsIgnored()
     {
         using var svc = new LogService(_logPath);
@@ -36,6 +69,27 @@ public class LogServiceTests : IDisposable
         svc.Flush();
         if (File.Exists(_logPath))
             Assert.Empty(File.ReadAllText(_logPath).Trim());
+    }
+
+    [Theory]
+    [InlineData(LogLevel.None, LogLevel.None, LogLevel.Critical, false)]
+    [InlineData(LogLevel.Info, LogLevel.None, LogLevel.Info, true)]
+    [InlineData(LogLevel.Warning, LogLevel.None, LogLevel.Info, false)]
+    [InlineData(LogLevel.None, LogLevel.Info, LogLevel.Info, true)]
+    [InlineData(LogLevel.Warning, LogLevel.Info, LogLevel.Info, true)]
+    public void IsEnabled_CombinesFileAndConsoleThresholds(
+        LogLevel fileLevel,
+        LogLevel consoleLevel,
+        LogLevel eventLevel,
+        bool expected)
+    {
+        using var svc = new LogService(_logPath)
+        {
+            FileLevel = fileLevel,
+            ConsoleLevel = consoleLevel,
+        };
+
+        Assert.Equal(expected, svc.IsEnabled(eventLevel));
     }
 
     [Fact]
