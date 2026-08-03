@@ -1629,7 +1629,7 @@ public sealed class SettingsService
             {
                 using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
                     JsonSerializer.Serialize(fs, settings, AppSettingsJsonContext.Default.AppSettings);
-                File.Move(tmp, _path, overwrite: true);
+                CommitTempFile(tmp, _path);
             }
             finally
             {
@@ -1652,7 +1652,7 @@ public sealed class SettingsService
             {
                 await using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
                     await JsonSerializer.SerializeAsync(fs, settings, AppSettingsJsonContext.Default.AppSettings, cancellationToken).ConfigureAwait(false);
-                File.Move(tmp, _path, overwrite: true);
+                await CommitTempFileAsync(tmp, _path).ConfigureAwait(false);
             }
             finally
             {
@@ -1660,6 +1660,56 @@ public sealed class SettingsService
             }
         }
         catch (Exception ex) { YaguLog.For("Settings").LogWarning(ex, "Failed to save settings to {Path}", _path); }
+    }
+
+    /// <summary>Attempts the temp-file replace once; returns false for a transient lock so the caller can retry.</summary>
+    internal static bool TryCommitTempFile(string tmp, string path, bool isLastAttempt, out Exception? error)
+    {
+        try
+        {
+            // A leftover read-only/hidden destination makes File.Move throw UnauthorizedAccessException
+            // no matter how long we wait, so clear those attributes before the final attempt.
+            if (isLastAttempt && File.Exists(path))
+            {
+                var attributes = File.GetAttributes(path);
+                if ((attributes & (FileAttributes.ReadOnly | FileAttributes.Hidden)) != 0)
+                    File.SetAttributes(path, attributes & ~(FileAttributes.ReadOnly | FileAttributes.Hidden));
+            }
+            File.Move(tmp, path, overwrite: true);
+            error = null;
+            return true;
+        }
+        catch (Exception ex) when (!isLastAttempt && ex is UnauthorizedAccessException or IOException)
+        {
+            error = ex;
+            return false;
+        }
+    }
+
+    /// <summary>Backoff (ms) before retry <paramref name="attempt"/> (1-based) of the atomic replace.</summary>
+    internal static int CommitRetryDelayMs(int attempt) => attempt * 25;
+
+    internal const int CommitAttempts = 5;
+
+    // Antivirus scanners and concurrent readers (the bug-report snapshot reads settings.json) can hold
+    // the destination open for a few milliseconds, which surfaces as UnauthorizedAccessException from
+    // the atomic replace and silently loses the save. Retry briefly instead of giving up immediately.
+    private static void CommitTempFile(string tmp, string path)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            if (TryCommitTempFile(tmp, path, attempt >= CommitAttempts, out _)) return;
+            Thread.Sleep(CommitRetryDelayMs(attempt));
+        }
+    }
+
+    private static async Task CommitTempFileAsync(string tmp, string path)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            if (TryCommitTempFile(tmp, path, attempt >= CommitAttempts, out _)) return;
+            await Task.Delay(CommitRetryDelayMs(attempt)).ConfigureAwait(false);
+        }
     }
 
     public static void PushRecent(List<string> list, string value, int max = AppSettings.MaxRecent)

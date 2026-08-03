@@ -711,6 +711,84 @@ public class SettingsServiceNewFieldTests
         finally { try { File.Delete(tmp); } catch { } }
     }
 
+    // ── Atomic-replace retry (settings silently failed to save when the destination was
+    //    briefly locked: "UnauthorizedAccessException ... at System.IO.FileSystem.MoveFile") ──
+
+    [Fact]
+    public void TryCommitTempFile_ReplacesDestination()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "qg-commit-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string dest = Path.Combine(dir, "settings.json");
+            string tmp = dest + ".tmp";
+            File.WriteAllText(dest, "old");
+            File.WriteAllText(tmp, "new");
+
+            Assert.True(SettingsService.TryCommitTempFile(tmp, dest, isLastAttempt: false, out var error));
+            Assert.Null(error);
+            Assert.Equal("new", File.ReadAllText(dest));
+            Assert.False(File.Exists(tmp));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void TryCommitTempFile_LockedDestination_ReportsTransientFailureInsteadOfThrowing()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "qg-commit-locked-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string dest = Path.Combine(dir, "settings.json");
+            string tmp = dest + ".tmp";
+            File.WriteAllText(dest, "old");
+            File.WriteAllText(tmp, "new");
+
+            using (new FileStream(dest, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                Assert.False(SettingsService.TryCommitTempFile(tmp, dest, isLastAttempt: false, out var error));
+                Assert.NotNull(error);
+            }
+
+            Assert.True(SettingsService.TryCommitTempFile(tmp, dest, isLastAttempt: true, out _));
+            Assert.Equal("new", File.ReadAllText(dest));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void TryCommitTempFile_ReadOnlyDestination_IsClearedOnLastAttempt()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "qg-commit-readonly-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string dest = Path.Combine(dir, "settings.json");
+            string tmp = dest + ".tmp";
+            File.WriteAllText(dest, "old");
+            File.WriteAllText(tmp, "new");
+            File.SetAttributes(dest, File.GetAttributes(dest) | FileAttributes.ReadOnly);
+
+            Assert.True(SettingsService.TryCommitTempFile(tmp, dest, isLastAttempt: true, out _));
+            Assert.Equal("new", File.ReadAllText(dest));
+        }
+        finally
+        {
+            foreach (var f in Directory.GetFiles(dir)) File.SetAttributes(f, FileAttributes.Normal);
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CommitRetryDelay_BacksOff()
+    {
+        Assert.Equal(25, SettingsService.CommitRetryDelayMs(1));
+        Assert.True(SettingsService.CommitRetryDelayMs(2) > SettingsService.CommitRetryDelayMs(1));
+        Assert.True(SettingsService.CommitAttempts > 1);
+    }
+
     [Fact]
     public void RoundTrip_SuppressEverythingNotRunningPrompt()
     {
