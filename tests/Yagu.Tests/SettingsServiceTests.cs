@@ -5,6 +5,34 @@ namespace Yagu.Tests;
 public class SettingsServiceTests
 {
     [Fact]
+    public void Load_MigratesLegacyDisabledUpdateChecksToOff()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            // Legacy settings file: the old per-launch consent bool was turned off, no mode field exists.
+            File.WriteAllText(temp, "{ \"AppUpdateChecksEnabled\": false }");
+            var loaded = new SettingsService(temp).Load();
+            Assert.Equal(AppUpdateCheckMode.Off, loaded.AppUpdateCheckMode);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
+    public void Load_LegacyEnabledUpdateChecks_StaysAtPromptForOneTimeConsent()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            // A legacy user who never opted out should get the improved one-time consent once (Prompt).
+            File.WriteAllText(temp, "{ \"AppUpdateChecksEnabled\": true }");
+            var loaded = new SettingsService(temp).Load();
+            Assert.Equal(AppUpdateCheckMode.Prompt, loaded.AppUpdateCheckMode);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
     public void RoundTrip_Persists()
     {
         var temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
@@ -19,6 +47,7 @@ public class SettingsServiceTests
             var defaultCreatedBefore = new DateTimeOffset(2024, 2, 3, 0, 0, 0, TimeSpan.Zero);
             var defaultModifiedAfter = new DateTimeOffset(2024, 3, 4, 0, 0, 0, TimeSpan.Zero);
             var defaultModifiedBefore = new DateTimeOffset(2024, 4, 5, 0, 0, 0, TimeSpan.Zero);
+            var lastAppUpdateCheck = new DateTimeOffset(2025, 5, 6, 7, 8, 9, TimeSpan.Zero);
             var s = new AppSettings
             {
                 LastDirectory = @"D:\proj",
@@ -42,6 +71,10 @@ public class SettingsServiceTests
                 DefaultCreatedBeforeDate = defaultCreatedBefore,
                 DefaultModifiedAfterDate = defaultModifiedAfter,
                 DefaultModifiedBeforeDate = defaultModifiedBefore,
+                AppUpdateChecksEnabled = false,
+                AppUpdateCheckMode = AppUpdateCheckMode.Manual,
+                LastAppUpdateCheckUtc = lastAppUpdateCheck,
+                LastAppUpdateAlertedVersion = "1.2.3.4",
             };
             s.RecentDirectories.Add(@"D:\a");
             s.SearchHistory.Add("foo");
@@ -82,6 +115,10 @@ public class SettingsServiceTests
             Assert.Equal(defaultCreatedBefore, loaded.DefaultCreatedBeforeDate);
             Assert.Equal(defaultModifiedAfter, loaded.DefaultModifiedAfterDate);
             Assert.Equal(defaultModifiedBefore, loaded.DefaultModifiedBeforeDate);
+            Assert.False(loaded.AppUpdateChecksEnabled);
+            Assert.Equal(AppUpdateCheckMode.Manual, loaded.AppUpdateCheckMode);
+            Assert.Equal(lastAppUpdateCheck, loaded.LastAppUpdateCheckUtc);
+            Assert.Equal("1.2.3.4", loaded.LastAppUpdateAlertedVersion);
             Assert.Equal(string.Empty, loaded.IncludeGlobs);
             Assert.Equal(AppSettings.DefaultExcludeGlobs, loaded.ExcludeGlobs);
             Assert.Equal(0, loaded.IncludeFilterModeIndex);
@@ -147,6 +184,15 @@ public class SettingsServiceCoverageTests
         }
         finally { File.Delete(tmp); }
     }
+
+    [Theory]
+    [InlineData(-1, AppSettings.DefaultFileIoTimeoutSeconds)]
+    [InlineData(0, AppSettings.DefaultFileIoTimeoutSeconds)]
+    [InlineData(1, 1)]
+    [InlineData(30, 30)]
+    [InlineData(1000, AppSettings.MaximumFileIoTimeoutSeconds)]
+    public void NormalizeFileIoTimeoutSeconds_Clamps(int value, int expected)
+        => Assert.Equal(expected, AppSettings.NormalizeFileIoTimeoutSeconds(value));
 
     [Fact]
     public void PushRecent_AddsToFront()
@@ -842,6 +888,15 @@ public class SettingsServiceNewFieldTests
         Assert.Equal(expected, AppSettings.NormalizeImageOcrMaxSide(input));
     }
 
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(-1, 0)]
+    [InlineData(1, 1)]
+    [InlineData(3, 3)]
+    [InlineData(99, 4)]
+    public void NormalizeImageOcrWorkerParallelism_PreservesAutomaticAndClampsExplicit(int input, int expected)
+        => Assert.Equal(expected, AppSettings.NormalizeImageOcrWorkerParallelism(input));
+
     [Fact]
     public void Defaults_ImageOcrQualitySettings()
     {
@@ -850,6 +905,8 @@ public class SettingsServiceNewFieldTests
         Assert.Equal("ChineseV5", AppSettings.DefaultImageOcrModel);
         Assert.Equal(960, s.ImageOcrMaxSide);
         Assert.Equal(960, AppSettings.DefaultImageOcrMaxSide);
+        Assert.Equal(0, s.ImageOcrWorkerParallelism);
+        Assert.Equal(0, AppSettings.DefaultImageOcrWorkerParallelism);
     }
 
     [Fact]
@@ -859,11 +916,17 @@ public class SettingsServiceNewFieldTests
         try
         {
             var svc = new SettingsService(tmp);
-            var s = new AppSettings { ImageOcrModel = "ChineseV5", ImageOcrMaxSide = 1536 };
+            var s = new AppSettings
+            {
+                ImageOcrModel = "ChineseV5",
+                ImageOcrMaxSide = 1536,
+                ImageOcrWorkerParallelism = 3,
+            };
             svc.Save(s);
             var loaded = svc.Load();
             Assert.Equal("ChineseV5", loaded.ImageOcrModel);
             Assert.Equal(1536, loaded.ImageOcrMaxSide);
+            Assert.Equal(3, loaded.ImageOcrWorkerParallelism);
         }
         finally { try { File.Delete(tmp); } catch { } }
     }
@@ -874,11 +937,12 @@ public class SettingsServiceNewFieldTests
         var tmp = Path.Combine(Path.GetTempPath(), "qg-ocr-quality-normalize-" + Guid.NewGuid() + ".json");
         try
         {
-            File.WriteAllText(tmp, """{"ImageOcrModel":"chinesev4","ImageOcrMaxSide":99999}""");
+            File.WriteAllText(tmp, """{"ImageOcrModel":"chinesev4","ImageOcrMaxSide":99999,"ImageOcrWorkerParallelism":99}""");
             var svc = new SettingsService(tmp);
             var loaded = svc.Load();
             Assert.Equal("ChineseV4", loaded.ImageOcrModel);
             Assert.Equal(4096, loaded.ImageOcrMaxSide);
+            Assert.Equal(4, loaded.ImageOcrWorkerParallelism);
         }
         finally { try { File.Delete(tmp); } catch { } }
     }

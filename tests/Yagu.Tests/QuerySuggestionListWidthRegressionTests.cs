@@ -1,8 +1,8 @@
 namespace Yagu.Tests;
 
 /// <summary>
-/// Source-pins for narrowing the query/pattern history dropdown so its right edge lines up with the
-/// "Match case" (Aa) toggle instead of running the full box width under the overlaid toggle strip.
+/// Source-pins for narrowing the query/pattern and directory history dropdowns so their right edges
+/// line up with the first intended command boundary instead of running beneath every overlaid button.
 /// The behavior lives in the WinUI-coupled <c>MainWindow.SearchInput.cs</c> (not compiled into
 /// Yagu.Tests), so it is validated by source-pin.
 /// </summary>
@@ -14,14 +14,48 @@ public sealed class QuerySuggestionListWidthRegressionTests
     [Fact]
     public void OpenChangedHandler_SchedulesTheWidthConstraintForTheQueryBox()
     {
-        // The modal force-close must still run first, then a Low-priority constraint for QueryBox only.
+        // The modal force-close must still run first, then Low-priority constraints selected by box.
         AssertContainsInOrder(SearchInputSource,
             "private void OnInputSuggestionListOpenChanged(DependencyObject sender, DependencyProperty dp)",
             "box.IsSuggestionListOpen = false;",
             "return;",
-            "if (box.IsSuggestionListOpen && ReferenceEquals(box, QueryBox))",
+            "if (box.IsSuggestionListOpen)",
+            "if (ReferenceEquals(box, QueryBox))",
             "DispatcherQueuePriority.Low,",
-            "ConstrainQuerySuggestionListWidth);");
+            "ConstrainQuerySuggestionListWidth);",
+            "else if (ReferenceEquals(box, DirectoryBox))",
+            "DispatcherQueuePriority.Low,",
+            "ConstrainDirectorySuggestionListWidth);");
+    }
+
+    [Fact]
+    public void DirectoryConstraint_TargetsPinButtonRightEdgeAndClampsItsOwnPopup()
+    {
+        AssertContainsInOrder(SearchInputSource,
+            "private void ConstrainDirectorySuggestionListWidth()",
+            "PinStartupDirectoryButton.ActualWidth <= 0",
+            "PinStartupDirectoryButton",
+            ".TransformToVisual(DirectoryBox)",
+            ".TransformPoint(new Windows.Foundation.Point(PinStartupDirectoryButton.ActualWidth, 0)).X;",
+            "_directorySuggestionTargetWidth = pinRight;",
+            "GetOpenPopupsForXamlRoot(xamlRoot)",
+            "IsDescendantOf(popup, DirectoryBox)",
+            "ApplyDirectorySuggestionCardWidth(card);");
+    }
+
+    [Fact]
+    public void DirectoryClampSetsMaxWidthAndReappliesIfFrameworkWidensItBack()
+    {
+        AssertContainsInOrder(SearchInputSource,
+            "private void ApplyDirectorySuggestionCardWidth(FrameworkElement card)",
+            "card.HorizontalAlignment = HorizontalAlignment.Left;",
+            "card.MinWidth = 0;",
+            "card.MaxWidth = _directorySuggestionTargetWidth;");
+
+        AssertContainsInOrder(SearchInputSource,
+            "private void OnDirectorySuggestionCardSizeChanged(object sender, SizeChangedEventArgs e)",
+            "card.ActualWidth > _directorySuggestionTargetWidth + 0.5",
+            "ApplyDirectorySuggestionCardWidth(card);");
     }
 
     [Fact]
@@ -70,7 +104,7 @@ public sealed class QuerySuggestionListWidthRegressionTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
         return dir?.FullName ?? Directory.GetCurrentDirectory();
     }

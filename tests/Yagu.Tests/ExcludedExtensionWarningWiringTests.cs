@@ -39,7 +39,7 @@ public sealed class ExcludedExtensionWarningWiringTests
         // The gate itself runs the HDD check first, then the excluded-extension check.
         int gateStart = SearchInputSource.IndexOf("private async Task<bool> RunPreSearchWarningGatesAsync(", StringComparison.Ordinal);
         Assert.True(gateStart >= 0, "Expected RunPreSearchWarningGatesAsync in MainWindow.SearchInput.cs");
-        string gate = Slice(SearchInputSource, gateStart, 600);
+        string gate = Slice(SearchInputSource, gateStart, 1400);
         int hdd = gate.IndexOf("CheckHddAndWarnAsync", StringComparison.Ordinal);
         int excluded = gate.IndexOf("CheckExcludedExtensionAndWarnAsync", StringComparison.Ordinal);
         Assert.True(hdd >= 0 && excluded > hdd, "The gate must run the HDD check before the excluded-extension check.");
@@ -48,10 +48,11 @@ public sealed class ExcludedExtensionWarningWiringTests
     [Fact]
     public void PreSearchGate_RunsMatchEverythingCheckLast_ModalIsTitlelessAndOffersFilenameListing()
     {
-        // The combined gate runs HDD -> excluded-extension -> match-everything (broad regex) check.
+        // The combined gate runs all scope/index warnings before HDD -> excluded-extension ->
+        // match-everything (broad regex), which remains the final warning check.
         int gateStart = SearchInputSource.IndexOf("private async Task<bool> RunPreSearchWarningGatesAsync(", StringComparison.Ordinal);
         Assert.True(gateStart >= 0, "Expected RunPreSearchWarningGatesAsync in MainWindow.SearchInput.cs");
-        string gate = Slice(SearchInputSource, gateStart, 700);
+        string gate = Slice(SearchInputSource, gateStart, 1500);
         int excluded = gate.IndexOf("CheckExcludedExtensionAndWarnAsync", StringComparison.Ordinal);
         int broad = gate.IndexOf("CheckMatchEverythingPatternAndWarnAsync", StringComparison.Ordinal);
         Assert.True(excluded >= 0 && broad > excluded,
@@ -76,7 +77,7 @@ public sealed class ExcludedExtensionWarningWiringTests
     {
         int idx = MainViewModelSource.IndexOf("public async Task SubmitSearchAsync(", StringComparison.Ordinal);
         Assert.True(idx >= 0, "Expected SubmitSearchAsync in MainViewModel.cs");
-        string method = Slice(MainViewModelSource, idx, 3000);
+        string method = Slice(MainViewModelSource, idx, 3400);
 
         int translate = method.IndexOf("TranslateSemanticQueryAsync()", StringComparison.Ordinal);
         int gate = method.IndexOf("postTranslationGate is not null", StringComparison.Ordinal);
@@ -191,9 +192,16 @@ public sealed class ExcludedExtensionWarningWiringTests
         // unless a semantic resolution is intentionally being shown in Advanced Options.
         int start = MainViewModelSource.IndexOf("partial void OnIsSearchingChanged(bool value)", StringComparison.Ordinal);
         Assert.True(start >= 0, "Expected OnIsSearchingChanged in MainViewModel.cs");
-        string method = Slice(MainViewModelSource, start, 700);
+        string method = Slice(MainViewModelSource, start, 1000);
 
-        Assert.Contains("if (value) return;", method);                       // act only when a search ENDS
+        int searchStartedGuard = method.IndexOf("if (value)", StringComparison.Ordinal);
+        int searchStartedReturn = method.IndexOf("return;", searchStartedGuard, StringComparison.Ordinal);
+        int searchEndedWork = method.IndexOf("SearchInNameFirstPhase = false;", StringComparison.Ordinal);
+        Assert.True(
+            searchStartedGuard >= 0
+                && searchStartedReturn > searchStartedGuard
+                && searchEndedWork > searchStartedReturn,
+            "The transient reset must remain below the early return for a search starting.");
         Assert.Contains("if (!_advancedOptionsTransientlyChanged) return;", method);
         Assert.Contains("_advancedOptionsTransientlyChanged = false;", method);
         Assert.Contains("if (_semanticResolutionVisible) return;", method);  // don't fight semantic display
@@ -305,8 +313,8 @@ public sealed class ExcludedExtensionWarningWiringTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.sln)");
+        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.slnx)");
     }
 }

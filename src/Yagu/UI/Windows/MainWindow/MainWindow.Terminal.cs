@@ -2,12 +2,14 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.Web.WebView2.Core;
 using Windows.ApplicationModel.DataTransfer;
 using Yagu.Services;
+using Yagu.Services.Logging;
 using System.Diagnostics;
 using System.Globalization;
 
@@ -242,7 +244,7 @@ public sealed partial class MainWindow
     {
         try
         {
-            LogService.Instance.Info("Terminal", "Initializing terminal WebView");
+            YaguLog.For("Terminal").LogInformation("Initializing terminal WebView");
             SyncTerminalShellSelectorFromSettings();
             EnsureWebView2LoaderLoaded();
 
@@ -267,16 +269,16 @@ public sealed partial class MainWindow
 
             string terminalHtmlPath = Path.Combine(AppContext.BaseDirectory, "Assets", "terminal.html");
             if (!File.Exists(terminalHtmlPath))
-                LogService.Instance.Warning("Terminal", $"terminal.html was not found at {terminalHtmlPath}; navigating via virtual host anyway.");
+                YaguLog.For("Terminal").LogWarning("terminal.html was not found at {TerminalHtmlPath}; navigating via virtual host anyway.", terminalHtmlPath);
 
-            LogService.Instance.Info("Terminal", $"Navigating terminal WebView to https://yagu-terminal/terminal.html from assets {assetsDir}");
+            YaguLog.For("Terminal").LogInformation("Navigating terminal WebView to https://yagu-terminal/terminal.html from assets {AssetsDir}", assetsDir);
             TerminalWebView.CoreWebView2.Navigate("https://yagu-terminal/terminal.html");
 
             _terminalInitialized = true;
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Terminal", "Terminal WebView initialization failed", ex);
+            YaguLog.For("Terminal").LogWarning(ex, "Terminal WebView initialization failed");
             Debug.WriteLine($"Terminal init failed: {ex}");
             ShowTerminalWebView2MissingMessage();
         }
@@ -297,7 +299,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Terminal", "Failed to show WebView2-missing message", ex);
+            YaguLog.For("Terminal").LogWarning(ex, "Failed to show WebView2-missing message");
         }
     }
 
@@ -315,16 +317,16 @@ public sealed partial class MainWindow
     {
         if (args.IsSuccess)
         {
-            LogService.Instance.Info("Terminal", "Terminal WebView navigation completed successfully");
+            YaguLog.For("Terminal").LogInformation("Terminal WebView navigation completed successfully");
             return;
         }
 
-        LogService.Instance.Warning("Terminal", $"Terminal WebView navigation failed: {args.WebErrorStatus}");
+        YaguLog.For("Terminal").LogWarning("Terminal WebView navigation failed: {WebErrorStatus}", args.WebErrorStatus);
     }
 
     private void OnTerminalWebViewProcessFailed(CoreWebView2 sender, CoreWebView2ProcessFailedEventArgs args)
     {
-        LogService.Instance.Warning("Terminal", $"Terminal WebView process failed: {args.ProcessFailedKind}");
+        YaguLog.For("Terminal").LogWarning("Terminal WebView process failed: {ProcessFailedKind}", args.ProcessFailedKind);
     }
 
     private void OnTerminalWebResourceResponseReceived(CoreWebView2 sender, CoreWebView2WebResourceResponseReceivedEventArgs args)
@@ -337,11 +339,11 @@ public sealed partial class MainWindow
 
             int statusCode = args.Response.StatusCode;
             if (statusCode >= 400)
-                LogService.Instance.Warning("Terminal", $"Terminal WebView resource failed: {statusCode} {uri}");
+                YaguLog.For("Terminal").LogWarning("Terminal WebView resource failed: {StatusCode} {Uri}", statusCode, uri);
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("Terminal", "Failed while reading terminal WebView resource response", ex);
+            YaguLog.For("Terminal").LogDebug(ex, "Failed while reading terminal WebView resource response");
         }
     }
 
@@ -359,7 +361,7 @@ public sealed partial class MainWindow
             switch (type)
             {
                 case "ready":
-                    LogService.Instance.Info("Terminal", "Terminal page reported ready");
+                    YaguLog.For("Terminal").LogInformation("Terminal page reported ready");
                     StartConPtySession();
                     _terminalReadyCompletion.TrySetResult(true);
                     if (_terminalPaneExpanded)
@@ -371,7 +373,7 @@ public sealed partial class MainWindow
                     LogTerminalInput(data);
                     if (_terminalService is null)
                     {
-                        LogService.Instance.Warning("Terminal", "Terminal input received before the shell session was available; starting a terminal session.");
+                        YaguLog.For("Terminal").LogWarning("Terminal input received before the shell session was available; starting a terminal session.");
                         StartConPtySession();
                     }
                     _terminalService?.WriteInput(data, echoInput);
@@ -406,7 +408,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Terminal", $"Failed to process terminal web message: {json}", ex);
+            YaguLog.For("Terminal").LogWarning(ex, "Failed to process terminal web message: {Json}", json);
         }
     }
 
@@ -457,9 +459,9 @@ public sealed partial class MainWindow
             return;
 
         if (string.Equals(level, "warning", StringComparison.OrdinalIgnoreCase) || string.Equals(level, "error", StringComparison.OrdinalIgnoreCase))
-            LogService.Instance.Warning("Terminal", message);
+            YaguLog.For("Terminal").LogWarning("{Message}", message);
         else
-            LogService.Instance.Info("Terminal", message);
+            YaguLog.For("Terminal").LogInformation("{Message}", message);
     }
 
     private void StartConPtySession()
@@ -479,16 +481,16 @@ public sealed partial class MainWindow
         {
             string workingDirectory = ResolveTerminalWorkingDirectory();
             _terminalActiveShellKind = ResolveTerminalShellKind();
-            LogService.Instance.Info("Terminal", $"Starting terminal shell session: shell={_terminalActiveShellKind}, cols={_terminalColumns}, rows={_terminalRows}, cwd='{workingDirectory}'");
+            YaguLog.For("Terminal").LogInformation("Starting terminal shell session: shell={ShellKind}, cols={Cols}, rows={Rows}, cwd='{WorkingDirectory}'", _terminalActiveShellKind, _terminalColumns, _terminalRows, workingDirectory);
             terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: workingDirectory, shellKind: _terminalActiveShellKind);
-            LogService.Instance.Info("Terminal", $"Terminal shell session started: shellPid={terminalService.ProcessId}");
+            YaguLog.For("Terminal").LogInformation("Terminal shell session started: shellPid={ShellPid}", terminalService.ProcessId);
         }
         catch (Exception ex)
         {
             if (ReferenceEquals(_terminalService, terminalService))
                 _terminalService = null;
             terminalService.Dispose();
-            LogService.Instance.Warning("Terminal", "Failed to start terminal shell session", ex);
+            YaguLog.For("Terminal").LogWarning(ex, "Failed to start terminal shell session");
             OnTerminalOutput($"\r\n\x1b[91m[Terminal failed to start: {ex.Message}]\x1b[0m\r\n", sessionGeneration);
         }
     }
@@ -512,7 +514,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Terminal", "Failed to copy terminal selection to clipboard", ex);
+            YaguLog.For("Terminal").LogWarning(ex, "Failed to copy terminal selection to clipboard");
         }
     }
 
@@ -535,7 +537,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Terminal", "Failed to paste clipboard text into terminal", ex);
+            YaguLog.For("Terminal").LogWarning(ex, "Failed to paste clipboard text into terminal");
         }
     }
 
@@ -586,7 +588,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Terminal", "Failed to persist terminal shell selection", ex);
+            YaguLog.For("Terminal").LogWarning(ex, "Failed to persist terminal shell selection");
         }
 
         // Clear the xterm.js surface so the freshly launched shell starts from a clean screen.
@@ -659,7 +661,7 @@ public sealed partial class MainWindow
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("Terminal", "Terminal output post failed", ex);
+                YaguLog.For("Terminal").LogWarning(ex, "Terminal output post failed");
                 Debug.WriteLine($"Terminal output error: {ex.Message}");
             }
         });
@@ -684,7 +686,7 @@ public sealed partial class MainWindow
         filteredText = TerminalDirectoryGuard.RemoveMarkerLine(bufferedOutput, probe.Marker);
         _terminalDirectoryProbe = null;
         probe.Completion.TrySetResult(new TerminalDirectoryProbeResult(verified, actualDirectory));
-        LogService.Instance.Info("Terminal", verified
+        YaguLog.For("Terminal").LogInformation("{Message}", verified
             ? $"Verified terminal cwd before generated CLI command: '{actualDirectory}'"
             : $"Terminal cwd verification failed before generated CLI command: expected '{probe.ExpectedDirectory}', actual '{actualDirectory}'");
         return true;
@@ -716,7 +718,7 @@ public sealed partial class MainWindow
             return;
 
         _terminalStartupPromptNudged = true;
-        LogService.Instance.Info("Terminal", "Sending startup carriage return to command shell after control-only startup packet.");
+        YaguLog.For("Terminal").LogInformation("Sending startup carriage return to command shell after control-only startup packet.");
         _terminalService?.WriteInput("\r");
     }
 
@@ -729,7 +731,7 @@ public sealed partial class MainWindow
         if (!_terminalLoggedFirstOutputPost)
         {
             _terminalLoggedFirstOutputPost = true;
-            LogService.Instance.Info("Terminal", $"Posted first terminal output to WebView: chars={terminalText.Length}");
+            YaguLog.For("Terminal").LogInformation("Posted first terminal output to WebView: chars={Chars}", terminalText.Length);
         }
     }
 
@@ -747,7 +749,7 @@ public sealed partial class MainWindow
             return;
 
         _terminalLoggedFirstInput = true;
-        LogService.Instance.Info("Terminal", $"Terminal host received first input: chars={data.Length}");
+        YaguLog.For("Terminal").LogInformation("Terminal host received first input: chars={Chars}", data.Length);
     }
 
     private static string EscapeForJson(string s)

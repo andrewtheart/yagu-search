@@ -7,8 +7,8 @@ public sealed class CliRunnerRegressionTests
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
-        Assert.Contains("LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, LogLevel.Critical);", source);
-        Assert.DoesNotContain("LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);", source);
+        Assert.Contains("LogService.InitFromSettings((YaguLogLevel)settings.LogLevelIndex, YaguLogLevel.Critical);", source);
+        Assert.DoesNotContain("LogService.InitFromSettings((YaguLogLevel)settings.LogLevelIndex, (YaguLogLevel)settings.ConsoleLogLevelIndex);", source);
     }
 
     [Fact]
@@ -17,6 +17,81 @@ public sealed class CliRunnerRegressionTests
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         Assert.Contains("Eq(tok, \"--help\", \"-help\"", source);
+    }
+
+    [Fact]
+    public void CliRunner_RunsFirstRunPromptsBeforeSearch()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        // The first-run prompts run after settings load and before the search options are built, and use
+        // the settings service bound to the same file the settings were loaded from.
+        Assert.Contains("var settingsService = ResolveSettingsService(args);", source);
+        Assert.Contains("CliFirstRunPrompts.RunAsync(settings, settingsService).GetAwaiter().GetResult();", source);
+        Assert.Contains("private static SettingsService ResolveSettingsService(CliArgs args)", source);
+        int promptsCall = source.IndexOf("CliFirstRunPrompts.RunAsync(", StringComparison.Ordinal);
+        int buildOptions = source.IndexOf("var perRootOptions = BuildPerRootSearchOptions(args, settings);", StringComparison.Ordinal);
+        Assert.True(promptsCall >= 0 && buildOptions > promptsCall,
+            "First-run prompts must run before the per-root search options are built.");
+    }
+
+    [Fact]
+    public void CliFirstRunPrompts_MirrorGuiStartupPromptsGatedBySameSettings()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliFirstRunPrompts.cs"));
+
+        // No-op for automated/piped runs.
+        Assert.Contains("if (Console.IsInputRedirected)", source);
+        // Each prompt gates on the SAME persisted flag as its GUI counterpart, so answering on either
+        // surface suppresses it on the other (true parity).
+        Assert.Contains("if (settings.TelemetryConsentPromptShown)", source);
+        Assert.Contains("if (settings.HasChosenSearchResultTempDirectory &&", source);
+        Assert.Contains("if (settings.HasCompletedFirstRun)", source);
+        Assert.Contains("if (!settings.SemanticSearchEnabled || settings.CpuSemanticWarningShown)", source);
+        Assert.Contains("if (settings.HasPromptedIndexOnboarding)", source);
+        Assert.Contains("DefaultContentIndexPathProvider.TryGetPreservedStorageDirectory", source);
+        Assert.Contains("DefaultContentIndexPathProvider.ClearPreservedStorageDirectory();", source);
+        Assert.Contains("settings.IndexedRoots.Count > 0", source);
+        Assert.Contains(".GetReusableStoredIndexRoots()", source);
+        Assert.Contains("Existing content indexes found:", source);
+        Assert.Contains("Use these indexes again without rebuilding them? [Y/n]", source);
+        Assert.Contains("settings.IndexedRoots = IndexedRootsPolicy.Add(settings.IndexedRoots, root);", source);
+        Assert.DoesNotContain(".HasReadableStoredIndex()", source);
+        Assert.Contains("FoundryModelUpdateChecker.ShouldCheck(", source);
+        // Actions reuse the same services as the GUI.
+        Assert.Contains("ExplorerContextMenu.Register();", source);
+        Assert.Contains("settings.IndexedRoots = IndexedRootsPolicy.Add(settings.IndexedRoots, folder);", source);
+        Assert.Contains("IndexBuildOperationFactory.CreateBuild(settings, effectiveRoot, rebuild: false)", source);
+        Assert.Contains("coordinator.BuildFullScopePreferWorkerAsync(", source);
+    }
+
+    [Fact]
+    public void CliFirstRunIndexOnboarding_AllowsMultipleFoldersAndABuildTrigger()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliFirstRunPrompts.cs"));
+
+        // Parity with the GUI onboarding dialog: enter one or more folders, then choose build trigger(s).
+        Assert.Contains("Enter one or more folder paths to index", source);
+        Assert.Contains("var effectiveRoots = new List<string>();", source);
+        Assert.Contains("foreach (string effectiveRoot in effectiveRoots)", source);
+        // The build trigger prompt normalizes the combined selection (Manual when none).
+        Assert.Contains("settings.IndexBuildTrigger = PromptIndexBuildTrigger(settings.IndexBuildTrigger);", source);
+        Assert.Contains("private static string PromptIndexBuildTrigger(string currentTrigger)", source);
+        Assert.Contains("AppSettings.NormalizeIndexBuildTrigger(string.Join(\",\", selected))", source);
+    }
+
+    [Fact]
+    public void ExplorerContextMenu_IsSharedByGuiAndCli()
+    {
+        string gui = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SettingsMenus.cs"));
+        string service = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "ExplorerContextMenu.cs"));
+
+        // Both surfaces write the identical registry keys via the shared service (no drift).
+        Assert.Contains("private static bool IsContextMenuRegistered() => ExplorerContextMenu.IsRegistered();", gui);
+        Assert.Contains("private static void RegisterContextMenu() => ExplorerContextMenu.Register();", gui);
+        Assert.Contains(@"Software\Classes\Directory\shell\Yagu", service);
+        Assert.Contains(@"Software\Classes\Directory\Background\shell\Yagu", service);
+        Assert.Contains("\"Search with Yagu\"", service);
     }
 
     [Fact]
@@ -85,7 +160,7 @@ public sealed class CliRunnerRegressionTests
         AssertContainsInOrder(source,
             "Path.Combine(Directory.GetCurrentDirectory(), LocalSettingsFileName)",
             "var launchSettings = ResolveProcessLaunchSettingsPath();",
-            "return new SettingsService().Load();");
+            "return new SettingsService();");
         Assert.Contains("Environment.ProcessPath", source);
         Assert.Contains("AppContext.BaseDirectory", source);
         Assert.Contains("If not, Yagu checks the running process launch", source);
@@ -127,6 +202,211 @@ public sealed class CliRunnerRegressionTests
 
         // --sort now accepts the directory/dir keys (previously rejected as unknown).
         Assert.Contains("or \"size\" or \"name\" or \"filename\" or \"directory\" or \"dir\" or \"path\")", source);
+    }
+
+    [Fact]
+    public void CliParser_RecognizesContentIndexFlags()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        // Per-search flags and management-command flags are parsed.
+        Assert.Contains("Eq(tok, \"--use-index\")", source);
+        Assert.Contains("Eq(tok, \"--no-index\")", source);
+        Assert.Contains("Eq(tok, \"--build-index\")", source);
+        Assert.Contains("Eq(tok, \"--rebuild-index\")", source);
+        Assert.Contains("Eq(tok, \"--index-status\")", source);
+        Assert.Contains("Eq(tok, \"--index-config\")", source);
+        Assert.Contains("Eq(tok, \"--clear-indexes\", \"--clear-index\")", source);
+        Assert.Contains("TryGetVal(raw, ref i, out v, \"--delete-index\")", source);
+        Assert.Contains("stored records:", source);
+        Assert.Contains("created (UTC):", source);
+        Assert.Contains("active generation built (UTC):", source);
+        Assert.Contains("last incremental update (UTC):", source);
+
+        // Indexed-folder root management commands.
+        Assert.Contains("Eq(tok, \"--index-list-roots\")", source);
+        Assert.Contains("Eq(tok, \"--index-add-root\")", source);
+        Assert.Contains("Eq(tok, \"--index-remove-root\")", source);
+        Assert.Contains("return RunIndexRoots(args);", source);
+        Assert.Contains("IndexedRootsPolicy.Add(settings.IndexedRoots", source);
+        Assert.Contains("IndexedRootsPolicy.Remove(settings.IndexedRoots", source);
+
+        // Per-folder glob overrides (plan §6.1): set/clear a root's include/exclude globs + list them.
+        Assert.Contains("Eq(tok, \"--index-set-root-filter\")", source);
+        Assert.Contains("Eq(tok, \"--index-clear-root-filter\")", source);
+        Assert.Contains("TryGetVal(raw, ref i, out v, \"--root-include\")", source);
+        Assert.Contains("TryGetVal(raw, ref i, out v, \"--root-exclude\")", source);
+        Assert.Contains("IndexedRootFilterPolicy.Normalize(filters)", source);
+        Assert.Contains("IndexedRootFilterPolicy.Find(settings.IndexedRootFilters, root)", source);
+
+        // Backing args + the management short-circuit dispatch.
+        Assert.Contains("public bool?            UseContentIndex { get; private set; }", source);
+        Assert.Contains("public bool IsIndexManagementCommand", source);
+        Assert.Contains("if (args.IsIndexManagementCommand)", source);
+        Assert.Contains("return RunIndexManagement(args);", source);
+    }
+
+    [Fact]
+    public void CliIndexStatus_ExplainsRepairableAndMissingSourceStates()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        Assert.Contains("status.Health == IndexStorageHealth.SourceMissing", source);
+        Assert.Contains("ContentIndexUiStatus.StorageHealthLabel(status.Health)", source);
+        Assert.Contains("Yagu.exe --cli --rebuild-index", source);
+        Assert.Contains("Yagu.exe --cli --delete-index", source);
+        Assert.Contains("searches safely live-scan until this is resolved", source);
+    }
+
+    [Fact]
+    public void CliSearchOptions_AttachContentIndexGateFactoryWhenOptedIn()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        // The CLI accelerates the same way the GUI does: when the search opts into the index, it attaches
+        // a closure that builds the pruning gate off-thread at discovery start (plan §5).
+        Assert.Contains("if (searchOptions.UseContentIndex)", source);
+        Assert.Contains("searchOptions.ContentIndexGateFactory = () =>", source);
+        Assert.Contains("return ContentIndexSearchGate.TryCreate(", source);
+        Assert.Contains("DefaultContentIndexPathProvider.Create(gateStorageDir)", source);
+        Assert.Contains("return searchOptions;", source);
+
+        // Size gate (plan §6.1): the CLI never loads a layered index larger than the in-process size limit
+        // (a multi-GB deserialize would be slower than a live scan) — it live-scans that scope instead.
+        Assert.Contains("int gateMaxInProcessSizeMB = AppSettings.NormalizeIndexMaxInProcessSizeMB(gateSettings.IndexMaxInProcessSizeMB);", source);
+        Assert.Contains("ResolveBestAvailableIndexRoot(gateOptions.Directory, gateSettings.IndexedRoots)", source);
+        Assert.Contains("if (!ContentIndexSearchGate.IsScopeWithinInProcessSizeLimit(gatePathProvider, indexRoot, gateRetained, gateMaxInProcessSizeMB))", source);
+
+
+        // Opt-in worker path (plan §3.3): when IndexUseNativeWorker is on, the CLI passes an
+        // IndexWorkerQuerySource so the query runs in the isolated worker (falls back in-process on failure).
+        Assert.Contains("gateSettings.IndexUseNativeWorker", source);
+        Assert.Contains("new IndexWorkerQuerySource(new IndexWorkerClient())", source);
+        Assert.Contains("candidateSource: gateCandidateSource", source);
+
+        // Stage-5 worker pruning (plan §5.8): gated by the IndexUseWorkerQuerySessions setting, the CLI
+        // sets a ContentIndexPruningScanFactory that builds+opens a PRUNING worker session via
+        // ContentIndexShadowScopeBuilder.TryCreatePruningScan (the in-process gate returns null when on).
+        Assert.Contains("if (gateSettings.IndexUseWorkerQuerySessions)", source);
+        Assert.Contains("searchOptions.ContentIndexPruningScanFactory = survivorSink =>", source);
+        Assert.Contains("ContentIndexShadowScopeBuilder.TryCreatePruningScan(", source);
+        // Out-of-process size cap (IndexMaxWorkerQuerySizeMB, default 30 GB): the CLI worker path is bounded
+        // too — an index over the worker cap live-scans instead of engaging the worker.
+        Assert.Contains("int gateMaxWorkerQuerySizeMB = AppSettings.NormalizeIndexMaxWorkerQuerySizeMB(gateSettings.IndexMaxWorkerQuerySizeMB);", source);
+        Assert.Contains("if (!ContentIndexSearchGate.IsScopeWithinWorkerMappedSizeLimit(pruningPathProvider, indexRoot, gateRetained, gateMaxWorkerQuerySizeMB))", source);
+    }
+
+    [Fact]
+    public void CliIndexManagement_ConsolidatesOverlapsAndSkipsDuplicateChildBuilds()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        Assert.Contains("IndexedRootsPolicy.FindBestCoveringRoot(settings.IndexedRoots, requested)", source);
+        Assert.Contains("is already covered by indexed root", source);
+        Assert.Contains("consolidated {coveredDescendants.Count} narrower covered root(s)", source);
+        Assert.Contains("Skipped duplicate index build", source);
+        Assert.Contains("parent and child indexes are never opened together", source);
+    }
+
+    [Fact]
+    public void CliCompletionSummary_ReportsContentIndexCoverage()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        // Parity with the GUI post-search coverage indicator (plan §6.2): the CLI prints a content-index
+        // line from the aggregated summary's IndexAcceleration when the index participated.
+        Assert.Contains("s.IndexAcceleration is { RequestedRoots: > 0 } idx", source);
+        Assert.Contains("ContentIndexUiStatus.CoverageCliSummary(coverage, idx.FilesPruned)", source);
+    }
+
+    [Fact]
+    public void CliWarnings_AvoidDuplicatePressureAndEmptyPowerShellErrorRecords()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        // Repeated pressure events still acknowledge eviction, but only the first emits a warning.
+        Assert.Contains("bool memoryPressureWarningShown = false;", source);
+        Assert.Contains("if (!memoryPressureWarningShown)", source);
+        Assert.Contains("memoryPressureWarningShown = true;", source);
+
+        // Empty stderr records can appear as the literal RemoteException type in PowerShell hosts.
+        Assert.Contains("msg = msg.TrimStart('\\r', '\\n');", source);
+        Assert.Contains("if (msg.Length == 0)", source);
+        Assert.Contains("msg = \" \";", source);
+    }
+
+    [Fact]
+    public void CliPlainStreaming_PrintsManagedFilenameMatchesThroughDirectOutputStream()
+    {
+        string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+        string search = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
+
+        Assert.Contains("object? directOutputLock = directStream is null ? null : new object();", cli);
+        Assert.Contains("rootOptions.DirectOutputLock = directOutputLock;", cli);
+        Assert.Contains("directStream?.Flush();", cli);
+        Assert.Contains("DirectOutputSink.WriteFileNameMatches(", search);
+        Assert.Contains("outputLock: options.DirectOutputLock", search);
+    }
+
+    [Fact]
+    public void CliRunner_ThreadsUseContentIndexIntoSearchOptions()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        // Default derives from settings and is gated on the master feature; per-search flag overrides.
+        Assert.Contains("bool useContentIndex = (args.UseContentIndex ?? s.UseContentIndexByDefault) && s.EnableContentIndex;", source);
+        Assert.Contains("UseContentIndex       = useContentIndex,", source);
+    }
+
+    [Fact]
+    public void CliRunner_IndexManagementUsesSharedServicesAndExitCodes()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        // Management commands go through the shared managed services and stable exit codes.
+        Assert.Contains("new ContentIndexManager(pathProvider, retained)", source);
+        Assert.Contains("ContentIndexConfigService.Reset(settings)", source);
+        Assert.Contains("ContentIndexConfigService.SetMany(settings, pairs)", source);
+        Assert.Contains("ContentIndexConfigService.GetAll(settings)", source);
+        Assert.Contains("(int)ContentIndexExitCode.UnsupportedScope", source);
+        Assert.Contains("(int)ContentIndexExitCode.BuildFailure", source);
+        Assert.Contains("(int)ContentIndexExitCode.InvalidArguments", source);
+    }
+
+    [Fact]
+    public void CliIndexSettingsChanges_PrintExactRebuildRecommendations()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        Assert.Contains("ContentIndexSettingsSnapshot before = ContentIndexSettingsChangeAdvisor.Capture(settings);", source);
+        Assert.Contains("WriteIndexRebuildRecommendation(ContentIndexSettingsChangeAdvisor.Analyze(", source);
+        Assert.Contains("private static void WriteIndexRebuildRecommendation(ContentIndexSettingsChangeAdvice advice)", source);
+        Assert.Contains("Rebuild recommended for {advice.AffectedRoots.Count} maintained index(es):", source);
+        Assert.Contains("Yagu.exe --cli --rebuild-index", source);
+    }
+
+    [Fact]
+    public void CliHelp_DocumentsContentIndexFlags()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        Assert.Contains("CONTENT INDEX (opt-in accelerator):", source);
+        Assert.Contains("--build-index [<path>]", source);
+        Assert.Contains("--index-config <k>=<v>", source);
+        Assert.Contains("--index-add-root <path>", source);
+    }
+
+    [Fact]
+    public void HelpMarkdown_DocumentsContentIndexCli()
+    {
+        string help = File.ReadAllText(Path.Combine(FindRepoRoot(), "HELP.md"));
+
+        Assert.Contains("### Content Index (CLI)", help);
+        Assert.Contains("`--use-index`", help);
+        Assert.Contains("`--build-index [<path>]`", help);
+        Assert.Contains("`--index-config reset`", help);
+        Assert.Contains("`--index-add-root <path>`", help);
+        Assert.Contains("Build-output changes print the affected roots", help);
     }
 
     [Fact]
@@ -228,24 +508,42 @@ public sealed class CliRunnerRegressionTests
     }
 
     [Fact]
-    public void CliParser_RecognizesImageOcrQualityFlags()
+    public void CliParser_RecognizesImageOcrQualityAndWorkerFlags()
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // Parser recognizes the model and detection-resolution options.
         Assert.Contains("TryGetVal(raw, ref i, out v, \"--ocr-model\")", source);
         Assert.Contains("TryGetInt(raw, ref i, out n, \"--ocr-max-side\")", source);
+        Assert.Contains("TryGetInt(raw, ref i, out n, \"--ocr-workers\")", source);
         // Nullable arg properties exist so the settings default applies when the flag is omitted.
         Assert.Contains("public string?          ImageOcrModel { get; private set; }", source);
         Assert.Contains("public int?             ImageOcrMaxSide { get; private set; }", source);
+        Assert.Contains("public int?             ImageOcrWorkerParallelism { get; private set; }", source);
         // Built into SearchOptions with the settings value as the fallback.
         Assert.Contains("ImageOcrModel         = imageOcrModel", source);
         Assert.Contains("ImageOcrMaxSide       = imageOcrMaxSide", source);
+        Assert.Contains("ImageOcrWorkerParallelism = imageOcrWorkerParallelism", source);
         Assert.Contains("args.ImageOcrModel ?? s.ImageOcrModel", source);
         Assert.Contains("args.ImageOcrMaxSide ?? s.ImageOcrMaxSide", source);
+        Assert.Contains("args.ImageOcrWorkerParallelism ?? s.ImageOcrWorkerParallelism", source);
+        Assert.Contains("OcrWorkerParallelism.Resolve(", source);
+        Assert.Contains("s.LimitParallelismOnHdd,", source);
         // Help mentions the flags.
         Assert.Contains("--ocr-model <name>", source);
         Assert.Contains("--ocr-max-side <px>", source);
+        Assert.Contains("--ocr-workers <0-4>", source);
+    }
+
+    [Fact]
+    public void CliPerRootOptions_ApplyHddLimiterToExplicitAndAllDriveSearches()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        Assert.Contains("bool isHardDisk = Yagu.Helpers.DiskTypeDetector.IsHardDisk(root);", source);
+        Assert.Contains("if (s.LimitParallelismOnHdd && isHardDisk)", source);
+        Assert.Contains("BuildSearchOptions(args, s, root, parallelism, isHardDisk: isHardDisk)", source);
+        Assert.Contains("BuildSearchOptions(args, s, root, p, backendOverride, isHardDisk)", source);
     }
 
     [Fact]
@@ -265,6 +563,18 @@ public sealed class CliRunnerRegressionTests
         // Declining drops to a literal Traditional search of the typed text.
         Assert.Contains("args.FallBackSemanticToTraditional();", source);
         Assert.Contains("Using Traditional search for:", source);
+    }
+
+    [Fact]
+    public void SemanticSingleToken_BypassesModelAndRunsTraditionalSearch()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        AssertContainsInOrder(source,
+            "string semanticText = args.SemanticPattern?.Trim() ?? string.Empty;",
+            "if (SemanticQuerySalvage.IsSingleTokenQuery(semanticText))",
+            "return FallBackToTraditional(args);",
+            "new FoundryLocalSemanticQueryTranslator");
     }
 
     [Fact]
@@ -340,7 +650,7 @@ public sealed class CliRunnerRegressionTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
         return dir?.FullName ?? Directory.GetCurrentDirectory();
     }

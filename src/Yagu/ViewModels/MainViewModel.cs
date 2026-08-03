@@ -7,6 +7,8 @@ using Yagu.Models;
 using Yagu.Helpers;
 using Yagu.Services;
 using Yagu.Services.Ai;
+using Yagu.Services.Index;
+using Yagu.Services.Ocr;
 using System.Collections;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
@@ -15,6 +17,9 @@ using System.Runtime;
 using System.Security;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
+using YaguLogLevel = Yagu.Services.LogLevel;
 
 namespace Yagu.ViewModels;
 
@@ -73,8 +78,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private bool _semanticResolutionVisible;
     private bool _queryModeInitialized;
     private CancellationTokenSource? _searchStatusHeartbeatCts;
+    private CancellationTokenSource? _resourceMonitorCts;
+    private static readonly TimeSpan IndexStorageSizeRefreshInterval = TimeSpan.FromMinutes(1);
+    private string _cachedIndexStorageRoot = string.Empty;
+    private FileListerBackend _cachedIndexStorageBackend;
+    private IndexStorageSizeMeasurement _cachedIndexStorageSize;
+    private DateTimeOffset _nextIndexStorageSizeRefreshUtc = DateTimeOffset.MinValue;
+    private bool _hasCachedIndexStorageSize;
+    private CancellationTokenSource? _indexStorageMeasurementCts;
 
     private CancellationTokenSource? _cts;
+    private IReadOnlyList<string> _activeSearchRoots = Array.Empty<string>();
     private readonly SemaphoreSlim _searchLifecycleGate = new(1, 1);
     private int _searchRunId;
     private AppSettings _settings;
@@ -82,6 +96,27 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private ResultStore? _resultStore;
     private CancellationTokenSource _metadataCts = new();
     private bool _metadataSortFilterRefreshQueued;
+    // Content-index pruning gates captured for the CURRENT search (one per accelerated root), used to
+    // classify per-file result provenance (plan §6.2). Read-only queries only; cleared each new search.
+    private readonly object _indexGatesLock = new();
+    private readonly List<Yagu.Services.Index.ContentIndexSearchGate> _activeIndexGates = new();
+    // Stage-5 worker pruning scans captured for the CURRENT search (one per root the worker serves), used to
+    // badge index-member result files. Guarded by _indexGatesLock; cleared each new search.
+    private readonly List<Yagu.Services.Index.IContentIndexPruningScan> _activePruningScans = new();
+    // Long-lived out-of-process index-worker query source, created on first use when the user opts into
+    // IndexUseNativeWorker (plan §3.3). Reused across searches; disposed with the VM.
+    private Yagu.Services.Index.IndexWorkerClient? _indexWorkerClient;
+    private Yagu.Services.Index.IIndexCandidateSource? _indexWorkerSource;
+    private readonly object _indexWorkerLock = new();
+    // Monotonic id for each mapped-query shadow session (plan §6 Stage 3). Unique per open so concurrent
+    // per-root shadow sessions never collide in the worker's session table.
+    private int _shadowQuerySessionId;
+    // Startup/query index warm-up. Query-mode deserialization is cancellable so beginning a search can
+    // stop the memory/IO-heavy warm rather than letting both compete and forcing the search into repeated GC.
+    private CancellationTokenSource? _indexWarmCancellation;
+    private int _indexWarmGeneration;
+    private string? _activeIndexWarmFolder;
+    private string? _resumeIndexWarmFolder;
     private bool _clearedDefaultExcludeForRegexMode;
     private readonly List<SortCriterion> _sortCriteria = [new(1, 0)];
     private readonly HashSet<string> _selectedExtensionFilters = new(StringComparer.OrdinalIgnoreCase);
@@ -111,6 +146,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private const double SearchSortRefreshIntervalMaxSec = 30.0;
     private const long SearchSortRefreshSlowBudgetMs = 500;
     private const int SearchSortRefreshDegradedDeferGroupThreshold = 20_000;
+
+    /// <summary>
+    /// The live persisted settings object. Exposed so the Settings window's Indexing tab can read and
+    /// write the many <c>Index*</c> ingestion/storage/scheduling fields directly through the shared
+    /// <c>AppSettings.Normalize*</c> validators (plan §6.1). Everything else uses the observable
+    /// view-model properties; direct mutation here is persisted by <see cref="PersistSettingsAsync"/>,
+    /// which saves the whole object, and reverted by the Settings window's cancel/restore.
+    /// </summary>
+    internal AppSettings Settings => _settings;
 
     public MainViewModel() : this(new SearchService(), new SettingsService(), new EditorLauncher(),
                                    DispatcherQueue.GetForCurrentThread())
@@ -173,6 +217,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         // Whether to release the model from VRAM after each translation (frees GPU memory between AI
         // searches at the cost of a reload); mirrors the AI settings toggle.
         _semanticTranslator.SetUnloadAfterUse(_settings.SemanticUnloadModelAfterUse);
+        // Per-model text-generation overrides (Temperature/TopP/MaxTokens/RandomSeed/Frequency/Presence).
+        // Empty by default; a power user can tune a specific model variant via settings.json.
+        _semanticTranslator.SetModelGenerationOverrides(_settings.SemanticModelParameterOverrides);
         DefaultToTraditionalSearchMode = _settings.DefaultToTraditionalSearchMode;
         SemanticModelAlias = _settings.SemanticModelAlias;
         SemanticDevicePreferenceOrder = _settings.SemanticDevicePreferenceOrder;
@@ -316,6 +363,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         LineTruncationLength = _settings.LineTruncationLength;
         MaxRecentItems = _settings.MaxRecentItems;
         MaxSemanticRecentItems = _settings.MaxSemanticRecentItems;
+        AutocompleteDropdownVisibleItems = _settings.AutocompleteDropdownVisibleItems;
         GlobalHotkeyEnabled = _settings.GlobalHotkeyEnabled;
         GlobalHotkeyKey = HotkeyService.TryNormalizeLetter(_settings.GlobalHotkeyKey, out var hotkeyKey)
             ? hotkeyKey.ToString()
@@ -333,15 +381,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         MaxMatchesPerFile = _settings.MaxMatchesPerFile;
         ApplyMaxMatchesPerFile(MaxMatchesPerFile);
         MaxMatchesPerLine = _settings.MaxMatchesPerLine;
+        FileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds(_settings.FileIoTimeoutSeconds);
         AbsoluteMaxResults = _settings.AbsoluteMaxResults;
         SkipBinary = _settings.SkipBinary;
         SearchOnlineOnlyFiles = _settings.SearchOnlineOnlyFiles;
         SearchHiddenFiles = _settings.SearchHiddenFiles;
         SearchImageText = _settings.SearchImageText;
         SearchPdfText = _settings.SearchPdfText;
+        // Session-only per-search content-index toggle (plan §5/§6.1). Seeded from the effective
+        // default (master feature on AND used-by-default on); never persisted, so a per-search
+        // opt-in/opt-out cannot change the saved default. Overrides apply on top of this.
+        UseContentIndex = _settings.ContentIndexActiveByDefault;
         ImageOcrEngine = _settings.ImageOcrEngine;
         ImageOcrModel = _settings.ImageOcrModel;
         ImageOcrMaxSide = _settings.ImageOcrMaxSide;
+        ImageOcrWorkerParallelism = _settings.ImageOcrWorkerParallelism;
         PinStartupDirectory = _settings.PinStartupDirectory;
         SearchInsideArchives = _settings.SearchInsideArchives;
         SettingsSkipExtensions = _settings.SkipExtensions;
@@ -352,6 +406,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         ArchiveExtensions = SettingsArchiveExtensions;
         SuppressAdminWarning = _settings.SuppressAdminWarning;
         SuppressEverythingNotRunningPrompt = _settings.SuppressEverythingNotRunningPrompt;
+        SuppressEverythingIndexCoverageWarning = _settings.SuppressEverythingIndexCoverageWarning;
         SuppressExcludedExtensionWarnings = _settings.SuppressExcludedExtensionWarnings;
         IncludeExcludedExtensionByDefault = _settings.IncludeExcludedExtensionByDefault;
         SuppressFontContrastWarnings = _settings.SuppressFontContrastWarnings;
@@ -397,7 +452,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
         MaxMatchesPerSection = _settings.MaxMatchesPerSection;
         PreviewSectionPageSize = _settings.PreviewSectionPageSize;
+        MaxSelectedFilesPerPreview = _settings.MaxSelectedFilesPerPreview;
+        MaxSelectedResultsPerPreview = _settings.MaxSelectedResultsPerPreview;
+        MaxRenderedMatchesPerSection = _settings.MaxRenderedMatchesPerSection;
         FullFilePreviewLimitMB = _settings.FullFilePreviewLimitMB;
+        FullFilePreviewMaxRenderLines = _settings.FullFilePreviewMaxRenderLines;
+        FullFilePreviewMaxRenderChars = _settings.FullFilePreviewMaxRenderChars;
         ArchiveMaxNestingDepth = _settings.ArchiveMaxNestingDepth;
         ArchiveMaxEntryMB = _settings.ArchiveMaxEntryMB;
 
@@ -415,6 +475,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SyncArchiveExtensionItems();
         // From here on, toggling "Search binary" drives the dropdown selection (see OnSkipBinaryChanged).
         _binaryExtensionsInitialized = true;
+
+        // Start the slow (10 s) status-bar resource monitor (disk temp + Yagu/worker RAM). Runs entirely off
+        // the UI thread and self-cancels on Dispose.
+        StartResourceUsageMonitor();
     }
 
     private static int NormalizePreviewWrapModeIndex(bool legacyPreviewWordWrap, int modeIndex)
@@ -438,22 +502,60 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         try { _dirAutoCompleteCts?.Cancel(); } catch { }
         try { _metadataCts.Cancel(); } catch { }
         try { _semanticCts?.Cancel(); } catch { }
+        try { _indexWarmCancellation?.Cancel(); } catch { }
+        try { _indexRebuildCancellation?.Cancel(); } catch { }
         StopSearchStatusHeartbeat();
+        StopResourceUsageMonitor();
         _cts?.Dispose();
         _dirAutoCompleteCts?.Dispose();
         _metadataCts.Dispose();
         _semanticCts?.Dispose();
+        _indexWarmCancellation?.Dispose();
         if (_semanticTranslator is IAsyncDisposable semanticDisposable)
         {
             try { _ = semanticDisposable.DisposeAsync().AsTask(); } catch { }
         }
-        _searchLifecycleGate.Dispose();
+        // Cancellation completes asynchronously; leave the lifecycle gate valid for the search finally.
         _resultStore?.Dispose();
+        try { _indexWorkerClient?.Dispose(); } catch { }
         GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// Lazily creates (once) and returns the long-lived out-of-process index-worker candidate source used
+    /// when <see cref="AppSettings.IndexUseNativeWorker"/> is on (plan §3.3). Reused across searches and
+    /// disposed with the view model. Never throws — construction is cheap (the worker process starts lazily
+    /// on the first query), and any later worker failure falls back to in-process evaluation.
+    /// </summary>
+    private Yagu.Services.Index.IIndexCandidateSource GetOrCreateIndexWorkerSource()
+    {
+        // Shares the single long-lived client with the Stage-3 shadow query pipeline (both created together).
+        GetOrCreateIndexWorkerClient();
+        return _indexWorkerSource!;
+    }
+
+    /// <summary>
+    /// Lazily creates (once) and returns the long-lived out-of-process index-worker client, shared by the
+    /// in-process-fallback candidate source (<see cref="GetOrCreateIndexWorkerSource"/>) and the Stage-3
+    /// mapped-query shadow pipeline so both reuse one worker process. Disposed with the view model.
+    /// </summary>
+    private Yagu.Services.Index.IndexWorkerClient GetOrCreateIndexWorkerClient()
+    {
+        lock (_indexWorkerLock)
+        {
+            if (_indexWorkerClient is null)
+            {
+                _indexWorkerClient = new Yagu.Services.Index.IndexWorkerClient();
+                _indexWorkerSource = new Yagu.Services.Index.IndexWorkerQuerySource(_indexWorkerClient);
+            }
+            return _indexWorkerClient;
+        }
     }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsCurrentDirectoryPinned))]
+    [NotifyPropertyChangedFor(nameof(IsCurrentDirectoryIndexed))]
+    [NotifyPropertyChangedFor(nameof(CurrentDirectoryIndexRoot))]
     public partial string Directory { get; set; } = string.Empty;
     [ObservableProperty] public partial string Query { get; set; } = string.Empty;
     [ObservableProperty] public partial bool CaseSensitive { get; set; }
@@ -535,6 +637,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         CaseSensitive = true;
         ExactMatch = false;
         Query = Yagu.Helpers.CodeAnnotationQuery.Pattern;
+    }
+
+    /// <summary>Loads a curated developer "quick search" (see <see cref="Yagu.Helpers.QuickSearchPresets"/>)
+    /// into the search box in Traditional regex mode. The caller submits the search afterwards.</summary>
+    public void ApplyQuickSearchPreset(Yagu.Helpers.QuickSearchPreset preset)
+    {
+        ArgumentNullException.ThrowIfNull(preset);
+        IsSemanticQueryMode = false;
+        UseRegex = true;
+        ExactMatch = false;
+        CaseSensitive = preset.CaseSensitive;
+        Query = preset.Pattern;
     }
 
     // ── Semantic search (Foundry Local) ──
@@ -677,7 +791,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// translation phase — it is replaced by the morphing Cancel button so the user can't fire a
     /// second concurrent run (which would corrupt the local model's in-flight inference).</summary>
     public Microsoft.UI.Xaml.Visibility SearchModeSplitButtonVisibility =>
-        SemanticSearchAvailable && !IsSearching && !IsTranslatingSemanticQuery
+        SemanticSearchAvailable && !IsSearching && !IsPreparingSearch && !IsTranslatingSemanticQuery
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
@@ -685,7 +799,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// chevron) or whenever a search is running — including the semantic translation phase — so it
     /// can morph into the red Cancel action the moment the user clicks Search.</summary>
     public Microsoft.UI.Xaml.Visibility SearchActionButtonVisibility =>
-        !SemanticSearchAvailable || IsSearching || IsTranslatingSemanticQuery
+        !SemanticSearchAvailable || IsSearching || IsPreparingSearch || IsTranslatingSemanticQuery
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
@@ -804,14 +918,22 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private bool SafeDetectAcceleratedHardware()
     {
         try { return _capabilityDetector.HasAcceleratedHardware(); }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            YaguLog.For("Capability").LogWarning(ex, "Accelerated-hardware detection failed → assuming no acceleration.");
+            return false;
+        }
     }
 
     /// <summary>Runs a capability probe, swallowing any fault as "not present" so startup never breaks.</summary>
     private static bool SafeDetect(Func<bool> probe)
     {
         try { return probe(); }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            YaguLog.For("Capability").LogWarning(ex, "A capability probe failed → treating the capability as unavailable.");
+            return false;
+        }
     }
 
     /// <summary>Reads the machine's dedicated GPU VRAM (bytes) for the larger-model auto-upgrade
@@ -819,7 +941,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private long SafeDetectGpuMemoryBytes()
     {
         try { return _capabilityDetector.GetMaxDedicatedGpuMemoryBytes(); }
-        catch { return 0; }
+        catch (Exception ex)
+        {
+            YaguLog.For("Capability").LogWarning(ex, "GPU VRAM detection failed → treating available VRAM as unknown (0).");
+            return 0;
+        }
     }
 
     [ObservableProperty] public partial int ContextLines { get; set; } = 3;
@@ -912,6 +1038,30 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         1 => SearchResultCollection.FormatExtensionDisplayName(_selectedExtensionFilters.First()),
         _ => $"{_selectedExtensionFilters.Count:N0} extensions",
     };
+
+    // ── Group / Filter menu breadcrumbs ──
+    // A short "you are here" path shown at the top of the Group and Filter menus when a selection is
+    // active, e.g. "Folder \u203A A-Z" or "By date \u203A Last week", so the current choice is visible
+    // without opening the submenus. Built on demand by the menu Opening handlers (no live binding needed).
+    public bool HasGroupBreadcrumb => GroupMode != GroupMode.None;
+    public string GroupBreadcrumb => HasGroupBreadcrumb
+        ? $"{GroupModeLabel}  \u203A  {GroupSortDirectionLabel}"
+        : string.Empty;
+
+    public bool HasFilterBreadcrumb => DateRangeFilter != DateRangeFilter.None || HasExtensionFilter;
+    public string FilterBreadcrumb
+    {
+        get
+        {
+            var parts = new List<string>(2);
+            if (DateRangeFilter != DateRangeFilter.None)
+                parts.Add($"By date  \u203A  {DateRangeFilterLabel}");
+            if (HasExtensionFilter)
+                parts.Add($"By extension  \u203A  {ExtensionFilterLabel}");
+            return string.Join("      ", parts);
+        }
+    }
+
 
     public IReadOnlyList<SortCriterion> SortCriteria => _sortCriteria;
 
@@ -1132,21 +1282,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial int IoOversubscriptionIndex { get; set; }
 
     /// <summary>
-    /// Session-only parallelism override applied when the search target is detected on a rotational
-    /// HDD. When non-null it takes precedence over <see cref="ParallelismIndex"/> for the actual
-    /// search, but is never written back to <see cref="ParallelismIndex"/> nor persisted to settings.
-    /// It is cleared when the user explicitly changes the parallelism setting, and lost on restart.
-    /// </summary>
-    private int? _sessionParallelismOverrideIndex;
-
-    /// <summary>
-    /// Applies a session-only parallelism override (e.g. limiting to 1 thread on an HDD). This does
-    /// NOT modify the persisted <see cref="ParallelismIndex"/> setting; it only affects searches in
-    /// the current session until the app restarts or the user changes parallelism in Settings.
-    /// </summary>
-    public void SetSessionParallelismOverride(int index) => _sessionParallelismOverrideIndex = index;
-
-    /// <summary>
     /// One-shot per-search parallelism override for HDD roots, chosen from the HDD warning dialog.
     /// When set, the next search uses <see cref="ResolveParallelism"/> of this index for HDD roots
     /// instead of forcing them to 1 thread. Consumed (cleared) when the search starts, so it applies
@@ -1160,10 +1295,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// </summary>
     public void SetHddParallelismOverrideForNextSearch(int index) => _hddParallelismOverrideIndexForNextSearch = index;
 
-    // When the user (or settings load) explicitly changes the persisted parallelism index, drop any
-    // session-only HDD override so the user's choice takes effect.
-    partial void OnParallelismIndexChanged(int value) => _sessionParallelismOverrideIndex = null;
-
     [ObservableProperty] public partial int LineTruncationLength { get; set; } = 500;
 
     // Propagate the per-match truncation length to the shared LineTruncator the moment the user
@@ -1173,6 +1304,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     [ObservableProperty] public partial int MaxRecentItems { get; set; } = 20;
     [ObservableProperty] public partial int MaxSemanticRecentItems { get; set; } = 20;
+
+    // How many autocomplete suggestions are visible at once (before scrolling) in the directory and
+    // search-pattern dropdowns. Distinct from the "max ... to remember" history caps. Default 5.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AutocompleteDropdownMaxHeight))]
+    public partial int AutocompleteDropdownVisibleItems { get; set; } = 5;
+
+    // Approximate rendered height (px) of one autocomplete suggestion row, used to convert the visible-item
+    // count into the AutoSuggestBox MaxSuggestionListHeight.
+    private const double AutocompleteItemHeightPx = 40;
+
+    /// <summary>The suggestion-list max height (px) that shows <see cref="AutocompleteDropdownVisibleItems"/>
+    /// rows before scrolling. Bound to both AutoSuggestBoxes' MaxSuggestionListHeight. Row count clamped
+    /// 1..50 defensively so a hand-edited setting can't collapse or balloon the dropdown.</summary>
+    public double AutocompleteDropdownMaxHeight => System.Math.Clamp(AutocompleteDropdownVisibleItems, 1, 50) * AutocompleteItemHeightPx;
     [ObservableProperty] public partial bool GlobalHotkeyEnabled { get; set; }
     [ObservableProperty] public partial int MemoryLimitMB { get; set; }
     [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 75;
@@ -1184,6 +1330,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
     [ObservableProperty] public partial int MaxMatchesPerLine { get; set; }
+    [ObservableProperty] public partial int FileIoTimeoutSeconds { get; set; }
     [ObservableProperty] public partial int AbsoluteMaxResults { get; set; }
     [ObservableProperty] public partial double MaxSearchDepth { get; set; } = double.NaN;
 
@@ -1234,6 +1381,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// <c>SearchPdfText</c> setting and surfaced as the Advanced Options ▸ Filters toggle.</summary>
     [ObservableProperty] public partial bool SearchPdfText { get; set; }
 
+    /// <summary>Session-only per-search opt-in to the persistent content index (plan §5/§6.1). Seeded
+    /// from the effective default (<see cref="AppSettings.ContentIndexActiveByDefault"/>: master feature
+    /// on AND used-by-default on) and surfaced as the Advanced Options ▸ Filters toggle. Never persisted;
+    /// it only changes whether the ordinary-text candidate set is pruned and is orthogonal to the image/
+    /// PDF/archive content-source toggles. When the master feature is off it has no effect.</summary>
+    [ObservableProperty] public partial bool UseContentIndex { get; set; }
+
     /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp) or
     /// "tesseract". Defaults to <see cref="AppSettings.EffectiveDefaultImageOcrEngine"/> (PaddleSharp on
     /// x64/Arm64; Tesseract on x86, where PaddleOCR's x64-only runtime cannot load). Settings-only.</summary>
@@ -1248,6 +1402,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// Larger values find smaller text at the cost of speed; 0 means unlimited (use the image's
     /// native resolution). Settings-only; configured on the OCR settings tab.</summary>
     [ObservableProperty] public partial int ImageOcrMaxSide { get; set; } = AppSettings.DefaultImageOcrMaxSide;
+
+    /// <summary>Independent OCR worker processes used by image-text search. 0 = conservative automatic;
+    /// explicit range 1–4. The effective count is resolved separately for each root so the existing
+    /// HDD parallelism safeguard can force one process on rotational media.</summary>
+    [ObservableProperty] public partial int ImageOcrWorkerParallelism { get; set; } = AppSettings.DefaultImageOcrWorkerParallelism;
 
     /// <summary>When true, the directory box is restored to <see cref="AppSettings.PinnedStartupDirectory"/>
     /// at launch; when false, the box starts empty (search all drives). Bound to the star toggle next to
@@ -1268,6 +1427,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             (Directory ?? string.Empty).Trim().TrimEnd('\\', '/'),
             _settings.PinnedStartupDirectory!.Trim().TrimEnd('\\', '/'),
             StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The registered root that covers the directory currently shown in the box, or null.</summary>
+    public string? CurrentDirectoryIndexRoot => string.IsNullOrWhiteSpace(Directory)
+        ? null
+        : IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, Directory!);
+
+    /// <summary>True when the current directory is either an explicit registered index root or lies below
+    /// one. The indexing toggle therefore stays selected for <c>C:\src</c> when the single maintained root
+    /// is <c>C:\</c>, instead of encouraging a redundant child index.</summary>
+    public bool IsCurrentDirectoryIndexed => CurrentDirectoryIndexRoot is not null;
 
 
     /// <summary>UI-facing inverse of <see cref="SkipBinary"/> for the "Search binary" toggle.</summary>
@@ -1310,7 +1479,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial int NativeConcurrencyLimit { get; set; }
     [ObservableProperty] public partial int MaxMatchesPerSection { get; set; }
     [ObservableProperty] public partial int PreviewSectionPageSize { get; set; }
+    // Configurable preview safety caps (0 = use the built-in default; see the Effective* properties in
+    // MainWindow.PreviewCommands.cs / MainWindow.PreviewBuilder.cs). They bound how much of a very large
+    // checked selection or a huge file the preview surface prepares/renders so the UI stays responsive.
+    [ObservableProperty] public partial int MaxSelectedFilesPerPreview { get; set; }
+    [ObservableProperty] public partial int MaxSelectedResultsPerPreview { get; set; }
+    [ObservableProperty] public partial int MaxRenderedMatchesPerSection { get; set; }
     [ObservableProperty] public partial int FullFilePreviewLimitMB { get; set; }
+    [ObservableProperty] public partial int FullFilePreviewMaxRenderLines { get; set; }
+    [ObservableProperty] public partial int FullFilePreviewMaxRenderChars { get; set; }
     [ObservableProperty] public partial int ArchiveMaxNestingDepth { get; set; }
     [ObservableProperty] public partial int ArchiveMaxEntryMB { get; set; }
 
@@ -1395,6 +1572,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         get => _suppressEverythingNotRunningPrompt;
         set => SetProperty(ref _suppressEverythingNotRunningPrompt, value);
     }
+    [ObservableProperty] public partial bool SuppressEverythingIndexCoverageWarning { get; set; }
     [ObservableProperty] public partial DateTimeOffset? FontContrastReminderAfterUtc { get; set; }
 
     [ObservableProperty] public partial bool ExcludeAdminProtectedPaths { get; set; } = true;
@@ -1466,6 +1644,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     [ObservableProperty] public partial string SearchResultTempDirectory { get; set; } = string.Empty;
     [ObservableProperty] public partial bool HasChosenSearchResultTempDirectory { get; set; }
+
+    // ── Status-bar resource indicators (measured off the UI thread; see RunResourceUsageMonitorAsync).
+    // TempUsage* reports this process's evicted-result files, IndexUsage* reports all content-index storage,
+    // and RamUsage* reports Yagu + its worker children. The index total is cached for one minute and is never
+    // refreshed while a search is running. ──
+    [ObservableProperty] public partial string TempUsageText { get; set; } = string.Empty;
+    [ObservableProperty] public partial string TempUsageTooltip { get; set; } = string.Empty;
+    [ObservableProperty] public partial string IndexUsageText { get; set; } = string.Empty;
+    [ObservableProperty] public partial string IndexUsageTooltip { get; set; } = string.Empty;
+    [ObservableProperty] public partial string RamUsageText { get; set; } = string.Empty;
+    [ObservableProperty] public partial string RamUsageTooltip { get; set; } = string.Empty;
+
     [ObservableProperty] public partial bool LimitParallelismOnHdd { get; set; } = true;
     [ObservableProperty] public partial bool SuppressHddParallelismWarnings { get; set; }
     [ObservableProperty] public partial bool SearchAllDrivesIncludesNetwork { get; set; }
@@ -2013,7 +2203,39 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [NotifyPropertyChangedFor(nameof(SearchModeSplitButtonVisibility))]
     [NotifyPropertyChangedFor(nameof(SearchActionButtonVisibility))]
     [NotifyPropertyChangedFor(nameof(ProgressTooltip))]
+    [NotifyPropertyChangedFor(nameof(IsSearchActive))]
     public partial bool IsSearching { get; set; }
+
+    /// <summary>True from the instant a search is initiated from the UI until the file scan actually
+    /// commits (<see cref="IsSearching"/> flips true) or the pre-search gate phase aborts. It lets the
+    /// Search button morph to Cancel and the indeterminate progress bar appear immediately, instead of
+    /// waiting out the multi-second pre-search gate work (e.g. the content-index journal-replay readiness
+    /// check). Cleared in <see cref="ResetStateForNewSearch"/> when the scan commits, or by
+    /// <see cref="EndSearchPreparation"/> when a gate aborts the run.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSearchActive))]
+    [NotifyPropertyChangedFor(nameof(SearchProgressIndeterminate))]
+    [NotifyPropertyChangedFor(nameof(SearchProgressRightLabel))]
+    [NotifyPropertyChangedFor(nameof(SearchModeSplitButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(SearchActionButtonVisibility))]
+    public partial bool IsPreparingSearch { get; set; }
+
+    /// <summary>True while a search is either being prepared (pre-scan gates) or actively scanning. Drives
+    /// the progress-overlay visibility so the bar also shows during the gate phase.</summary>
+    public bool IsSearchActive => IsSearching || IsPreparingSearch;
+
+    /// <summary>True during the fast filename name-first pass (and its brief priority content scan), before
+    /// the full-drive scan total is established. Set true when a scan commits and latched false once a
+    /// progress snapshot reports the full phase, so the bar stays indeterminate across preparing + name-first
+    /// and only becomes determinate for the single 0→100% content-scan climb.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SearchProgressIndeterminate))]
+    [NotifyPropertyChangedFor(nameof(SearchProgressRightLabel))]
+    public partial bool SearchInNameFirstPhase { get; set; }
+
+    /// <summary>The search progress bar is indeterminate while preparing (pre-scan gates) or during the
+    /// name-first pass, and determinate for the full content scan (a single 0→100% climb).</summary>
+    public bool SearchProgressIndeterminate => IsPreparingSearch || SearchInNameFirstPhase;
 
     /// <summary>True from the instant the user clicks Cancel until the in-flight file scan or semantic
     /// translation actually stops. Cancellation isn't instantaneous — a large search keeps draining
@@ -2026,6 +2248,203 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial string StatusText { get; set; } = string.Empty;
     [ObservableProperty] public partial string? ErrorText { get; set; }
     [ObservableProperty] public partial string? FallbackReason { get; set; }
+
+    /// <summary>Main-window content-index availability indicator (plan §6.2). Reflects whether a usable
+    /// index exists for the folder(s) the current search covers. It is presence-only and never implies
+    /// acceleration — the tooltip states files are still read live in this build. Updated per search by
+    /// <see cref="RefreshIndexStatusAsync"/>; hidden unless the feature and its status setting are on.</summary>
+    [ObservableProperty] public partial string IndexStatusText { get; set; } = string.Empty;
+    [ObservableProperty] public partial string IndexStatusGlyph { get; set; } = string.Empty;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IndexStatusAccessibleHelpText))]
+    public partial string IndexStatusTooltip { get; set; } = string.Empty;
+    [ObservableProperty] public partial bool ShowIndexStatus { get; set; }
+
+    /// <summary>One line per ready local drive and explicitly maintained index root. Unlike the
+    /// current-search status, this launch-time snapshot is not discarded when a search changes roots.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AllDriveIndexStatusVisibility))]
+    [NotifyPropertyChangedFor(nameof(IndexStatusAccessibleHelpText))]
+    public partial string AllDriveIndexStatusText { get; set; } = string.Empty;
+
+    public string IndexStatusAccessibleHelpText => string.IsNullOrWhiteSpace(AllDriveIndexStatusText)
+        ? IndexStatusTooltip
+        : IndexStatusTooltip + Environment.NewLine + Environment.NewLine
+            + "All-drive and indexed-folder health:" + Environment.NewLine + AllDriveIndexStatusText;
+
+    /// <summary>True while the current search root's query index is being loaded into the process-wide
+    /// immutable query cache. The status bar shows "Indexing: preparing..." until this becomes false.</summary>
+    [ObservableProperty] public partial bool IsIndexWarmActive { get; set; }
+
+    /// <summary>True after a user starts a search while warming and the warm has been cancelled until that
+    /// search finishes. This is separate from pausing index builds.</summary>
+    [ObservableProperty] public partial bool IsIndexWarmPausedForSearch { get; set; }
+
+    /// <summary>The root currently warming, or the root queued to resume after the active search.</summary>
+    public string? ActiveIndexWarmFolder => _activeIndexWarmFolder ?? _resumeIndexWarmFolder;
+
+    /// <summary>Big, highly-visible percent for the custom "Indexing…" tooltip (e.g. "47%"); paired with
+    /// <see cref="ShowIndexBuildPercent"/> and <see cref="IndexBuildPercentValue"/>. Distinct from the
+    /// descriptive <see cref="IndexStatusTooltip"/> text — only populated while a build is actively running
+    /// with a known estimate.</summary>
+    [ObservableProperty] public partial string IndexBuildPercentText { get; set; } = string.Empty;
+
+    /// <summary>The estimated percent-complete (0–99) driving the progress bar in the custom "Indexing…"
+    /// tooltip.</summary>
+    [ObservableProperty] public partial int IndexBuildPercentValue { get; set; }
+
+    /// <summary>True while the custom "Indexing…" tooltip should show the big percent + progress bar (a
+    /// build is running and its estimate is known). Drives <see cref="IndexBuildPercentVisibility"/>.</summary>
+    [ObservableProperty] public partial bool ShowIndexBuildPercent { get; set; }
+
+    /// <summary>True while an on-demand index rebuild triggered from the status-bar indicator's
+    /// "Index date … (click to rebuild)" menu is running. Drives the full-window blocking overlay that
+    /// prevents any other interaction until the rebuild finishes.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanCancelIndexRebuild))]
+    public partial bool IsIndexRebuildBlocking { get; set; }
+
+    private bool _indexBlockingOperationIsRebuild = true;
+
+    /// <summary>True after the user requests cancellation until the worker-backed rebuild has observed
+    /// its token and unwound. Keeps the overlay visible while disabling the button against repeat clicks.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanCancelIndexRebuild))]
+    [NotifyPropertyChangedFor(nameof(IndexRebuildCancelButtonText))]
+    public partial bool IsIndexRebuildCancelling { get; set; }
+
+    public bool CanCancelIndexRebuild => IsIndexRebuildBlocking && !IsIndexRebuildCancelling;
+    public string IndexRebuildOverlayTitle => _indexBlockingOperationIsRebuild
+        ? "Rebuilding the content index"
+        : "Building the content index";
+    public string IndexRebuildCancelButtonText => IsIndexRebuildCancelling
+        ? "Canceling…"
+        : _indexBlockingOperationIsRebuild ? "Cancel rebuild" : "Cancel build";
+
+    /// <summary>The 0–100 progress of the blocking index rebuild, driving the overlay's progress bar.</summary>
+    [ObservableProperty] public partial double IndexRebuildProgressPercent { get; set; }
+
+    /// <summary>The descriptive status line of the blocking index rebuild overlay (which root, how far).</summary>
+    [ObservableProperty] public partial string IndexRebuildProgressText { get; set; } = string.Empty;
+
+    /// <summary>Whole-number percent label for the blocking index rebuild overlay (e.g. "42%").</summary>
+    public string IndexRebuildProgressPercentLabel => $"{IndexRebuildProgressPercent:F0}%";
+    partial void OnIndexRebuildProgressPercentChanged(double value) => OnPropertyChanged(nameof(IndexRebuildProgressPercentLabel));
+
+    /// <summary>Searched folders that have no content index yet and are not already registered in
+    /// <see cref="AppSettings.IndexedRoots"/>. When non-empty the status indicator can offer Add folder.</summary>
+    public IReadOnlyList<string> IndexStatusFoldersWithoutIndex { get; private set; } = Array.Empty<string>();
+
+    /// <summary>Searched folders that are already registered in <see cref="AppSettings.IndexedRoots"/>
+    /// but do not have a usable on-disk generation yet. These need Build now, not Add folder.</summary>
+    public IReadOnlyList<string> IndexStatusRegisteredFoldersWithoutIndex { get; private set; } = Array.Empty<string>();
+
+    /// <summary>True when clicking the main-window index indicator can offer to register a searched folder.</summary>
+    public bool IndexStatusCanAddFolder => IndexStatusFoldersWithoutIndex.Count > 0;
+
+    /// <summary>True when clicking the status should open Settings ▸ Indexing to build a registered root.</summary>
+    public bool IndexStatusCanBuildRegisteredFolder => IndexStatusRegisteredFoldersWithoutIndex.Count > 0;
+
+    // Background index-build activity (onboarding build, startup auto-build, Settings "Build now"): while
+    // any is running the main-window index indicator shows "Indexing…" instead of availability/coverage.
+    private int _activeIndexBuilds;
+    private string? _activeIndexBuildFolder;
+    private bool _activeIndexBuildIsIncremental;
+    private IReadOnlyList<string> _lastIndexStatusRoots = Array.Empty<string>();
+    private bool _lastIndexStatusUseThisSearch;
+    // Searched roots that currently have a readable on-disk index, plus the oldest of their build times.
+    // Captured per search by RefreshIndexStatusAsync and read (on the UI thread) when the status-bar
+    // indicator's right-click menu builds its "Index date … (click to rebuild)" item.
+    private IReadOnlyList<string> _currentIndexBuiltRoots = Array.Empty<string>();
+    private DateTimeOffset? _currentIndexBuiltUtc;
+    private readonly Dictionary<string, (DateTimeOffset? CreatedUtc, DateTimeOffset? BuiltUtc, DateTimeOffset? LastIncrementalUpdateUtc)> _currentIndexDatesByRoot =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ContentIndexManager.ScopeFreshnessStatus> _currentIndexFreshnessByRoot =
+        new(StringComparer.OrdinalIgnoreCase);
+    // Global launch-time health remains separate from current-search coverage. Search callbacks may
+    // replace the context label/tooltip, but an unhealthy drive still keeps warning precedence and the
+    // hover overlay always retains every drive/root row.
+    private IReadOnlyList<IndexRootHealthEntry> _allDriveIndexHealth = Array.Empty<IndexRootHealthEntry>();
+    public IReadOnlyList<IndexRootHealthEntry> AllDriveIndexHealth => _allDriveIndexHealth;
+    private int _allDriveIndexHealthRefreshGeneration;
+    // Session-only: set when the user turns the content index off (persistent) from the status-indicator
+    // menu, so the indicator stays visible as "Index: off" this session — otherwise the menu that offers
+    // "Enable indexing" would vanish with the indicator. Reset by re-enabling and never persisted.
+    private bool _indexOffIndicatorSticky;
+    // Immediate B0 index-routing status for the current search. Updated on the UI thread by the
+    // per-root gate callbacks; prevents the slower availability refresh from overwriting a known bypass.
+    private int _indexRuntimeStatusRunId;
+    private readonly HashSet<string> _indexRuntimeAttemptedRoots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _indexRuntimeAcceleratedRootPaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _indexRuntimeBypassReasonsByRoot = new(StringComparer.OrdinalIgnoreCase);
+    private string? _indexRuntimeBypassReason;
+
+    // Right-click "pause indexing": a VM-owned cancellation source that main-window-tracked builds observe,
+    // plus the folder to re-kick when the user resumes.
+    private CancellationTokenSource? _indexBuildCancellation;
+    // Dedicated cancellation for the full-window on-demand rebuild. Linked to the shared build token so
+    // global pause/disable still stops it, but canceling this overlay does not leave indexing paused.
+    private CancellationTokenSource? _indexRebuildCancellation;
+    private string? _pausedIndexBuildFolder;
+
+    /// <summary>
+    /// Hook the main window installs so <see cref="ResumeIndexing"/> can re-run the multi-root
+    /// auto/startup/scheduled build pass (which the view owns) when the paused build had no single tracked
+    /// folder. Without it, resuming such a pass could only clear the indicator to "index available".
+    /// Returns a task that runs the pass over the registered folders; never throws.
+    /// </summary>
+    public Func<Task>? ResumeAutoIndexBuildAsync { get; set; }
+
+    /// <summary>Session-only Developer Options override for the WhenIdle maintenance trigger. This
+    /// changes only the idle verdict; the normal trigger, pause, search, battery, disk-space, and build
+    /// eligibility gates still apply. It deliberately is not copied to <see cref="AppSettings"/>.</summary>
+    [ObservableProperty] public partial bool SimulateSystemIdle { get; set; }
+
+    /// <summary>Hook installed by the main window so Developer Options can evaluate the real WhenIdle
+    /// scheduler immediately instead of waiting for its next 30-second timer tick.</summary>
+    public Func<Task>? RequestIdleIndexMaintenanceAsync { get; set; }
+
+    // Set when a build was stopped because the index drive hit the used-space limit; makes the indicator
+    // show a disk-full warning (instead of the generic paused state) until the user resumes.
+    private string? _indexDiskFullMessage;
+
+    // Estimated percent-complete (0–99) of the active build, or -1 when unknown. Shown at the end of the
+    // "Indexing…" tooltip. Reported periodically by the build via ReportIndexBuildProgress.
+    private int _indexBuildPercent = -1;
+
+    /// <summary>True while one or more background index builds are running (drives the "Indexing…" indicator).</summary>
+    public bool IsIndexBuildActive => _activeIndexBuilds > 0;
+
+    /// <summary>The folder whose index is actively building for a single-folder build (onboarding add /
+    /// Settings "Build now"), or null for a multi-root pass with no single tracked folder. Lets the
+    /// Settings folder list overlay a live "Indexing… N%" on the exact row being built.</summary>
+    public string? ActiveIndexBuildFolder => _activeIndexBuildFolder;
+
+    /// <summary>True when the active tracked index operation is an incremental journal update rather than
+    /// a complete staged build. Used by exit warnings so interruption consequences are described accurately.</summary>
+    public bool IsActiveIndexBuildIncremental => _activeIndexBuildIsIncremental;
+
+    /// <summary>Session-only flag: the user paused indexing from the status-bar indicator's right-click menu.
+    /// While set, tracked builds are cancelled and auto/startup/watcher builds are skipped until resumed.</summary>
+    [ObservableProperty] public partial bool IsIndexingPaused { get; set; }
+
+    /// <summary>True when the status-bar indicator can offer "Pause indexing" (a build is active and not
+    /// already paused).</summary>
+    public bool CanPauseIndexing => IsIndexBuildActive && !IsIndexingPaused;
+
+    /// <summary>A cancellation token for main-window-tracked index builds; cancelled when the user pauses
+    /// indexing. Callers pass it to <c>BuildScope</c> / the auto-builder so pause stops the work promptly.</summary>
+    public CancellationToken IndexBuildCancellationToken
+    {
+        get
+        {
+            _indexBuildCancellation ??= new CancellationTokenSource();
+            return _indexBuildCancellation.Token;
+        }
+    }
+
+    partial void OnIsIndexingPausedChanged(bool value) => OnPropertyChanged(nameof(CanPauseIndexing));
+
     [ObservableProperty] public partial int FilesScanned { get; set; }
     [ObservableProperty] public partial int TotalFiles { get; set; }
 
@@ -2050,7 +2469,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 // FilesScanned can momentarily exceed a slightly stale TotalFiles between 100 ms
                 // snapshots; clamp so the tooltip never reads over 100%.
                 double pct = Math.Min(100.0, (double)FilesScanned / TotalFiles * 100);
-                return $"{pct:F1}% complete ({FilesScanned:N0} files out of {TotalFiles:N0} total files)";
+                string baseText = $"{pct:F1}% complete ({FilesScanned:N0} files out of {TotalFiles:N0} total files)";
+                string? phase = _sourceBackedSearchProgress?.BuildPhaseLabel(FilesScanned, TotalFiles);
+                return phase is null ? baseText : baseText + Environment.NewLine + phase;
             }
             // Total not yet known. A recursive enumeration of a large tree, or a search whose filters
             // exclude every file during discovery, can churn for minutes before a total is available —
@@ -2067,8 +2488,50 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         }
     }
 
-    partial void OnFilesScannedChanged(int value) => OnPropertyChanged(nameof(ProgressTooltip));
-    partial void OnTotalFilesChanged(int value) => OnPropertyChanged(nameof(ProgressTooltip));
+    private SourceBackedSearchProgress? _sourceBackedSearchProgress;
+
+    /// <summary>Whole-number completion label shown at the far-right edge of the search progress bar.
+    /// Empty while discovery has not produced a total; clamped because progress snapshots can briefly
+    /// report more processed files than a slightly stale total.</summary>
+    public string SearchProgressPercentLabel => TotalFiles > 0
+        ? $"{Math.Min(100.0, (double)FilesScanned / TotalFiles * 100):F0}%"
+        : string.Empty;
+
+    private string _searchProgressPhaseLabel = string.Empty;
+
+    /// <summary>Right-edge progress text: the normal rounded percent during discovery/native scanning,
+    /// then an explicit OCR/PDF counter while slow extraction workers drain their remaining queue.</summary>
+    public string SearchProgressRightLabel => SearchProgressIndeterminate
+        ? string.Empty
+        : string.IsNullOrEmpty(_searchProgressPhaseLabel)
+            ? SearchProgressPercentLabel
+            : _searchProgressPhaseLabel;
+
+    partial void OnFilesScannedChanged(int value)
+    {
+        OnPropertyChanged(nameof(ProgressTooltip));
+        OnPropertyChanged(nameof(SearchProgressPercentLabel));
+        OnPropertyChanged(nameof(SearchProgressRightLabel));
+    }
+
+    partial void OnTotalFilesChanged(int value)
+    {
+        OnPropertyChanged(nameof(ProgressTooltip));
+        OnPropertyChanged(nameof(SearchProgressPercentLabel));
+        OnPropertyChanged(nameof(SearchProgressRightLabel));
+    }
+
+    private void UpdateSearchProgressPhaseLabel(SearchProgress progress)
+    {
+        _sourceBackedSearchProgress = progress.SourceBacked;
+        string next = progress.SourceBacked?.BuildCombinedLabel(progress.FilesScanned, progress.TotalFiles)
+            ?? string.Empty;
+        if (string.Equals(next, _searchProgressPhaseLabel, StringComparison.Ordinal))
+            return;
+        _searchProgressPhaseLabel = next;
+        OnPropertyChanged(nameof(SearchProgressRightLabel));
+        OnPropertyChanged(nameof(ProgressTooltip));
+    }
     [ObservableProperty] public partial int MatchesFound { get; set; }
     [ObservableProperty] public partial int FilesSkipped { get; set; }
     [ObservableProperty] public partial bool HasPerformedSearch { get; set; }
@@ -2142,6 +2605,29 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         ShowMemoryPressureWarningLabel && !string.IsNullOrWhiteSpace(DegradedNoticeText)
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    // The "Filter files…" box only makes sense once a search has produced files. It keys off the
+    // UNFILTERED result set (AllGroups), NOT HasResults (which reflects the filtered/visible groups) —
+    // otherwise typing a filter that matches nothing would empty the visible groups and hide the very
+    // box the user is typing in, trapping them. Its change notification piggybacks on HasResults via
+    // the OnPropertyChanged override below (HasResults is raised at every point AllGroups can cross
+    // empty/non-empty: first result streamed in, search completion, clear; and harmlessly on filter,
+    // where AllGroups is unchanged so the box stays visible).
+    public Microsoft.UI.Xaml.Visibility ResultFileFilterVisibility =>
+        _resultCollection.AllGroups.Count > 0
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    private static readonly System.ComponentModel.PropertyChangedEventArgs s_resultFileFilterVisibilityChangedArgs =
+        new(nameof(ResultFileFilterVisibility));
+
+    protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+        if (e.PropertyName == nameof(HasResults))
+            base.OnPropertyChanged(s_resultFileFilterVisibilityChangedArgs);
+    }
+
     public Microsoft.UI.Xaml.Visibility StatsForNerdsVisibility =>
         ShowStatsForNerds
             ? Microsoft.UI.Xaml.Visibility.Visible
@@ -2149,6 +2635,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     public Microsoft.UI.Xaml.Visibility SkippedCountVisibility =>
         HasPerformedSearch
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    public Microsoft.UI.Xaml.Visibility IndexStatusVisibility =>
+        ShowIndexStatus
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    public Microsoft.UI.Xaml.Visibility AllDriveIndexStatusVisibility =>
+        string.IsNullOrWhiteSpace(AllDriveIndexStatusText)
+            ? Microsoft.UI.Xaml.Visibility.Collapsed
+            : Microsoft.UI.Xaml.Visibility.Visible;
+
+    public Microsoft.UI.Xaml.Visibility IndexBuildPercentVisibility =>
+        ShowIndexBuildPercent
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
@@ -2228,6 +2729,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             if (b.AccessDenied > 0)   lines.AppendLine(CultureInfo.InvariantCulture, $"  🔐  Access denied         {b.AccessDenied,8:N0}");
             if (b.Directories > 0)    lines.AppendLine(CultureInfo.InvariantCulture, $"  📁  Inaccessible dirs     {b.Directories,8:N0}");
             if (b.IOError > 0)        lines.AppendLine(CultureInfo.InvariantCulture, $"  ⚠️  I/O errors            {b.IOError,8:N0}");
+            if (b.IoTimeout > 0)      lines.AppendLine(CultureInfo.InvariantCulture, $"  ⏱️  I/O timeouts          {b.IoTimeout,8:N0}");
             if (b.NotFound > 0)       lines.AppendLine(CultureInfo.InvariantCulture, $"  ❓  Not found             {b.NotFound,8:N0}");
             if (b.Encoding > 0)       lines.AppendLine(CultureInfo.InvariantCulture, $"  🔤  Encoding errors       {b.Encoding,8:N0}");
             if (b.Other > 0)          lines.AppendLine(CultureInfo.InvariantCulture, $"  ❔  Other                 {b.Other,8:N0}");
@@ -2249,6 +2751,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     partial void OnShowStatsForNerdsChanged(bool value) => OnPropertyChanged(nameof(StatsForNerdsVisibility));
     partial void OnShowAutoScrollResultsCheckboxChanged(bool value) => OnPropertyChanged(nameof(AutoScrollResultsCheckboxVisibility));
     partial void OnHasPerformedSearchChanged(bool value) => OnPropertyChanged(nameof(SkippedCountVisibility));
+    partial void OnShowIndexStatusChanged(bool value) => OnPropertyChanged(nameof(IndexStatusVisibility));
+
+    partial void OnShowIndexBuildPercentChanged(bool value) => OnPropertyChanged(nameof(IndexBuildPercentVisibility));
     partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); OnPropertyChanged(nameof(ProgressTooltip)); }
     partial void OnAccessDeniedCountChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnSortModeIndexChanged(int value)
@@ -2328,20 +2833,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     partial void OnDefaultMaxFileSizeBytesChanged(long value) => OnPropertyChanged(nameof(DefaultMaxFileSizeMB));
     partial void OnFileLogLevelIndexChanged(int value)
     {
-        LogService.Instance.FileLevel = (LogLevel)value;
-        LogService.Instance.Info("Settings", $"File log level changed to {(LogLevel)value}");
+        LogService.Instance.FileLevel = (YaguLogLevel)value;
+        YaguLog.For("Settings").LogInformation("File log level changed to {Level}", (YaguLogLevel)value);
     }
     partial void OnConsoleLogLevelIndexChanged(int value)
     {
-        LogService.Instance.ConsoleLevel = (LogLevel)value;
-        LogService.Instance.Info("Settings", $"Console log level changed to {(LogLevel)value}");
+        LogService.Instance.ConsoleLevel = (YaguLogLevel)value;
+        YaguLog.For("Settings").LogInformation("Console log level changed to {Level}", (YaguLogLevel)value);
     }
 
     partial void OnFileListerBackendIndexChanged(int value)
     {
         var backend = (FileListerBackend)value;
         FileLister.Backend = backend;
-        LogService.Instance.Info("Settings", $"FileLister backend set to {backend}");
+        YaguLog.For("Settings").LogInformation("FileLister backend set to {Backend}", backend);
     }
 
     /// <summary>
@@ -2378,7 +2883,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 // plain Traditional search of the typed text. (A salvaged plan already set its own
                 // "best guess" status inside TranslateSemanticQueryAsync.)
                 ErrorText = string.Empty;
-                // A trivially-literal query (e.g. "1") already set an accurate passthrough status inside
+                // A single-token query already set an accurate passthrough status inside
                 // TranslateSemanticQueryAsync; only show the generic model-failure message when the
                 // translator left the status blank.
                 if (string.IsNullOrEmpty(SemanticStatusText))
@@ -2392,6 +2897,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             // search target (include globs / literal query) the model produced rather than the raw
             // natural-language text. Used for the excluded-extension warning.
             if (postTranslationGate is not null && !await postTranslationGate().ConfigureAwait(true))
+                return;
+
+            // The user clicked Cancel during the pre-search gate phase (before the scan committed) — abort.
+            if (IsSearchPreparationCancellationRequested)
                 return;
 
             await StartSearchAsync().ConfigureAwait(true);
@@ -2455,12 +2964,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             return SemanticTranslationOutcome.Aborted;
         }
 
-        // A trivially-literal query — a single character, a bare number, or a short symbol token like
-        // "1" — is not natural language. Small on-device models tend to hallucinate a plan (often
-        // echoing a prompt example) for such input, so skip the model entirely and let the caller run a
-        // plain traditional search of the typed text (what the user means). Set an accurate status so
-        // the caller's generic "AI couldn't interpret that" message is not shown.
-        if (SemanticQuerySalvage.IsTrivialLiteralQuery(text))
+        // A single token cannot express a natural-language search request. Skip model startup entirely
+        // and let the caller run a plain Traditional search for the typed text. Set an accurate status
+        // so the caller's generic "AI couldn't interpret that" message is not shown.
+        if (SemanticQuerySalvage.IsSingleTokenQuery(text))
         {
             SemanticStatusText = $"\u201C{text}\u201D isn't a natural-language query \u2014 searching for it directly.";
             return SemanticTranslationOutcome.Failed;
@@ -2565,7 +3072,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("SemanticSearch", $"Translation failed: {ex.Message}", ex);
+            YaguLog.For("SemanticSearch").LogWarning(ex, "Translation failed: {Error}", ex.Message);
             SemanticStatusText = string.Empty;
             return SemanticTranslationOutcome.Failed;
         }
@@ -2869,8 +3376,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 _settings.LastFoundryModelAlertUtc = DateTimeOffset.UtcNow;
             await PersistSettingsAsync().ConfigureAwait(true);
 
-            LogService.Instance.Info("SemanticSearch",
-                $"Foundry model update check: {currentModels.Count} catalog model(s), {result.Changes.Count} new, baselineSeeded={result.BaselineSeeded}.");
+            YaguLog.For("SemanticSearch").LogInformation(
+                "Foundry model update check: {CatalogCount} catalog model(s), {NewCount} new, baselineSeeded={BaselineSeeded}.",
+                currentModels.Count, result.Changes.Count, result.BaselineSeeded);
             return result.Changes;
         }
         catch (OperationCanceledException)
@@ -2879,7 +3387,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("SemanticSearch", $"Foundry model update check failed: {ex.Message}", ex);
+            YaguLog.For("SemanticSearch").LogWarning(ex, "Foundry model update check failed: {Error}", ex.Message);
             return none;
         }
     }
@@ -2996,6 +3504,27 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// Exposed so the Developer Options reset button can reflect the current state.</summary>
     public bool MultilineNewlineSuggestionDismissed => _settings.MultilineNewlineSuggestionDismissed;
 
+    /// <summary>True when the user opted out of the warning shown before a search pauses an active
+    /// content-index warm-up. The behavior still pauses warming; only the warning is suppressed.</summary>
+    public bool SuppressIndexWarmSearchWarning
+    {
+        get => _settings.SuppressIndexWarmSearchWarning;
+        set
+        {
+            if (_settings.SuppressIndexWarmSearchWarning == value)
+                return;
+            _settings.SuppressIndexWarmSearchWarning = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>Re-enables the index warm-up search warning from Developer Options.</summary>
+    public async Task ResetIndexWarmSearchWarningAsync()
+    {
+        SuppressIndexWarmSearchWarning = false;
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
     /// <summary>Re-enables the literal-"\n" multiline suggestion prompt after the user dismissed it
     /// (Developer Options → Reminders and Warnings reset). Persists so the reset survives a restart.</summary>
     public async Task ResetMultilineNewlineSuggestionAsync()
@@ -3012,13 +3541,2128 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// </summary>
     public IReadOnlyList<string> ResolveTargetRoots()
     {
-        if (!string.IsNullOrWhiteSpace(Directory))
-            return [Directory.Trim()];
+        string normalizedDirectory = DriveEnumerator.NormalizeSearchRoot(Directory);
+        if (normalizedDirectory.Length > 0)
+            return [normalizedDirectory];
 
         return DriveEnumerator.GetSearchRoots(
             SearchAllDrivesIncludesNetwork,
             SearchAllDrivesIncludesRemovable,
             SearchAllDrivesIncludesCloud);
+    }
+
+    /// <summary>
+    /// Updates the main-window content-index availability indicator (plan §6.2) for the folders a
+    /// search covers. It reports only whether a usable index <em>exists</em> for each root — a fact
+    /// knowable today from generation existence alone, with no USN journal, worker, or pruning — so it
+    /// is safe and honest before the deferred hot-path integration lands. The read runs off the UI
+    /// thread through the managed <see cref="ContentIndexManager"/> (crash-safe: it never memory-maps
+    /// an index file and validates checksums), and a missing/corrupt scope counts as "no index" rather
+    /// than throwing into the UI. The indicator never implies acceleration; its tooltip states files
+    /// are still read live in this build.
+    /// </summary>
+    private async Task RefreshIndexStatusAsync(IReadOnlyList<string> roots, bool useThisSearch)
+    {
+        if (!_settings.EnableContentIndex || !_settings.ShowIndexStatusInMainWindow)
+        {
+            // Keep a muted "Index: off" indicator visible after a menu-driven persistent disable (this
+            // session only) so the status menu — and its "Enable indexing" command — stays reachable.
+            if (_indexOffIndicatorSticky && !_settings.EnableContentIndex && _settings.ShowIndexStatusInMainWindow)
+                ShowIndexDisabledIndicator();
+            else
+                ShowIndexStatus = false;
+            IndexStatusFoldersWithoutIndex = Array.Empty<string>();
+            IndexStatusRegisteredFoldersWithoutIndex = Array.Empty<string>();
+            _currentIndexBuiltRoots = Array.Empty<string>();
+            _currentIndexBuiltUtc = null;
+            _currentIndexDatesByRoot.Clear();
+            _currentIndexFreshnessByRoot.Clear();
+            OnPropertyChanged(nameof(IndexStatusCanAddFolder));
+            OnPropertyChanged(nameof(IndexStatusCanBuildRegisteredFolder));
+            return;
+        }
+
+        var rootsCopy = roots.ToArray();
+        int retained = AppSettings.NormalizeIndexRetainedGenerationCount(_settings.IndexRetainedGenerationCount);
+        string storageDir = _settings.IndexStorageDirectory;
+        bool masterEnabled = _settings.EnableContentIndex;
+        int maxCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(_settings.IndexMaxJournalCatchupRecords);
+
+        // Remember the search context so a finishing background build can recompute the indicator for it.
+        _lastIndexStatusRoots = rootsCopy;
+        _lastIndexStatusUseThisSearch = useThisSearch;
+
+        IndexAvailability availability;
+        List<string> missingRoots;
+        List<(string Root, DateTimeOffset? BuiltUtc, DateTimeOffset? CreatedUtc, DateTimeOffset? LastIncrementalUpdateUtc, ContentIndexManager.ScopeFreshnessStatus Freshness)> builtRoots;
+        try
+        {
+            (availability, missingRoots, builtRoots) = await Task.Run(() =>
+            {
+                var provider = DefaultContentIndexPathProvider.Create(storageDir);
+                var manager = new ContentIndexManager(provider, retained);
+                int withIndex = 0;
+                var missing = new List<string>();
+                var built = new List<(string, DateTimeOffset?, DateTimeOffset?, DateTimeOffset?, ContentIndexManager.ScopeFreshnessStatus)>();
+                foreach (string root in rootsCopy)
+                {
+                    try
+                    {
+                        string indexRoot = manager.ResolveBestAvailableIndexRoot(root, _settings.IndexedRoots);
+                        IndexMetadataStatus meta = manager.GetMetadataStatusForRoot(indexRoot);
+                        if (meta.Exists && meta.MetadataReadable && meta.Health == IndexStorageHealth.Healthy)
+                        {
+                            ContentIndexManager.ScopeFreshnessStatus freshness = manager.GetScopeFreshnessStatus(
+                                indexRoot,
+                                ContentIndexFreshnessEvaluator.CreateReader(
+                                    maxCatchupRecords,
+                                    TimeSpan.FromSeconds(AppSettings.NormalizeFileIoTimeoutSeconds(_settings.FileIoTimeoutSeconds))));
+                            if (!freshness.NeedsAttention)
+                                withIndex++;
+                            if (!built.Any(item => string.Equals(item.Item1, indexRoot, StringComparison.OrdinalIgnoreCase)))
+                                built.Add((indexRoot, meta.BuiltUtc, meta.CreatedUtc, meta.LastIncrementalUpdateUtc, freshness));
+                        }
+                        else
+                        {
+                            missing.Add(root);
+                        }
+                    }
+                    catch
+                    {
+                        // A missing/corrupt scope simply counts as "no index"; never throw into the UI.
+                        missing.Add(root);
+                    }
+                }
+                return (ContentIndexUiStatus.Availability(masterEnabled, useThisSearch, withIndex, rootsCopy.Length), missing, built);
+            }).ConfigureAwait(true);
+        }
+        catch
+        {
+            ShowIndexStatus = false;
+            IndexStatusFoldersWithoutIndex = Array.Empty<string>();
+            IndexStatusRegisteredFoldersWithoutIndex = Array.Empty<string>();
+            _currentIndexBuiltRoots = Array.Empty<string>();
+            _currentIndexBuiltUtc = null;
+            _currentIndexDatesByRoot.Clear();
+            _currentIndexFreshnessByRoot.Clear();
+            OnPropertyChanged(nameof(IndexStatusCanAddFolder));
+            OnPropertyChanged(nameof(IndexStatusCanBuildRegisteredFolder));
+            ApplyAllDriveIndexHealthStatus(force: !IsSearchActive);
+            return;
+        }
+
+        // Capture which searched roots currently have a readable index and the oldest of their build times,
+        // so the status-bar right-click menu can show "Index date … (click to rebuild)" for them.
+        _currentIndexBuiltRoots = builtRoots.Select(b => b.Root).ToArray();
+        _currentIndexDatesByRoot.Clear();
+        _currentIndexFreshnessByRoot.Clear();
+        foreach (var built in builtRoots)
+        {
+            _currentIndexDatesByRoot[IndexScopeIdentity.NormalizePath(built.Root)] =
+                (built.CreatedUtc ?? built.BuiltUtc, built.BuiltUtc, built.LastIncrementalUpdateUtc);
+            _currentIndexFreshnessByRoot[IndexScopeIdentity.NormalizePath(built.Root)] = built.Freshness;
+        }
+        DateTimeOffset? oldestBuilt = null;
+        foreach (var built in builtRoots)
+        {
+            DateTimeOffset? builtUtc = built.BuiltUtc;
+            if (builtUtc is { } t && (oldestBuilt is null || t < oldestBuilt))
+                oldestBuilt = t;
+        }
+        _currentIndexBuiltUtc = oldestBuilt;
+
+        bool addable = availability is IndexAvailability.None or IndexAvailability.Partial;
+        string[] registeredMissing = addable
+            ? missingRoots.Where(root => IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, root) is not null).ToArray()
+            : Array.Empty<string>();
+        string[] unregisteredMissing = addable
+            ? missingRoots.Where(root => IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, root) is null).ToArray()
+            : Array.Empty<string>();
+        // Only genuinely unregistered roots flow into Add folder. A registered-but-unbuilt root opens
+        // Settings ▸ Indexing instead, where Build now can create its first on-disk generation.
+        IndexStatusFoldersWithoutIndex = unregisteredMissing;
+        IndexStatusRegisteredFoldersWithoutIndex = registeredMissing;
+        OnPropertyChanged(nameof(IndexStatusCanAddFolder));
+        OnPropertyChanged(nameof(IndexStatusCanBuildRegisteredFolder));
+
+        // Background build/warm activity owns the indicator until it finishes.
+        if (_activeIndexBuilds > 0 || IsIndexWarmActive || IsIndexWarmPausedForSearch)
+            return;
+        // A B0 gate attempt has already produced a more precise status for this search (accelerating or
+        // bypassed). Do not replace it with the coarser presence-only "Index: available" result.
+        if (_indexRuntimeStatusRunId == Volatile.Read(ref _searchRunId)
+            && _indexRuntimeAttemptedRoots.Count > 0)
+            return;
+
+        KeyValuePair<string, ContentIndexManager.ScopeFreshnessStatus>[] freshnessFailures = _currentIndexFreshnessByRoot
+            .Where(static pair => pair.Value.NeedsAttention)
+            .ToArray();
+        if (freshnessFailures.Length > 0)
+        {
+            int rebuildCount = freshnessFailures.Count(static pair => pair.Value.RequiresRebuild);
+            IndexStatusGlyph = "\uE7BA"; // Warning
+            IndexStatusText = rebuildCount switch
+            {
+                1 => "Index: rebuild required",
+                > 1 => $"Index: {rebuildCount} rebuilds required",
+                _ => "Index: freshness unavailable",
+            };
+            IndexStatusTooltip = "One or more index files are structurally valid, but their drive change-journal freshness can no longer be proven. "
+                + string.Join(" ", freshnessFailures.Select(static pair => $"{pair.Key}: {pair.Value.Problem}"))
+                + BuildIndexRootStatusDetails()
+                + BuildIndexDateDetails()
+                + (rebuildCount > 0
+                    ? " Hover to rebuild the repairable index, or open Settings \u25B8 Indexing for details."
+                    : " Open Settings \u25B8 Indexing for details.");
+            ShowIndexStatus = true;
+            ApplyAllDriveIndexHealthStatus(force: !IsSearchActive);
+            return;
+        }
+
+        bool onlyRegisteredUnbuilt = availability == IndexAvailability.None
+            && registeredMissing.Length > 0
+            && unregisteredMissing.Length == 0;
+        IndexStatusGlyph = onlyRegisteredUnbuilt
+            ? ContentIndexUiStatus.CoverageGlyph(IndexSearchCoverage.Bypassed)
+            : ContentIndexUiStatus.AvailabilityGlyph(availability);
+        IndexStatusText = onlyRegisteredUnbuilt
+            ? (rootsCopy.Length == 1 ? "Index: not built for this folder" : "Index: registered but not built")
+            : (rootsCopy.Length > 1 && availability == IndexAvailability.None
+                ? "Index: none"
+                : ContentIndexUiStatus.AvailabilityLabel(availability));
+        string tooltip = ContentIndexUiStatus.AvailabilityTooltip(availability);
+        if (registeredMissing.Length > 0)
+            tooltip = (registeredMissing.Length == 1 && rootsCopy.Length == 1
+                    ? "This folder is in your indexed-folders list, but it has no usable index yet. "
+                    : registeredMissing.Length == 1
+                        ? "One searched folder is in your indexed-folders list but has no usable index yet. "
+                    : "Some searched folders are in your indexed-folders list but have no usable index yet. ")
+                + "Click to open Settings \u25B8 Indexing and choose Build now.";
+        if (unregisteredMissing.Length > 0)
+            tooltip += " Click to add a folder to the index.";
+        tooltip += BuildIndexRootStatusDetails();
+        tooltip += BuildIndexDateDetails();
+        // Not currently building: explain when indexing runs (manual / at startup / when idle).
+        tooltip += BuildIndexSchedulingDetails();
+        IndexStatusTooltip = tooltip;
+        ShowIndexStatus = ContentIndexUiStatus.ShouldShowAvailability(availability);
+        ApplyAllDriveIndexHealthStatus(force: !IsSearchActive);
+    }
+
+    /// <summary>Refreshes search-context index health for the directory currently shown in the search
+    /// box. Called when the user commits a directory and around searches/builds; launch-time global
+    /// visibility is handled separately by <see cref="RefreshAllDriveIndexStatus"/>.</summary>
+    public void RefreshCurrentIndexStatus()
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(RefreshCurrentIndexStatus);
+            return;
+        }
+        if (_disposed)
+            return;
+
+        _ = RefreshIndexStatusAsync(
+            ResolveTargetRoots(),
+            UseContentIndex && _settings.EnableContentIndex);
+    }
+
+    /// <summary>Builds a launch-time health snapshot for every ready local fixed drive plus every
+    /// explicitly maintained index root. The snapshot is deliberately independent of the current
+    /// search directory, so changing/searching one folder cannot hide a bad index on another drive.</summary>
+    public void RefreshAllDriveIndexStatus()
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(RefreshAllDriveIndexStatus);
+            return;
+        }
+        if (_disposed)
+            return;
+
+        int generation = Interlocked.Increment(ref _allDriveIndexHealthRefreshGeneration);
+        if (!_settings.EnableContentIndex || !_settings.ShowIndexStatusInMainWindow)
+        {
+            _allDriveIndexHealth = Array.Empty<IndexRootHealthEntry>();
+            AllDriveIndexStatusText = string.Empty;
+            return;
+        }
+
+        AllDriveIndexStatusText = "Checking local drive index health…";
+        if (!IsIndexBuildActive && !IsIndexWarmActive && !IsIndexWarmPausedForSearch && !IsSearchActive)
+        {
+            IndexStatusGlyph = "\uE895"; // sync/checking
+            IndexStatusText = "Index: checking all drives";
+            IndexStatusTooltip = "Yagu is checking the content-index metadata and change-journal freshness for every ready local drive.";
+            ShowIndexStatus = true;
+        }
+
+        string[] registeredRoots = IndexedRootsPolicy.Normalize(_settings.IndexedRoots).ToArray();
+        int retained = AppSettings.NormalizeIndexRetainedGenerationCount(_settings.IndexRetainedGenerationCount);
+        string storageDir = _settings.IndexStorageDirectory;
+        int maxCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(_settings.IndexMaxJournalCatchupRecords);
+        int fileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds(_settings.FileIoTimeoutSeconds);
+        _ = RefreshAllDriveIndexStatusAsync(
+            generation,
+            registeredRoots,
+            retained,
+            storageDir,
+            maxCatchupRecords,
+            fileIoTimeoutSeconds);
+    }
+
+    private async Task RefreshAllDriveIndexStatusAsync(
+        int generation,
+        string[] registeredRoots,
+        int retained,
+        string storageDir,
+        int maxCatchupRecords,
+        int fileIoTimeoutSeconds)
+    {
+        IReadOnlyList<IndexRootHealthEntry> health;
+        try
+        {
+            health = await Task.Run(() =>
+            {
+                string[] roots = DriveEnumerator.GetSearchRoots(
+                        includeNetwork: false,
+                        includeRemovable: false,
+                        includeCloud: false)
+                    .Concat(registeredRoots)
+                    .Where(static root => !string.IsNullOrWhiteSpace(root))
+                    .Select(IndexScopeIdentity.NormalizePath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(static root => root, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                var provider = DefaultContentIndexPathProvider.Create(storageDir);
+                var manager = new ContentIndexManager(provider, retained);
+                var rows = new List<IndexRootHealthEntry>(roots.Length);
+                foreach (string root in roots)
+                {
+                    try
+                    {
+                        rows.Add(ReadAllDriveIndexHealth(
+                            manager,
+                            root,
+                            registeredRoots,
+                            maxCatchupRecords,
+                            fileIoTimeoutSeconds));
+                    }
+                    catch (Exception ex)
+                    {
+                        rows.Add(new IndexRootHealthEntry(
+                            root,
+                            IndexRootHealthKind.StorageProblem,
+                            $"health check failed ({ex.GetType().Name}) — searches scan live"));
+                    }
+                }
+                return (IReadOnlyList<IndexRootHealthEntry>)rows;
+            }).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            health = new IndexRootHealthEntry[]
+            {
+                new IndexRootHealthEntry(
+                    "Local drives",
+                    IndexRootHealthKind.StorageProblem,
+                    $"health check failed ({ex.GetType().Name}) — searches scan live"),
+            };
+        }
+
+        if (_disposed || generation != Volatile.Read(ref _allDriveIndexHealthRefreshGeneration))
+            return;
+
+        _allDriveIndexHealth = health;
+        AllDriveIndexStatusText = string.Join(
+            Environment.NewLine,
+            health.Select(static row => $"{row.Root} — {row.Status}"));
+        ApplyAllDriveIndexHealthStatus(force: true);
+    }
+
+    private static IndexRootHealthEntry ReadAllDriveIndexHealth(
+        ContentIndexManager manager,
+        string root,
+        IReadOnlyList<string> registeredRoots,
+        int maxCatchupRecords,
+        int fileIoTimeoutSeconds)
+    {
+        bool registered = IndexedRootsPolicy.FindBestCoveringRoot(registeredRoots, root) is not null;
+        if (!registered)
+        {
+            // A ready drive remains in the all-drive overview after it is removed from IndexedRoots, but
+            // any exact on-disk scope is now leftover/unmaintained data. Do not keep evaluating its journal
+            // or let it raise a global freshness warning; Settings ▸ Indexing still surfaces it for add/delete.
+            IndexMetadataStatus leftover = manager.GetMetadataStatusForRoot(root);
+            return ContentIndexUiStatus.UnregisteredRootHealth(root, leftover.Exists);
+        }
+
+        string indexRoot = manager.ResolveBestAvailableIndexRoot(root, registeredRoots);
+        IndexMetadataStatus metadata = manager.GetMetadataStatusForRoot(indexRoot);
+
+        if (metadata.Exists && metadata.MetadataReadable && metadata.Health == IndexStorageHealth.Healthy)
+        {
+            ContentIndexManager.ScopeFreshnessStatus freshness = manager.GetScopeFreshnessStatus(
+                indexRoot,
+                ContentIndexFreshnessEvaluator.CreateReader(
+                    maxCatchupRecords,
+                    TimeSpan.FromSeconds(fileIoTimeoutSeconds)));
+            string date = FormatAllDriveIndexDate(metadata);
+            return freshness.State switch
+            {
+                ContentIndexManager.ScopeFreshnessState.Fresh => new IndexRootHealthEntry(
+                    root,
+                    IndexRootHealthKind.Healthy,
+                    "healthy — up to date" + date),
+                ContentIndexManager.ScopeFreshnessState.Dirty => new IndexRootHealthEntry(
+                    root,
+                    IndexRootHealthKind.ChangesPending,
+                    "healthy — "
+                        + (freshness.DirtyCount == 1
+                            ? "1 recent filesystem change pending indexing"
+                            : $"{freshness.DirtyCount:N0} recent filesystem changes pending indexing")
+                        + "; affected files scan live until the next update"
+                        + date),
+                ContentIndexManager.ScopeFreshnessState.Uncertain when freshness.RequiresRebuild => new IndexRootHealthEntry(
+                    root,
+                    IndexRootHealthKind.RebuildRequired,
+                    "rebuild required — " + (freshness.Problem ?? "freshness cannot be proven"),
+                    indexRoot),
+                _ => new IndexRootHealthEntry(
+                    root,
+                    IndexRootHealthKind.FreshnessUnavailable,
+                    "freshness unavailable — live scan only — "
+                        + (freshness.Problem ?? "freshness cannot be proven"),
+                    IncrementalRoot: freshness.RawStatus == UsnReadStatus.Incomplete ? indexRoot : null),
+            };
+        }
+
+        if (metadata.Exists)
+        {
+            bool canRebuild = metadata.Health != IndexStorageHealth.SourceMissing
+                && System.IO.Directory.Exists(indexRoot);
+            string problem = metadata.Problem ?? "The active index metadata is not usable.";
+            return new IndexRootHealthEntry(
+                root,
+                canRebuild ? IndexRootHealthKind.RebuildRequired : IndexRootHealthKind.StorageProblem,
+                ContentIndexUiStatus.StorageHealthLabel(metadata.Health) + " — " + problem,
+                canRebuild ? indexRoot : null);
+        }
+
+        return new IndexRootHealthEntry(
+            root,
+            IndexRootHealthKind.BuildRequired,
+            "registered, but the index is not built");
+    }
+
+    private static string FormatAllDriveIndexDate(IndexMetadataStatus metadata)
+    {
+        DateTimeOffset? timestamp = metadata.LastIncrementalUpdateUtc ?? metadata.CreatedUtc ?? metadata.BuiltUtc;
+        if (timestamp is not { } value)
+            return string.Empty;
+        string label = metadata.LastIncrementalUpdateUtc is not null ? "last updated" : "created";
+        return $" · {label} {value.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture)}";
+    }
+
+    /// <summary>Applies global warning precedence without replacing the current-search explanation.
+    /// A forced call owns the idle/startup indicator; ordinary search refreshes invoke the non-forced
+    /// form, which preserves active acceleration in the label while also reporting how many other roots
+    /// need attention.</summary>
+    private bool ApplyAllDriveIndexHealthStatus(
+        bool force = false,
+        IndexSearchCoverage? activeSearchCoverage = null)
+    {
+        if (!_settings.EnableContentIndex || !_settings.ShowIndexStatusInMainWindow
+            || _allDriveIndexHealth.Count == 0
+            || IsIndexBuildActive || IsIndexWarmActive || IsIndexWarmPausedForSearch)
+            return false;
+
+        bool needsAttention = _allDriveIndexHealth.Any(static root => root.NeedsAttention);
+        if (!force && !needsAttention)
+            return false;
+        if (force && !needsAttention && IsSearchActive)
+            return false; // healthy global state must not hide active search coverage
+
+        // A drive-health refresh can finish after B0 has already reported acceleration. Recover the
+        // current activity here as well as accepting the immediate caller's value, so that late refresh
+        // never collapses "accelerating (x of y need attention)" back to only the warning count.
+        if (activeSearchCoverage is null
+            && IsSearchActive
+            && _indexRuntimeStatusRunId == Volatile.Read(ref _searchRunId)
+            && _indexRuntimeAcceleratedRootPaths.Count > 0)
+        {
+            int searchedRoots = _lastIndexStatusRoots.Count > 0
+                ? _lastIndexStatusRoots.Count
+                : _indexRuntimeAttemptedRoots.Count;
+            activeSearchCoverage = _indexRuntimeAcceleratedRootPaths.Count == searchedRoots
+                ? IndexSearchCoverage.Full
+                : IndexSearchCoverage.Partial;
+        }
+
+        IndexStatusGlyph = ContentIndexUiStatus.AllDriveHealthGlyph(_allDriveIndexHealth);
+        IndexStatusText = ContentIndexUiStatus.AllDriveHealthLabel(_allDriveIndexHealth, activeSearchCoverage);
+        if (force)
+        {
+            IndexStatusTooltip = ContentIndexUiStatus.AllDriveHealthSummary(_allDriveIndexHealth)
+                + " Hover for the status of each drive and indexed folder."
+                + BuildIndexSchedulingDetails();
+        }
+        ShowIndexStatus = true;
+        return true;
+    }
+
+    private void ResetRuntimeIndexStatus(int runId)
+    {
+        _indexRuntimeStatusRunId = runId;
+        _indexRuntimeAttemptedRoots.Clear();
+        _indexRuntimeAcceleratedRootPaths.Clear();
+        _indexRuntimeBypassReasonsByRoot.Clear();
+        _indexRuntimeBypassReason = null;
+    }
+
+    /// <summary>Receives the per-root gate decision at B0 (off the UI thread) and immediately replaces
+    /// the availability-only indicator with the truthful state for the active search.</summary>
+    private void ReportContentIndexAttempt(int runId, string root, bool accelerated, string reason)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => ReportContentIndexAttempt(runId, root, accelerated, reason));
+            return;
+        }
+        if (runId != Volatile.Read(ref _searchRunId))
+            return; // stale callback from a superseded search
+        if (_indexRuntimeStatusRunId != runId)
+            ResetRuntimeIndexStatus(runId);
+        string normalizedRoot = IndexScopeIdentity.NormalizePath(root);
+        _indexRuntimeAttemptedRoots.Add(normalizedRoot);
+        bool registeredButUnbuilt = !accelerated
+            && reason.Contains("no trusted index", StringComparison.OrdinalIgnoreCase)
+            && IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, normalizedRoot) is not null;
+
+        if (accelerated)
+        {
+            _indexRuntimeAcceleratedRootPaths.Add(normalizedRoot);
+            _indexRuntimeBypassReasonsByRoot.Remove(normalizedRoot);
+        }
+        else
+        {
+            // A gate can begin accelerated and later fail safe at B1. Replace that root's optimistic B0
+            // status instead of ignoring the repeated callback, so the indicator never claims that a
+            // full live-scan fallback is still accelerating.
+            _indexRuntimeAcceleratedRootPaths.Remove(normalizedRoot);
+            _indexRuntimeBypassReasonsByRoot[normalizedRoot] = reason;
+            _indexRuntimeBypassReason = reason;
+        }
+
+        if (registeredButUnbuilt)
+        {
+            IndexStatusFoldersWithoutIndex = IndexStatusFoldersWithoutIndex
+                .Where(path => !string.Equals(IndexScopeIdentity.NormalizePath(path), normalizedRoot, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            IndexStatusRegisteredFoldersWithoutIndex = IndexStatusRegisteredFoldersWithoutIndex
+                .Append(normalizedRoot)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            OnPropertyChanged(nameof(IndexStatusCanAddFolder));
+            OnPropertyChanged(nameof(IndexStatusCanBuildRegisteredFolder));
+        }
+
+        if (!_settings.EnableContentIndex || !_settings.ShowIndexStatusInMainWindow
+            || IsIndexBuildActive || IsIndexWarmActive || IsIndexWarmPausedForSearch)
+            return;
+
+        int attempted = _indexRuntimeAttemptedRoots.Count;
+        int acceleratedRoots = _indexRuntimeAcceleratedRootPaths.Count;
+        int searchedRoots = _lastIndexStatusRoots.Count > 0 ? _lastIndexStatusRoots.Count : attempted;
+        IndexSearchCoverage? activeSearchCoverage = null;
+        if (acceleratedRoots > 0 && acceleratedRoots == searchedRoots)
+        {
+            activeSearchCoverage = IndexSearchCoverage.Full;
+            IndexStatusGlyph = ContentIndexUiStatus.CoverageGlyph(IndexSearchCoverage.Full);
+            IndexStatusText = "Index: accelerating";
+            IndexStatusTooltip = "The content index is actively pruning files for this search. Matching candidates are still verified live."
+                + BuildIndexRootStatusDetails(acceleratedRoots, postSearch: false)
+                + BuildIndexDateDetails();
+        }
+        else if (acceleratedRoots > 0)
+        {
+            activeSearchCoverage = IndexSearchCoverage.Partial;
+            IndexStatusGlyph = ContentIndexUiStatus.CoverageGlyph(IndexSearchCoverage.Partial);
+            IndexStatusText = "Index: partially accelerating";
+            IndexStatusTooltip = "The content index is accelerating some searched roots; other roots are being scanned live. "
+                + DescribeIndexBypassReason(_indexRuntimeBypassReason)
+                + BuildIndexRootStatusDetails(acceleratedRoots, postSearch: false)
+                + BuildIndexDateDetails();
+        }
+        else
+        {
+            IndexStatusGlyph = ContentIndexUiStatus.CoverageGlyph(IndexSearchCoverage.Bypassed);
+            if (registeredButUnbuilt)
+            {
+                IndexStatusText = "Index: not built for this folder";
+                IndexStatusTooltip = $"{normalizedRoot} is in your indexed-folders list, but it has no usable index yet. "
+                    + "Click to open Settings \u25B8 Indexing and choose Build now."
+                    + BuildIndexRootStatusDetails(acceleratedRoots, postSearch: false)
+                    + BuildIndexDateDetails();
+            }
+            else
+            {
+                bool catchupLimitFailure = IsIndexCatchupLimitReason(_indexRuntimeBypassReason);
+                bool freshnessFailure = IsIndexFreshnessRepairReason(_indexRuntimeBypassReason);
+                if (catchupLimitFailure)
+                {
+                    IndexStatusText = "Index: update needed";
+                    IndexStatusTooltip = $"The index for {root} is beyond the configured change-journal catch-up limit. "
+                        + DescribeIndexBypassReason(_indexRuntimeBypassReason)
+                        + BuildIndexRootStatusDetails(acceleratedRoots, postSearch: false)
+                        + BuildIndexDateDetails()
+                        + " Open Settings \u25B8 Indexing to increase the catch-up limit, or rebuild explicitly.";
+                }
+                else if (freshnessFailure)
+                {
+                    IndexStatusText = "Index: rebuild required";
+                    IndexStatusTooltip = $"The index for {root} cannot prove change-journal freshness. "
+                        + DescribeIndexBypassReason(_indexRuntimeBypassReason)
+                        + BuildIndexRootStatusDetails(acceleratedRoots, postSearch: false)
+                        + BuildIndexDateDetails()
+                        + " Hover to rebuild the affected index.";
+                }
+                else
+                {
+                    IndexStatusText = "Index: available \u00b7 not accelerated";
+                    IndexStatusTooltip = $"An index is available for {root}, but it cannot accelerate this query. "
+                        + DescribeIndexBypassReason(_indexRuntimeBypassReason)
+                        + BuildIndexRootStatusDetails(acceleratedRoots, postSearch: false)
+                        + BuildIndexDateDetails();
+                }
+            }
+        }
+        ShowIndexStatus = true;
+        ApplyAllDriveIndexHealthStatus(activeSearchCoverage: activeSearchCoverage);
+    }
+
+    private static string DescribeIndexBypassReason(string? reason)
+    {
+        if (reason?.Contains("no required trigram", StringComparison.OrdinalIgnoreCase) == true)
+            return "The query has no safe required trigram, so Yagu is scanning files live.";
+        if (reason?.Contains("not selective", StringComparison.OrdinalIgnoreCase) == true)
+            return "The query would leave too many candidates, so a live scan is faster.";
+        if (reason?.Contains("Incomplete", StringComparison.OrdinalIgnoreCase) == true)
+            return "The index checkpoint is more than the configured change-journal catch-up limit behind, so Yagu cannot prove the layer is fresh. Increase the catch-up limit and update the index, or rebuild it.";
+        if (reason?.Contains("CheckpointAhead", StringComparison.OrdinalIgnoreCase) == true)
+            return "The saved index checkpoint is ahead of the drive's live change journal, usually because the journal was reset or recreated. Rebuild the affected index to establish a valid checkpoint.";
+        if (reason?.Contains("GapDetected", StringComparison.OrdinalIgnoreCase) == true)
+            return "The drive change journal no longer contains every change since this index layer was built. Rebuild the affected index to restore freshness.";
+        if (reason?.Contains("JournalIdChanged", StringComparison.OrdinalIgnoreCase) == true)
+            return "The drive change journal was reset after this index layer was built. Rebuild the affected index to establish a new freshness checkpoint.";
+        if (reason?.Contains("layer not fresh", StringComparison.OrdinalIgnoreCase) == true
+            || reason?.Contains("JournalDiscontinuity", StringComparison.OrdinalIgnoreCase) == true
+            || reason?.Contains("CheckpointInvalid", StringComparison.OrdinalIgnoreCase) == true)
+            return "Yagu cannot prove that this index layer includes every recent file change. Rebuild the affected index to restore freshness.";
+        return string.IsNullOrWhiteSpace(reason)
+            ? "Yagu is scanning files live."
+            : $"Yagu is scanning files live: {reason}.";
+    }
+
+    /// <summary>
+    /// Builds a user-facing per-root breakdown for multi-root/all-drives index tooltips. Availability
+    /// comes from the cheap manifest refresh; runtime callbacks add exact accelerated/bypass states. The
+    /// aggregate completion summary only carries a count, so when the worker path did not callback per
+    /// root, remaining accelerated slots are assigned to the built roots (the only roots that could have
+    /// accelerated). A single-root search returns an empty suffix to keep its tooltip compact.
+    /// </summary>
+    private string BuildIndexRootStatusDetails(int acceleratedRootCount = 0, bool postSearch = false)
+    {
+        string[] roots = _lastIndexStatusRoots
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Select(IndexScopeIdentity.NormalizePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (roots.Length <= 1)
+            return string.Empty;
+
+        var builtRoots = _currentIndexBuiltRoots
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Select(IndexScopeIdentity.NormalizePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var registeredUnbuilt = IndexStatusRegisteredFoldersWithoutIndex
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Select(IndexScopeIdentity.NormalizePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var acceleratedRoots = new HashSet<string>(_indexRuntimeAcceleratedRootPaths, StringComparer.OrdinalIgnoreCase);
+
+        // Worker pruning reports aggregate coverage even when it does not invoke the in-process per-root
+        // attempt callback. Infer those roots only from manifest-backed roots, never from an unindexed root.
+        int remainingAccelerated = Math.Max(0, acceleratedRootCount - acceleratedRoots.Count);
+        if (remainingAccelerated > 0)
+        {
+            foreach (string root in roots)
+            {
+                if (remainingAccelerated == 0) break;
+                if (builtRoots.Contains(root) && acceleratedRoots.Add(root))
+                    remainingAccelerated--;
+            }
+        }
+
+        var lines = new List<string>(roots.Length + 1) { "Drive/folder index status:" };
+        foreach (string root in roots)
+        {
+            string state;
+            if (acceleratedRoots.Contains(root))
+                state = postSearch ? "accelerated this search" : "accelerating this search";
+            else if (_indexRuntimeBypassReasonsByRoot.TryGetValue(root, out string? reason))
+                state = "scanned live — " + FormatIndexRootBypassReason(reason);
+            else if (TryGetCurrentIndexFreshnessForSearchRoot(root, out var freshness) && freshness.RequiresRebuild)
+                state = "rebuild required — " + (freshness.Problem ?? "freshness cannot be proven");
+            else if (TryGetCurrentIndexFreshnessForSearchRoot(root, out freshness) && freshness.NeedsAttention)
+                state = "freshness unavailable — scanning live — " + (freshness.Problem ?? "freshness cannot be proven");
+            else if (registeredUnbuilt.Contains(root))
+                state = "registered, but the index is not built";
+            else if (!builtRoots.Contains(root))
+                state = "not indexed";
+            else
+                state = postSearch ? "index available, but scanned live" : "index available";
+            lines.Add($"  {root} — {state}");
+        }
+        return Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, lines);
+    }
+
+    private static string FormatIndexRootBypassReason(string? reason)
+    {
+        if (reason?.Contains("no required trigram", StringComparison.OrdinalIgnoreCase) == true)
+            return "query has no safe required trigram";
+        if (reason?.Contains("not selective", StringComparison.OrdinalIgnoreCase) == true)
+            return "a live scan is faster for this query";
+        if (reason?.Contains("no trusted index", StringComparison.OrdinalIgnoreCase) == true)
+            return "no trusted index";
+        if (reason?.Contains("Incomplete", StringComparison.OrdinalIgnoreCase) == true)
+            return "change-journal catch-up limit reached";
+        if (reason?.Contains("CheckpointAhead", StringComparison.OrdinalIgnoreCase) == true)
+            return "saved checkpoint is ahead of the live change journal";
+        if (reason?.Contains("GapDetected", StringComparison.OrdinalIgnoreCase) == true)
+            return "change journal no longer covers the index checkpoint";
+        if (reason?.Contains("JournalIdChanged", StringComparison.OrdinalIgnoreCase) == true)
+            return "change journal was reset after the index was built";
+        if (reason?.Contains("layer not fresh", StringComparison.OrdinalIgnoreCase) == true
+            || reason?.Contains("JournalDiscontinuity", StringComparison.OrdinalIgnoreCase) == true
+            || reason?.Contains("CheckpointInvalid", StringComparison.OrdinalIgnoreCase) == true)
+            return "index freshness cannot be proven";
+        return string.IsNullOrWhiteSpace(reason) ? "index was not used" : reason.Trim().TrimEnd('.');
+    }
+
+    private bool TryGetCurrentIndexFreshnessForSearchRoot(
+        string searchRoot,
+        out ContentIndexManager.ScopeFreshnessStatus freshness)
+    {
+        string normalized = IndexScopeIdentity.NormalizePath(searchRoot);
+        if (_currentIndexFreshnessByRoot.TryGetValue(normalized, out freshness))
+            return true;
+        string? covering = IndexedRootsPolicy.FindBestCoveringRoot(
+            _currentIndexFreshnessByRoot.Keys.ToArray(), normalized);
+        return covering is not null && _currentIndexFreshnessByRoot.TryGetValue(covering, out freshness);
+    }
+
+    /// <summary>Builds the timestamp section shared by every index-status hover state. A single index
+    /// gets compact Created/Active generation/Last updated lines; multi-root searches identify each indexed root.</summary>
+    private string BuildIndexDateDetails()
+    {
+        if (_currentIndexDatesByRoot.Count == 0)
+            return string.Empty;
+
+        static string Format(DateTimeOffset value)
+            => value.ToLocalTime().ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture);
+
+        if (_currentIndexDatesByRoot.Count == 1)
+        {
+            var dates = _currentIndexDatesByRoot.Values.First();
+            var lines = new List<string>(2);
+            if (dates.CreatedUtc is { } created)
+                lines.Add($"Created: {Format(created)}");
+            if (dates.BuiltUtc is { } built && built != dates.CreatedUtc)
+                lines.Add($"Active generation built: {Format(built)}");
+            if (dates.LastIncrementalUpdateUtc is { } updated)
+                lines.Add($"Last incremental update: {Format(updated)}");
+            return lines.Count == 0 ? string.Empty : Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, lines);
+        }
+
+        var rootLines = new List<string>(_currentIndexDatesByRoot.Count + 1) { "Index dates:" };
+        foreach (var pair in _currentIndexDatesByRoot.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var parts = new List<string>(2);
+            if (pair.Value.CreatedUtc is { } created)
+                parts.Add($"created {Format(created)}");
+            if (pair.Value.BuiltUtc is { } built && built != pair.Value.CreatedUtc)
+                parts.Add($"active generation built {Format(built)}");
+            if (pair.Value.LastIncrementalUpdateUtc is { } updated)
+                parts.Add($"updated incrementally {Format(updated)}");
+            if (parts.Count > 0)
+                rootLines.Add($"  {pair.Key} — {string.Join(" · ", parts)}");
+        }
+        return rootLines.Count == 1 ? string.Empty : Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, rootLines);
+    }
+
+    /// <summary>Places the automatic-indexing schedule in its own paragraph below the date section so
+    /// it cannot run into the Created/Last updated line in the status hover surface.</summary>
+    private string BuildIndexSchedulingDetails()
+        => Environment.NewLine + Environment.NewLine
+            + ContentIndexUiStatus.SchedulingHint(_settings.IndexBuildTrigger);
+
+    /// <summary>
+    /// Upgrades the main-window index indicator from pre-search <em>availability</em> to real post-search
+    /// <em>coverage</em> (plan §6.2): once a search finishes, its <see cref="IndexAccelerationInfo"/> says
+    /// how many searched roots the index actually accelerated, so the glyph honestly reflects Full/Partial/
+    /// Bypassed. Leaves the availability indicator untouched when the feature/setting is off or the index
+    /// did not participate (a null summary or no opted-in root).
+    /// </summary>
+    private void UpdateIndexCoverageStatus(IndexAccelerationInfo? acceleration)
+    {
+        if (!_settings.EnableContentIndex || !_settings.ShowIndexStatusInMainWindow)
+            return;
+        if (acceleration is null || acceleration.RequestedRoots <= 0)
+            return;
+        // Background build/warm activity owns the indicator instead of coverage.
+        if (_activeIndexBuilds > 0 || IsIndexWarmActive || IsIndexWarmPausedForSearch)
+            return;
+
+        int accelerated = acceleration.AcceleratedRoots;
+        int liveScanned = Math.Max(0, acceleration.RequestedRoots - accelerated);
+        IndexSearchCoverage coverage = ContentIndexUiStatus.Coverage(
+            enabled: true, usedThisSearch: true, accelerated, liveScanned);
+
+        IndexStatusGlyph = ContentIndexUiStatus.CoverageGlyph(coverage);
+        IndexStatusText = ContentIndexUiStatus.CoverageLabel(coverage);
+        IndexStatusTooltip = ContentIndexUiStatus.CoverageTooltip(coverage, acceleration.FilesPruned)
+            + BuildIndexRootStatusDetails(accelerated, postSearch: true)
+            + BuildIndexDateDetails()
+            + BuildIndexSchedulingDetails();
+        ShowIndexStatus = ContentIndexUiStatus.ShouldShowStatus(true, _settings.ShowIndexStatusInMainWindow);
+        ApplyAllDriveIndexHealthStatus();
+    }
+
+    /// <summary>
+    /// Enables the content-index feature (if it is off), registers <paramref name="folder"/> as an indexed
+    /// root, persists settings, and starts a background build of that folder. Backs the main-window
+    /// "add this folder to the index" affordances (the clickable status indicator and the first-run
+    /// onboarding prompt). Never throws — the build runs off the UI thread and a failure only logs; the
+    /// caller is responsible for any large-folder confirmation before calling this.
+    /// </summary>
+    public async Task AddFolderToIndexAndBuildAsync(string folder)
+    {
+        string? effectiveRoot = await RegisterFolderForIndexAsync(folder).ConfigureAwait(true);
+        if (effectiveRoot is null)
+            return;
+
+        YaguLog.For("ContentIndex").LogInformation(
+            "Onboarding: registered effective root '{EffectiveRoot}' for requested folder '{RequestedRoot}' and starting a background index build.",
+            effectiveRoot, folder.Trim());
+        StartBackgroundIndexBuild(effectiveRoot);
+    }
+
+    /// <summary>
+    /// Registers several folders as indexed roots at once (first-run onboarding lets the user pick more
+    /// than one), optionally sets which automatic build trigger(s) maintain them, persists settings a
+    /// single time, then starts a background build for each distinct effective root. Folders already
+    /// covered by a broader registered root are skipped. Never throws.
+    /// </summary>
+    public async Task AddFoldersToIndexAndBuildAsync(IReadOnlyList<string> folders, string? buildTrigger)
+    {
+        if (folders is null || folders.Count == 0)
+            return;
+
+        _settings.EnableContentIndex = true;
+        UseContentIndex = true;
+        if (!string.IsNullOrWhiteSpace(buildTrigger))
+            _settings.IndexBuildTrigger = AppSettings.NormalizeIndexBuildTrigger(buildTrigger);
+
+        var effectiveRoots = new List<string>(folders.Count);
+        foreach (string folder in folders)
+        {
+            if (string.IsNullOrWhiteSpace(folder))
+                continue;
+            string root = folder.Trim();
+            // Skip a folder already covered by an equal/broader root registered so far (including ones
+            // added earlier in this same loop), so we never register or build a redundant child.
+            if (IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, root) is not null)
+                continue;
+            _settings.IndexedRoots = IndexedRootsPolicy.Add(_settings.IndexedRoots, root);
+            string effectiveRoot = IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, root) ?? root;
+            if (!effectiveRoots.Contains(effectiveRoot, StringComparer.OrdinalIgnoreCase))
+                effectiveRoots.Add(effectiveRoot);
+        }
+
+        await PersistSettingsAsync().ConfigureAwait(true);
+        OnPropertyChanged(nameof(IsCurrentDirectoryIndexed));
+        OnPropertyChanged(nameof(CurrentDirectoryIndexRoot));
+
+        foreach (string effectiveRoot in effectiveRoots)
+        {
+            YaguLog.For("ContentIndex").LogInformation(
+                "Onboarding: registered effective root '{EffectiveRoot}' and starting a background index build.",
+                effectiveRoot);
+            StartBackgroundIndexBuild(effectiveRoot);
+        }
+    }
+
+    /// <summary>Registers <paramref name="folder"/> and awaits its initial build behind the same
+    /// full-window blocking overlay used by an explicit rebuild. This is the pre-search readiness
+    /// dialog path: the user chose "Add to index", so Yagu must stay blocked until that requested
+    /// operation completes rather than silently starting the ordinary onboarding background build.</summary>
+    public async Task AddFolderToIndexAndBuildBlockingAsync(string folder)
+    {
+        string? effectiveRoot = await RegisterFolderForIndexAsync(folder).ConfigureAwait(true);
+        if (effectiveRoot is null)
+            return;
+
+        YaguLog.For("ContentIndex").LogInformation(
+            "Pre-search readiness: registered effective root '{EffectiveRoot}' for requested folder '{RequestedRoot}' and starting a blocking index build.",
+            effectiveRoot, folder.Trim());
+        await RunCurrentIndexBlockingAsync(new[] { effectiveRoot }, rebuild: false).ConfigureAwait(true);
+    }
+
+    private async Task<string?> RegisterFolderForIndexAsync(string folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder))
+            return null;
+        string root = folder.Trim();
+        string? existingCover = IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, root);
+
+        // Opt in: turn the master feature on, default the per-search toggle on, and register the root.
+        _settings.EnableContentIndex = true;
+        _settings.IndexedRoots = IndexedRootsPolicy.Add(_settings.IndexedRoots, root);
+        string effectiveRoot = IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, root) ?? root;
+        UseContentIndex = true;
+        await PersistSettingsAsync().ConfigureAwait(true);
+        OnPropertyChanged(nameof(IsCurrentDirectoryIndexed));
+        OnPropertyChanged(nameof(CurrentDirectoryIndexRoot));
+
+        if (existingCover is not null)
+        {
+            StatusText = $"{root} is already covered by the content index root {existingCover}.";
+            return null;
+        }
+
+        return effectiveRoot;
+    }
+
+    /// <summary>Enrolls an existing leftover index in the maintained-root list without rebuilding it.
+    /// The next automatic maintenance pass evaluates its freshness and applies a safe incremental update
+    /// when possible. This settings-only action is safe while another root is being indexed.</summary>
+    public async Task MaintainExistingIndexAsync(string folder)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => _ = MaintainExistingIndexAsync(folder));
+            return;
+        }
+        if (_disposed || string.IsNullOrWhiteSpace(folder))
+            return;
+
+        string requestedRoot = IndexScopeIdentity.NormalizePath(folder);
+        string? existingCover = IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, requestedRoot);
+        _settings.EnableContentIndex = true;
+        _settings.IndexedRoots = IndexedRootsPolicy.Add(_settings.IndexedRoots, requestedRoot);
+        string effectiveRoot = IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, requestedRoot)
+            ?? requestedRoot;
+        UseContentIndex = true;
+        await PersistSettingsAsync().ConfigureAwait(true);
+        OnPropertyChanged(nameof(IsCurrentDirectoryIndexed));
+        OnPropertyChanged(nameof(CurrentDirectoryIndexRoot));
+        StatusText = existingCover is null
+            ? $"Added {effectiveRoot} to maintained index folders. Its existing index will be checked by the next maintenance pass."
+            : $"{requestedRoot} is already maintained by the covering index root {existingCover}.";
+        RefreshCurrentIndexStatus();
+        RefreshAllDriveIndexStatus();
+    }
+
+    /// <summary>Deletes the exact stored index for <paramref name="folder"/> without changing maintained
+    /// roots. The caller supplies confirmation. A concurrent writer is rejected by the index lease.</summary>
+    public async Task DeleteStoredIndexAsync(string folder)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => _ = DeleteStoredIndexAsync(folder));
+            return;
+        }
+        if (_disposed || string.IsNullOrWhiteSpace(folder))
+            return;
+        if (IsIndexBuildActive || IsIndexRebuildBlocking)
+        {
+            StatusText = "Wait for the current index operation to finish before deleting stored index data.";
+            return;
+        }
+
+        string root = IndexScopeIdentity.NormalizePath(folder);
+        var provider = DefaultContentIndexPathProvider.Create(_settings.IndexStorageDirectory);
+        var manager = new ContentIndexManager(
+            provider,
+            AppSettings.NormalizeIndexRetainedGenerationCount(_settings.IndexRetainedGenerationCount));
+        try
+        {
+            bool existed = await Task.Run(() => manager.DeleteScope(ContentIndexManager.ScopeIdForRoot(root)))
+                .ConfigureAwait(true);
+            StatusText = existed
+                ? $"Deleted the stored content index for {root}."
+                : $"No stored content index existed for {root}.";
+        }
+        catch (IndexWriteBusyException)
+        {
+            StatusText = "Another index operation is running; delete the stored index after it finishes.";
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Deleting the stored index for '{Root}' failed.", root);
+            StatusText = $"Deleting the stored index for {root} failed: {ex.Message}";
+        }
+        finally
+        {
+            RefreshCurrentIndexStatus();
+            RefreshAllDriveIndexStatus();
+        }
+    }
+
+    /// <summary>
+    /// Starts an immediate rebuild for an already-registered root from the status indicator's context
+    /// menu. Does not modify registration or settings. The operation uses the same worker-backed,
+    /// cancellable background path as onboarding and exposes normal progress/pause behavior.
+    /// </summary>
+    public void RebuildRegisteredIndexNow(string folder)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => RebuildRegisteredIndexNow(folder));
+            return;
+        }
+        if (_disposed || IsIndexBuildActive || IsIndexingPaused || string.IsNullOrWhiteSpace(folder))
+            return;
+
+        string root = IndexScopeIdentity.NormalizePath(folder);
+        if (!IndexedRootsPolicy.Contains(_settings.IndexedRoots, root))
+            return; // context action is only valid for a registered root
+
+        YaguLog.For("ContentIndex").LogInformation(
+            "Status menu: rebuilding registered index root '{Root}'.", root);
+        StartBackgroundIndexBuild(root, rebuild: true);
+    }
+
+    /// <summary>
+    /// Describes the on-disk index for the currently searched roots for the status-bar indicator's
+    /// "Index date … (click to rebuild)" menu item. Returns <c>true</c> (with a formatted
+    /// <paramref name="dateLabel"/> and the <paramref name="roots"/> to rebuild) only when at least one
+    /// searched root currently has a readable index; the date is the oldest of those roots' build times,
+    /// rendered in local time (or "unknown" when a manifest carries no timestamp).
+    /// </summary>
+    public bool TryGetCurrentIndexRebuildTarget(out string dateLabel, out IReadOnlyList<string> roots)
+    {
+        roots = _currentIndexBuiltRoots;
+        if (_currentIndexBuiltRoots.Count == 0)
+        {
+            dateLabel = string.Empty;
+            return false;
+        }
+
+        string date = _currentIndexBuiltUtc is { } built
+            ? built.ToLocalTime().ToString("MM/ddd/yyyy HH:mm", System.Globalization.CultureInfo.CurrentCulture)
+            : "unknown";
+        dateLabel = $"Index date: {date} (click to rebuild)";
+        return true;
+    }
+
+    /// <summary>
+    /// Returns indexed roots whose active-search bypass or all-drive health snapshot identifies as a
+    /// repairable freshness/storage failure. Query-shape/selectivity bypasses and unsupported journals
+    /// are intentionally excluded because rebuilding cannot help them.
+    /// </summary>
+    public bool TryGetCurrentIndexFreshnessRepairTarget(
+        out string actionLabel,
+        out IReadOnlyList<string> roots)
+    {
+        var builtRoots = _currentIndexBuiltRoots
+            .Select(IndexScopeIdentity.NormalizePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string[] repairRoots = _indexRuntimeBypassReasonsByRoot
+            .Where(pair => IsIndexFreshnessRepairReason(pair.Value)
+                && (!TryGetCurrentIndexFreshnessForSearchRoot(pair.Key, out var freshness)
+                    || !freshness.NeedsAttention
+                    || freshness.RequiresRebuild))
+            .Select(pair =>
+            {
+                string searchedRoot = IndexScopeIdentity.NormalizePath(pair.Key);
+                return builtRoots.Contains(searchedRoot)
+                    ? searchedRoot
+                    : IndexedRootsPolicy.FindBestCoveringRoot(builtRoots, searchedRoot);
+            })
+            .Where(root => root is not null)
+            .Select(root => root!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        repairRoots = repairRoots
+            .Concat(_currentIndexFreshnessByRoot
+                .Where(static pair => pair.Value.RequiresRebuild)
+                .Select(static pair => pair.Key))
+            .Concat(_allDriveIndexHealth
+                .Where(static root => root.CanRepair)
+                .Select(static root => root.RepairRoot!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        roots = repairRoots;
+        actionLabel = repairRoots.Length switch
+        {
+            1 => $"Rebuild {repairRoots[0]} index",
+            > 1 => $"Rebuild {repairRoots.Length} indexes",
+            _ => string.Empty,
+        };
+        return repairRoots.Length > 0;
+    }
+
+    private static bool IsIndexFreshnessRepairReason(string? reason)
+        => !IsIndexCatchupLimitReason(reason)
+            && (reason?.Contains("layer not fresh", StringComparison.OrdinalIgnoreCase) == true
+            || reason?.Contains("JournalDiscontinuity", StringComparison.OrdinalIgnoreCase) == true
+            || reason?.Contains("CheckpointInvalid", StringComparison.OrdinalIgnoreCase) == true
+            || reason?.Contains("CheckpointAhead", StringComparison.OrdinalIgnoreCase) == true);
+
+    private static bool IsIndexCatchupLimitReason(string? reason)
+        => reason?.Contains("Incomplete", StringComparison.OrdinalIgnoreCase) == true;
+
+    /// <summary>
+    /// Rebuilds the content index for <paramref name="roots"/> while a full-window blocking overlay
+    /// prevents any other interaction, updating that overlay with live progress. Invoked from the
+    /// status-bar indicator's "Index date … (click to rebuild)" menu item. The build uses the same
+    /// worker-backed path as a background build, but here it is awaited and the rest of the UI is
+    /// intentionally blocked until it finishes. Never throws.
+    /// </summary>
+    public async Task RebuildCurrentIndexBlockingAsync(IReadOnlyList<string> roots)
+        => await RunCurrentIndexBlockingAsync(roots, rebuild: true).ConfigureAwait(true);
+
+    private async Task RunCurrentIndexBlockingAsync(IReadOnlyList<string> roots, bool rebuild)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => _ = RunCurrentIndexBlockingAsync(roots, rebuild));
+            return;
+        }
+        if (_disposed || IsIndexRebuildBlocking || IsIndexBuildActive || IsIndexingPaused
+            || roots is null || roots.Count == 0)
+            return;
+
+        var targets = roots.Where(r => !string.IsNullOrWhiteSpace(r)).Select(r => r.Trim()).ToArray();
+        if (targets.Length == 0)
+            return;
+
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(IndexBuildCancellationToken);
+        _indexRebuildCancellation = cancellation;
+        _indexBlockingOperationIsRebuild = rebuild;
+        OnPropertyChanged(nameof(IndexRebuildOverlayTitle));
+        OnPropertyChanged(nameof(IndexRebuildCancelButtonText));
+        IsIndexRebuildCancelling = false;
+        IsIndexRebuildBlocking = true;
+        IndexRebuildProgressPercent = 0;
+        string operation = rebuild ? "rebuild" : "build";
+        IndexRebuildProgressText = targets.Length == 1
+            ? $"Preparing to {operation} the index for {targets[0]}…"
+            : $"Preparing to {operation} {targets.Length} indexes…";
+        await Task.Yield(); // allow the full-window overlay to paint before worker startup
+
+        try
+        {
+            for (int i = 0; i < targets.Length && !cancellation.IsCancellationRequested; i++)
+                await BuildOneBlockingAsync(targets[i], i, targets.Length, rebuild, cancellation.Token).ConfigureAwait(true);
+        }
+        finally
+        {
+            if (ReferenceEquals(_indexRebuildCancellation, cancellation))
+                _indexRebuildCancellation = null;
+            IsIndexRebuildBlocking = false;
+            IsIndexRebuildCancelling = false;
+            IndexRebuildProgressPercent = 0;
+            IndexRebuildProgressText = string.Empty;
+            if (_lastIndexStatusRoots.Count > 0)
+                await RefreshIndexStatusAsync(_lastIndexStatusRoots, _lastIndexStatusUseThisSearch).ConfigureAwait(true);
+            RefreshAllDriveIndexStatus();
+        }
+    }
+
+    /// <summary>Runs an explicit incremental maintenance pass for one physical index root. This never
+    /// falls back to a full rebuild: if journal continuity still cannot be proven, the existing index is
+    /// retained unchanged and the user can search live or explicitly choose Rebuild. When
+    /// <paramref name="increasedCatchupLimit"/> is supplied, that user-approved larger bounded journal
+    /// replay limit is persisted before the pass.</summary>
+    public async Task RefreshCurrentIndexIncrementallyAsync(string root, int? increasedCatchupLimit = null)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => _ = RefreshCurrentIndexIncrementallyAsync(root, increasedCatchupLimit));
+            return;
+        }
+        if (_disposed || IsIndexBuildActive || IsIndexRebuildBlocking || IsIndexingPaused
+            || string.IsNullOrWhiteSpace(root))
+            return;
+
+        string normalizedRoot = IndexScopeIdentity.NormalizePath(root);
+        if (increasedCatchupLimit is { } requested)
+        {
+            int normalized = AppSettings.NormalizeIndexMaxJournalCatchupRecords(requested);
+            if (normalized > _settings.IndexMaxJournalCatchupRecords)
+            {
+                _settings.IndexMaxJournalCatchupRecords = normalized;
+                await PersistSettingsAsync().ConfigureAwait(true);
+            }
+        }
+
+        BeginIndexBuildActivity(normalizedRoot, isIncremental: true);
+        StatusText = $"Updating the {normalizedRoot} content index incrementally…";
+        try
+        {
+            IndexMaintenanceOperation operation = IndexBuildOperationFactory.CreateMaintenance(
+                _settings,
+                new[] { normalizedRoot },
+                IndexMaintenanceOperation.ModeIncremental,
+                rebuildWhenDirty: false);
+            operation.AllowFullRebuildFallback = false;
+            operation.AllowCompatibilityRebuild = false;
+            operation.ForceRefresh = true;
+            var coordinator = new IndexBuildCoordinator();
+            IndexMaintenanceSuccess result = await coordinator.RunMaintenancePreferWorkerAsync(
+                operation,
+                _settings.IndexUseNativeWorker,
+                IndexBuildCancellationToken,
+                (progressRoot, percent, stage) => ReportIndexBuildProgress(progressRoot, percent, stage)).ConfigureAwait(true);
+
+            IndexMaintenanceRootResult? rootResult = result.Roots.FirstOrDefault();
+            StatusText = rootResult?.Action switch
+            {
+                IndexMaintenanceActions.DeltaAppended => $"Updated the {normalizedRoot} index incrementally.",
+                IndexMaintenanceActions.Compacted => $"Updated and compacted the {normalizedRoot} index.",
+                IndexMaintenanceActions.Reanchored => $"The {normalizedRoot} index was already current; its checkpoint was refreshed.",
+                IndexMaintenanceActions.Skipped => $"The {normalizedRoot} index is already up to date.",
+                _ when rootResult?.Outcome == "needsFullRebuild" =>
+                    $"The incremental update could not establish journal continuity for {normalizedRoot}; the existing index was kept unchanged. Search live or explicitly rebuild it.",
+                _ => $"The incremental update for {normalizedRoot} did not complete; the existing index was kept unchanged.",
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = $"Incremental update for {normalizedRoot} was cancelled; the existing index was kept unchanged.";
+        }
+        catch (IndexWriteBusyException)
+        {
+            StatusText = "Another index operation is already running.";
+        }
+        catch (IndexDiskFullException ex)
+        {
+            OnIndexBuildStoppedForDiskSpace(ex.DriveDisplayName, ex.UsedPercent, ex.ThresholdPercent);
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "On-demand incremental refresh failed for '{Root}'.", normalizedRoot);
+            StatusText = $"Incremental update for {normalizedRoot} failed; the existing index was kept unchanged.";
+        }
+        finally
+        {
+            EndIndexBuildActivity();
+            if (_lastIndexStatusRoots.Count > 0)
+                await RefreshIndexStatusAsync(_lastIndexStatusRoots, _lastIndexStatusUseThisSearch).ConfigureAwait(true);
+            RefreshAllDriveIndexStatus();
+        }
+    }
+
+    /// <summary>Requests cooperative cancellation of only the on-demand blocking rebuild. The previously
+    /// published index remains available because the builder publishes staged generations atomically.</summary>
+    public void CancelCurrentIndexRebuild()
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(CancelCurrentIndexRebuild);
+            return;
+        }
+        if (!IsIndexRebuildBlocking || IsIndexRebuildCancelling)
+            return;
+
+        IsIndexRebuildCancelling = true;
+        IndexRebuildProgressText = _indexBlockingOperationIsRebuild
+            ? "Canceling the rebuild… The existing index remains available."
+            : "Canceling the build… No incomplete index will be published.";
+        _indexRebuildCancellation?.Cancel();
+        YaguLog.For("ContentIndex").LogInformation(
+            "User cancelled the blocking index {Action}.", _indexBlockingOperationIsRebuild ? "rebuild" : "build");
+    }
+
+    private async Task BuildOneBlockingAsync(string root, int index, int total, bool rebuild, CancellationToken token)
+    {
+        IndexBuildOperation operation = IndexBuildOperationFactory.CreateBuild(_settings, root, rebuild);
+        bool useWorker = _settings.IndexUseNativeWorker;
+        long driveUsedBytes = IndexBuildProgressEstimate.DriveUsedBytes(root);
+
+        BeginIndexBuildActivity(root);
+        try
+        {
+            var coordinator = new IndexBuildCoordinator();
+            await coordinator.BuildFullScopePreferWorkerAsync(
+                operation,
+                useWorker,
+                token,
+                progress: p => ReportRebuildBlockingProgress(root, index, total,
+                    IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes)),
+                pdfProgress: p => ReportRebuildBlockingProgress(root, index, total,
+                    p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5)),
+                imageOcrProgress: p => ReportRebuildBlockingProgress(root, index, total,
+                    p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4))).ConfigureAwait(true);
+            YaguLog.For("ContentIndex").LogInformation("Blocking index {Action} complete for '{Root}'.", rebuild ? "rebuild" : "build", root);
+        }
+        catch (OperationCanceledException)
+        {
+            YaguLog.For("ContentIndex").LogInformation("Blocking index {Action} for '{Root}' was paused/cancelled.", rebuild ? "rebuild" : "build", root);
+        }
+        catch (IndexDiskFullException ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning("Blocking index {Action} for '{Root}' stopped: {Error}", rebuild ? "rebuild" : "build", root, ex.Message);
+            OnIndexBuildStoppedForDiskSpace(ex.DriveDisplayName, ex.UsedPercent, ex.ThresholdPercent);
+        }
+        catch (IndexWriteBusyException)
+        {
+            YaguLog.For("ContentIndex").LogInformation("Blocking index {Action} for '{Root}' skipped because another index operation is running.", rebuild ? "rebuild" : "build", root);
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Blocking index {Action} failed for '{Root}'.", rebuild ? "rebuild" : "build", root);
+        }
+        finally
+        {
+            EndIndexBuildActivity();
+        }
+    }
+
+    /// <summary>Self-marshalling progress sink for <see cref="RebuildCurrentIndexBlockingAsync"/>: folds a
+    /// per-root 0–99 estimate (or -1 unknown) into the overall 0–100 overlay progress across all roots and
+    /// refreshes the overlay's status line.</summary>
+    private void ReportRebuildBlockingProgress(string root, int index, int total, int percent)
+    {
+        void apply()
+        {
+            if (!IsIndexRebuildBlocking)
+                return;
+            if (percent >= 0)
+            {
+                double overall = (index * 100.0 + Math.Clamp(percent, 0, 100)) / Math.Max(1, total);
+                IndexRebuildProgressPercent = Math.Clamp(overall, 0, 100);
+            }
+            string suffix = percent >= 0 ? $" {percent}%" : string.Empty;
+            string verb = _indexBlockingOperationIsRebuild ? "Rebuilding" : "Building";
+            IndexRebuildProgressText = total > 1
+                ? $"{verb} {root} ({index + 1} of {total})…{suffix}"
+                : $"{verb} {root}…{suffix}";
+        }
+        if (!_dispatcher.TryEnqueue(apply))
+            apply();
+    }
+
+    /// <summary>
+    /// Starts loading the current root's immutable query index immediately. A cold open runs off the UI
+    /// thread and is cooperatively cancellable; there is deliberately no fixed wait before it starts.
+    /// If a search is already running, the root is queued and warming begins when that search finishes.
+    /// </summary>
+    public void StartContentIndexWarmup(string? folder)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => StartContentIndexWarmup(folder));
+            return;
+        }
+        if (_disposed || !_settings.EnableContentIndex || !UseContentIndex || string.IsNullOrWhiteSpace(folder))
+            return;
+
+        // Stage-6 (plan §5.8): the worker PRUNING path needs no in-process warm. The worker memory-maps the
+        // scope's format-v3 lazily and its open at barrier B0 is cheap (no ~8× in-process deserialize, no GC
+        // storm), so a worker-served scope accelerates directly on the FIRST search. Warming here would
+        // deserialize the whole index into the host — the exact footprint the worker path removes — so skip it
+        // entirely when the flag is on.
+        if (_settings.IndexUseWorkerQuerySessions)
+            return;
+
+        string requestedRoot = folder.Trim();
+        string root = IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, requestedRoot)
+            ?? requestedRoot;
+        if (IsSearching)
+        {
+            _resumeIndexWarmFolder = root;
+            OnPropertyChanged(nameof(ActiveIndexWarmFolder));
+            return;
+        }
+        if (IsIndexWarmActive
+            && string.Equals(_activeIndexWarmFolder, root, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        int retained = AppSettings.NormalizeIndexRetainedGenerationCount(_settings.IndexRetainedGenerationCount);
+        string storageDir = _settings.IndexStorageDirectory;
+        int maxInProcessSizeMB = AppSettings.NormalizeIndexMaxInProcessSizeMB(_settings.IndexMaxInProcessSizeMB);
+        var pathProvider = DefaultContentIndexPathProvider.Create(storageDir);
+        try
+        {
+            var manager = new ContentIndexManager(pathProvider, retained);
+            if (!manager.HasCurrentIndex(root))
+                return;
+            if (ContentIndexSearchGate.IsScopeWarm(pathProvider, root, retained))
+            {
+                ShowIndexWarmReadyStatus(root);
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex,
+                "Could not prepare startup index warm-up for {Root}; searches will live-scan.", root);
+            return;
+        }
+
+        CancellationTokenSource? previous = _indexWarmCancellation;
+        _indexWarmCancellation = null;
+        try { previous?.Cancel(); } catch { }
+
+        int generation = ++_indexWarmGeneration;
+        var cancellation = new CancellationTokenSource();
+        _indexWarmCancellation = cancellation;
+        _activeIndexWarmFolder = root;
+        _resumeIndexWarmFolder = null;
+        IsIndexWarmPausedForSearch = false;
+        IsIndexWarmActive = true;
+        OnPropertyChanged(nameof(ActiveIndexWarmFolder));
+        ShowIndexWarmPreparingStatus(root);
+        YaguLog.For("ContentIndex").LogInformation(
+            "Index warm-up starting immediately for {Root} (no startup delay).", root);
+
+        _ = RunContentIndexWarmupAsync(
+            generation,
+            root,
+            pathProvider,
+            retained,
+            maxInProcessSizeMB,
+            cancellation);
+    }
+
+    private async Task RunContentIndexWarmupAsync(
+        int generation,
+        string root,
+        IContentIndexPathProvider pathProvider,
+        int retained,
+        int maxInProcessSizeMB,
+        CancellationTokenSource cancellation)
+    {
+        bool ready = false;
+        bool loadable = true;
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            (ready, loadable) = await Task.Run(() =>
+            {
+                CancellationToken token = cancellation.Token;
+                token.ThrowIfCancellationRequested();
+                if (!ContentIndexSearchGate.IsScopeWithinInProcessSizeLimit(
+                        pathProvider,
+                        root,
+                        retained,
+                        maxInProcessSizeMB))
+                    return (false, false);
+
+                string scopeId = ContentIndexManager.ScopeIdForRoot(root);
+                var store = new ContentIndexStore(pathProvider, scopeId, Math.Max(1, retained));
+                if (store.IsCurrentLayeredIndexCached())
+                    return (true, true);
+                return (store.TryOpenLayered(retainDocuments: false, cancellationToken: token) is not null, true);
+            }, cancellation.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            YaguLog.For("ContentIndex").LogInformation(
+                "Index warm-up paused/cancelled for {Root} after {ElapsedSeconds:0.0}s.",
+                root,
+                stopwatch.Elapsed.TotalSeconds);
+            return;
+        }
+        catch (OutOfMemoryException ex)
+        {
+            loadable = false;
+            YaguLog.For("ContentIndex").LogCritical(ex,
+                "Index warm-up ran out of memory for {Root}; searches will live-scan.", root);
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex,
+                "Index warm-up failed for {Root}; searches will continue with live scanning.", root);
+        }
+        finally
+        {
+            cancellation.Dispose();
+        }
+
+        if (generation != _indexWarmGeneration || _disposed)
+            return;
+
+        _indexWarmCancellation = null;
+        _activeIndexWarmFolder = null;
+        IsIndexWarmActive = false;
+        OnPropertyChanged(nameof(ActiveIndexWarmFolder));
+
+        if (ready)
+        {
+            YaguLog.For("ContentIndex").LogInformation(
+                "Index warm-up completed for {Root} in {ElapsedSeconds:0.0}s.",
+                root,
+                stopwatch.Elapsed.TotalSeconds);
+            ShowIndexWarmReadyStatus(root);
+        }
+        else
+        {
+            if (!loadable)
+                YaguLog.For("ContentIndex").LogInformation(
+                    "Index warm-up skipped for {Root}: the index is outside the configured in-process size policy.",
+                    root);
+            _ = RefreshIndexStatusAsync([root], UseContentIndex && _settings.EnableContentIndex);
+        }
+    }
+
+    /// <summary>Cancels an active warm before a search and remembers its root for automatic restart when
+    /// the search ends. Returns false when no warm was active.</summary>
+    public bool PauseContentIndexWarmupForSearch()
+    {
+        if (!_dispatcher.HasThreadAccess)
+            return false;
+        if (!IsIndexWarmActive || string.IsNullOrWhiteSpace(_activeIndexWarmFolder))
+            return false;
+
+        _resumeIndexWarmFolder = _activeIndexWarmFolder;
+        _activeIndexWarmFolder = null;
+        ++_indexWarmGeneration; // makes the cancelled run's completion stale
+        CancellationTokenSource? cancellation = _indexWarmCancellation;
+        _indexWarmCancellation = null;
+        try { cancellation?.Cancel(); } catch { }
+        IsIndexWarmActive = false;
+        IsIndexWarmPausedForSearch = true;
+        OnPropertyChanged(nameof(ActiveIndexWarmFolder));
+        ShowIndexWarmPausedStatus();
+        return true;
+    }
+
+    /// <summary>Restarts a warm that was paused (or queued) for a search. Safe to call after every search;
+    /// it is a no-op when no root is waiting.</summary>
+    public void ResumeContentIndexWarmupAfterSearch()
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(ResumeContentIndexWarmupAfterSearch);
+            return;
+        }
+        if (IsSearching || string.IsNullOrWhiteSpace(_resumeIndexWarmFolder))
+            return;
+
+        string root = _resumeIndexWarmFolder;
+        _resumeIndexWarmFolder = null;
+        IsIndexWarmPausedForSearch = false;
+        OnPropertyChanged(nameof(ActiveIndexWarmFolder));
+        StartContentIndexWarmup(root);
+    }
+
+    private void ShowIndexWarmPreparingStatus(string root)
+    {
+        if (!_settings.ShowIndexStatusInMainWindow || IsIndexBuildActive)
+            return;
+        IndexStatusGlyph = "\uE895";
+        IndexStatusText = "Indexing: preparing...";
+        IndexStatusTooltip = $"Loading the content index for {root} into the query cache. "
+            + "A search can start now, but it will pause this warm-up and run without index acceleration."
+            + BuildIndexDateDetails();
+        ShowIndexBuildPercent = false;
+        ShowIndexStatus = true;
+    }
+
+    private void ShowIndexWarmPausedStatus()
+    {
+        if (!_settings.ShowIndexStatusInMainWindow || IsIndexBuildActive)
+            return;
+        IndexStatusGlyph = "\uE769";
+        IndexStatusText = "Indexing: warm-up paused";
+        IndexStatusTooltip = "Index warm-up is paused while the search runs. It resumes automatically when the search finishes."
+            + BuildIndexDateDetails();
+        ShowIndexBuildPercent = false;
+        ShowIndexStatus = true;
+    }
+
+    private void ShowIndexWarmReadyStatus(string root)
+    {
+        if (!_settings.ShowIndexStatusInMainWindow || IsIndexBuildActive)
+            return;
+        IndexStatusGlyph = ContentIndexUiStatus.AvailabilityGlyph(IndexAvailability.Available);
+        IndexStatusText = "Index: ready";
+        IndexStatusTooltip = $"The content index for {root} is warmed and ready for accelerated searches."
+            + BuildIndexDateDetails();
+        ShowIndexBuildPercent = false;
+        ShowIndexStatus = true;
+        ApplyAllDriveIndexHealthStatus(force: true);
+    }
+
+    /// <summary>
+    /// Unregisters <paramref name="folder"/> from the content-index roots (the inverse of
+    /// <see cref="AddFolderToIndexAndBuildAsync"/>) and persists settings. This only removes it from the
+    /// auto-index list — it does NOT delete any already-built on-disk index data (that is managed from
+    /// Settings ▸ Indexing), matching the "Remove selected folder" behavior there. Never throws.
+    /// </summary>
+    public async Task RemoveFolderFromIndexAsync(string folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder))
+            return;
+        string root = folder.Trim();
+
+        if (!IndexedRootsPolicy.Contains(_settings.IndexedRoots, root))
+            return;
+
+        _settings.IndexedRoots = IndexedRootsPolicy.Remove(_settings.IndexedRoots, root);
+        await PersistSettingsAsync().ConfigureAwait(true);
+        OnPropertyChanged(nameof(IsCurrentDirectoryIndexed));
+        OnPropertyChanged(nameof(CurrentDirectoryIndexRoot));
+        RefreshAllDriveIndexStatus();
+
+        YaguLog.For("ContentIndex").LogInformation("Unregistered '{Root}' from the content-index roots.", root);
+    }
+
+    /// <summary>
+    /// Starts a cancellable background build of <paramref name="folder"/> (using the shared
+    /// <see cref="IndexBuildCancellationToken"/> so a right-click pause stops it), and brackets it with the
+    /// "Indexing…" indicator activity. Never throws; a failure or pause only logs.
+    /// </summary>
+    private void StartBackgroundIndexBuild(string folder, bool rebuild = false)
+    {
+        string root = folder.Trim();
+        if (root.Length == 0)
+            return;
+
+        IndexBuildOperation operation = IndexBuildOperationFactory.CreateBuild(_settings, root, rebuild);
+        bool useWorker = _settings.IndexUseNativeWorker;
+        CancellationToken token = IndexBuildCancellationToken;
+        // Denominator for the "% complete" estimate: the used space of the drive this root lives on
+        // (cheap, no pre-count). Captured once here on the UI thread; the build reports crawled bytes.
+        long driveUsedBytes = IndexBuildProgressEstimate.DriveUsedBytes(root);
+
+        BeginIndexBuildActivity(root);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var coordinator = new IndexBuildCoordinator();
+                await coordinator.BuildFullScopePreferWorkerAsync(
+                    operation,
+                    useWorker,
+                    token,
+                    progress: p => ReportIndexBuildProgress(IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes)),
+                    pdfProgress: p => ReportIndexBuildProgress(p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5)),
+                    imageOcrProgress: p => ReportIndexBuildProgress(p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4)));
+                YaguLog.For("ContentIndex").LogInformation(
+                    "Background index {Action} complete for '{Root}'.", rebuild ? "rebuild" : "build", root);
+            }
+            catch (OperationCanceledException)
+            {
+                YaguLog.For("ContentIndex").LogInformation("Background index build for '{Root}' was paused/cancelled.", root);
+            }
+            catch (IndexDiskFullException ex)
+            {
+                YaguLog.For("ContentIndex").LogWarning("Background index build for '{Root}' stopped: {Error}", root, ex.Message);
+                OnIndexBuildStoppedForDiskSpace(ex.DriveDisplayName, ex.UsedPercent, ex.ThresholdPercent);
+            }
+            catch (IndexWriteBusyException)
+            {
+                YaguLog.For("ContentIndex").LogInformation("Background index build for '{Root}' skipped because another index operation is running.", root);
+            }
+            catch (Exception ex)
+            {
+                YaguLog.For("ContentIndex").LogWarning(ex, "Background index build failed for '{Root}'.", root);
+            }
+            finally
+            {
+                EndIndexBuildActivity();
+            }
+        });
+    }
+
+    /// <summary>
+    /// Pauses indexing (from the status-bar indicator's right-click menu): cancels the running tracked
+    /// build(s) and holds off auto/startup/watcher builds until <see cref="ResumeIndexing"/>. Safe from any
+    /// thread. Session-only — a relaunch starts unpaused.
+    /// </summary>
+    public void PauseIndexing()
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(PauseIndexing);
+            return;
+        }
+        if (IsIndexingPaused)
+            return;
+
+        IsIndexingPaused = true;
+        _pausedIndexBuildFolder = _activeIndexBuildFolder;
+        _indexBuildCancellation?.Cancel();
+        YaguLog.For("ContentIndex").LogInformation("User paused indexing.");
+        ShowIndexBuildingStatus();
+        OnPropertyChanged(nameof(CanPauseIndexing));
+    }
+
+    /// <summary>
+    /// Resumes indexing after a pause: clears the pause, replaces the cancellation source, and re-starts the
+    /// build for the folder that was building when paused (if any). Safe from any thread.
+    /// </summary>
+    public void ResumeIndexing()
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(ResumeIndexing);
+            return;
+        }
+        if (!IsIndexingPaused)
+            return;
+
+        IsIndexingPaused = false;
+        _indexBuildCancellation?.Dispose();
+        _indexBuildCancellation = null;
+        string? folder = _pausedIndexBuildFolder;
+        _pausedIndexBuildFolder = null;
+        _indexDiskFullMessage = null;
+        YaguLog.For("ContentIndex").LogInformation("User resumed indexing.");
+        OnPropertyChanged(nameof(CanPauseIndexing));
+
+        if (!string.IsNullOrWhiteSpace(folder))
+        {
+            StartBackgroundIndexBuild(folder!);
+        }
+        else if (IndexedRootsPolicy.Normalize(_settings.IndexedRoots).Count > 0 && ResumeAutoIndexBuildAsync is { } resumeAutoBuild)
+        {
+            // The paused build was a multi-root auto/startup/scheduled pass with no single tracked folder.
+            // Reset the indicator baseline, then re-run that pass over the registered folders via the
+            // view-installed hook so a resume actually resumes (it skips folders whose index is already
+            // fresh, and re-shows "Indexing…" as soon as it starts) instead of just clearing the indicator.
+            RevertIndexIndicatorAfterBuild();
+            _ = resumeAutoBuild();
+        }
+        else
+        {
+            RevertIndexIndicatorAfterBuild();
+        }
+    }
+
+    /// <summary>
+    /// Stops using the content index for searches for the rest of this session WITHOUT changing the saved
+    /// setting — the feature and any registered roots stay, and a relaunch uses the index again. Backs the
+    /// status indicator's "Disable index ▸ Disable index (this run)" command. Safe from any thread.
+    /// </summary>
+    public void DisableContentIndexThisRun()
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(DisableContentIndexThisRun);
+            return;
+        }
+        if (_disposed)
+            return;
+
+        UseContentIndex = false;
+        YaguLog.For("ContentIndex").LogInformation("Status menu: disabled content-index use for this session (not persisted).");
+        StatusText = "Content index off for this session — it will be used again next launch.";
+        _ = RefreshIndexStatusAsync(_lastIndexStatusRoots, false);
+    }
+
+    /// <summary>
+    /// Turns the content-index feature OFF and SAVES the setting so it stays off across launches. Cancels any
+    /// running tracked build and hides the status indicator. Registered roots and the index files on disk are
+    /// kept, so re-enabling in Settings ▸ Indexing restores them. Backs the status indicator's
+    /// "Disable index ▸ Disable indexing (persistent)" command. Safe from any thread.
+    /// </summary>
+    public async Task DisableContentIndexPersistentlyAsync()
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => _ = DisableContentIndexPersistentlyAsync());
+            return;
+        }
+        if (_disposed)
+            return;
+
+        // Stop any in-flight tracked build promptly, then clear the paused state (we are turning it off,
+        // not pausing).
+        _indexBuildCancellation?.Cancel();
+        IsIndexingPaused = false;
+
+        _settings.EnableContentIndex = false;
+        UseContentIndex = false;
+        await PersistSettingsAsync().ConfigureAwait(true);
+
+        Interlocked.Increment(ref _allDriveIndexHealthRefreshGeneration);
+        _allDriveIndexHealth = Array.Empty<IndexRootHealthEntry>();
+        AllDriveIndexStatusText = string.Empty;
+
+        // Keep a muted "Index: off" indicator this session so the status menu (which now offers "Enable
+        // indexing") stays reachable — otherwise the user could only re-enable via Settings ▸ Indexing.
+        _indexOffIndicatorSticky = true;
+        ShowIndexDisabledIndicator();
+        OnPropertyChanged(nameof(IsCurrentDirectoryIndexed));
+        YaguLog.For("ContentIndex").LogInformation("Status menu: disabled content indexing persistently.");
+        StatusText = "Content indexing turned off. Right-click ▸ Enable indexing to turn it back on.";
+    }
+
+    /// <summary>
+    /// Re-enables using the content index for searches this session after "Disable index (this run)". Sets
+    /// the session <see cref="UseContentIndex"/> flag back on without touching saved settings. Backs the
+    /// status indicator's "Use index (this run)" command. Safe from any thread.
+    /// </summary>
+    public void EnableContentIndexThisRun()
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(EnableContentIndexThisRun);
+            return;
+        }
+        if (_disposed)
+            return;
+
+        UseContentIndex = true;
+        YaguLog.For("ContentIndex").LogInformation("Status menu: re-enabled content-index use for this session.");
+        StatusText = "Content index on for this session.";
+        _ = RefreshIndexStatusAsync(_lastIndexStatusRoots, UseContentIndex && _settings.EnableContentIndex);
+        RefreshAllDriveIndexStatus();
+    }
+
+    /// <summary>
+    /// Turns the content-index feature back ON and SAVES it after "Disable indexing (persistent)". Clears
+    /// the sticky "Index: off" indicator and refreshes the status. Registered folders and their on-disk
+    /// indexes were kept, so they become usable again immediately. Backs the status indicator's
+    /// "Enable indexing" command. Safe from any thread.
+    /// </summary>
+    public async Task EnableContentIndexFromStatusMenuAsync()
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => _ = EnableContentIndexFromStatusMenuAsync());
+            return;
+        }
+        if (_disposed)
+            return;
+
+        _settings.EnableContentIndex = true;
+        UseContentIndex = true;
+        _indexOffIndicatorSticky = false;
+        await PersistSettingsAsync().ConfigureAwait(true);
+
+        OnPropertyChanged(nameof(IsCurrentDirectoryIndexed));
+        YaguLog.For("ContentIndex").LogInformation("Status menu: re-enabled content indexing (persistent).");
+        StatusText = "Content indexing turned on.";
+        _ = RefreshIndexStatusAsync(_lastIndexStatusRoots, UseContentIndex && _settings.EnableContentIndex);
+        RefreshAllDriveIndexStatus();
+    }
+
+    /// <summary>
+    /// Applies and immediately persists one of the simple automatic-indexing presets offered by the
+    /// main-window status overlay. If automatic passes were still configured to build only missing
+    /// indexes, upgrades them to incremental maintenance so existing indexes are kept current.
+    /// </summary>
+    public async Task SetAutomaticIndexingPresetAsync(string trigger)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => _ = SetAutomaticIndexingPresetAsync(trigger));
+            return;
+        }
+        if (_disposed)
+            return;
+
+        bool supported =
+            string.Equals(trigger, ContentIndexBuildScheduler.TriggerContinuous, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trigger, ContentIndexBuildScheduler.TriggerWhenIdle, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trigger, ContentIndexBuildScheduler.TriggerAtStartup, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trigger, ContentIndexBuildScheduler.TriggerOnSchedule, StringComparison.OrdinalIgnoreCase);
+        if (!supported)
+            throw new ArgumentOutOfRangeException(nameof(trigger), trigger, "Unknown automatic-indexing preset.");
+
+        string normalizedTrigger = AppSettings.NormalizeIndexBuildTrigger(trigger);
+        _settings.IndexBuildTrigger = normalizedTrigger;
+        if (string.Equals(
+                AppSettings.NormalizeIndexUpdateMode(_settings.IndexUpdateMode),
+                AppSettings.DefaultIndexUpdateMode,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _settings.IndexUpdateMode = AppSettings.IndexUpdateModeAutomaticIncremental;
+        }
+
+        await PersistSettingsAsync().ConfigureAwait(true);
+
+        YaguLog.For("ContentIndex").LogInformation(
+            "Status overlay: automatic indexing saved with trigger {Trigger} and update mode {UpdateMode}.",
+            _settings.IndexBuildTrigger,
+            _settings.IndexUpdateMode);
+        StatusText = ContentIndexUiStatus.SchedulingHint(_settings.IndexBuildTrigger) + " Setting saved.";
+        RefreshCurrentIndexStatus();
+        RefreshAllDriveIndexStatus();
+
+        if (AppSettings.IndexBuildTriggerHas(
+                normalizedTrigger,
+                ContentIndexBuildScheduler.TriggerContinuous)
+            && RequestIdleIndexMaintenanceAsync is { } requestMaintenance)
+        {
+            _ = requestMaintenance();
+        }
+    }
+
+    /// <summary>Shows the muted "Index: off" status indicator (used after a menu-driven persistent disable),
+    /// unless the user has turned the indicator off entirely in settings.</summary>
+    private void ShowIndexDisabledIndicator()
+    {
+        if (!_settings.ShowIndexStatusInMainWindow)
+        {
+            ShowIndexStatus = false;
+            return;
+        }
+        IndexStatusGlyph = "\uEA39"; // Blocked
+        IndexStatusText = "Index: off";
+        IndexStatusTooltip = "Content indexing is off. Right-click \u25B8 Enable indexing to turn it back on."
+            + BuildIndexDateDetails();
+        ShowIndexStatus = true;
+    }
+
+    /// <summary>
+    /// Called when an index build is stopped because the index drive reached its used-space limit
+    /// (plan §11.2). Auto-pauses indexing (so auto/watcher builds don't immediately retry) and shows a
+    /// disk-full warning in the status-bar indicator. The user frees space then right-clicks ▸ Resume.
+    /// Safe from any thread.
+    /// </summary>
+    public void OnIndexBuildStoppedForDiskSpace(string driveDisplayName, double usedPercent, int thresholdPercent)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => OnIndexBuildStoppedForDiskSpace(driveDisplayName, usedPercent, thresholdPercent));
+            return;
+        }
+
+        _indexDiskFullMessage =
+            $"Indexing stopped: {driveDisplayName} is {usedPercent:F0}% full (limit {thresholdPercent}%). "
+            + "Free disk space, then right-click ▸ Resume indexing — or raise the limit in Settings ▸ Indexing.";
+        if (!IsIndexingPaused)
+        {
+            IsIndexingPaused = true;
+            _pausedIndexBuildFolder = _activeIndexBuildFolder;
+        }
+        YaguLog.For("ContentIndex").LogWarning(
+            "Indexing stopped for disk space: {Drive} {UsedPercent:F1}% full (limit {ThresholdPercent}%).",
+            driveDisplayName, usedPercent, thresholdPercent);
+        ShowIndexBuildingStatus();
+        OnPropertyChanged(nameof(CanPauseIndexing));
+    }
+
+    /// <summary>
+    /// Marks that a background index build has started and shows an "Indexing…" state in the main-window
+    /// index indicator (overriding availability/coverage until every active build finishes). Safe to call
+    /// from any thread. Each call MUST be paired with <see cref="EndIndexBuildActivity"/>.
+    /// </summary>
+    public void BeginIndexBuildActivity(string? folder = null, bool isIncremental = false)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => BeginIndexBuildActivity(folder, isIncremental));
+            return;
+        }
+
+        _activeIndexBuilds++;
+        if (!string.IsNullOrWhiteSpace(folder))
+            _activeIndexBuildFolder = folder;
+        _activeIndexBuildIsIncremental = isIncremental;
+        _indexBuildPercent = -1; // fresh build starts at an unknown estimate
+        ShowIndexBuildingStatus();
+        OnPropertyChanged(nameof(IsIndexBuildActive));
+        OnPropertyChanged(nameof(CanPauseIndexing));
+    }
+
+    /// <summary>
+    /// Updates the estimated percent-complete (0–100, or -1 for unknown) shown at the end of the "Indexing…"
+    /// tooltip. Called periodically from a running build (off the UI thread), so it self-marshals and only
+    /// refreshes the tooltip when the value actually changed and a build is still active and unpaused.
+    /// </summary>
+    public void ReportIndexBuildProgress(int percent) => ReportIndexBuildProgress(null, percent, null);
+
+    /// <summary>
+    /// Reports which folder a multi-root pass is currently indexing (so the tooltip names the drive) together
+    /// with its percent-complete. Passing a non-empty <paramref name="folder"/> updates the active folder
+    /// without changing the active-build count; <paramref name="percent"/> is the 0–100 estimate (or -1 when
+    /// unknown). Self-marshals; a late report after the build finished is ignored.
+    /// </summary>
+    public void ReportIndexBuildProgress(string? folder, int percent) => ReportIndexBuildProgress(folder, percent, null);
+
+    /// <summary>Reports folder, progress, and worker stage. The incremental stage is retained so the status
+    /// bar says the existing index is being updated rather than implying a full rebuild.</summary>
+    public void ReportIndexBuildProgress(string? folder, int percent, string? stage)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => ReportIndexBuildProgress(folder, percent, stage));
+            return;
+        }
+
+        if (_activeIndexBuilds <= 0)
+            return; // build finished (or none active) — ignore a late report
+
+        bool changed = false;
+        if (!string.IsNullOrWhiteSpace(folder)
+            && !string.Equals(folder, _activeIndexBuildFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            _activeIndexBuildFolder = folder;
+            changed = true;
+        }
+        if (percent != _indexBuildPercent)
+        {
+            _indexBuildPercent = percent;
+            changed = true;
+        }
+        bool incremental = string.Equals(stage, "incremental", StringComparison.OrdinalIgnoreCase);
+        if (stage is not null && incremental != _activeIndexBuildIsIncremental)
+        {
+            _activeIndexBuildIsIncremental = incremental;
+            changed = true;
+        }
+
+        if (changed && !IsIndexingPaused)
+            ShowIndexBuildingStatus();
+    }
+
+    /// <summary>
+    /// Marks that a background index build has finished. When the last active build completes, the
+    /// main-window index indicator reverts to the availability/coverage status for the last search
+    /// context (or is hidden if none) — unless indexing is paused, in which case the paused state stays.
+    /// Safe to call from any thread.
+    /// </summary>
+    public void EndIndexBuildActivity()
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(EndIndexBuildActivity);
+            return;
+        }
+
+        _activeIndexBuilds = Math.Max(0, _activeIndexBuilds - 1);
+        OnPropertyChanged(nameof(IsIndexBuildActive));
+        OnPropertyChanged(nameof(CanPauseIndexing));
+
+        if (_activeIndexBuilds > 0)
+        {
+            ShowIndexBuildingStatus();
+            return;
+        }
+
+        // While paused, keep the "Indexing paused" indicator until the user resumes.
+        if (IsIndexingPaused)
+        {
+            ShowIndexBuildingStatus();
+            return;
+        }
+
+        _activeIndexBuildFolder = null;
+        _activeIndexBuildIsIncremental = false;
+        RevertIndexIndicatorAfterBuild();
+    }
+
+    /// <summary>Reverts the main-window index indicator from a build state back to availability/coverage for
+    /// the last search context (or hides it / shows a one-shot "Index: ready" when there is none).</summary>
+    private void RevertIndexIndicatorAfterBuild()
+    {
+        ShowIndexBuildPercent = false;
+        if (!_settings.EnableContentIndex || !_settings.ShowIndexStatusInMainWindow)
+        {
+            ShowIndexStatus = false;
+            return;
+        }
+
+        if (IsIndexWarmActive && !string.IsNullOrWhiteSpace(_activeIndexWarmFolder))
+        {
+            ShowIndexWarmPreparingStatus(_activeIndexWarmFolder);
+            return;
+        }
+        if (IsIndexWarmPausedForSearch)
+        {
+            ShowIndexWarmPausedStatus();
+            return;
+        }
+
+        if (_lastIndexStatusRoots.Count > 0)
+        {
+            _ = RefreshIndexStatusAsync(_lastIndexStatusRoots, _lastIndexStatusUseThisSearch);
+        }
+        else
+        {
+            IndexStatusGlyph = ContentIndexUiStatus.AvailabilityGlyph(IndexAvailability.Available);
+            IndexStatusText = "Index: ready";
+            IndexStatusTooltip = "The content index finished building. Matching files are always read live from disk. "
+                + BuildIndexDateDetails()
+                + BuildIndexSchedulingDetails();
+            ShowIndexStatus = true;
+        }
+        RefreshAllDriveIndexStatus();
+    }
+
+    /// <summary>Renders the "Indexing…" (or "Indexing paused") state on the main-window index indicator
+    /// (no-op when the user has hidden index status).</summary>
+    private void ShowIndexBuildingStatus()
+    {
+        if (!_settings.ShowIndexStatusInMainWindow)
+            return;
+
+        if (IsIndexingPaused)
+        {
+            ShowIndexBuildPercent = false;
+            if (_indexDiskFullMessage is { } diskFull)
+            {
+                IndexStatusGlyph = "\uE7BA"; // caution triangle
+                IndexStatusText = "Index: disk full";
+                IndexStatusTooltip = diskFull + BuildIndexDateDetails();
+                ShowIndexStatus = true;
+                return;
+            }
+
+            IndexStatusGlyph = "\uE769"; // Pause
+            IndexStatusText = "Indexing paused";
+            IndexStatusTooltip = (string.IsNullOrWhiteSpace(_activeIndexBuildFolder)
+                ? "Indexing is paused. Right-click to resume."
+                : $"Indexing of {_activeIndexBuildFolder} is paused. Right-click to resume.")
+                + BuildIndexDateDetails();
+            ShowIndexStatus = true;
+            return;
+        }
+
+        IndexStatusGlyph = "\uE895"; // Sync
+        // Surface the estimate right in the status-bar text so the progress is visible at a glance, and
+        // populate the custom tooltip's big percent + progress bar (below).
+        string activity = _activeIndexBuildIsIncremental ? "Updating index" : "Indexing";
+        IndexStatusText = _activeIndexBuildIsIncremental && _indexBuildPercent >= 100
+            ? "Finalizing index update\u2026"
+            : _indexBuildPercent >= 0 ? $"{activity}\u2026 {_indexBuildPercent}%" : $"{activity}\u2026";
+        if (_activeIndexBuildIsIncremental)
+        {
+            IndexStatusTooltip = string.IsNullOrWhiteSpace(_activeIndexBuildFolder)
+                ? "Updating the existing content index incrementally\u2026 This runs in the background; searches keep working and the current index remains available. Right-click to pause."
+                : $"Updating the existing content index for {_activeIndexBuildFolder} incrementally\u2026 This runs in the background; searches keep working and the current index remains available. Right-click to pause.";
+        }
+        else
+        {
+            IndexStatusTooltip = string.IsNullOrWhiteSpace(_activeIndexBuildFolder)
+                ? "Building the content index\u2026 This runs in the background; searches keep working and results never change. Right-click to pause."
+                : $"Building a content index for {_activeIndexBuildFolder}\u2026 This runs in the background; searches keep working and results never change. Right-click to pause.";
+        }
+        IndexStatusTooltip += BuildIndexDateDetails();
+        if (_indexBuildPercent >= 0)
+        {
+            IndexBuildPercentText = $"{_indexBuildPercent}%";
+            IndexBuildPercentValue = _indexBuildPercent;
+            ShowIndexBuildPercent = true;
+        }
+        else
+        {
+            ShowIndexBuildPercent = false;
+        }
+        ShowIndexStatus = true;
     }
 
     [RelayCommand]
@@ -3030,13 +5674,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         if (!IsSemanticQueryMode && Yagu.Helpers.SingleFilePathQueryDetector.Resolve(Query) is { } singleFilePath)
         {
             await RunSingleFilePathDisplayAsync(singleFilePath).ConfigureAwait(true);
+            ResumeContentIndexWarmupAfterSearch();
             return;
         }
 
-        bool directorySpecified = !string.IsNullOrWhiteSpace(Directory);
-        if (directorySpecified && !System.IO.Directory.Exists(Directory))
+        string normalizedDirectory = DriveEnumerator.NormalizeSearchRoot(Directory);
+        bool directorySpecified = normalizedDirectory.Length > 0;
+        if (directorySpecified && !string.Equals(Directory, normalizedDirectory, StringComparison.Ordinal))
+            Directory = normalizedDirectory;
+        if (directorySpecified && !System.IO.Directory.Exists(normalizedDirectory))
         {
-            ErrorText = $"Directory does not exist: {Directory}";
+            ErrorText = $"Directory does not exist: {normalizedDirectory}";
+            ResumeContentIndexWarmupAfterSearch();
             return;
         }
         // An empty directory means "search all drives" — resolve the eligible roots now.
@@ -3044,11 +5693,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         if (targetRoots.Count == 0)
         {
             ErrorText = "No drives are available to search.";
+            ResumeContentIndexWarmupAfterSearch();
             return;
         }
         if (string.IsNullOrEmpty(Query))
         {
             ErrorText = "Enter a search query.";
+            ResumeContentIndexWarmupAfterSearch();
             return;
         }
 
@@ -3062,6 +5713,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             {
                 ErrorText = $"Conflicting extensions found in both Skip and Archive lists: {string.Join(", ", conflicts.Select(e => $".{e}"))}. " +
                             "Remove them from the Skip list or the Archive list to proceed.";
+                ResumeContentIndexWarmupAfterSearch();
                 return;
             }
         }
@@ -3071,23 +5723,32 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         if (effectiveMinFileSizeBytes > 0 && effectiveMaxFileSizeBytes > 0 && effectiveMinFileSizeBytes > effectiveMaxFileSizeBytes)
         {
             ErrorText = "Minimum file size cannot be larger than maximum file size.";
+            ResumeContentIndexWarmupAfterSearch();
             return;
         }
 
         if (IsDateRangeInvalid(CreatedAfterDate, CreatedBeforeDate))
         {
             ErrorText = "Created after date cannot be later than created before date.";
+            ResumeContentIndexWarmupAfterSearch();
             return;
         }
 
         if (IsDateRangeInvalid(ModifiedAfterDate, ModifiedBeforeDate))
         {
             ErrorText = "Modified after date cannot be later than modified before date.";
+            ResumeContentIndexWarmupAfterSearch();
             return;
         }
 
         int runId = Interlocked.Increment(ref _searchRunId);
         CancelPreviousSearchForNewRun(runId);
+        ResetRuntimeIndexStatus(runId);
+
+        // Fire-and-forget: refresh the main-window content-index availability indicator for the roots
+        // this search covers (plan §6.2). Presence-only, runs off the UI thread, and never blocks or
+        // delays the search — filename-first results are unaffected.
+        _ = RefreshIndexStatusAsync(targetRoots, UseContentIndex && _settings.EnableContentIndex);
 
         await _searchLifecycleGate.WaitAsync();
 
@@ -3118,12 +5779,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
             var effectiveSkipExtensions = BuildEffectiveSkipExtensionSet();
 
-            int baseParallelism = ResolveParallelism(_sessionParallelismOverrideIndex ?? ParallelismIndex);
+            int baseParallelism = ResolveParallelism(ParallelismIndex);
             // One-shot HDD parallelism override chosen in the warning dialog; applies to this search
             // only. Consume it now so it never leaks into a later search.
             int? hddParallelismOverride = _hddParallelismOverrideIndexForNextSearch;
             _hddParallelismOverrideIndexForNextSearch = null;
-            SearchOptions BuildOptionsForRoot(string dir, int parallelism, FileListerBackend? backendOverride) => new SearchOptions
+            SearchOptions BuildOptionsForRoot(string dir, int parallelism, FileListerBackend? backendOverride, bool isHardDisk) => new SearchOptions
             {
                 Directory = dir,
                 Query = Query,
@@ -3147,8 +5808,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 ModifiedBeforeDate = ModifiedBeforeDate,
                 MaxResults = MaxResults,
                 MaxMatchesPerLine = MaxMatchesPerLine,
+                FileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds(FileIoTimeoutSeconds),
                 AbsoluteMaxResults = AbsoluteMaxResults,
                 SkipBinary = SkipBinary,
+                AvoidSourceMemoryMap = DriveEnumerator.ShouldAvoidSourceMemoryMap(
+                    DriveEnumerator.GetDriveTypeForPath(dir)),
                 SearchOnlineOnlyFiles = SearchOnlineOnlyFiles,
                 SearchHiddenFiles = SearchHiddenFiles,
                 ObeyGitignore = ObeyGitignore,
@@ -3161,6 +5825,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine),
                 ImageOcrModel = AppSettings.NormalizeImageOcrModel(ImageOcrModel),
                 ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(ImageOcrMaxSide),
+                ImageOcrWorkerParallelism = OcrWorkerParallelism.Resolve(
+                    ImageOcrWorkerParallelism,
+                    AppSettings.NormalizeImageOcrEngine(ImageOcrEngine),
+                    Environment.ProcessorCount,
+                    LimitParallelismOnHdd,
+                    isHardDisk),
                 SearchPdfText = SearchPdfText,
                 PdfTextExtensions = ParseExtensionSet(AppSettings.DefaultPdfTextExtensions),
                 MaxDegreeOfParallelism = parallelism,
@@ -3172,7 +5842,161 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths,
                 MaxSearchDepth = double.IsNaN(MaxSearchDepth) ? 0 : (int)MaxSearchDepth,
                 DegradedResultStore = _resultStore,
+                // Session-only content-index opt-in, gated by the master feature (plan §5/§6.1). Only
+                // prunes the ordinary-text candidate set; orthogonal to the image/PDF/archive toggles.
+                UseContentIndex = UseContentIndex && _settings.EnableContentIndex,
             };
+
+            // Attaches the content-index pruning gate factory to a per-root options set (plan §5). The
+            // factory is a closure invoked later, off the UI thread, at the start of that root's discovery,
+            // so no index/journal I/O runs here. A null factory (feature off) leaves the live-scan path
+            // untouched.
+            void AttachContentIndexGateFactory(SearchOptions rootOptions, string root)
+            {
+                if (!rootOptions.UseContentIndex)
+                    return;
+
+                AppSettings settings = _settings;
+                string storageDir = settings.IndexStorageDirectory;
+                int retained = AppSettings.NormalizeIndexRetainedGenerationCount(settings.IndexRetainedGenerationCount);
+                // Opt-in: route the query through the isolated out-of-process worker (identical results, but a
+                // native/read fault is contained in the worker). Falls back in-process on any worker failure.
+                Yagu.Services.Index.IIndexCandidateSource? candidateSource =
+                    settings.IndexUseNativeWorker ? GetOrCreateIndexWorkerSource() : null;
+                int maxInProcessSizeMB = AppSettings.NormalizeIndexMaxInProcessSizeMB(settings.IndexMaxInProcessSizeMB);
+                int maxWorkerQuerySizeMB = AppSettings.NormalizeIndexMaxWorkerQuerySizeMB(settings.IndexMaxWorkerQuerySizeMB);
+                string ResolveIndexRoot(IContentIndexPathProvider pathProvider)
+                    => new ContentIndexManager(pathProvider, retained)
+                        .ResolveBestAvailableIndexRoot(root, settings.IndexedRoots);
+                rootOptions.ContentIndexGateFactory = () =>
+                {
+                    // Stage-5 (plan §5.8): when the worker PRUNING path is enabled it supersedes the
+                    // in-process gate — never open the index in-process (the worker path's whole purpose is a
+                    // bounded host footprint, so a large scope is served by the worker or live-scanned).
+                    if (settings.IndexUseWorkerQuerySessions)
+                        return null;
+                    var pathProvider = DefaultContentIndexPathProvider.Create(storageDir);
+                    string indexRoot = ResolveIndexRoot(pathProvider);
+                    // Size gate (plan §6.1): an index whose on-disk size exceeds the in-process limit is NEVER
+                    // loaded into memory. Deserializing a multi-GB layered index leaves a multi-GB resident
+                    // footprint that trips the search memory monitor into degraded mode, making the search
+                    // SLOWER than a plain live scan — so such a scope always live-scans and is never warmed.
+                    if (!ContentIndexSearchGate.IsScopeWithinInProcessSizeLimit(pathProvider, indexRoot, retained, maxInProcessSizeMB))
+                    {
+                        long activeBytes = new ContentIndexStore(
+                            pathProvider,
+                            ContentIndexManager.ScopeIdForRoot(indexRoot),
+                            retained).GetCurrentLayeredIndexSizeBytes();
+                        string reason = activeBytes <= 0
+                            ? "no trusted index is available"
+                            : $"active index size {ResourceUsageMonitor.FormatBytes(activeBytes)} exceeds the configured {ResourceUsageMonitor.FormatBytes((long)maxInProcessSizeMB * 1024 * 1024)} in-process limit; enable memory-mapped worker query sessions with format-v3 data to serve this large index";
+                        ReportContentIndexAttempt(runId, root, false, reason);
+                        return null;
+                    }
+                    // Don't block the first result on a COLD index open. A large layered index (a multi-GB
+                    // base + delta segments) can take tens of seconds to deserialize — far slower than simply
+                    // live-scanning — so if it isn't already warm (deserialized in the query-mode cache) for
+                    // this scope, live-scan THIS search and warm the index in the background so the NEXT search
+                    // is index-accelerated.
+                    if (!ContentIndexSearchGate.IsScopeWarm(pathProvider, indexRoot, retained))
+                    {
+                        StartContentIndexWarmup(indexRoot);
+                        return null;
+                    }
+                    var gate = ContentIndexSearchGate.TryCreate(
+                        pathProvider,
+                        indexRoot,
+                        rootOptions,
+                        settings,
+                        retained,
+                        journalReader: null,
+                        candidateSource: candidateSource,
+                        onAttempt: (active, reason) =>
+                            ReportContentIndexAttempt(runId, root, active, reason));
+                    // Capture the live gate so InitializeResultGroup can classify per-file provenance.
+                    if (gate is not null)
+                        lock (_indexGatesLock)
+                            _activeIndexGates.Add(gate);
+                    return gate;
+                };
+
+                // Stage-5 worker PRUNING path (plan §5.8): when the user-selectable mapped-worker setting
+                // is on, prune this root via the isolated worker over its memory-mapped v3 WITHOUT loading the
+                // index into the host — so a large scope over IndexMaxInProcessSizeMB is served with a bounded
+                // host footprint (the in-process gate above returns null when this is on — mutually exclusive).
+                // The factory takes the search's survivor sink (its pending-file writer); it forwards survivors
+                // and prunes proven-nonmembers, rescuing the dirty subset at B1. Returns null → live-scan when
+                // the worker cannot serve the scope (never a large in-process deserialize). Reuses the single
+                // long-lived worker client.
+                if (settings.IndexUseWorkerQuerySessions)
+                {
+                    Yagu.Services.Index.IndexWorkerClient pruningClient = GetOrCreateIndexWorkerClient();
+                    int maxCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(settings.IndexMaxJournalCatchupRecords);
+                    int queryWorkerParallelism = Yagu.Services.Index.IndexWorkerParallelism.ResolveQueryDegree(
+                        settings.IndexQueryWorkerParallelism,
+                        Environment.ProcessorCount,
+                        settings.LimitParallelismOnHdd,
+                        Yagu.Helpers.DiskTypeDetector.IsHardDisk(root));
+                    string spoolDir = System.IO.Path.Combine(storageDir, "query-spool");
+                    rootOptions.ContentIndexPruningScanFactory = survivorSink =>
+                    {
+                        // Out-of-process size cap (IndexMaxWorkerQuerySizeMB, default 30 GB): the worker MAPS
+                        // rather than deserializes the index, so it serves far larger scopes than the in-process
+                        // cap — but is still bounded. An index over this size (or none) live-scans instead.
+                        var workerPathProvider = DefaultContentIndexPathProvider.Create(storageDir);
+                        string indexRoot = ResolveIndexRoot(workerPathProvider);
+                        var store = new Yagu.Services.Index.ContentIndexStore(
+                            workerPathProvider,
+                            Yagu.Services.Index.ContentIndexManager.ScopeIdForRoot(indexRoot),
+                            retained);
+                        if (!ContentIndexSearchGate.IsScopeWithinWorkerMappedSizeLimit(workerPathProvider, indexRoot, retained, maxWorkerQuerySizeMB))
+                        {
+                            long mappedBytes = store.GetCurrentLayeredMappedQuerySizeBytes();
+                            string reason = mappedBytes <= 0
+                                ? "no trusted format-v3 query index is available"
+                                : $"mapped query index size {ResourceUsageMonitor.FormatBytes(mappedBytes)} exceeds the configured {ResourceUsageMonitor.FormatBytes((long)maxWorkerQuerySizeMB * 1024 * 1024)} worker limit";
+                            ReportContentIndexAttempt(runId, root, false, reason);
+                            return null;
+                        }
+                        var scan = Yagu.Services.Index.ContentIndexShadowScopeBuilder.TryCreatePruningScan(
+                            pruningClient,
+                            store,
+                            rootOptions,
+                            System.Threading.Interlocked.Increment(ref _shadowQuerySessionId),
+                            Yagu.Services.Index.ContentIndexFreshnessEvaluator.CreateReader(
+                                maxCatchupRecords,
+                                TimeSpan.FromSeconds(AppSettings.NormalizeFileIoTimeoutSeconds(settings.FileIoTimeoutSeconds))),
+                            spoolDir,
+                            survivorSink,
+                            workerParallelism: queryWorkerParallelism,
+                            onAttempt: (active, reason) =>
+                                ReportContentIndexAttempt(runId, root, active, reason));
+                        // Capture the live scan so InitializeResultGroup can badge index-member result files.
+                        if (scan is not null)
+                            lock (_indexGatesLock)
+                                _activePruningScans.Add(scan);
+                        return scan;
+                    };
+                }
+
+                // Extended-source (PDF-text) pruning (plan §7 Phase 4): skip PDFs whose extracted text cannot
+                // contain a match. Off by default; only engages when a determinism-proven PDF namespace was
+                // built for this root AND this search extracts PDF text. Fail-safe: null → extract every PDF.
+                if ((settings.IndexBuildPdfTextExtendedSource && rootOptions.SearchPdfText)
+                    || (settings.IndexBuildImageTextExtendedSource && rootOptions.SearchImageText))
+                {
+                    rootOptions.ExtendedSourceGateFactory = () =>
+                    {
+                        var extendedPathProvider = DefaultContentIndexPathProvider.Create(storageDir);
+                        string indexRoot = ResolveIndexRoot(extendedPathProvider);
+                        return Yagu.Services.Index.ExtendedSourceSearchGate.TryCreate(
+                            extendedPathProvider,
+                            indexRoot,
+                            rootOptions,
+                            settings);
+                    };
+                }
+            }
 
             // One options set per target root. When searching all drives, each root gets its own
             // parallelism: HDD roots are forced to 1 (avoid thrashing) while other drives use the
@@ -3183,12 +6007,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             var perRootOptions = new List<SearchOptions>(targetRoots.Count);
             FileListerBackend? allDrivesBackendOverride =
                 (!directorySpecified && SearchAllDrivesForceFullScan) ? FileListerBackend.Managed : null;
+            // Drop any gates captured by a previous search before this one's factories start populating them.
+            lock (_indexGatesLock)
+            {
+                _activeIndexGates.Clear();
+                _activePruningScans.Clear();
+            }
             foreach (var root in targetRoots)
             {
                 int parallelism = baseParallelism;
-                if (LimitParallelismOnHdd && Yagu.Helpers.DiskTypeDetector.IsHardDisk(root))
+                bool isHardDisk = Yagu.Helpers.DiskTypeDetector.IsHardDisk(root);
+                if (LimitParallelismOnHdd && isHardDisk)
                     parallelism = hddParallelismOverride is int overrideIndex ? ResolveParallelism(overrideIndex) : 1;
-                perRootOptions.Add(BuildOptionsForRoot(root, parallelism, allDrivesBackendOverride));
+                var rootOptions = BuildOptionsForRoot(root, parallelism, allDrivesBackendOverride, isHardDisk);
+                AttachContentIndexGateFactory(rootOptions, root);
+                perRootOptions.Add(rootOptions);
             }
 
             // Capture the parameters THIS search actually ran with, for preview/editor match
@@ -3211,9 +6044,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
             cts = new CancellationTokenSource();
             _cts = cts;
+            _activeSearchRoots = targetRoots.ToArray();
             var token = cts.Token;
             lowDiskMonitorTask = StartLowDiskSpaceMonitor(runId, cts, _resultStore);
-            LogService.Instance.Warning("Search", $"Starting search #{runId}: query='{Query}', dir='{(directorySpecified ? Directory : $"<all drives: {targetRoots.Count}>")}', regex={UseRegex}, caseSensitive={CaseSensitive}, mode={SearchModeIndex}");
+            YaguLog.For("Search").LogWarning("Starting search #{RunId}: query='{Query}', dir='{Dir}', regex={UseRegex}, caseSensitive={CaseSensitive}, mode={SearchModeIndex}", runId, Query, directorySpecified ? Directory : "<all drives: " + targetRoots.Count + ">", UseRegex, CaseSensitive, SearchModeIndex);
 
             // Yield to the UI message pump periodically so the app stays responsive
             // when the events channel is draining many buffered items synchronously.
@@ -3264,7 +6098,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
                 if (!IsCurrentSearch(runId, cts))
                 {
-                    LogService.Instance.Warning("Search", $"Ignoring stale search #{runId} event after a newer search started");
+                    YaguLog.For("Search").LogWarning("Ignoring stale search #{RunId} event after a newer search started", runId);
                     break;
                 }
 
@@ -3273,10 +6107,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 if ((now - uiLastLogTicks) >= Stopwatch.Frequency * UiLogIntervalSec)
                 {
                     uiLastLogTicks = now;
-                    LogService.Instance.Warning("UIConsumer",
-                        $"Events received={uiEventsReceived:N0}, matchesReceived={uiMatchesReceived:N0}, " +
-                        $"groups={_resultCollection.AllGroups.Count:N0}, yields={uiYieldCount:N0}, " +
-                        $"degraded={Degraded}, diskEvicted={_resultStore?.EvictedCount ?? 0:N0}");
+                    YaguLog.For("UIConsumer").LogWarning(
+                        "Events received={Events:N0}, matchesReceived={Matches:N0}, " +
+                        "groups={Groups:N0}, yields={Yields:N0}, " +
+                        "degraded={Degraded}, diskEvicted={DiskEvicted:N0}",
+                        uiEventsReceived, uiMatchesReceived, _resultCollection.AllGroups.Count, uiYieldCount, Degraded, _resultStore?.EvictedCount ?? 0);
                 }
 
                 switch (evt)
@@ -3292,6 +6127,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                         break;
                     case SearchEvent.DiscoveryComplete d:
                         TotalFiles = d.TotalFiles;
+                        SearchInNameFirstPhase = false; // full total known — determinate bar from here
                         StatusText = $"Searching {d.TotalFiles:N0} files…";
                         break;
                     case SearchEvent.Match m:
@@ -3312,9 +6148,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                         RefreshStatusFromReceivedMatches();
                         if (uiEventSw.ElapsedMilliseconds > 200)
                         {
-                            LogService.Instance.Warning("UIConsumer",
-                                $"Slow AddMatches: {mb.Results.Count} results took {uiEventSw.ElapsedMilliseconds}ms " +
-                                $"(groups={_resultCollection.AllGroups.Count:N0})");
+                            YaguLog.For("UIConsumer").LogWarning(
+                                "Slow AddMatches: {Count} results took {ElapsedMs}ms " +
+                                "(groups={Groups:N0})",
+                                mb.Results.Count, uiEventSw.ElapsedMilliseconds, _resultCollection.AllGroups.Count);
                         }
                         break;
                     case SearchEvent.SourceBackedMatchBatch sb:
@@ -3325,14 +6162,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                         RefreshStatusFromReceivedMatches();
                         if (uiEventSw.ElapsedMilliseconds > 200)
                         {
-                            LogService.Instance.Warning("UIConsumer",
-                                $"Slow AddSourceBackedMatches: {sb.Results.Count} results took {uiEventSw.ElapsedMilliseconds}ms " +
-                                $"(groups={_resultCollection.AllGroups.Count:N0})");
+                            YaguLog.For("UIConsumer").LogWarning(
+                                "Slow AddSourceBackedMatches: {Count} results took {ElapsedMs}ms " +
+                                "(groups={Groups:N0})",
+                                sb.Results.Count, uiEventSw.ElapsedMilliseconds, _resultCollection.AllGroups.Count);
                         }
                         break;
                     case SearchEvent.Progress p:
                         FilesScanned = p.Snapshot.FilesScanned;
                         TotalFiles = p.Snapshot.TotalFiles;
+                        // Latch out of the indeterminate name-first phase once the full-scan total is live.
+                        if (SearchInNameFirstPhase && !p.Snapshot.NameFirstPhase)
+                            SearchInNameFirstPhase = false;
+                        UpdateSearchProgressPhaseLabel(p.Snapshot);
                         MatchesFound = Math.Max(p.Snapshot.MatchesFound, ClampMatchCount(uiMatchesReceived));
                         FilesSkipped = p.Snapshot.FilesSkipped;
                         AccessDeniedCount = p.Snapshot.AccessDenied;
@@ -3346,7 +6188,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                     case SearchEvent.MemoryPressure mp:
                         DegradedNoticeText = "Memory pressure — paging results to disk";
                         Degraded = true;
-                        LogService.Instance.Warning("ViewModel", $"Memory pressure event received — starting async eviction ({_resultCollection.AllGroups.Count:N0} groups, {MatchesFound:N0} matches)");
+                        YaguLog.For("ViewModel").LogWarning("Memory pressure event received — starting async eviction ({Groups:N0} groups, {Matches:N0} matches)", _resultCollection.AllGroups.Count, MatchesFound);
                         // Fire-and-forget from the UI thread: the background task may wait
                         // for ResultStore queue space so existing payloads do not pile up
                         // in RAM while the disk writer catches up.
@@ -3355,20 +6197,25 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                             var evictSw = Stopwatch.StartNew();
                             int enqueued = EvictAllResults();
                             evictSw.Stop();
-                            LogService.Instance.Warning("ViewModel", $"Eviction enqueued {enqueued:N0} results in {evictSw.ElapsedMilliseconds}ms (drain continues in background)");
+                            YaguLog.For("ViewModel").LogWarning("Eviction enqueued {Enqueued:N0} results in {ElapsedMs}ms (drain continues in background)", enqueued, evictSw.ElapsedMilliseconds);
 
                             // Acknowledge immediately so SearchService leaves eviction-in-flight
                             // state and can fire the next pressure cycle if memory is still high.
                             try { mp.AcknowledgeEviction(enqueued); }
-                            catch (Exception ex) { LogService.Instance.Warning("ViewModel", "AcknowledgeEviction threw", ex); }
+                            catch (Exception ex) { YaguLog.For("ViewModel").LogWarning(ex, "AcknowledgeEviction threw"); }
 
                             // Wait for the background drain to flush bytes to disk before
                             // triggering the compacting GC — otherwise we'd compact while
                             // the match-line/context strings are still rooted by the channel.
                             try { _resultStore?.Drain(); }
-                            catch (Exception ex) { LogService.Instance.Warning("ViewModel", "ResultStore drain failed", ex); }
+                            catch (Exception ex) { YaguLog.For("ViewModel").LogWarning(ex, "ResultStore drain failed"); }
 
-                            if (IsSearching)
+                            // A zero-result eviction freed no managed payload. Forcing a full GC and
+                            // trimming the working set in that case only causes page-fault churn while
+                            // the native scanner continues reading files. The SearchService callback
+                            // already applies the same productive-eviction guard; keep the post-drain GC
+                            // here only when this pass actually queued payloads for eviction.
+                            if (IsSearching && enqueued > 0)
                                 SearchService.CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(3));
                             else
                                 CollectPostEvictionIfDue();
@@ -3378,12 +6225,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                         Degraded = false;
                         DegradedNoticeText = string.Empty;
                         UpdateFilesPerSecond();
-                        LogService.Instance.Warning("ViewModel", $"Memory pressure relieved — leaving memory-saving mode ({relieved.Diagnostics})");
+                        YaguLog.For("ViewModel").LogWarning("Memory pressure relieved — leaving memory-saving mode ({Diagnostics})", relieved.Diagnostics);
                         break;
                     case SearchEvent.ScanCompleted sc:
                         var scanElapsed = StopSearchTimer();
                         FilesScanned = sc.Summary.FilesScanned;
                         TotalFiles = sc.Summary.TotalFiles;
+                        SearchInNameFirstPhase = false;
                         MatchesFound = Math.Max(sc.Summary.TotalMatches, ClampMatchCount(uiMatchesReceived));
                         FilesSkipped = sc.Summary.FilesSkipped;
                         AccessDeniedCount = sc.Summary.SkipReasons?.AccessDenied ?? 0;
@@ -3394,14 +6242,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                         StatusText = $"Finalizing results... {MatchesFound:N0} matches in {_resultCollection.AllGroups.Count:N0} files ({FormatElapsed(scanElapsed)})";
                         break;
                     case SearchEvent.Completed c:
-                        LogService.Instance.Warning("UIConsumer",
-                            $"Search #{runId} completed: uiEvents={uiEventsReceived:N0}, uiMatches={uiMatchesReceived:N0}, " +
-                            $"groups={_resultCollection.AllGroups.Count:N0}, yields={uiYieldCount:N0}, " +
-                            $"diskEvicted={_resultStore?.EvictedCount ?? 0:N0}");
+                        YaguLog.For("UIConsumer").LogWarning(
+                            "Search #{RunId} completed: uiEvents={Events:N0}, uiMatches={Matches:N0}, " +
+                            "groups={Groups:N0}, yields={Yields:N0}, " +
+                            "diskEvicted={DiskEvicted:N0}",
+                            runId, uiEventsReceived, uiMatchesReceived, _resultCollection.AllGroups.Count, uiYieldCount, _resultStore?.EvictedCount ?? 0);
                         var completedElapsed = StopSearchTimer();
                         int actualTotalMatches = Math.Max(c.Summary.TotalMatches, ClampMatchCount(uiMatchesReceived));
                         FilesScanned = c.Summary.FilesScanned;
                         TotalFiles = c.Summary.TotalFiles;
+                        SearchInNameFirstPhase = false;
                         MatchesFound = actualTotalMatches;
                         FilesSkipped = c.Summary.FilesSkipped;
                         AccessDeniedCount = c.Summary.SkipReasons?.AccessDenied ?? 0;
@@ -3416,6 +6266,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                         var displaySummary = c.Summary with { TotalMatches = actualTotalMatches, FilesWithMatches = actualFileCount };
                         StatusText = BuildCompletionStatus(displaySummary, completedElapsed);
                         ApplySortAndFilter();
+                        UpdateIndexCoverageStatus(c.Summary.IndexAcceleration);
                         ShowSearchCompleteToast(displaySummary, completedElapsed);
                         break;
                 }
@@ -3431,13 +6282,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                     var message = LowDiskSpaceMonitor.BuildTerminationMessage(lowDiskSpace);
                     StatusText = message;
                     ErrorText = message;
-                    LogService.Instance.Warning("Search", $"Search #{runId} terminated because temp-file drive {lowDiskSpace.DriveDisplayName} is {lowDiskSpace.UsedPercent:F1}% full");
+                    YaguLog.For("Search").LogWarning("Search #{RunId} terminated because temp-file drive {Drive} is {UsedPercent:F1}% full", runId, lowDiskSpace.DriveDisplayName, lowDiskSpace.UsedPercent);
                     SearchTerminatedByLowDiskSpace?.Invoke(message);
                 }
                 else
                 {
                     StatusText = BuildCancelledStatus(cancelledElapsed);
-                    LogService.Instance.Info("Search", $"Search #{runId} cancelled");
+                    YaguLog.For("Search").LogInformation("Search #{RunId} cancelled", runId);
                 }
                 DegradedNoticeText = string.Empty;
             }
@@ -3448,7 +6299,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             {
                 StopSearchTimer();
                 ErrorText = $"Search failed: {ex.Message}";
-                LogService.Instance.Critical("Search", $"Search #{runId} failed", ex);
+                YaguLog.For("Search").LogCritical(ex, "Search #{RunId} failed", runId);
             }
         }
         finally
@@ -3460,6 +6311,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 OnPropertyChanged(nameof(HasResults));
                 OnPropertyChanged(nameof(ShowEmptyState));
                 _cts = null;
+                _activeSearchRoots = Array.Empty<string>();
             }
 
             try { cts?.Cancel(); } catch { }
@@ -3468,6 +6320,33 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
             cts?.Dispose();
             _searchLifecycleGate.Release();
+            ResumeContentIndexWarmupAfterSearch();
+        }
+    }
+
+    /// <summary>Cancels only active work whose captured root lies on a removed volume. This is a transient
+    /// device-loss response, not the user-visible indexing pause state.</summary>
+    public void CancelOperationsForRemovedVolumes(IReadOnlyList<string> removedVolumeRoots)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            _dispatcher.TryEnqueue(() => CancelOperationsForRemovedVolumes(removedVolumeRoots));
+            return;
+        }
+        if (removedVolumeRoots is null || removedVolumeRoots.Count == 0)
+            return;
+
+        if (_activeSearchRoots.Any(root => DeviceVolumeChange.IntersectsAnyRoot(root, removedVolumeRoots)))
+        {
+            try { _cts?.Cancel(); } catch { }
+            StatusText = "Search cancelled because a source drive was removed.";
+        }
+
+        if (DeviceVolumeChange.IntersectsAnyRoot(_activeIndexBuildFolder, removedVolumeRoots)
+            || DeviceVolumeChange.IntersectsAnyRoot(_activeIndexWarmFolder, removedVolumeRoots))
+        {
+            try { _indexBuildCancellation?.Cancel(); } catch { }
+            try { _indexWarmCancellation?.Cancel(); } catch { }
         }
     }
 
@@ -3531,7 +6410,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         {
             StopSearchTimer();
             ErrorText = $"Search failed: {ex.Message}";
-            LogService.Instance.Critical("Search", "Single-file-path display failed", ex);
+            YaguLog.For("Search").LogCritical(ex, "Single-file-path display failed");
         }
         finally
         {
@@ -3559,11 +6438,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         {
             StatusText = "Cleaning up previous search…";
             previous.Cancel();
-            LogService.Instance.Info("Search", $"Cancelling previous search before starting search #{runId}");
+            YaguLog.For("Search").LogInformation("Cancelling previous search before starting search #{RunId}", runId);
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Search", "Previous search cleanup cancellation failed", ex);
+            YaguLog.For("Search").LogWarning(ex, "Previous search cleanup cancellation failed");
         }
     }
 
@@ -3600,6 +6479,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
         ErrorText = null;
         FallbackReason = null;
+        _searchProgressPhaseLabel = string.Empty;
+        _sourceBackedSearchProgress = null;
+        OnPropertyChanged(nameof(SearchProgressRightLabel));
         FilesScanned = 0;
         TotalFiles = 0;
         MatchesFound = 0;
@@ -3613,6 +6495,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         DegradedNoticeText = string.Empty;
         _lowDiskSpaceCancellation = null;
         IsSearching = true;
+        IsPreparingSearch = false;   // the scan committed — hand feedback off to IsSearching
+        // Stay indeterminate seamlessly from the preparing phase through the name-first pass; a progress
+        // snapshot reporting the full phase (or discovery completion) latches this false for the content scan.
+        SearchInNameFirstPhase = true;
         _bytesScanned = 0;
         _prevBytesScanned = 0;
         _prevFilesScanned = 0;
@@ -3654,7 +6540,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
             _lowDiskSpaceCancellation = lowDiskSpace;
             try { cts.Cancel(); }
-            catch (Exception ex) { LogService.Instance.Warning("Search", "Low disk-space cancellation failed", ex); }
+            catch (Exception ex) { YaguLog.For("Search").LogWarning(ex, "Low disk-space cancellation failed"); }
         }, cts.Token);
     }
 
@@ -3667,7 +6553,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         }
         catch (Exception ex) when (!string.IsNullOrWhiteSpace(tempDir))
         {
-            LogService.Instance.Warning("ResultStore", $"Could not create result store in '{tempDir}', falling back to Windows temp", ex);
+            YaguLog.For("ResultStore").LogWarning(ex, "Could not create result store in '{TempDir}', falling back to Windows temp", tempDir);
             return new ResultStore();
         }
     }
@@ -3689,9 +6575,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private string BuildProgressStatus(SearchProgress progress)
     {
         var prefix = Degraded ? "Searching (memory-saving mode)" : "Searching";
+        string? phase = progress.SourceBacked?.BuildPhaseLabel(progress.FilesScanned, progress.TotalFiles);
         if (progress.TotalFiles > 0)
         {
-            return $"{prefix} {progress.FilesScanned:N0}/{progress.TotalFiles:N0} files... {progress.MatchesFound:N0} matches";
+            return phase is null
+                ? $"{prefix} {progress.FilesScanned:N0}/{progress.TotalFiles:N0} files... {progress.MatchesFound:N0} matches"
+                : $"{prefix} {phase}... {progress.MatchesFound:N0} matches";
         }
 
         return $"{prefix}... {progress.FilesScanned:N0} files scanned, {progress.MatchesFound:N0} matches";
@@ -3770,11 +6659,259 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         UpdateFilesPerSecond();
     }
 
+    // ── Status-bar resource-usage monitor ──
+    // A slow (10 s) background loop that measures Yagu's disk-temp footprint, total content-index storage,
+    // and RAM (plus its worker children), then publishes formatted labels to the status bar. All measurement
+    // runs on the thread pool (the PeriodicTimer resumes off the UI thread). The potentially larger index
+    // measurement is cached for one minute and never refreshed during a search. Only the final string
+    // assignments are marshalled back to the UI thread.
+
+    /// <summary>Starts the periodic resource-usage monitor (idempotent). Called once at construction.</summary>
+    private void StartResourceUsageMonitor()
+    {
+        if (_disposed || _resourceMonitorCts is not null)
+            return;
+        var cts = new CancellationTokenSource();
+        _resourceMonitorCts = cts;
+        _ = RunResourceUsageMonitorAsync(cts);
+    }
+
+    private void StopResourceUsageMonitor()
+    {
+        var cts = Interlocked.Exchange(ref _resourceMonitorCts, null);
+        try { cts?.Cancel(); } catch { }
+        try { cts?.Dispose(); } catch { }
+    }
+
+    private async Task RunResourceUsageMonitorAsync(CancellationTokenSource cts)
+    {
+        try
+        {
+            // Publish an immediate first sample so the indicators aren't blank for the first 10 s.
+            await Task.Run(() => MeasureAndPublishResourceUsage(cts.Token), cts.Token).ConfigureAwait(false);
+
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+            while (await timer.WaitForNextTickAsync(cts.Token).ConfigureAwait(false))
+            {
+                if (_disposed)
+                    break;
+                MeasureAndPublishResourceUsage(cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            YaguLog.For("ViewModel").LogDebug(ex, "Resource-usage monitor stopped unexpectedly.");
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _resourceMonitorCts, null, cts);
+            try { cts.Dispose(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Measures (off the UI thread) disk temp, cached index storage, and RAM used by Yagu plus each worker
+    /// child process, then marshals the formatted status-bar labels to the UI thread.
+    /// </summary>
+    private void MeasureAndPublishResourceUsage(CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Temp footprint: sum this process's evicted-result temp files (metadata only).
+            long tempBytes = ResourceUsageMonitor.SumProcessTempResultBytes(SearchResultTempDirectory, Environment.ProcessId);
+
+            IndexStorageSizeMeasurement? indexMeasurement = MeasureIndexStorageUsage(cancellationToken, out string indexRoot);
+
+            // RAM: this Yagu process + its own worker children (attributed by parent PID so a second Yagu
+            // instance's workers are not double-counted).
+            long totalRamBytes = ResourceUsageMonitor.GetTotalPhysicalMemoryBytes();
+            var breakdown = new List<(string Name, long Bytes)>();
+            long selfBytes;
+            try
+            {
+                using var self = Process.GetCurrentProcess();
+                selfBytes = self.WorkingSet64;
+            }
+            catch { selfBytes = Environment.WorkingSet; }
+            breakdown.Add(("Yagu", selfBytes));
+
+            long usedBytes = selfBytes;
+            int myPid = Environment.ProcessId;
+            foreach (string workerName in OrphanedWorkerCleanup.WorkerProcessNames)
+            {
+                Process[] workers;
+                try { workers = Process.GetProcessesByName(workerName); }
+                catch { continue; }
+
+                long workerBytes = 0;
+                foreach (Process worker in workers)
+                {
+                    try
+                    {
+                        if (OrphanedWorkerCleanup.GetParentProcessId(worker.Id) == myPid)
+                            workerBytes += worker.WorkingSet64;
+                    }
+                    catch { /* exited / access denied — skip */ }
+                    finally { try { worker.Dispose(); } catch { } }
+                }
+                if (workerBytes > 0)
+                {
+                    breakdown.Add((workerName, workerBytes));
+                    usedBytes += workerBytes;
+                }
+            }
+
+            string tempText = ResourceUsageMonitor.FormatTempStatus(tempBytes);
+            string tempTooltip = ResourceUsageMonitor.BuildTempTooltip(tempBytes, SearchResultTempDirectory);
+            string? indexText = indexMeasurement is { } measuredIndex
+                ? ResourceUsageMonitor.FormatIndexStatus(measuredIndex.Bytes)
+                : null;
+            string? indexTooltip = indexMeasurement is { } measuredTooltipIndex
+                ? ResourceUsageMonitor.BuildIndexTooltip(measuredTooltipIndex, indexRoot)
+                : null;
+            string ramText = ResourceUsageMonitor.FormatRamStatus(usedBytes, totalRamBytes);
+            string ramTooltip = ResourceUsageMonitor.BuildRamTooltip(breakdown, usedBytes, totalRamBytes);
+
+            _dispatcher.TryEnqueue(() =>
+            {
+                if (_disposed)
+                    return;
+                TempUsageText = tempText;
+                TempUsageTooltip = tempTooltip;
+                if (indexText is not null && indexTooltip is not null)
+                {
+                    IndexUsageText = indexText;
+                    IndexUsageTooltip = indexTooltip;
+                }
+                RamUsageText = ramText;
+                RamUsageTooltip = ramTooltip;
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ViewModel").LogDebug(ex, "Resource-usage sample failed.");
+        }
+    }
+
+    private IndexStorageSizeMeasurement? MeasureIndexStorageUsage(
+        CancellationToken cancellationToken,
+        out string indexRoot)
+    {
+        indexRoot = DefaultContentIndexPathProvider.Create(_settings.IndexStorageDirectory).IndexRoot;
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        var backend = (FileListerBackend)FileListerBackendIndex;
+        bool sameRoot = string.Equals(_cachedIndexStorageRoot, indexRoot, StringComparison.OrdinalIgnoreCase);
+        bool sameBackend = _cachedIndexStorageBackend == backend;
+
+        // The 10-second resource loop may continue during a search, but an index-size refresh never competes
+        // with file discovery or scanning. Reuse the last value until the search ends; otherwise refresh no
+        // more than once per minute. A storage-location or backend change invalidates the cache immediately.
+        if (_hasCachedIndexStorageSize && sameRoot && sameBackend && now < _nextIndexStorageSizeRefreshUtc)
+        {
+            return _cachedIndexStorageSize;
+        }
+
+        // Never start a storage walk while a search is active. If there is no current-root cached value yet,
+        // leave the existing label unchanged and retry on the next monitor tick after the search.
+        if (IsSearching)
+            return sameRoot && sameBackend && _hasCachedIndexStorageSize ? _cachedIndexStorageSize : null;
+
+        cancellationToken.ThrowIfCancellationRequested();
+        using var measurementCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        CancellationTokenSource? priorCts = Interlocked.CompareExchange(
+            ref _indexStorageMeasurementCts,
+            measurementCts,
+            comparand: null);
+        if (priorCts is not null)
+            return sameRoot && sameBackend && _hasCachedIndexStorageSize ? _cachedIndexStorageSize : null;
+
+        try
+        {
+            // Close the check/register race: a search that began just before registration could not cancel
+            // this CTS, while any search beginning after registration will cancel it from the change hook.
+            if (IsSearching)
+            {
+                measurementCts.Cancel();
+                return sameRoot && sameBackend && _hasCachedIndexStorageSize ? _cachedIndexStorageSize : null;
+            }
+
+            IndexStorageSizeMeasurement measurement = ResourceUsageMonitor.MeasureTotalIndexStorageBytes(
+                indexRoot,
+                backend,
+                measurementCts.Token);
+            measurementCts.Token.ThrowIfCancellationRequested();
+            _cachedIndexStorageSize = measurement;
+            _cachedIndexStorageRoot = indexRoot;
+            _cachedIndexStorageBackend = backend;
+            _nextIndexStorageSizeRefreshUtc = now + IndexStorageSizeRefreshInterval;
+            _hasCachedIndexStorageSize = true;
+            return measurement;
+        }
+        catch (OperationCanceledException) when (
+            !cancellationToken.IsCancellationRequested
+            && measurementCts.IsCancellationRequested)
+        {
+            return sameRoot && sameBackend && _hasCachedIndexStorageSize ? _cachedIndexStorageSize : null;
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _indexStorageMeasurementCts, null, measurementCts);
+        }
+    }
+
+    private void CancelIndexStorageMeasurement()
+    {
+        try { Volatile.Read(ref _indexStorageMeasurementCts)?.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
+
     private string BuildCancelledStatus(TimeSpan elapsed)
     {
         var time = FormatElapsed(elapsed);
         var rate = FormatThroughput(FilesScanned, _bytesScanned, elapsed);
         return $"Cancelled — {MatchesFound:N0} matches, {FilesScanned:N0} files processed ({time}, {rate})";
+    }
+
+    private CancellationTokenSource? _searchPrepareCts;
+
+    /// <summary>True once the user has requested cancellation of the in-progress pre-search preparation
+    /// (Cancel clicked while the pre-scan gates are still running, before <see cref="IsSearching"/> flips).</summary>
+    public bool IsSearchPreparationCancellationRequested => _searchPrepareCts?.IsCancellationRequested == true;
+
+    /// <summary>Marks the start of the pre-search preparation phase (semantic offers + warning gates), so
+    /// the Cancel button and an indeterminate progress bar appear immediately instead of after the
+    /// multi-second gate work. Returns a token that <see cref="CancelSearchPreparation"/> cancels.</summary>
+    public CancellationToken BeginSearchPreparation()
+    {
+        _searchPrepareCts?.Dispose();
+        _searchPrepareCts = new CancellationTokenSource();
+        IsPreparingSearch = true;
+        return _searchPrepareCts.Token;
+    }
+
+    /// <summary>Ends the preparation phase (the scan committed, or a gate aborted the run). Clears the
+    /// "Canceling.." state only when no file scan is actually running.</summary>
+    public void EndSearchPreparation()
+    {
+        IsPreparingSearch = false;
+        if (!IsSearching) IsCancelling = false;
+        _searchPrepareCts?.Dispose();
+        _searchPrepareCts = null;
+    }
+
+    /// <summary>Requests cancellation of the in-progress preparation (Cancel clicked before the scan
+    /// starts). Shows the disabled "Canceling.." state; the gate phase aborts at its next checkpoint.</summary>
+    public void CancelSearchPreparation()
+    {
+        if (!IsPreparingSearch) return;
+        IsCancelling = true;
+        try { _searchPrepareCts?.Cancel(); }
+        catch (Exception ex) { YaguLog.For("Search").LogWarning(ex, "Cancel preparation failed"); }
     }
 
     [RelayCommand]
@@ -3783,7 +6920,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         // Only flip into the "Canceling.." state when there's actually a run to cancel — CancelAsync is
         // also called on session load/close where nothing is in flight.
         if (IsSearching) IsCancelling = true;
-        try { _cts?.Cancel(); } catch (Exception ex) { LogService.Instance.Warning("Search", "Cancel failed", ex); }
+        try { _cts?.Cancel(); } catch (Exception ex) { YaguLog.For("Search").LogWarning(ex, "Cancel failed"); }
         return Task.CompletedTask;
     }
 
@@ -3842,7 +6979,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             pkg.SetText(text);
             Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(pkg);
         }
-        catch (Exception ex) { LogService.Instance.Verbose("Clipboard", "Clipboard unavailable", ex); }
+        catch (Exception ex) { YaguLog.For("Clipboard").LogDebug(ex, "Clipboard unavailable"); }
     }
 
     /// <summary>
@@ -3927,8 +7064,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         sw.Stop();
         if (sw.ElapsedMilliseconds >= 500)
         {
-            LogService.Instance.Warning("ViewModel",
-                $"Pre-evicted {evicted:N0}/{results.Count:N0} new result payload(s) before UI insertion in {sw.ElapsedMilliseconds}ms");
+            YaguLog.For("ViewModel").LogWarning(
+                "Pre-evicted {Evicted:N0}/{Total:N0} new result payload(s) before UI insertion in {ElapsedMs}ms",
+                evicted, results.Count, sw.ElapsedMilliseconds);
         }
     }
 
@@ -3959,10 +7097,68 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     private void InitializeResultGroup(FileGroup group)
     {
+        // Tag the file's content-index candidacy provenance for the results-list badge (plan §6.2), if the
+        // index participated in this search. Read-only + fast (a dict lookup per captured gate); safe on
+        // the UI thread concurrently with the discovery loop.
+        TrySetIndexProvenance(group);
+
         // Load metadata on a worker thread — the FileInfo syscall on the UI
         // dispatcher was a measurable stall on searches with thousands of
         // distinct files.
         group.BeginLoadMetadata(action => _dispatcher.TryEnqueue(() => action()), OnResultGroupMetadataLoaded, _metadataCts.Token);
+    }
+
+    /// <summary>
+    /// Sets <see cref="FileGroup.Provenance"/> from the captured per-root pruning gates (plan §6.2). Only
+    /// runs when the master feature and the provenance setting are on and at least one gate accelerated
+    /// this search; a file the index selected as a candidate is tagged index-accelerated, everything else
+    /// live-scanned. Never throws — a classification failure just leaves the group unbadged.
+    /// </summary>
+    private void TrySetIndexProvenance(FileGroup group)
+    {
+        if (!_settings.EnableContentIndex || !_settings.ShowIndexProvenanceInResults)
+            return;
+
+        Yagu.Services.Index.ContentIndexSearchGate[] gates;
+        Yagu.Services.Index.IContentIndexPruningScan[] pruningScans;
+        lock (_indexGatesLock)
+        {
+            if (_activeIndexGates.Count == 0 && _activePruningScans.Count == 0)
+                return;
+            gates = _activeIndexGates.ToArray();
+            pruningScans = _activePruningScans.ToArray();
+        }
+
+        try
+        {
+            string normalized = Yagu.Services.Index.IndexScopeIdentity.NormalizePath(group.FilePath);
+            var provenance = Yagu.Services.Index.IndexProvenanceKind.LiveScanned;
+            foreach (var gate in gates)
+            {
+                if (gate.ClassifyProvenance(normalized) == Yagu.Services.Index.IndexProvenanceKind.IndexAccelerated)
+                {
+                    provenance = Yagu.Services.Index.IndexProvenanceKind.IndexAccelerated;
+                    break;
+                }
+            }
+            // Stage-5 worker pruning path: a file the worker classified as an index member is badged too.
+            if (provenance != Yagu.Services.Index.IndexProvenanceKind.IndexAccelerated)
+            {
+                foreach (var scan in pruningScans)
+                {
+                    if (scan.WasIndexMember(normalized))
+                    {
+                        provenance = Yagu.Services.Index.IndexProvenanceKind.IndexAccelerated;
+                        break;
+                    }
+                }
+            }
+            group.Provenance = provenance;
+        }
+        catch
+        {
+            // Provenance is a cosmetic hint — never let a classification error affect results.
+        }
     }
 
     private void OnResultGroupMetadataLoaded(FileGroup group)
@@ -4002,8 +7198,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             if (_lastSearchSortRefreshTicks == 0 || now - _lastSearchSortRefreshTicks >= intervalTicks)
             {
                 _lastSearchSortRefreshTicks = now;
-                LogService.Instance.Verbose("ViewModel",
-                    $"Deferring periodic in-search sort refresh for degraded large result set: {groupCount:N0} group(s); final refresh will run on completion");
+                YaguLog.For("ViewModel").LogDebug(
+                    "Deferring periodic in-search sort refresh for degraded large result set: {Groups:N0} group(s); final refresh will run on completion",
+                    groupCount);
             }
 
             return;
@@ -4047,12 +7244,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("ViewModel", $"Periodic in-search sort refresh threw: {ex.GetType().Name}: {ex.Message}");
+                YaguLog.For("ViewModel").LogWarning("Periodic in-search sort refresh threw: {ExceptionType}: {Error}", ex.GetType().Name, ex.Message);
                 return;
             }
             sw.Stop();
-            LogService.Instance.Verbose("ViewModel",
-                $"Periodic in-search sort refresh: {currentGroupCount:N0} group(s) in {sw.ElapsedMilliseconds}ms (degraded={Degraded}, nextInterval={_searchSortRefreshIntervalSec:F1}s)");
+            YaguLog.For("ViewModel").LogDebug(
+                "Periodic in-search sort refresh: {Groups:N0} group(s) in {ElapsedMs}ms (degraded={Degraded}, nextInterval={NextIntervalSec:F1}s)",
+                currentGroupCount, sw.ElapsedMilliseconds, Degraded, _searchSortRefreshIntervalSec);
 
             // Adaptive backoff: if the pass was slow, double the interval (capped); if fast, halve it back toward base.
             if (sw.ElapsedMilliseconds >= SearchSortRefreshSlowBudgetMs)
@@ -4097,7 +7295,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private int EvictAllResults()
     {
         int evicted = _resultCollection.EvictAll(_resultStore);
-        LogService.Instance.Info("ViewModel", $"Evicted {evicted:N0} results to disk ({_resultStore?.EvictedCount ?? 0:N0} total on disk)");
+        YaguLog.For("ViewModel").LogInformation("Evicted {Evicted:N0} results to disk ({TotalOnDisk:N0} total on disk)", evicted, _resultStore?.EvictedCount ?? 0);
         // GC is now triggered by the worker threads after the eviction signal,
         // keeping the UI thread responsive.
         return evicted;
@@ -4128,7 +7326,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("ViewModel", "Post-eviction compacting GC failed", ex);
+            YaguLog.For("ViewModel").LogWarning(ex, "Post-eviction compacting GC failed");
         }
         finally
         {
@@ -4137,9 +7335,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             Volatile.Write(ref s_postEvictionCompactingGcInFlight, 0);
 
             if (gcStopwatch.ElapsedMilliseconds >= 500)
-                LogService.Instance.Warning("ViewModel", $"Post-eviction compacting GC took {gcStopwatch.ElapsedMilliseconds:N0}ms");
+                YaguLog.For("ViewModel").LogWarning("Post-eviction compacting GC took {ElapsedMs:N0}ms", gcStopwatch.ElapsedMilliseconds);
             else
-                LogService.Instance.Info("ViewModel", $"Post-eviction compacting GC took {gcStopwatch.ElapsedMilliseconds:N0}ms");
+                YaguLog.For("ViewModel").LogInformation("Post-eviction compacting GC took {ElapsedMs:N0}ms", gcStopwatch.ElapsedMilliseconds);
         }
     }
 
@@ -4210,7 +7408,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             }
             catch (Exception ex) when (ex is EndOfStreamException or FormatException or InvalidOperationException or ObjectDisposedException)
             {
-                LogService.Instance.Warning("ViewModel", $"Could not hydrate result at offset {result.DiskOffset}: {ex.Message}");
+                YaguLog.For("ViewModel").LogWarning("Could not hydrate result at offset {Offset}: {Error}", result.DiskOffset, ex.Message);
             }
         }
     }
@@ -4281,7 +7479,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         }
         catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
         {
-            LogService.Instance.Warning("ViewModel", $"Batch hydration failed: {ex.Message}");
+            YaguLog.For("ViewModel").LogWarning("Batch hydration failed: {Error}", ex.Message);
             return payloads ?? (IReadOnlyList<HydrationPayload>)Array.Empty<HydrationPayload>();
         }
     }
@@ -4345,7 +7543,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            LogService.Instance.Warning("ViewModel", $"Source-backed hydration failed for '{result.FilePath}': {ex.Message}");
+            YaguLog.For("ViewModel").LogWarning("Source-backed hydration failed for '{File}': {Error}", result.FilePath, ex.Message);
             return null;
         }
     }
@@ -4522,7 +7720,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         if (s.Truncated)
             return $"Truncated at {s.TotalMatches:N0} matches ({time}, {rate})";
         if (s.Degraded)
-            return $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files — some results paged to disk ({time}, {rate})";
+            return $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files ({time}, {rate})";
         return $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files ({time}, {rate})";
     }
 
@@ -4566,7 +7764,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             _prevDisplayTime = seconds;
         }
 
-        StatusText = $"{MatchesFound:N0} matches in {filesWithMatches:N0} files ({FormatElapsed(_searchTimer.Elapsed)}, {_instantFilesPerSec:N1} files/sec)";
+        string? sourcePhase = _sourceBackedSearchProgress?.BuildPhaseLabel(FilesScanned, TotalFiles);
+        string phaseSuffix = sourcePhase is null ? string.Empty : $" — {sourcePhase}";
+        StatusText = $"{MatchesFound:N0} matches in {filesWithMatches:N0} files ({FormatElapsed(_searchTimer.Elapsed)}, {_instantFilesPerSec:N1} files/sec){phaseSuffix}";
 
         // Collect incremental sample for sparkline (~0.15s window, rolling 30s)
         double dt = seconds - _prevSampleTime;
@@ -4797,6 +7997,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.LineTruncationLength = LineTruncationLength;
         _settings.MaxRecentItems = MaxRecentItems;
         _settings.MaxSemanticRecentItems = MaxSemanticRecentItems;
+        _settings.AutocompleteDropdownVisibleItems = AutocompleteDropdownVisibleItems;
         _settings.GlobalHotkeyEnabled = GlobalHotkeyEnabled;
         _settings.GlobalHotkeyKey = HotkeyService.TryNormalizeLetter(GlobalHotkeyKey, out var hotkeyKey)
             ? hotkeyKey.ToString()
@@ -4813,6 +8014,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.MaxMatchesPerFile = MaxMatchesPerFile;
         _settings.MaxMatchesPerLine = MaxMatchesPerLine < 0 ? 0 : MaxMatchesPerLine;
+        _settings.FileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds(FileIoTimeoutSeconds);
         _settings.AbsoluteMaxResults = AbsoluteMaxResults < 0 ? 0 : AbsoluteMaxResults;
         _settings.SkipBinary = d is null ? SkipBinary : d.SkipBinary;
         _settings.SearchOnlineOnlyFiles = SearchOnlineOnlyFiles;
@@ -4822,6 +8024,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine);
         _settings.ImageOcrModel = AppSettings.NormalizeImageOcrModel(ImageOcrModel);
         _settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(ImageOcrMaxSide);
+        _settings.ImageOcrWorkerParallelism = AppSettings.NormalizeImageOcrWorkerParallelism(ImageOcrWorkerParallelism);
         // The startup-directory pin flag mirrors the star toggle. The captured directory itself
         // (PinnedStartupDirectory) is a snapshot written by SetStartupDirectoryPinnedAsync at click
         // time, so it is intentionally NOT recaptured here and never drifts as the box changes.
@@ -4832,6 +8035,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.BinaryExtensions = d is null ? SettingsBinaryExtensions : d.SettingsBinaryExtensions;
         _settings.SuppressAdminWarning = SuppressAdminWarning;
         _settings.SuppressEverythingNotRunningPrompt = SuppressEverythingNotRunningPrompt;
+        _settings.SuppressEverythingIndexCoverageWarning = SuppressEverythingIndexCoverageWarning;
         _settings.SuppressExcludedExtensionWarnings = SuppressExcludedExtensionWarnings;
         _settings.IncludeExcludedExtensionByDefault = IncludeExcludedExtensionByDefault;
         _settings.SuppressFontContrastWarnings = SuppressFontContrastWarnings;
@@ -4876,14 +8080,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.NativeConcurrencyLimit = NativeConcurrencyLimit;
         _settings.MaxMatchesPerSection = MaxMatchesPerSection;
         _settings.PreviewSectionPageSize = PreviewSectionPageSize;
+        _settings.MaxSelectedFilesPerPreview = MaxSelectedFilesPerPreview;
+        _settings.MaxSelectedResultsPerPreview = MaxSelectedResultsPerPreview;
+        _settings.MaxRenderedMatchesPerSection = MaxRenderedMatchesPerSection;
         _settings.FullFilePreviewLimitMB = FullFilePreviewLimitMB;
+        _settings.FullFilePreviewMaxRenderLines = FullFilePreviewMaxRenderLines;
+        _settings.FullFilePreviewMaxRenderChars = FullFilePreviewMaxRenderChars;
         _settings.ArchiveMaxNestingDepth = ArchiveMaxNestingDepth;
         _settings.ArchiveMaxEntryMB = ArchiveMaxEntryMB;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 
         await _settingsService.SaveAsync(_settings).ConfigureAwait(false);
-        LogService.Instance.Info("Settings", "Settings persisted");
+        YaguLog.For("Settings").LogInformation("Settings persisted");
         LogService.Instance.Flush();
     }
 
@@ -5365,7 +8574,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     partial void OnIsSearchingChanged(bool value)
     {
-        if (value) return;                                // act only when a search ENDS (finish or cancel)
+        if (value)
+        {
+            CancelIndexStorageMeasurement();
+            return;                                      // remaining work applies only when a search ENDS
+        }
+        SearchInNameFirstPhase = false;
         if (!IsTranslatingSemanticQuery) IsCancelling = false;   // cancel drained — restore the button
         if (!_advancedOptionsTransientlyChanged) return;
         _advancedOptionsTransientlyChanged = false;

@@ -265,6 +265,12 @@ internal sealed class YaguDialog : Window
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 VerticalScrollMode = ScrollMode.Auto,
+                // Disabling only the horizontal SCROLLBAR still leaves HorizontalScrollMode enabled, which
+                // measures the content at INFINITE width — so wrapping text/cards never wrap and instead
+                // overflow (and get clipped) when the window is narrower than the content's natural width
+                // (e.g. at high-DPI). Disabling the horizontal scroll MODE constrains content to the
+                // viewport width so it wraps to fit instead of clipping.
+                HorizontalScrollMode = ScrollMode.Disabled,
             };
         if (options.MinContentHeight > 0)
             bodyContent.MinHeight = options.MinContentHeight;

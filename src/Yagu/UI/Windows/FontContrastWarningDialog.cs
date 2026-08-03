@@ -1,9 +1,11 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Yagu.Helpers;
 using Yagu.Services;
+using Yagu.Services.Logging;
 using Yagu.ViewModels;
 
 namespace Yagu;
@@ -42,7 +44,7 @@ internal static class FontContrastWarningDialog
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("FontContrast", $"Warning dialog failed: {ex.Message}", ex);
+                YaguLog.For("FontContrast").LogWarning(ex, "Warning dialog failed: {Error}", ex.Message);
                 try
                 {
                     viewModel.FontContrastReminderAfterUtc = DateTimeOffset.UtcNow.Add(FontContrastWarningService.RemindLaterDelay);
@@ -50,7 +52,7 @@ internal static class FontContrastWarningDialog
                 }
                 catch (Exception persistEx)
                 {
-                    LogService.Instance.Warning("FontContrast", $"Unable to persist warning snooze after dialog failure: {persistEx.Message}", persistEx);
+                    YaguLog.For("FontContrast").LogWarning(persistEx, "Unable to persist warning snooze after dialog failure: {Error}", persistEx.Message);
                 }
                 return true;
             }

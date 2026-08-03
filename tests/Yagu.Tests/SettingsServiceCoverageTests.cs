@@ -73,6 +73,45 @@ public sealed class SettingsServiceExtendedCoverageTests : IDisposable
     }
 
     [Fact]
+    public void PreviewSafetyCaps_DefaultToZero_AndRoundTrip()
+    {
+        // The configurable preview render/preparation caps default to 0 (meaning "use the built-in
+        // default") and round-trip any explicit override through save/load.
+        var defaults = new AppSettings();
+        Assert.Equal(0, defaults.MaxSelectedFilesPerPreview);
+        Assert.Equal(0, defaults.MaxSelectedResultsPerPreview);
+        Assert.Equal(0, defaults.MaxRenderedMatchesPerSection);
+        Assert.Equal(0, defaults.FullFilePreviewMaxRenderLines);
+        Assert.Equal(0, defaults.FullFilePreviewMaxRenderChars);
+
+        var service = new SettingsService(_settingsPath);
+        service.Save(new AppSettings
+        {
+            MaxSelectedFilesPerPreview = 250,
+            MaxSelectedResultsPerPreview = 50_000,
+            MaxRenderedMatchesPerSection = 8_000,
+            FullFilePreviewMaxRenderLines = 40_000,
+            FullFilePreviewMaxRenderChars = 2_000_000,
+        });
+
+        var loaded = service.Load();
+        Assert.Equal(250, loaded.MaxSelectedFilesPerPreview);
+        Assert.Equal(50_000, loaded.MaxSelectedResultsPerPreview);
+        Assert.Equal(8_000, loaded.MaxRenderedMatchesPerSection);
+        Assert.Equal(40_000, loaded.FullFilePreviewMaxRenderLines);
+        Assert.Equal(2_000_000, loaded.FullFilePreviewMaxRenderChars);
+    }
+
+    [Fact]
+    public void EverythingIndexCoverageWarningSuppression_RoundTrips()
+    {
+        var service = new SettingsService(_settingsPath);
+        service.Save(new AppSettings { SuppressEverythingIndexCoverageWarning = true });
+
+        Assert.True(service.Load().SuppressEverythingIndexCoverageWarning);
+    }
+
+    [Fact]
     public void Load_CorruptJson_ReturnsDefaults()
     {
         File.WriteAllText(_settingsPath, "{ this is not valid json !@#$");

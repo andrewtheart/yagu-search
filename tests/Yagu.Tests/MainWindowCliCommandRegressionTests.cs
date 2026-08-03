@@ -82,14 +82,16 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("\"--pdf-text\"", source);
         Assert.Contains("\"--no-pdf-text\"", source);
         Assert.Contains("ViewModel.SearchPdfText == setting.SearchPdfText", source);
-        // OCR engine / recognition model / detection resolution must be reproducible when image-text
-        // is on, so a UI OCR search runs with the same engine/model/resolution from the CLI.
+        // OCR engine / recognition model / detection resolution / worker count must be reproducible
+        // when image-text is on, so the UI and CLI run the same OCR configuration.
         Assert.Contains("\"--ocr-engine\"", source);
         Assert.Contains("\"--ocr-model\"", source);
         Assert.Contains("\"--ocr-max-side\"", source);
+        Assert.Contains("\"--ocr-workers\"", source);
         Assert.Contains("string.Equals(ViewModel.ImageOcrEngine, setting.ImageOcrEngine", source);
         Assert.Contains("string.Equals(ViewModel.ImageOcrModel, setting.ImageOcrModel", source);
         Assert.Contains("ViewModel.ImageOcrMaxSide == setting.ImageOcrMaxSide", source);
+        Assert.Contains("ViewModel.ImageOcrWorkerParallelism == setting.ImageOcrWorkerParallelism", source);
         // A pinned semantic model must be reproducible via --semantic-model in semantic mode.
         Assert.Contains("\"--semantic-model\"", source);
         Assert.Contains("string.Equals(ViewModel.SemanticModelAlias, setting.SemanticModelAlias", source);
@@ -108,6 +110,8 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("\"--max-depth\"", source);
         Assert.Contains("SearchOptions.ResolveContentSearchParallelism", source);
         Assert.Contains("BuildEffectiveSkipExtensionsForCli", source);
+        Assert.Contains("if ((SearchMode)ViewModel.SearchModeIndex == SearchMode.Content)", source);
+        Assert.Contains("ParseExtensionSetForCli(ViewModel.BinaryExtensions)", source);
         Assert.Contains("QuoteCliValue", source);
         Assert.Contains("_includeGeneratedCliCommandSavedSettingOptions", source);
         Assert.Contains("OnGeneratedCliCommandSavedSettingOptionsToggled", source);
@@ -310,7 +314,7 @@ public sealed class MainWindowCliCommandRegressionTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
         return dir?.FullName ?? Directory.GetCurrentDirectory();
     }

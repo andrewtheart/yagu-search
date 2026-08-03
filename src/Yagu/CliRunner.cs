@@ -4,9 +4,13 @@ using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using Yagu.Models;
 using Yagu.Services;
 using Yagu.Services.Ai;
+using Yagu.Services.Index;
+using Yagu.Services.Logging;
+using YaguLogLevel = Yagu.Services.LogLevel;
 
 namespace Yagu;
 
@@ -17,7 +21,7 @@ namespace Yagu;
 /// and streams search results to stdout in grep-style format while writing
 /// warnings and the completion summary to stderr.
 /// </summary>
-internal static class CliRunner
+internal static partial class CliRunner
 {
     private const string LocalSettingsFileName = ".yagu.json";
 
@@ -89,6 +93,11 @@ internal static class CliRunner
         if (!string.IsNullOrWhiteSpace(args.CalcExpression))
             return RunCalc(args.CalcExpression!);
 
+        // Content-index management commands (build/status/rebuild/delete/clear/config) short-circuit the
+        // search pipeline; they manage the persistent index and exit.
+        if (args.IsIndexManagementCommand)
+            return RunIndexManagement(args);
+
         // --load-session short-circuits the entire search pipeline: just
         // read the file and re-emit results in grep-style format.
         if (!string.IsNullOrWhiteSpace(args.LoadSessionPath))
@@ -131,7 +140,8 @@ internal static class CliRunner
         if (vtEnabled)
             OfferEverythingSetupAsync().GetAwaiter().GetResult();
 
-        var settings = LoadEffectiveSettings(args);
+        var settingsService = ResolveSettingsService(args);
+        var settings = settingsService.Load();
 
         // Apply CLI overrides to settings used outside of SearchOptions.
         if (args.LogLevelIndex.HasValue)         settings.LogLevelIndex = args.LogLevelIndex.Value;
@@ -140,7 +150,7 @@ internal static class CliRunner
 
         // Configure the file-lister backend from settings (same as App() constructor).
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
-        LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, LogLevel.Critical);
+        LogService.InitFromSettings((YaguLogLevel)settings.LogLevelIndex, YaguLogLevel.Critical);
 
         // Seed the OCR download consent gate from settings and register a console-based warning so
         // image-text (OCR) search never downloads the engine/models without explicit consent.
@@ -152,12 +162,21 @@ internal static class CliRunner
         // of persisted consent (those are interactive-app features only).
         Yagu.Services.Telemetry.TelemetryGate.Headless = true;
 
+        // First-run interactive prompts that mirror the GUI startup chain (index onboarding, temp-file
+        // location, Explorer context menu, telemetry consent, CPU-only AI warning, new-model alerts).
+        // Each is gated by the SAME persisted setting as the GUI, so answering on either surface
+        // suppresses it on the other. No-ops when stdin is redirected (non-interactive/piped).
+        CliFirstRunPrompts.RunAsync(settings, settingsService).GetAwaiter().GetResult();
+
         var perRootOptions = BuildPerRootSearchOptions(args, settings);
         if (perRootOptions.Count == 0)
         {
             WriteError("error: no drives are available to search.");
             return 2;
         }
+
+        PromptEverythingIndexCoverageAsync(perRootOptions, settings, settingsService)
+            .GetAwaiter().GetResult();
 
         return RunSearchAsync(perRootOptions, args, vtEnabled).GetAwaiter().GetResult();
     }
@@ -188,6 +207,14 @@ internal static class CliRunner
         translator.SetGpuMemoryBytes(gpuMemoryBytes);
     }
 
+    /// <summary>Pushes the user's per-model text-generation overrides (from settings.json) onto the CLI
+    /// translator so a <c>--semantic-pattern</c> run honors the same tuned sampling parameters as the GUI.
+    /// Empty by default (built-in per-model defaults apply).</summary>
+    private static void ApplyModelGenerationOverrides(FoundryLocalSemanticQueryTranslator translator, AppSettings settings)
+    {
+        translator.SetModelGenerationOverrides(settings.SemanticModelParameterOverrides);
+    }
+
     /// <summary>
     /// Runs the local model to translate <see cref="CliArgs.SemanticPattern"/> into concrete search
     /// flags and folds them into <paramref name="args"/>. Returns <c>Stop=true</c> when the caller
@@ -196,6 +223,13 @@ internal static class CliRunner
     /// </summary>
     private static async Task<(int Code, bool Stop)> RunSemanticAsync(CliArgs args, AppSettings settings)
     {
+        string semanticText = args.SemanticPattern?.Trim() ?? string.Empty;
+        if (SemanticQuerySalvage.IsSingleTokenQuery(semanticText))
+        {
+            WriteError($"Single-token query '{semanticText}' does not need AI; searching for it directly.");
+            return FallBackToTraditional(args);
+        }
+
         if (!settings.SemanticSearchEnabled)
         {
             WriteError("error: semantic search is disabled (SemanticSearchEnabled = false in settings).");
@@ -210,6 +244,7 @@ internal static class CliRunner
         await using var translator = new FoundryLocalSemanticQueryTranslator(enabled: true, modelOverrideAlias: modelAlias);
 
         ApplyDetectedAccelerators(translator);
+        ApplyModelGenerationOverrides(translator, settings);
 
         var context = new SemanticTranslationContext
         {
@@ -251,7 +286,7 @@ internal static class CliRunner
         SemanticTranslationResult result;
         try
         {
-            result = await translator.TranslateAsync(args.SemanticPattern!.Trim(), context, progress, CancellationToken.None)
+            result = await translator.TranslateAsync(semanticText, context, progress, CancellationToken.None)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -346,6 +381,7 @@ internal static class CliRunner
         await using var translator = new FoundryLocalSemanticQueryTranslator(enabled: true, modelOverrideAlias: modelAlias);
 
         ApplyDetectedAccelerators(translator);
+        ApplyModelGenerationOverrides(translator, settings);
 
         string? lastProgress = null;
         var progress = new Progress<SemanticTranslationProgress>(p =>
@@ -779,7 +815,7 @@ internal static class CliRunner
         catch (Exception ex)
         {
             // Consent still applies this run even if persistence fails.
-            LogService.Instance.Warning("OcrConsent", $"Unable to persist OCR download consent: {ex.Message}", ex);
+            YaguLog.For("OcrConsent").LogWarning(ex, "Unable to persist OCR download consent: {Error}", ex.Message);
         }
     }
 
@@ -1091,6 +1127,85 @@ internal static class CliRunner
     private static bool IsYes(string? answer)
         => string.IsNullOrWhiteSpace(answer) || answer.Trim().StartsWith("y", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// CLI parity for the GUI's Everything index-coverage warning. Non-interactive/piped invocations never
+    /// block. The saved-INI negative is treated as unknown while Everything is running because settings
+    /// changed in the UI are held in memory until exit; this prevents false warnings for a newly-added FAT
+    /// drive whose scan is still pending.
+    /// </summary>
+    private static async Task PromptEverythingIndexCoverageAsync(
+        IReadOnlyList<SearchOptions> perRootOptions,
+        AppSettings settings,
+        SettingsService settingsService)
+    {
+        if (Console.IsInputRedirected || settings.SuppressEverythingIndexCoverageWarning)
+            return;
+        if (settings.FileListerBackendIndex == (int)FileListerBackend.Managed
+            || perRootOptions.All(options => options.FileListerBackendOverride == FileListerBackend.Managed))
+            return;
+
+        string? everythingExe = FindEverythingExe(FileLister.FindEsExe() ?? string.Empty);
+        if (everythingExe is null)
+            return;
+
+        bool everythingRunning = false;
+        try
+        {
+            Process[] processes = Process.GetProcessesByName("Everything");
+            everythingRunning = processes.Length > 0;
+            foreach (Process process in processes) process.Dispose();
+        }
+        catch { /* saved config is the only available source */ }
+
+        string[] targets = perRootOptions
+            .Select(options => options.Directory)
+            .Where(directory => !string.IsNullOrWhiteSpace(directory))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        IReadOnlyList<string>? uncovered = await Task.Run(() =>
+            EverythingIndexCoverageDetector.FindConfirmedUncoveredPaths(
+                targets, everythingExe, everythingRunning)).ConfigureAwait(false);
+        if (uncovered is null || uncovered.Count == 0)
+            return;
+
+        IReadOnlyList<string> roots = EverythingIndexConfigurator.NormalizeRootVolumes(uncovered);
+        if (roots.Count == 0)
+            return;
+
+        Console.Error.WriteLine();
+        Console.Error.WriteLine(roots.Count == 1
+            ? "The following drive does not appear to be in Everything's index:"
+            : "The following drives do not appear to be in Everything's index:");
+        Console.Error.WriteLine();
+        foreach (string root in roots)
+            Console.Error.WriteLine($"  {root}");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("Adding these root drives to the Everything index is highly recommended for the fastest initial filename-based search results.");
+        Console.Error.WriteLine("Add them manually in Everything: Tools -> Options -> Indexes, or let Yagu use Everything's documented -add-volumes/-rescan commands.");
+        Console.Error.WriteLine();
+        Console.Error.Write("[A]dd automatically / [O]k, I added it / [I]gnore for now / [N]ever warn again: ");
+        string answer = (Console.ReadLine() ?? string.Empty).Trim();
+        Console.Error.WriteLine();
+
+        if (answer.StartsWith("n", StringComparison.OrdinalIgnoreCase))
+        {
+            settings.SuppressEverythingIndexCoverageWarning = true;
+            await settingsService.SaveAsync(settings).ConfigureAwait(false);
+            return;
+        }
+        if (answer.StartsWith("a", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine("Adding drive(s) to Everything and starting a rescan...");
+            bool added = await EverythingIndexConfigurator.AddVolumesAndRescanAsync(
+                everythingExe, uncovered).ConfigureAwait(false);
+            Console.Error.WriteLine(added
+                ? "Everything accepted the drive(s). Large FAT/exFAT indexes may take a few minutes to populate."
+                : "Could not add the drive(s) automatically. Use Everything -> Tools -> Options -> Indexes.");
+            Console.Error.WriteLine();
+        }
+        // O/I/blank all continue the search without changing settings.
+    }
+
     private static string? FindEverythingExe(string esPath)
     {
         var dir = Path.GetDirectoryName(esPath);
@@ -1141,21 +1256,29 @@ internal static class CliRunner
     // Settings: .yagu.json in CWD → process launch directory → global AppData, then CLI overrides
     // -----------------------------------------------------------------------
 
-    private static AppSettings LoadEffectiveSettings(CliArgs args)
+    private static AppSettings LoadEffectiveSettings(CliArgs args) => ResolveSettingsService(args).Load();
+
+    /// <summary>
+    /// Resolves the <see cref="SettingsService"/> bound to the settings file the CLI reads and writes:
+    /// a <c>.yagu.json</c> beside the current working directory, else one beside the running process,
+    /// else the global AppData settings. Both <see cref="LoadEffectiveSettings"/> and the first-run
+    /// prompts use it so a prompt persists to the same file it was loaded from.
+    /// </summary>
+    private static SettingsService ResolveSettingsService(CliArgs args)
     {
         // 1. Prefer a .yagu.json beside the current working directory.
         var cwdSettings = Path.Combine(Directory.GetCurrentDirectory(), LocalSettingsFileName);
         if (File.Exists(cwdSettings))
-            return new SettingsService(cwdSettings).Load();
+            return new SettingsService(cwdSettings);
 
         // 2. Next try a .yagu.json beside the running process. This lets a portable
         // Yagu install carry a local CLI defaults file even when invoked from another CWD.
         var launchSettings = ResolveProcessLaunchSettingsPath();
         if (!string.IsNullOrWhiteSpace(launchSettings) && File.Exists(launchSettings))
-            return new SettingsService(launchSettings).Load();
+            return new SettingsService(launchSettings);
 
         // 3. Fall back to global AppData settings.
-        return new SettingsService().Load();
+        return new SettingsService();
     }
 
     private static string? ResolveProcessLaunchSettingsPath()
@@ -1205,7 +1328,14 @@ internal static class CliRunner
     private static List<SearchOptions> BuildPerRootSearchOptions(CliArgs args, AppSettings s)
     {
         if (!string.IsNullOrWhiteSpace(args.Directory))
-            return new List<SearchOptions> { BuildSearchOptions(args, s) };
+        {
+            string root = Yagu.Services.DriveEnumerator.NormalizeSearchRoot(args.Directory);
+            bool isHardDisk = Yagu.Helpers.DiskTypeDetector.IsHardDisk(root);
+            int parallelism = args.Parallelism ?? SearchOptions.ResolveContentSearchParallelism(s.ParallelismIndex, Environment.ProcessorCount);
+            if (s.LimitParallelismOnHdd && isHardDisk)
+                parallelism = 1;
+            return new List<SearchOptions> { BuildSearchOptions(args, s, root, parallelism, isHardDisk: isHardDisk) };
+        }
 
         var roots = Yagu.Services.DriveEnumerator.GetSearchRoots(
             s.SearchAllDrivesIncludesNetwork, s.SearchAllDrivesIncludesRemovable, s.SearchAllDrivesIncludesCloud);
@@ -1217,13 +1347,20 @@ internal static class CliRunner
         foreach (var root in roots)
         {
             int p = baseParallelism;
-            if (s.LimitParallelismOnHdd && Yagu.Helpers.DiskTypeDetector.IsHardDisk(root)) p = 1;
-            list.Add(BuildSearchOptions(args, s, root, p, backendOverride));
+            bool isHardDisk = Yagu.Helpers.DiskTypeDetector.IsHardDisk(root);
+            if (s.LimitParallelismOnHdd && isHardDisk) p = 1;
+            list.Add(BuildSearchOptions(args, s, root, p, backendOverride, isHardDisk));
         }
         return list;
     }
 
-    private static SearchOptions BuildSearchOptions(CliArgs args, AppSettings s, string? directoryOverride = null, int? parallelismOverride = null, FileListerBackend? backendOverride = null)
+    private static SearchOptions BuildSearchOptions(
+        CliArgs args,
+        AppSettings s,
+        string? directoryOverride = null,
+        int? parallelismOverride = null,
+        FileListerBackend? backendOverride = null,
+        bool isHardDisk = false)
     {
         bool caseSensitive  = args.CaseSensitive ?? s.CaseSensitive;
         bool useRegex       = args.UseRegex       ?? s.UseRegex;
@@ -1231,6 +1368,7 @@ internal static class CliRunner
         long minFileSize    = args.MinFileSizeBytes ?? s.DefaultMinFileSizeBytes;
         long maxFileSize    = args.MaxFileSizeBytes ?? s.DefaultMaxFileSizeBytes;
         bool skipBinary     = args.SkipBinary     ?? s.SkipBinary;
+        bool useContentIndex = (args.UseContentIndex ?? s.UseContentIndexByDefault) && s.EnableContentIndex;
         int  parallelism    = parallelismOverride ?? args.Parallelism ?? SearchOptions.ResolveContentSearchParallelism(s.ParallelismIndex, Environment.ProcessorCount);
         long memoryBytes    = args.MemoryLimitMB.HasValue
             ? (long)args.MemoryLimitMB.Value * 1024 * 1024
@@ -1247,12 +1385,20 @@ internal static class CliRunner
         string imageOcrEngine = AppSettings.NormalizeImageOcrEngine(args.ImageOcrEngine ?? s.ImageOcrEngine);
         string imageOcrModel = AppSettings.NormalizeImageOcrModel(args.ImageOcrModel ?? s.ImageOcrModel);
         int imageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(args.ImageOcrMaxSide ?? s.ImageOcrMaxSide);
+        int imageOcrWorkerParallelism = Yagu.Services.Ocr.OcrWorkerParallelism.Resolve(
+            args.ImageOcrWorkerParallelism ?? s.ImageOcrWorkerParallelism,
+            imageOcrEngine,
+            Environment.ProcessorCount,
+            s.LimitParallelismOnHdd,
+            isHardDisk);
 
         bool obeyGitignore = args.ObeyGitignore ?? s.ObeyGitignore;
         bool gitignorePrecedence = args.GitignoreTakesPrecedence ?? s.GitignoreTakesPrecedence;
         bool exactMatch = args.ExactMatch ?? s.ExactMatch;
         int maxMatchesPerFile = args.MaxMatchesPerFile ?? s.MaxMatchesPerFile;
         int maxMatchesPerLine = args.MaxMatchesPerLine ?? s.MaxMatchesPerLine;
+        int fileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds(
+            args.FileIoTimeoutSeconds ?? s.FileIoTimeoutSeconds);
         int absoluteMaxResults = args.AbsoluteMaxResults ?? s.AbsoluteMaxResults;
         int maxSearchDepth = args.MaxSearchDepth ?? s.MaxSearchDepth;
         var includeMode = (FilterPatternMode)(args.IncludeFilterModeIndex ?? s.IncludeFilterModeIndex);
@@ -1270,7 +1416,7 @@ internal static class CliRunner
             ? new HashSet<string>(args.SkipExtensions, StringComparer.OrdinalIgnoreCase)
             : ParseSkipExtensions(s.SkipExtensions);
 
-        return new SearchOptions
+        var searchOptions = new SearchOptions
         {
             Directory             = directoryOverride ?? args.Directory ?? string.Empty,
             Query                 = args.Pattern!,
@@ -1299,6 +1445,10 @@ internal static class CliRunner
             AbsoluteMaxResults    = absoluteMaxResults,
             MaxSearchDepth        = maxSearchDepth,
             SkipBinary            = skipBinary,
+            AvoidSourceMemoryMap  = DriveEnumerator.ShouldAvoidSourceMemoryMap(
+                DriveEnumerator.GetDriveTypeForPath(directoryOverride ?? args.Directory)),
+            FileIoTimeoutSeconds  = fileIoTimeoutSeconds,
+            UseContentIndex       = useContentIndex,
             SearchOnlineOnlyFiles = s.SearchOnlineOnlyFiles,
             SearchHiddenFiles     = args.SearchHiddenFiles ?? s.SearchHiddenFiles,
             ObeyGitignore         = obeyGitignore,
@@ -1317,11 +1467,117 @@ internal static class CliRunner
             ImageOcrEngine        = imageOcrEngine,
             ImageOcrModel         = imageOcrModel,
             ImageOcrMaxSide       = imageOcrMaxSide,
+            ImageOcrWorkerParallelism = imageOcrWorkerParallelism,
             SearchPdfText         = searchPdfText,
             PdfTextExtensions     = SplitSemi(AppSettings.DefaultPdfTextExtensions).ToHashSet(StringComparer.OrdinalIgnoreCase),
             ExcludeAdminProtectedPaths = excludeAdminPaths,
             AdminProtectedPathSegments = Yagu.Services.FileLister.ParseAdminProtectedSegments(adminSegments),
         };
+
+        // Attach the content-index pruning gate factory (plan §5) so the CLI accelerates the same way the
+        // GUI does. The closure is invoked off-thread at the start of discovery; a null result (feature
+        // off, ineligible query, no trusted generation) leaves the live-scan path untouched.
+        if (searchOptions.UseContentIndex)
+        {
+            AppSettings gateSettings = s;
+            string gateStorageDir = gateSettings.IndexStorageDirectory;
+            int gateRetained = AppSettings.NormalizeIndexRetainedGenerationCount(gateSettings.IndexRetainedGenerationCount);
+            SearchOptions gateOptions = searchOptions;
+            // Default on (IndexUseNativeWorker): evaluate the query in the isolated out-of-process worker
+            // instead of in-process. Created lazily; the worker's kill-on-close job cleans it up when the CLI exits.
+            IIndexCandidateSource? gateCandidateSource = gateSettings.IndexUseNativeWorker
+                ? new IndexWorkerQuerySource(new IndexWorkerClient())
+                : null;
+            int gateMaxInProcessSizeMB = AppSettings.NormalizeIndexMaxInProcessSizeMB(gateSettings.IndexMaxInProcessSizeMB);
+            int gateMaxWorkerQuerySizeMB = AppSettings.NormalizeIndexMaxWorkerQuerySizeMB(gateSettings.IndexMaxWorkerQuerySizeMB);
+            string ResolveGateIndexRoot(IContentIndexPathProvider pathProvider)
+                => new ContentIndexManager(pathProvider, gateRetained)
+                    .ResolveBestAvailableIndexRoot(gateOptions.Directory, gateSettings.IndexedRoots);
+            searchOptions.ContentIndexGateFactory = () =>
+            {
+                // Stage-5 (plan §5.8): when the worker PRUNING path is enabled it supersedes the in-process
+                // gate — never open the index in-process (a large scope is served by the worker or live-scanned).
+                if (gateSettings.IndexUseWorkerQuerySessions)
+                    return null;
+                var gatePathProvider = DefaultContentIndexPathProvider.Create(gateStorageDir);
+                string indexRoot = ResolveGateIndexRoot(gatePathProvider);
+                // Size gate (plan §6.1): never load a layered index larger than the in-process limit — a
+                // multi-GB deserialize would make this one-shot search slower than a plain live scan. The CLI
+                // has no next-search cache to warm, so an over-limit scope simply live-scans.
+                if (!ContentIndexSearchGate.IsScopeWithinInProcessSizeLimit(gatePathProvider, indexRoot, gateRetained, gateMaxInProcessSizeMB))
+                    return null;
+                return ContentIndexSearchGate.TryCreate(
+                    gatePathProvider,
+                    indexRoot,
+                    gateOptions,
+                    gateSettings,
+                    gateRetained,
+                    journalReader: null,
+                    candidateSource: gateCandidateSource);
+            };
+
+            // Stage-5 worker PRUNING path (plan §5.8): when the mapped-worker setting is
+            // on, prune via the isolated worker over the memory-mapped v3 WITHOUT loading the index into the
+            // host — so a large scope over IndexMaxInProcessSizeMB is served with a bounded host footprint (the
+            // in-process gate above returns null when this is on — mutually exclusive). The factory takes the
+            // search's survivor sink; it forwards survivors and prunes proven-nonmembers, rescuing the dirty
+            // subset at B1. Returns null → live-scan when the worker cannot serve the scope (never a large
+            // in-process deserialize). The worker's kill-on-close job cleans up this one-shot client on exit.
+            if (gateSettings.IndexUseWorkerQuerySessions)
+            {
+                var pruningClient = new IndexWorkerClient();
+                string pruningSpoolDir = System.IO.Path.Combine(gateStorageDir, "query-spool");
+                int pruningMaxCatchup = AppSettings.NormalizeIndexMaxJournalCatchupRecords(gateSettings.IndexMaxJournalCatchupRecords);
+                int queryWorkerParallelism = IndexWorkerParallelism.ResolveQueryDegree(
+                    gateSettings.IndexQueryWorkerParallelism,
+                    Environment.ProcessorCount,
+                    gateSettings.LimitParallelismOnHdd,
+                    Yagu.Helpers.DiskTypeDetector.IsHardDisk(gateOptions.Directory));
+                searchOptions.ContentIndexPruningScanFactory = survivorSink =>
+                {
+                    // Out-of-process size cap (IndexMaxWorkerQuerySizeMB, default 30 GB): the worker MAPS
+                    // rather than deserializes the index, so it serves far larger scopes than the in-process
+                    // cap — but is still bounded. Over this size (or no index) → live-scan instead.
+                    var pruningPathProvider = DefaultContentIndexPathProvider.Create(gateStorageDir);
+                    string indexRoot = ResolveGateIndexRoot(pruningPathProvider);
+                    if (!ContentIndexSearchGate.IsScopeWithinWorkerMappedSizeLimit(pruningPathProvider, indexRoot, gateRetained, gateMaxWorkerQuerySizeMB))
+                        return null;
+                    var pruningStore = new ContentIndexStore(
+                        pruningPathProvider,
+                        ContentIndexManager.ScopeIdForRoot(indexRoot),
+                        gateRetained);
+                    return ContentIndexShadowScopeBuilder.TryCreatePruningScan(
+                        pruningClient,
+                        pruningStore,
+                        gateOptions,
+                        1,
+                        ContentIndexFreshnessEvaluator.CreateReader(pruningMaxCatchup),
+                        pruningSpoolDir,
+                        survivorSink,
+                        workerParallelism: queryWorkerParallelism);
+                };
+            }
+
+            // Extended-source (PDF-text) pruning (plan §7 Phase 4): skip PDFs whose extracted text cannot
+            // contain a match. Off by default; only engages when a determinism-proven PDF namespace exists
+            // for this root AND this search extracts PDF text. Fail-safe: null → extract every PDF.
+            if ((gateSettings.IndexBuildPdfTextExtendedSource && gateOptions.SearchPdfText)
+                || (gateSettings.IndexBuildImageTextExtendedSource && gateOptions.SearchImageText))
+            {
+                searchOptions.ExtendedSourceGateFactory = () =>
+                {
+                    var extendedPathProvider = DefaultContentIndexPathProvider.Create(gateStorageDir);
+                    string indexRoot = ResolveGateIndexRoot(extendedPathProvider);
+                    return ExtendedSourceSearchGate.TryCreate(
+                        extendedPathProvider,
+                        indexRoot,
+                        gateOptions,
+                        gateSettings);
+                };
+            }
+        }
+
+        return searchOptions;
     }
 
     private static string[] SplitSemi(string value)
@@ -1375,10 +1631,12 @@ internal static class CliRunner
         // results for post-processing (sort/export/replace/group/save-session) and in multiline mode
         // (which streams through the managed writer instead).
         Stream? directStream = (needsCollection || streamingMultiline) ? null : new BufferedStream(Console.OpenStandardOutput(), 1 << 17);
+        object? directOutputLock = directStream is null ? null : new object();
         foreach (var rootOptions in perRootOptions)
         {
             rootOptions.DirectOutputStream = directStream;
             rootOptions.DirectOutputColor = !needsCollection && useColor;
+            rootOptions.DirectOutputLock = directOutputLock;
         }
 
         var progress = vtEnabled ? new ProgressLine(useColor) : null;
@@ -1389,6 +1647,7 @@ internal static class CliRunner
         long filesScanned = 0;
         long bytesScanned = 0;
         DateTime searchStarted = DateTime.UtcNow;
+        bool memoryPressureWarningShown = false;
 
         try
         {
@@ -1408,9 +1667,16 @@ internal static class CliRunner
 
                     case SearchEvent.MemoryPressure mp:
                         mp.AcknowledgeEviction(0);
-                        progress?.Hide();
-                        WriteError("warning: memory pressure detected; search continues in degraded mode.", useColor);
-                        progress?.Show();
+                        // A long search may cross the pressure threshold more than once. Every event still
+                        // acknowledges eviction, but one warning is enough; repeating it suggests separate
+                        // failures even though the search remains in the same degraded mode.
+                        if (!memoryPressureWarningShown)
+                        {
+                            memoryPressureWarningShown = true;
+                            progress?.Hide();
+                            WriteError("warning: memory pressure detected; search continues in degraded mode.", useColor);
+                            progress?.Show();
+                        }
                         break;
 
                     case SearchEvent.Fallback f:
@@ -1424,6 +1690,7 @@ internal static class CliRunner
                         filesScanned = c.Summary.FilesScanned;
                         bytesScanned = c.Summary.BytesScanned;
                         multilineWriter?.Flush();
+                        directStream?.Flush();
                         WriteCompletionSummary(c.Summary, useColor);
 
                         if (needsCollection && collectedResults != null)
@@ -1524,6 +1791,17 @@ internal static class CliRunner
         if (s.Cancelled)  sb.Append(" [cancelled]");
         WriteError(sb.ToString(), color);
 
+        // Content-index coverage (plan §6.2 — parity with the GUI post-search coverage indicator). Only
+        // printed when the index actually participated (some root opted in); ordinary live-scans print nothing.
+        if (s.IndexAcceleration is { RequestedRoots: > 0 } idx)
+        {
+            var coverage = ContentIndexUiStatus.Coverage(
+                enabled: true, usedThisSearch: true, idx.AcceleratedRoots, Math.Max(0, idx.RequestedRoots - idx.AcceleratedRoots));
+            string? idxLine = ContentIndexUiStatus.CoverageCliSummary(coverage, idx.FilesPruned);
+            if (idxLine is not null)
+                WriteError(idxLine, color);
+        }
+
         var b = s.SkipReasons;
         if (b is not null && s.FilesSkipped > 0)
         {
@@ -1540,10 +1818,22 @@ internal static class CliRunner
             if (b.MultilineSkipped > 0) WriteError($"  Multiline size/timeout:   {b.MultilineSkipped,8:N0}", color);
             if (b.Other > 0)         WriteError($"  Other:                    {b.Other,8:N0}", color);
         }
+        // CLI exits immediately after the completion summary. Flush structured diagnostics synchronously so
+        // the last pruning/search metrics are not lost between async logger timer ticks.
+        LogService.Instance.Flush();
     }
 
     private static void WriteError(string msg, bool color = false)
-        => Console.Error.WriteLine(color ? $"{Orange}{msg}{Reset}" : msg);
+    {
+        // PowerShell wraps each native stderr line in a RemoteException ErrorRecord. An empty stderr
+        // record (including the empty first record from a leading newline) has no message, so some hosts
+        // render its exception type literally as "System.Management.Automation.RemoteException". Keep
+        // intentional visual spacer lines non-empty and strip accidental leading line breaks.
+        msg = msg.TrimStart('\r', '\n');
+        if (msg.Length == 0)
+            msg = " ";
+        Console.Error.WriteLine(color ? $"{Orange}{msg}{Reset}" : msg);
+    }
 
     // -----------------------------------------------------------------------
     // Export file writing
@@ -1674,6 +1964,311 @@ internal static class CliRunner
         Console.Out.WriteLine(result.Display);
         return 0;
     }
+
+    // -----------------------------------------------------------------------
+    // Content-index management (--build-index / --index-status / --rebuild-index /
+    // --delete-index / --clear-indexes / --index-config). These manage the persistent
+    // content index (plan §6.3) and exit; they never run a search.
+    // -----------------------------------------------------------------------
+    private static int RunIndexManagement(CliArgs args)
+    {
+        var settings = LoadEffectiveSettings(args);
+
+        if (args.IndexConfigRequested)
+            return RunIndexConfig(args);
+
+        if (args.IndexListRoots || args.IndexAddRootPath is not null || args.IndexRemoveRootPath is not null
+            || args.IndexSetRootFilterPath is not null || args.IndexClearRootFilterPath is not null)
+            return RunIndexRoots(args);
+
+        var pathProvider = DefaultContentIndexPathProvider.Create(settings.IndexStorageDirectory);
+        int retained = AppSettings.NormalizeIndexRetainedGenerationCount(settings.IndexRetainedGenerationCount);
+        var manager = new ContentIndexManager(pathProvider, retained);
+
+        if (args.ClearIndexes)
+        {
+            try
+            {
+                int removed = manager.ClearAll();
+                Console.Out.WriteLine($"Cleared {removed} index scope(s).");
+                return (int)ContentIndexExitCode.Success;
+            }
+            catch (IndexWriteBusyException ex)
+            {
+                WriteError($"error: {ex.Message}");
+                return (int)ContentIndexExitCode.AlreadyRunning;
+            }
+        }
+
+        if (args.IndexDeletePath is not null)
+        {
+            try
+            {
+                string scopeId = ContentIndexManager.ScopeIdForRoot(args.IndexDeletePath);
+                bool existed = manager.DeleteScope(scopeId);
+                Console.Out.WriteLine(existed
+                    ? $"Deleted index for {args.IndexDeletePath}."
+                    : $"No index found for {args.IndexDeletePath}.");
+                return (int)ContentIndexExitCode.Success;
+            }
+            catch (IndexWriteBusyException ex)
+            {
+                WriteError($"error: {ex.Message}");
+                return (int)ContentIndexExitCode.AlreadyRunning;
+            }
+        }
+
+        if (args.IndexStatusRequested)
+        {
+            string root = ResolveIndexRoot(args.IndexStatusPath);
+            string? coveringRoot = IndexedRootsPolicy.FindBestCoveringRoot(settings.IndexedRoots, root);
+            if (coveringRoot is not null
+                && !string.Equals(coveringRoot, IndexScopeIdentity.NormalizePath(root), StringComparison.OrdinalIgnoreCase))
+            {
+                IndexMetadataStatus childStatus = manager.GetMetadataStatusForRoot(root);
+                Console.Out.WriteLine($"Content index coverage for {root}:");
+                Console.Out.WriteLine($"  covered by:  {coveringRoot}");
+                Console.Out.WriteLine("  search use:  the broader index only (parent and child indexes are never opened together)");
+                Console.Out.WriteLine(childStatus.Exists
+                    ? $"  child data:  redundant stored scope; remove with Yagu.exe --cli --delete-index \"{root}\""
+                    : "  child data:  none (no duplicate is maintained)");
+                return (int)ContentIndexExitCode.Success;
+            }
+            IndexMetadataStatus status = manager.GetMetadataStatusForRoot(root);
+            if (!status.Exists)
+            {
+                Console.Out.WriteLine($"No content index for {root}.");
+                return (int)ContentIndexExitCode.Success;
+            }
+            if (!status.MetadataReadable || status.Health == IndexStorageHealth.SourceMissing)
+            {
+                Console.Out.WriteLine($"Content index for {root} needs attention:");
+                Console.Out.WriteLine($"  state:       {ContentIndexUiStatus.StorageHealthLabel(status.Health)}");
+                Console.Out.WriteLine($"  reason:      {status.Problem ?? "No trustworthy root metadata was found."}");
+                Console.Out.WriteLine(Directory.Exists(root)
+                    ? $"  repair:      Yagu.exe --cli --rebuild-index \"{root}\""
+                    : $"  remove:      Yagu.exe --cli --delete-index \"{root}\"");
+                Console.Out.WriteLine("  searches safely live-scan until this is resolved.");
+                return (int)ContentIndexExitCode.Success;
+            }
+            Console.Out.WriteLine($"Content index for {root}:");
+            Console.Out.WriteLine($"  scope:       {ContentIndexManager.ScopeIdForRoot(root)}");
+            Console.Out.WriteLine($"  stored records: {status.DocumentCount:N0}");
+            Console.Out.WriteLine($"  segments:    {status.SegmentCount:N0}");
+            Console.Out.WriteLine($"  created (UTC):  {status.CreatedUtc:u}");
+            Console.Out.WriteLine($"  active generation built (UTC): {status.BuiltUtc:u}");
+            if (status.LastIncrementalUpdateUtc is { } updated)
+                Console.Out.WriteLine($"  last incremental update (UTC): {updated:u}");
+            Console.Out.WriteLine("  metadata readable; use Settings > Indexing > Validate for full structural validation.");
+            return (int)ContentIndexExitCode.Success;
+        }
+
+        // --build-index / --rebuild-index. Both use a staged transaction; rebuild keeps the old complete
+        // index visible until the new raw/PDF build commits in one final pointer flip.
+        string buildRoot = ResolveIndexRoot(args.IndexBuildPath ?? args.IndexRebuildPath);
+        string? registeredCover = IndexedRootsPolicy.FindBestCoveringRoot(settings.IndexedRoots, buildRoot);
+        if (registeredCover is not null
+            && !string.Equals(registeredCover, IndexScopeIdentity.NormalizePath(buildRoot), StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Out.WriteLine($"Skipped duplicate index build: {buildRoot} is already covered by registered root {registeredCover}.");
+            Console.Out.WriteLine($"Build or repair the broader root instead: Yagu.exe --cli --rebuild-index \"{registeredCover}\"");
+            return (int)ContentIndexExitCode.Success;
+        }
+        using var buildCts = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancelHandler = (_, e) => { e.Cancel = true; buildCts.Cancel(); };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            IndexBuildOperation operation = IndexBuildOperationFactory.CreateBuild(settings, buildRoot, args.IndexRebuildRequested);
+            var coordinator = new IndexBuildCoordinator();
+            IndexBuildSuccess result = coordinator.BuildFullScopePreferWorkerAsync(
+                operation, settings.IndexUseNativeWorker, buildCts.Token).GetAwaiter().GetResult();
+            Console.Out.WriteLine($"Built content index for {buildRoot} ({result.LastPublishedArtifactId}).");
+            Console.Out.WriteLine($"  {result.Summary}");
+            if (result.PdfStatus is not null)
+                Console.Out.WriteLine($"  PDF-text index: {result.PdfStatus} ({result.PdfAdmitted}/{result.PdfsSeen} PDF(s), determinism {result.PdfDeterminism}).");
+            if (result.ImageOcrStatus is not null)
+                Console.Out.WriteLine($"  Image-text index: {result.ImageOcrStatus} ({result.ImagesAdmitted}/{result.ImagesSeen} image(s) admitted, {result.ImagesFailed} failed; positive candidates only, nonmembers still OCR live).");
+            return (int)ContentIndexExitCode.Success;
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            WriteError($"error: {ex.Message}");
+            return (int)ContentIndexExitCode.UnsupportedScope;
+        }
+        catch (OperationCanceledException)
+        {
+            return (int)ContentIndexExitCode.Cancelled;
+        }
+        catch (IndexDiskFullException ex)
+        {
+            WriteError($"error: {ex.Message}");
+            return (int)ContentIndexExitCode.BuildFailure;
+        }
+        catch (IndexWriteBusyException ex)
+        {
+            WriteError($"error: {ex.Message}");
+            return (int)ContentIndexExitCode.AlreadyRunning;
+        }
+        catch (Exception ex)
+        {
+            WriteError($"error: build failed: {ex.Message}");
+            return (int)ContentIndexExitCode.BuildFailure;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+        }
+    }
+
+    // Lists, adds, or removes the persisted indexed-folder roots (--index-list-roots /
+    // --index-add-root / --index-remove-root). Operates on the global settings so changes persist.
+    private static int RunIndexRoots(CliArgs args)
+    {
+        var service = new SettingsService();
+        var settings = service.Load();
+        ContentIndexSettingsSnapshot before = ContentIndexSettingsChangeAdvisor.Capture(settings);
+
+        if (args.IndexAddRootPath is not null)
+        {
+            string requested = IndexScopeIdentity.NormalizePath(args.IndexAddRootPath);
+            string? existingCover = IndexedRootsPolicy.FindBestCoveringRoot(settings.IndexedRoots, requested);
+            IReadOnlyList<string> coveredDescendants = IndexedRootsPolicy.FindCoveredDescendants(settings.IndexedRoots, requested);
+            settings.IndexedRoots = IndexedRootsPolicy.Add(settings.IndexedRoots, requested);
+            service.Save(settings);
+            if (existingCover is not null)
+                Console.Out.WriteLine($"Not added: {requested} is already covered by indexed root {existingCover}.");
+            else if (coveredDescendants.Count > 0)
+                Console.Out.WriteLine($"Added indexed root {requested}; consolidated {coveredDescendants.Count} narrower covered root(s).");
+            else if (IndexedRootsPolicy.Contains(settings.IndexedRoots, requested))
+                Console.Out.WriteLine($"Added indexed folder: {requested}");
+            else
+                Console.Out.WriteLine($"Not added: indexed-root limit {IndexedRootsPolicy.MaxIndexedRoots} reached.");
+            WriteIndexRebuildRecommendation(ContentIndexSettingsChangeAdvisor.Analyze(
+                before, ContentIndexSettingsChangeAdvisor.Capture(settings)));
+            return (int)ContentIndexExitCode.Success;
+        }
+
+        if (args.IndexRemoveRootPath is not null)
+        {
+            settings.IndexedRoots = IndexedRootsPolicy.Remove(settings.IndexedRoots, args.IndexRemoveRootPath);
+            service.Save(settings);
+            Console.Out.WriteLine($"Removed indexed folder: {IndexScopeIdentity.NormalizePath(args.IndexRemoveRootPath)}");
+            return (int)ContentIndexExitCode.Success;
+        }
+
+        if (args.IndexSetRootFilterPath is not null)
+        {
+            string key = IndexScopeIdentity.NormalizePath(args.IndexSetRootFilterPath);
+            string include = (args.RootIncludeGlobs ?? string.Empty).Trim();
+            string exclude = (args.RootExcludeGlobs ?? string.Empty).Trim();
+            var filters = settings.IndexedRootFilters
+                .Where(f => !string.Equals(IndexScopeIdentity.NormalizePath(f.Path ?? string.Empty), key, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (include.Length > 0 || exclude.Length > 0)
+                filters.Add(new IndexedRootFilter { Path = key, IncludeGlobs = include, ExcludeGlobs = exclude });
+            settings.IndexedRootFilters = IndexedRootFilterPolicy.Normalize(filters);
+            service.Save(settings);
+            Console.Out.WriteLine(include.Length > 0 || exclude.Length > 0
+                ? $"Set per-folder filters for {key} (include='{include}', exclude='{exclude}')."
+                : $"Cleared per-folder filters for {key}.");
+            WriteIndexRebuildRecommendation(ContentIndexSettingsChangeAdvisor.Analyze(
+                before, ContentIndexSettingsChangeAdvisor.Capture(settings)));
+            return (int)ContentIndexExitCode.Success;
+        }
+
+        if (args.IndexClearRootFilterPath is not null)
+        {
+            string key = IndexScopeIdentity.NormalizePath(args.IndexClearRootFilterPath);
+            settings.IndexedRootFilters = IndexedRootFilterPolicy.Normalize(settings.IndexedRootFilters
+                .Where(f => !string.Equals(IndexScopeIdentity.NormalizePath(f.Path ?? string.Empty), key, StringComparison.OrdinalIgnoreCase))
+                .ToList());
+            service.Save(settings);
+            Console.Out.WriteLine($"Cleared per-folder filters for {key}.");
+            WriteIndexRebuildRecommendation(ContentIndexSettingsChangeAdvisor.Analyze(
+                before, ContentIndexSettingsChangeAdvisor.Capture(settings)));
+            return (int)ContentIndexExitCode.Success;
+        }
+
+        if (settings.IndexedRoots.Count == 0)
+            Console.Out.WriteLine("No indexed folders registered.");
+        else
+            foreach (string root in settings.IndexedRoots)
+            {
+                IndexedRootFilter? filter = IndexedRootFilterPolicy.Find(settings.IndexedRootFilters, root);
+                if (filter is null)
+                    Console.Out.WriteLine(root);
+                else
+                    Console.Out.WriteLine($"{root}  [include='{filter.IncludeGlobs}' exclude='{filter.ExcludeGlobs}']");
+            }
+        return (int)ContentIndexExitCode.Success;
+    }
+
+    // Prints, sets, or resets the persisted Indexing settings (--index-config). Operates on the global
+    // settings so changes persist across sessions.
+    private static int RunIndexConfig(CliArgs args)
+    {
+        var service = new SettingsService();
+        var settings = service.Load();
+        ContentIndexSettingsSnapshot before = ContentIndexSettingsChangeAdvisor.Capture(settings);
+
+        if (args.IndexConfigReset)
+        {
+            ContentIndexConfigService.Reset(settings);
+            service.Save(settings);
+            Console.Out.WriteLine("Reset all indexing settings to defaults.");
+            WriteIndexRebuildRecommendation(ContentIndexSettingsChangeAdvisor.Analyze(
+                before, ContentIndexSettingsChangeAdvisor.Capture(settings)));
+            return (int)ContentIndexExitCode.Success;
+        }
+
+        if (args.IndexConfigPairs.Count > 0)
+        {
+            var pairs = new List<(string Key, string Value)>();
+            foreach (string entry in args.IndexConfigPairs)
+            {
+                int eq = entry.IndexOf('=', StringComparison.Ordinal);
+                if (eq <= 0)
+                {
+                    WriteError($"error: invalid --index-config entry '{entry}' (expected key=value).");
+                    return (int)ContentIndexExitCode.InvalidArguments;
+                }
+                pairs.Add((entry[..eq], entry[(eq + 1)..]));
+            }
+            var result = ContentIndexConfigService.SetMany(settings, pairs);
+            if (!result.Success)
+            {
+                WriteError($"error: {result.Error}");
+                return (int)ContentIndexExitCode.InvalidArguments;
+            }
+            service.Save(settings);
+            Console.Out.WriteLine($"Updated {pairs.Count} indexing setting(s).");
+            WriteIndexRebuildRecommendation(ContentIndexSettingsChangeAdvisor.Analyze(
+                before, ContentIndexSettingsChangeAdvisor.Capture(settings)));
+            return (int)ContentIndexExitCode.Success;
+        }
+
+        foreach (var (key, value) in ContentIndexConfigService.GetAll(settings))
+            Console.Out.WriteLine($"{key}={value}");
+        return (int)ContentIndexExitCode.Success;
+    }
+
+    private static void WriteIndexRebuildRecommendation(ContentIndexSettingsChangeAdvice advice)
+    {
+        if (!advice.HasRecommendation)
+            return;
+
+        Console.Out.WriteLine();
+        Console.Out.WriteLine($"Rebuild recommended for {advice.AffectedRoots.Count} maintained index(es):");
+        foreach (ContentIndexRebuildReason reason in advice.Reasons)
+            Console.Out.WriteLine($"  - {reason.Description}");
+        Console.Out.WriteLine("Run:");
+        foreach (string root in advice.AffectedRoots)
+            Console.Out.WriteLine($"  Yagu.exe --cli --rebuild-index \"{root}\"");
+    }
+
+    private static string ResolveIndexRoot(string? path)
+        => string.IsNullOrWhiteSpace(path) ? Directory.GetCurrentDirectory() : path.Trim('"');
 
     private static int RunLoadSession(string path, bool vtEnabled)
     {
@@ -2214,6 +2809,7 @@ internal static class CliRunner
                   --file-lister-backend <n> File lister: 0=Auto, 1=SDK, 2=es.exe, 3=Managed.
                   --max-matches-per-file <n> Cap matches per file (0 = unlimited).
                   --max-matches-per-line <n> Cap matches emitted per line (0 = unlimited, default 0).
+                  --file-io-timeout <seconds> Per-file/volume I/O deadline (1-600, default 30).
                   --absolute-max-results <n> Hard total-match backstop even when --max-results is 0 (default 2000000).
                   --max-depth <n>         Max directory recursion depth (0 = unlimited).
 
@@ -2239,6 +2835,8 @@ internal static class CliRunner
                                           ChineseV4, or ChineseV5 (default). Ignored by the tesseract engine.
                   --ocr-max-side <px>     PaddleSharp detection resolution (longest side, default 960;
                                           0 = unlimited/native). Ignored by the tesseract engine.
+                  --ocr-workers <0-4>     Independent OCR worker processes. 0 = automatic (Paddle: 1;
+                                          Tesseract: up to 2). The saved HDD limiter forces 1 on HDD roots.
 
             ADMIN / SECURITY:
                   --no-admin-warning      Suppress the non-administrator privilege warning.
@@ -2290,6 +2888,32 @@ internal static class CliRunner
                                           .yagu-session file and emit its results in
                                           ripgrep-compatible format. --directory and
                                           PATTERN are not required when loading a session.
+
+            CONTENT INDEX (opt-in accelerator):
+                  --use-index             Use the persistent content index for this search (default
+                                          from settings). Does not bypass a disabled master feature;
+                                          if indexing is off it live-scans. Orthogonal to
+                                          --image-text / --pdf-text / --search-archives.
+                  --no-index              Force a full live scan for this search (never use the index).
+                  --build-index [<path>]  Build/update the content index for a scope (default: current
+                                          directory), print a summary, and exit.
+                  --rebuild-index [<path>] Force a full rebuild of the index for a scope.
+                  --index-status [<path>] Print the index manifest and last-build summary for a scope.
+                  --delete-index <path>   Delete the index for one scope.
+                  --clear-indexes         Delete all local content-index data.
+                  --index-config          Print every persisted Indexing setting and its value.
+                  --index-config <k>=<v>  Set an Indexing setting (repeatable; validated like Settings).
+                                          Build-output changes print affected-root rebuild commands.
+                  --index-config reset    Restore all Indexing settings to their defaults.
+                  --index-list-roots      List the folders registered for content indexing (shows any per-folder filters).
+                  --index-add-root <path> Register a folder and print its build command when newly maintained.
+                  --index-remove-root <path> Unregister a folder from content indexing.
+                  --index-set-root-filter <path> [--root-include <globs>] [--root-exclude <globs>]
+                                          Set per-folder build-time globs for one root. Exclude globs add to
+                                          the global excludes; include globs re-admit paths a broader exclude
+                                          drops (e.g. index node_modules under just this folder). Omit both to clear;
+                                          semantic changes print the affected root's rebuild command.
+                  --index-clear-root-filter <path> Remove per-folder overrides and print rebuild advice.
 
             SETTINGS FILE:
                             If .yagu.json exists in the current working directory it is used as the
@@ -3430,6 +4054,7 @@ internal sealed class CliArgs
     public string?          ImageOcrEngine { get; private set; }
     public string?          ImageOcrModel { get; private set; }
     public int?             ImageOcrMaxSide { get; private set; }
+    public int?             ImageOcrWorkerParallelism { get; private set; }
     public bool             AllowOcrDownload { get; private set; }
     public string?          ArchiveExtensions { get; private set; }
     public bool?            ExcludeAdminProtectedPaths { get; private set; }
@@ -3440,6 +4065,7 @@ internal sealed class CliArgs
     public int?             ExcludeFilterModeIndex { get; private set; }
     public int?             MaxMatchesPerFile { get; private set; }
     public int?             MaxMatchesPerLine { get; private set; }
+    public int?             FileIoTimeoutSeconds { get; private set; }
     public int?             AbsoluteMaxResults { get; private set; }
     public int?             MaxSearchDepth { get; private set; }
     public bool?            ExactMatch { get; private set; }
@@ -3495,6 +4121,35 @@ internal sealed class CliArgs
     // Session (.yagu-session) file options
     public string?          LoadSessionPath { get; private set; }
     public string?          SaveSessionPath { get; private set; }
+
+    // Content index (--use-index / --no-index per-search; management commands short-circuit the search).
+    public bool?            UseContentIndex { get; private set; }
+    public bool             IndexBuildRequested { get; private set; }
+    public string?          IndexBuildPath { get; private set; }
+    public bool             IndexRebuildRequested { get; private set; }
+    public string?          IndexRebuildPath { get; private set; }
+    public bool             IndexStatusRequested { get; private set; }
+    public string?          IndexStatusPath { get; private set; }
+    public string?          IndexDeletePath { get; private set; }
+    public bool             ClearIndexes { get; private set; }
+    public bool             IndexConfigRequested { get; private set; }
+    public bool             IndexConfigReset { get; private set; }
+    public List<string>     IndexConfigPairs { get; } = [];
+    public bool             IndexListRoots { get; private set; }
+    public string?          IndexAddRootPath { get; private set; }
+    public string?          IndexRemoveRootPath { get; private set; }
+    public string?          IndexSetRootFilterPath { get; private set; }
+    public string?          IndexClearRootFilterPath { get; private set; }
+    public string?          RootIncludeGlobs { get; private set; }
+    public string?          RootExcludeGlobs { get; private set; }
+
+    /// <summary>True when the args request an index management command (build/status/delete/clear/config)
+    /// that short-circuits the normal search pipeline.</summary>
+    public bool IsIndexManagementCommand =>
+        IndexBuildRequested || IndexRebuildRequested || IndexStatusRequested
+        || IndexDeletePath is not null || ClearIndexes || IndexConfigRequested
+        || IndexListRoots || IndexAddRootPath is not null || IndexRemoveRootPath is not null
+        || IndexSetRootFilterPath is not null || IndexClearRootFilterPath is not null;
 
     private CliArgs() { }
 
@@ -3554,7 +4209,71 @@ internal sealed class CliArgs
             if (Eq(tok, "--exclude-regex"))                  { a.ExcludeFilterModeIndex = 1; i++; continue; }
             if (Eq(tok, "--exclude-glob-mode"))              { a.ExcludeFilterModeIndex = 0; i++; continue; }
 
+            // Content index (opt-in accelerator). --use-index / --no-index are per-search; the rest are
+            // management commands that short-circuit the search.
+            if (Eq(tok, "--use-index"))                      { a.UseContentIndex = true; i++; continue; }
+            if (Eq(tok, "--no-index"))                       { a.UseContentIndex = false; i++; continue; }
+            if (Eq(tok, "--clear-indexes", "--clear-index")) { a.ClearIndexes = true; i++; continue; }
+            if (Eq(tok, "--build-index"))
+            {
+                a.IndexBuildRequested = true; i++;
+                if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexBuildPath = raw[i++].Trim('"'); }
+                continue;
+            }
+            if (Eq(tok, "--rebuild-index"))
+            {
+                a.IndexRebuildRequested = true; i++;
+                if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexRebuildPath = raw[i++].Trim('"'); }
+                continue;
+            }
+            if (Eq(tok, "--index-status"))
+            {
+                a.IndexStatusRequested = true; i++;
+                if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexStatusPath = raw[i++].Trim('"'); }
+                continue;
+            }
+            if (Eq(tok, "--index-config"))
+            {
+                a.IndexConfigRequested = true; i++;
+                if (i < raw.Length && !raw[i].StartsWith('-'))
+                {
+                    string cv = raw[i];
+                    if (string.Equals(cv, "reset", StringComparison.OrdinalIgnoreCase)) { a.IndexConfigReset = true; i++; }
+                    else if (cv.Contains('=', StringComparison.Ordinal)) { a.IndexConfigPairs.Add(cv); i++; }
+                }
+                continue;
+            }
+            if (Eq(tok, "--index-list-roots"))               { a.IndexListRoots = true; i++; continue; }
+            if (Eq(tok, "--index-add-root"))
+            {
+                i++;
+                if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexAddRootPath = raw[i++].Trim('"'); }
+                continue;
+            }
+            if (Eq(tok, "--index-remove-root"))
+            {
+                i++;
+                if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexRemoveRootPath = raw[i++].Trim('"'); }
+                continue;
+            }
+            if (Eq(tok, "--index-set-root-filter"))
+            {
+                i++;
+                if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexSetRootFilterPath = raw[i++].Trim('"'); }
+                continue;
+            }
+            if (Eq(tok, "--index-clear-root-filter"))
+            {
+                i++;
+                if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexClearRootFilterPath = raw[i++].Trim('"'); }
+                continue;
+            }
+
             string? v;
+            if (TryGetVal(raw, ref i, out v, "--root-include"))
+                { a.RootIncludeGlobs = v.Trim('"'); continue; }
+            if (TryGetVal(raw, ref i, out v, "--root-exclude"))
+                { a.RootExcludeGlobs = v.Trim('"'); continue; }
             if (TryGetVal(raw, ref i, out v, "--directory", "--dir"))
                 { a.Directory = v.Trim('"'); continue; }
             if (TryGetVal(raw, ref i, out v, "--pattern", "-p"))
@@ -3619,12 +4338,14 @@ internal sealed class CliArgs
             if (TryGetInt(raw, ref i, out n, "--file-lister-backend"))   { a.FileListerBackendIndex = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--max-matches-per-file"))  { a.MaxMatchesPerFile = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--max-matches-per-line"))  { a.MaxMatchesPerLine = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--file-io-timeout"))       { a.FileIoTimeoutSeconds = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--absolute-max-results"))  { a.AbsoluteMaxResults = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--max-depth"))             { a.MaxSearchDepth = n; continue; }
             if (TryGetVal(raw, ref i, out v, "--archive-extensions"))    { a.ArchiveExtensions = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--ocr-engine"))            { a.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(v); continue; }
             if (TryGetVal(raw, ref i, out v, "--ocr-model"))             { a.ImageOcrModel = AppSettings.NormalizeImageOcrModel(v); continue; }
             if (TryGetInt(raw, ref i, out n, "--ocr-max-side"))          { a.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(n); continue; }
+            if (TryGetInt(raw, ref i, out n, "--ocr-workers"))           { a.ImageOcrWorkerParallelism = AppSettings.NormalizeImageOcrWorkerParallelism(n); continue; }
             if (TryGetVal(raw, ref i, out v, "--admin-protected-paths")) { a.AdminProtectedPathSegments = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--created-after"))         { if (DateTimeOffset.TryParse(v, out var d)) a.CreatedAfter = d; continue; }
             if (TryGetVal(raw, ref i, out v, "--created-before"))        { if (DateTimeOffset.TryParse(v, out var d)) a.CreatedBefore = d; continue; }
@@ -3685,6 +4406,9 @@ internal sealed class CliArgs
             // Session file options
             if (TryGetVal(raw, ref i, out v, "--load-session"))           { a.LoadSessionPath = v.Trim('"'); continue; }
             if (TryGetVal(raw, ref i, out v, "--save-session"))           { a.SaveSessionPath = v.Trim('"'); continue; }
+
+            // Content index: delete one scope by root path (a path is required).
+            if (TryGetVal(raw, ref i, out v, "--delete-index"))           { a.IndexDeletePath = v.Trim('"'); continue; }
 
             // Positional: first non-flag is the pattern
             if (!tok.StartsWith('-') && a.Pattern is null)

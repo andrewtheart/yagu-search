@@ -1,9 +1,11 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Yagu.Helpers;
 using Yagu.Services;
+using Yagu.Services.Logging;
 
 namespace Yagu;
 
@@ -35,7 +37,7 @@ internal static class TelemetryConsentDialog
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("TelemetryConsent", $"Consent dialog failed: {ex.Message}", ex);
+                YaguLog.For("TelemetryConsent").LogWarning(ex, "Consent dialog failed: {Error}", ex.Message);
             }
             finally
             {
@@ -103,7 +105,7 @@ internal static class TelemetryConsentDialog
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("TelemetryConsent", $"Unable to persist telemetry consent: {ex.Message}", ex);
+                YaguLog.For("TelemetryConsent").LogWarning(ex, "Unable to persist telemetry consent: {Error}", ex.Message);
             }
         }
         finally

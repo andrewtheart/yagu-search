@@ -1,5 +1,6 @@
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
@@ -14,10 +15,12 @@ public sealed partial class HelpWindow : Window
 {
     private static nint s_webView2LoaderHandle;
     private readonly string _helpPath;
+    private readonly string _appTitle;
 
     public HelpWindow(IntPtr mainHwnd, string helpPath, string appTitle)
     {
         _helpPath = helpPath;
+        _appTitle = appTitle;
         InitializeComponent();
 
         // Title-bar-less modal: hide the OS caption strip reliably. Setting ExtendsContentIntoTitleBar
@@ -27,8 +30,6 @@ public sealed partial class HelpWindow : Window
         // all content -- including that button -- stays interactive.
         ExtendsContentIntoTitleBar = true;
 
-        AppTitleText.Text = appTitle;
-        HelpPathText.Text = helpPath;
         HelpWebView.Loaded += OnHelpWebViewLoaded;
 
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
@@ -142,7 +143,42 @@ public sealed partial class HelpWindow : Window
         ";
         string script = $"var s=document.createElement('style');s.textContent=`{darkCss}`;document.head.appendChild(s);";
         await sender.ExecuteScriptAsync(script);
+
+        // The navigation blade is the pandoc table of contents (nav#TOC) styled by help-style.html.
+        // Inject the running app's title/version into the blade header so it brands the sidebar.
+        string brandScript =
+            "(function(){var t=document.getElementById('TOC');if(!t||document.getElementById('toc-brand'))return;" +
+            "var d=document.createElement('div');d.id='toc-brand';" +
+            "var a=document.createElement('span');a.className='toc-brand-title';a.textContent=" + JsString("Yagu Help") + ";" +
+            "var b=document.createElement('span');b.className='toc-brand-sub';b.textContent=" + JsString(_appTitle) + ";" +
+            "d.appendChild(a);d.appendChild(b);t.insertBefore(d,t.firstChild);})();";
+        await sender.ExecuteScriptAsync(brandScript);
+
         LoadingPanel.Visibility = Visibility.Collapsed;
+    }
+
+    // Renders a string as a safe double-quoted JavaScript string literal for embedding in injected script.
+    private static string JsString(string value)
+    {
+        var sb = new StringBuilder(value.Length + 2);
+        sb.Append('"');
+        foreach (char c in value)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
+                    else sb.Append(c);
+                    break;
+            }
+        }
+        sb.Append('"');
+        return sb.ToString();
     }
 
 }

@@ -143,7 +143,7 @@ public sealed class FontContrastWarningServiceTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
 
         return dir?.FullName ?? throw new InvalidOperationException("Could not locate repository root.");

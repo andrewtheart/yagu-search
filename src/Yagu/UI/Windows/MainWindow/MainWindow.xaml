@@ -72,103 +72,136 @@
             </Button>
         </DataTemplate>
 
-        <DataTemplate x:Key="FileGroupResultTemplate" x:DataType="models:FileGroup">
-            <Expander AutomationProperties.AutomationId="FileGroupResultExpander"
-                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding" Collapsed="OnFileGroupCollapsed">
-                <Expander.Header>
-                    <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" DoubleTapped="OnFileGroupHeaderDoubleTapped" Loaded="OnFileGroupHeaderLoaded" Tag="{x:Bind FilePath}" Background="Transparent">
-                        <Grid.ContextFlyout>
-                            <MenuFlyout Opening="OnFileHeaderContextMenuOpening">
-                                <MenuFlyoutItem Text="Preview" Click="OnPreviewSingleFile" Tag="{x:Bind FilePath}">
-                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutItem Text="Preview all selected" Click="OnPreviewSelectedFiles" Tag="{x:Bind FilePath}">
-                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutSeparator />
-                                <MenuFlyoutItem Text="Copy Full Path" Click="OnCopyFileGroupPath" Tag="{x:Bind FilePath}">
-                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutItem Text="Open containing folder in Explorer" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}">
-                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xED25;" /></MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutSeparator />
-                                <MenuFlyoutItem Text="Copy Selected File Paths" Click="OnCopySelectedFilePaths">
-                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutItem Text="Copy Selected Files With Content" Click="OnCopySelectedFilesWithContent">
-                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutSeparator />
-                                <MenuFlyoutItem Text="Save Selected File Paths…" Click="OnSaveSelectedFilePaths">
-                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutItem Text="Save Selected Files With Content…" Click="OnSaveSelectedFilesWithContent">
-                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                            </MenuFlyout>
-                        </Grid.ContextFlyout>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="320" MinWidth="0" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
-                                  Style="{StaticResource CircularSelectionCheckBoxStyle}"
-                                  IsThreeState="False"
-                                  IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
-                                  Indeterminate="OnFileGroupCheckBoxIndeterminate"
-                                  Click="OnFileGroupCheckBoxClicked" />
-                        <StackPanel Grid.Column="1" Orientation="Vertical" Spacing="3" VerticalAlignment="Center" Margin="0,0,10,0">
-                            <Border Background="#1A6B5A" CornerRadius="4" Padding="8,2" HorizontalAlignment="Left" MinWidth="105"
-                                ToolTipService.ToolTip="Matches found inside the file's contents"
-                                Visibility="{x:Bind HasContentMatches, Mode=OneWay}">
-                                <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
+        <DataTemplate x:Key="FileGroupHeaderTemplate" x:DataType="models:FileGroup">
+            <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" DoubleTapped="OnFileGroupHeaderDoubleTapped" Loaded="OnFileGroupHeaderLoaded" Tag="{x:Bind FilePath}" Background="Transparent">
+                <Grid.ContextFlyout>
+                    <MenuFlyout Opening="OnFileHeaderContextMenuOpening">
+                        <MenuFlyoutItem Text="Preview" Click="OnPreviewSingleFile" Tag="{x:Bind FilePath}">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="Preview all selected" Click="OnPreviewSelectedFiles" Tag="{x:Bind FilePath}">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="Copy Full Path" Click="OnCopyFileGroupPath" Tag="{x:Bind FilePath}">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="Open containing folder in Explorer" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xED25;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="Copy Selected File Paths" Click="OnCopySelectedFilePaths">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="Copy Selected Files With Content" Click="OnCopySelectedFilesWithContent">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="Save Selected File Paths…" Click="OnSaveSelectedFilePaths">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="Save Selected Files With Content…" Click="OnSaveSelectedFilesWithContent">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="Open with default application" Click="OnOpenFileGroupWithDefaultApplication" Tag="{x:Bind FilePath}">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7AC;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                    </MenuFlyout>
+                </Grid.ContextFlyout>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="320" MinWidth="0" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
+                          Style="{StaticResource CircularSelectionCheckBoxStyle}"
+                          IsThreeState="False"
+                          IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
+                          Indeterminate="OnFileGroupCheckBoxIndeterminate"
+                          Click="OnFileGroupCheckBoxClicked" />
+                <Grid Grid.Column="1" VerticalAlignment="Center" Margin="0,0,10,0">
+                    <StackPanel Orientation="Vertical" Spacing="3" VerticalAlignment="Center">
+                        <Border Background="#1A6B5A" CornerRadius="4" Padding="6,2" HorizontalAlignment="Left" MinWidth="112"
+                            ToolTipService.ToolTip="Matches found inside the file's contents"
+                            Visibility="{x:Bind HasContentMatches, Mode=OneWay}">
+                            <Grid ColumnSpacing="4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
                                     <FontIcon Glyph="&#xE8A5;" FontSize="10" Foreground="#B0E0D0" VerticalAlignment="Center" />
-                                    <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
+                                    <TextBlock VerticalAlignment="Center" TextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
                                         <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
                                     </TextBlock>
                                 </StackPanel>
-                            </Border>
-                            <Border Background="#284B7A" CornerRadius="4" Padding="8,2" HorizontalAlignment="Center"
-                                ToolTipService.ToolTip="The file name matches your search"
-                                Visibility="{x:Bind HasFileNameMatch, Mode=OneWay}">
-                                <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
-                                    <FontIcon Glyph="&#xE8AC;" FontSize="10" Foreground="#A9CBF2" VerticalAlignment="Center" />
-                                    <TextBlock VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#A9CBF2" Text="file name" />
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                        <StackPanel Grid.Column="2" MinWidth="0" VerticalAlignment="Center">
-                            <TextBlock Text="{x:Bind FileName}"
-                                       ToolTipService.ToolTip="{x:Bind FileName}"
-                                       FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Text="{x:Bind DirectoryName}" Tag="CompactDir"
-                                       ToolTipService.ToolTip="{x:Bind DirectoryName}"
-                                       FontSize="13" Opacity="0.55" TextTrimming="CharacterEllipsis"
-                                       Visibility="Collapsed" />
-                            <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
-                                <TextBlock Opacity="0.45" FontSize="11">
-                                    <Run Text="Modified:" /><Run Text=" " /><Run Text="{x:Bind FormattedDate, Mode=OneWay}" /><Run Text=" | Size:" /><Run Text=" " /><Run Text="{x:Bind FormattedSize, Mode=OneWay}" />
-                                </TextBlock>
+                                <FontIcon Grid.Column="2" Glyph="&#xE9F5;" FontSize="11" Foreground="#C9B8F0" VerticalAlignment="Center"
+                                    ToolTipService.ToolTip="The content index selected this file as a candidate. Match content is always read live from the file."
+                                    Visibility="{x:Bind IsIndexAccelerated, Mode=OneWay}" />
+                            </Grid>
+                        </Border>
+                        <Border Background="#284B7A" CornerRadius="4" Padding="6,2" HorizontalAlignment="Left" MinWidth="112"
+                            ToolTipService.ToolTip="The file name matches your search"
+                            Visibility="{x:Bind HasFileNameMatch, Mode=OneWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
+                                <FontIcon Glyph="&#xE8AC;" FontSize="10" Foreground="#A9CBF2" VerticalAlignment="Center" />
+                                <TextBlock VerticalAlignment="Center" TextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#A9CBF2" Text="file name" />
                             </StackPanel>
-                        </StackPanel>
-                        <TextBlock Grid.Column="3" Text="{x:Bind DirectoryName}" Tag="WideDir"
-                                   ToolTipService.ToolTip="{x:Bind DirectoryName}"
-                                   Opacity="0.45" FontSize="11" VerticalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis"
-                                   HorizontalAlignment="Left" Margin="12,0,4,0" />
-                        <Button Grid.Column="4" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}"
-                                Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                Background="Transparent" BorderThickness="0"
-                                VerticalAlignment="Center" Margin="4,0,0,0"
-                                ToolTipService.ToolTip="Open containing folder in Explorer">
-                            <FontIcon Glyph="&#xED25;" FontSize="12" />
-                        </Button>
-                    </Grid>
-                </Expander.Header>
+                        </Border>
+                    </StackPanel>
+                </Grid>
+                <StackPanel Grid.Column="2" MinWidth="0" VerticalAlignment="Center">
+                    <TextBlock Text="{x:Bind FileName}"
+                               ToolTipService.ToolTip="{x:Bind FileName}"
+                               FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{x:Bind DirectoryName}" Tag="CompactDir"
+                               ToolTipService.ToolTip="{x:Bind DirectoryName}"
+                               FontSize="13" Opacity="0.55" TextTrimming="CharacterEllipsis"
+                               Visibility="Collapsed" />
+                    <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
+                        <TextBlock Opacity="0.45" FontSize="11">
+                            <Run Text="Modified:" /><Run Text=" " /><Run Text="{x:Bind FormattedDate, Mode=OneWay}" /><Run Text=" | Size:" /><Run Text=" " /><Run Text="{x:Bind FormattedSize, Mode=OneWay}" />
+                        </TextBlock>
+                    </StackPanel>
+                </StackPanel>
+                <TextBlock Grid.Column="3" Text="{x:Bind DirectoryName}" Tag="WideDir"
+                           ToolTipService.ToolTip="{x:Bind DirectoryName}"
+                           Opacity="0.45" FontSize="11" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           HorizontalAlignment="Left" Margin="12,0,4,0" />
+                <Button Grid.Column="4" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}"
+                        Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                        Background="Transparent" BorderThickness="0"
+                        VerticalAlignment="Center" Margin="4,0,0,0"
+                        ToolTipService.ToolTip="Open containing folder in Explorer">
+                    <FontIcon Glyph="&#xED25;" FontSize="12" />
+                </Button>
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="FileGroupResultTemplate" x:DataType="models:FileGroup">
+            <Grid>
+                <!-- No-drawer (file-name-only) row: inset its header by the SAME padding the Expander applies
+                     to its header content, so the selection radio lines up with the drawer rows' radio. -->
+                <ContentControl Content="{Binding}"
+                                ContentTemplate="{StaticResource FileGroupHeaderTemplate}"
+                                HorizontalContentAlignment="Stretch"
+                                Margin="{ThemeResource ExpanderHeaderPadding}"
+                                Visibility="{x:Bind IsFileNameOnlyMatch, Mode=OneWay}" />
+                <Expander AutomationProperties.AutomationId="FileGroupResultExpander"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                          Visibility="{x:Bind HasContentMatches, Mode=OneWay}"
+                          IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}"
+                          Expanding="OnFileGroupExpanding" Collapsed="OnFileGroupCollapsed">
+                    <Expander.Header>
+                        <ContentControl Content="{Binding}"
+                                        ContentTemplate="{StaticResource FileGroupHeaderTemplate}"
+                                        HorizontalContentAlignment="Stretch" />
+                    </Expander.Header>
                 <StackPanel>
                     <ItemsControl ItemsSource="{x:Bind VisibleResults}">
                         <ItemsControl.ItemTemplate>
@@ -192,15 +225,20 @@
                                     </ItemsControl>
                                     <Grid Padding="0,2,8,2" ColumnSpacing="3" Tapped="OnMatchLineTapped" Background="Transparent">
                                         <Grid.ContextFlyout>
-                                            <MenuFlyout>
-                                                <MenuFlyoutItem Text="Copy Selected Lines" Click="OnCopySelectedLines">
+                                            <MenuFlyout Opening="OnMatchLineContextMenuOpening">
+                                                <MenuFlyoutItem Text="Copy line" Click="OnCopySingleLine">
                                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
                                                 </MenuFlyoutItem>
-                                                <MenuFlyoutItem Text="Export Selected to File…" Click="OnExportSelectedLines">
-                                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                                                <MenuFlyoutItem Text="Copy lines" Click="OnCopySelectedLines" Visibility="Collapsed">
+                                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
                                                 </MenuFlyoutItem>
                                                 <MenuFlyoutSeparator />
-                                                <MenuFlyoutItem Text="Copy This Line" Click="OnCopySingleLine" />
+                                                <MenuFlyoutItem Text="Export this to file…" Click="OnExportSingleLine">
+                                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                                                </MenuFlyoutItem>
+                                                <MenuFlyoutItem Text="Export selected to file…" Click="OnExportSelectedLines" Visibility="Collapsed">
+                                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                                                </MenuFlyoutItem>
                                             </MenuFlyout>
                                         </Grid.ContextFlyout>
                                         <Grid.ColumnDefinitions>
@@ -214,14 +252,14 @@
                                                       Click="OnMatchLineCheckBoxClicked"
                                                       Loaded="OnMatchLineNumberLoaded"
                                                       ToolTipService.ToolTip="{x:Bind LineLocationTooltip, Mode=OneWay}"
-                                                      MinWidth="34" MinHeight="22" Padding="5,1" Margin="4,0,2,0"
+                                                      MinWidth="54" MinHeight="22" Padding="5,1" Margin="4,0,2,0"
                                                       CornerRadius="4"
                                                       VerticalAlignment="Center"
-                                                      HorizontalContentAlignment="Right">
+                                                      HorizontalContentAlignment="Center">
                                            <TextBlock Text="{x:Bind LineLocationDisplay, Mode=OneWay}"
                                                       FontFamily="Consolas"
                                                       FontSize="12"
-                                                      TextAlignment="Right"
+                                                      TextAlignment="Center"
                                                       FontWeight="SemiBold" />
                                         </ToggleButton>
                                         <RichTextBlock Grid.Column="1" TextTrimming="CharacterEllipsis" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="False" Loaded="OnMatchLineLoaded" VerticalAlignment="Center" />
@@ -260,6 +298,7 @@
                                      Padding="4,4,0,2" FontSize="12" />
                 </StackPanel>
             </Expander>
+            </Grid>
         </DataTemplate>
 
         <local:ResultListItemTemplateSelector x:Key="ResultListItemTemplateSelector"
@@ -320,8 +359,11 @@
             </Button>
         </StackPanel>
 
+        <!-- Row 1 banners (both collapsed by default): admin-elevation notice, then the non-modal
+             app-update notification. Stacked so they never overlap if both are shown at once. -->
+        <StackPanel Grid.Row="1" Spacing="0">
         <!-- Admin elevation banner (hidden when running elevated) -->
-        <Border x:Name="AdminBanner" Grid.Row="1" Visibility="Collapsed"
+        <Border x:Name="AdminBanner" Visibility="Collapsed"
                 Background="#332000" Padding="10,4,10,4">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -354,6 +396,27 @@
             </Grid>
         </Border>
 
+        <!-- Non-modal app-update notification. Shown only in Automatic mode when a genuinely newer
+             release is found (see MainWindow.AppUpdate.cs); Title/Message are set from code-behind.
+             Close (X) = remind me later (re-surfaces after the next throttled check). -->
+        <InfoBar x:Name="AppUpdateInfoBar"
+                 IsOpen="False"
+                 Severity="Informational"
+                 Margin="16,6,16,0"
+                 CloseButtonClick="OnAppUpdateInfoBarRemindLater">
+            <InfoBar.ActionButton>
+                <Button x:Name="AppUpdateInfoBarViewButton" Content="View release"
+                        Click="OnAppUpdateInfoBarViewRelease" />
+            </InfoBar.ActionButton>
+            <InfoBar.Content>
+                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+                    <HyperlinkButton x:Name="AppUpdateInfoBarSkipButton" Content="Skip this version"
+                                     Click="OnAppUpdateInfoBarSkipVersion" Padding="0" />
+                </StackPanel>
+            </InfoBar.Content>
+        </InfoBar>
+        </StackPanel>
+
         <!-- Search controls card -->
         <Border x:Name="SearchControlsBorder" Grid.Row="2" Margin="16,10,16,4" Padding="16,18,16,6"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -379,6 +442,7 @@
                     <AutoSuggestBox
                         x:Name="DirectoryBox"
                         MaxHeight="60"
+                        MaxSuggestionListHeight="{x:Bind ViewModel.AutocompleteDropdownMaxHeight, Mode=OneWay}"
                         PlaceholderText="Directory to search (leave empty to search all drives)"
                         Text="{x:Bind ViewModel.Directory, Mode=TwoWay}"
                         ItemsSource="{x:Bind ViewModel.DirectorySuggestions, Mode=OneWay}"
@@ -407,16 +471,36 @@
                                 <Setter Property="TextWrapping" Value="Wrap" />
                                 <Setter Property="VerticalContentAlignment" Value="Center" />
                                 <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
-                                <Setter Property="Padding" Value="10,6,136,6" />
+                                <Setter Property="Padding" Value="10,6,176,6" />
                             </Style>
                         </AutoSuggestBox.TextBoxStyle>
                     </AutoSuggestBox>
-                    <!-- Pin + Browse embedded at the trailing edge of the directory box (overlay, like
-                         the query box's clear button). The star pins the current directory as the
-                         startup default; Browse opens the folder picker. -->
+                    <!-- Pin + Index + Browse embedded at the trailing edge of the directory box (overlay,
+                         like the query box's clear button). The star pins the current directory as the
+                         startup default; the index glyph adds it to the content index; Browse opens the
+                         folder picker. -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Stretch"
                                 Margin="0,1,1,1">
+                        <StackPanel.Resources>
+                            <!-- Selected (checked) look for the pin/index toggles: NO blue fill or border.
+                                 Keep the chrome identical to the unselected button and instead tint the
+                                 glyph itself with the accent colour (matches the divider style; see the
+                                 DirectoryToggleButtons_SelectedTintsGlyphNotChrome pin). -->
+                            <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="Transparent" />
+                            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="{ThemeResource SubtleFillColorSecondary}" />
+                            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="{ThemeResource SubtleFillColorTertiary}" />
+                            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedDisabled" Color="Transparent" />
+                            <SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="{ThemeResource SystemAccentColor}" />
+                            <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver" Color="{ThemeResource SystemAccentColor}" />
+                            <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed" Color="{ThemeResource SystemAccentColor}" />
+                            <SolidColorBrush x:Key="ToggleButtonForegroundCheckedDisabled" Color="{ThemeResource TextFillColorDisabled}" />
+                            <SolidColorBrush x:Key="ToggleButtonBorderBrushChecked" Color="{ThemeResource CardStrokeColorDefault}" />
+                            <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPointerOver" Color="{ThemeResource CardStrokeColorDefault}" />
+                            <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPressed" Color="{ThemeResource CardStrokeColorDefault}" />
+                            <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedDisabled" Color="{ThemeResource CardStrokeColorDefault}" />
+                        </StackPanel.Resources>
                         <ToggleButton x:Name="PinStartupDirectoryButton" Click="OnPinStartupDirectory"
+                                      AccessKey="P"
                                       ToolTipService.ToolTip="Pin this directory as the startup default"
                                       VerticalAlignment="Stretch" Padding="10,0" MinWidth="0"
                                       CornerRadius="0"
@@ -425,7 +509,18 @@
                                       BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
                             <FontIcon x:Name="PinStartupDirectoryIcon" Glyph="&#xE734;" FontSize="14" />
                         </ToggleButton>
-                        <Button x:Name="BrowseDirectoryButton" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder"
+                        <ToggleButton x:Name="IndexDirectoryButton" Click="OnIndexCurrentDirectory"
+                                      AccessKey="I"
+                                      ToolTipService.ToolTip="Add this directory to the content index"
+                                      VerticalAlignment="Stretch" Padding="10,0" MinWidth="0"
+                                      CornerRadius="0"
+                                      Background="Transparent"
+                                      BorderThickness="1,0,0,0"
+                                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                            <FontIcon x:Name="IndexDirectoryIcon" Glyph="&#xE8F1;" FontSize="14" />
+                        </ToggleButton>
+                        <Button x:Name="BrowseDirectoryButton" Click="OnBrowseDirectory"
+                                AccessKey="B" ToolTipService.ToolTip="Browse for folder"
                                 VerticalAlignment="Stretch"
                                 Padding="10,0" MinWidth="0"
                                 CornerRadius="0,4,4,0"
@@ -450,13 +545,13 @@
                         x:Name="QueryBox"
                         MinHeight="60"
                         MaxHeight="240"
+                        MaxSuggestionListHeight="{x:Bind ViewModel.AutocompleteDropdownMaxHeight, Mode=OneWay}"
                         PlaceholderText="{x:Bind ViewModel.QueryPlaceholderText, Mode=OneWay}"
                         Text="{x:Bind ViewModel.Query, Mode=TwoWay}"
                         QuerySubmitted="OnQuerySubmitted"
                         TextChanged="OnQueryTextChanged"
                         SizeChanged="OnSearchInputSizeChanged"
-                        LostFocus="OnQueryLostFocus"
-                        KeyDown="OnQueryKeyDown">
+                        LostFocus="OnQueryLostFocus">
                         <AutoSuggestBox.ItemTemplate>
                             <DataTemplate x:DataType="models:HistorySuggestion">
                                 <Grid>
@@ -478,6 +573,7 @@
                              flows underneath those controls. -->
                         <AutoSuggestBox.TextBoxStyle>
                             <Style TargetType="TextBox" BasedOn="{StaticResource AutoSuggestBoxTextBoxStyle}">
+                                <Setter Property="AcceptsReturn" Value="False" />
                                 <Setter Property="TextWrapping" Value="Wrap" />
                                 <Setter Property="VerticalContentAlignment" Value="Top" />
                                 <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
@@ -517,6 +613,7 @@
                             </StackPanel>
                         </Border>
                         <ToggleButton x:Name="CaseSensitiveToggle"
+                                      AccessKey="C"
                                       IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}"
                                       ToolTipService.ToolTip="Match Case (Alt+C)"
                                       Padding="4,2" MinWidth="0" MinHeight="0"
@@ -525,6 +622,7 @@
                             <TextBlock Text="Aa" FontSize="12" FontWeight="SemiBold" />
                         </ToggleButton>
                         <ToggleButton x:Name="RegexToggle"
+                                      AccessKey="R"
                                       IsChecked="{x:Bind ViewModel.UseRegex, Mode=TwoWay}"
                                       ToolTipService.ToolTip="Use Regular Expression (Alt+R). This will be enabled if Multiline is enabled"
                                       Padding="4,2" MinWidth="0" MinHeight="0"
@@ -533,6 +631,7 @@
                             <TextBlock Text=".*" FontSize="12" FontFamily="Consolas" />
                         </ToggleButton>
                         <ToggleButton x:Name="MultilineToggle"
+                                      AccessKey="M"
                                       IsChecked="{x:Bind ViewModel.Multiline, Mode=TwoWay}"
                                       ToolTipService.ToolTip="Match Across Lines / Multiline — run the query over the whole file so a match can span line breaks. Slower &amp; heavier; best with a narrow scope. (Alt+M)"
                                       Padding="4,2" MinWidth="0" MinHeight="0"
@@ -541,6 +640,7 @@
                             <TextBlock Text="\n" FontSize="12" FontFamily="Consolas" />
                         </ToggleButton>
                         <ToggleButton x:Name="ExactMatchToggle"
+                                      AccessKey="E"
                                       IsChecked="{x:Bind ViewModel.ExactMatch, Mode=TwoWay}"
                                       ToolTipService.ToolTip="Exact Match — on: treat the whole query as one term. Off: split on spaces and match any term. (Alt+E). Ignored while Multiline is on"
                                       Padding="4,2" MinWidth="0" MinHeight="0"
@@ -649,6 +749,7 @@
                      Opened/Closed handlers. -->
                 <Button x:Name="AdvancedOptionsToggle"
                         Grid.Column="0"
+                        AccessKey="A"
                         HorizontalAlignment="Left" VerticalAlignment="Center"
                         Background="Transparent" BorderThickness="0"
                         MinWidth="0" MinHeight="48" Padding="4,0" FontSize="12">
@@ -733,6 +834,12 @@
                                             </ListViewItem>
                                             <ListViewItem>
                                                 <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <FontIcon Glyph="&#xE945;" FontSize="12" />
+                                                    <TextBlock Text="Quick searches" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </ListViewItem>
+                                            <ListViewItem>
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
                                                     <FontIcon Glyph="&#xE71C;" FontSize="12" />
                                                     <TextBlock Text="Filters" VerticalAlignment="Center" />
                                                 </StackPanel>
@@ -762,18 +869,6 @@
                                         <!-- Search tab -->
                                         <StackPanel x:Name="AdvancedOptionsSearchTabContent" Spacing="14">
                                             <TextBlock Text="Search" FontSize="16" FontWeight="SemiBold" />
-                                            <StackPanel Spacing="6">
-                                                <TextBlock Text="Quick searches" Opacity="0.75" FontWeight="SemiBold" />
-                                                <Button x:Name="FindCodeAnnotationsButton"
-                                                        Click="OnFindCodeAnnotations"
-                                                        HorizontalAlignment="Left"
-                                                        ToolTipService.ToolTip="Load a whole-word regex over TODO, FIXME, HACK, BUG, XXX, NOTE, OPTIMIZE and REVIEW, then search — surfaces every outstanding code annotation.">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <FontIcon Glyph="&#xE8A5;" FontSize="14" />
-                                                        <TextBlock Text="Find code annotations (TODO / FIXME…)" VerticalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                            </StackPanel>
                                             <StackPanel Spacing="6">
                                                 <TextBlock Text="Search mode" Opacity="0.75" />
                                                 <ComboBox SelectedIndex="{x:Bind ViewModel.SearchModeIndex, Mode=TwoWay}"
@@ -888,6 +983,88 @@
                                                                  LostFocus="OnFilterBoxLostFocus" />
                                                     </Grid>
                                                 </StackPanel>
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <!-- Quick searches tab -->
+                                        <StackPanel x:Name="AdvancedOptionsQuickSearchesTabContent" Spacing="10" Visibility="Collapsed">
+                                            <TextBlock Text="Quick searches" FontSize="16" FontWeight="SemiBold" />
+                                            <TextBlock Opacity="0.75" TextWrapping="Wrap"
+                                                       Text="One-click searches for things developers hunt for across a codebase. Each loads a regex into the box (Traditional mode) and runs immediately over the current directory." />
+                                            <StackPanel x:Name="QuickSearchesPanel" Spacing="6">
+                                                <Button x:Name="FindCodeAnnotationsButton"
+                                                        Click="OnFindCodeAnnotations"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                        ToolTipService.ToolTip="Load a whole-word regex over TODO, FIXME, HACK, BUG, XXX, NOTE, OPTIMIZE and REVIEW, then search — surfaces every outstanding code annotation.">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <FontIcon Glyph="&#xE8A5;" FontSize="14" />
+                                                        <TextBlock Text="Find code annotations (TODO / FIXME…)" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Tag="merge-conflicts" Click="OnQuickSearch"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                        ToolTipService.ToolTip="Find unresolved Git merge-conflict markers left in files after a bad merge.">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <FontIcon Glyph="&#xE8AB;" FontSize="14" />
+                                                        <TextBlock Text="Merge conflict markers" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Tag="debug-output" Click="OnQuickSearch"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                        ToolTipService.ToolTip="Find leftover debug output — console.log, print(), printf, System.out.print, Debug.Write/Log, fmt.Print.">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <FontIcon Glyph="&#xEBE8;" FontSize="14" />
+                                                        <TextBlock Text="Leftover debug output" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Tag="secrets" Click="OnQuickSearch"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                        ToolTipService.ToolTip="First-pass scan for hardcoded credentials — assignments to api key, secret, password, token, access key, or connection string.">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <FontIcon Glyph="&#xE72E;" FontSize="14" />
+                                                        <TextBlock Text="Possible secrets / credentials" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Tag="urls" Click="OnQuickSearch"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                        ToolTipService.ToolTip="Find every http(s) URL — handy for auditing endpoints and links.">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <FontIcon Glyph="&#xE71B;" FontSize="14" />
+                                                        <TextBlock Text="URLs / links" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Tag="emails" Click="OnQuickSearch"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                        ToolTipService.ToolTip="Find email addresses in the files.">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <FontIcon Glyph="&#xE715;" FontSize="14" />
+                                                        <TextBlock Text="Email addresses" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Tag="empty-catch" Click="OnQuickSearch"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                        ToolTipService.ToolTip="Find empty catch blocks that silently swallow exceptions.">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <FontIcon Glyph="&#xE7BA;" FontSize="14" />
+                                                        <TextBlock Text="Empty catch blocks" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Tag="deprecated" Click="OnQuickSearch"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                        ToolTipService.ToolTip="Find APIs marked deprecated or obsolete — @deprecated, [Obsolete], @Deprecated.">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <FontIcon Glyph="&#xE81C;" FontSize="14" />
+                                                        <TextBlock Text="Deprecated / obsolete markers" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Tag="guids" Click="OnQuickSearch"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                        ToolTipService.ToolTip="Find GUIDs / UUIDs in the files.">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <FontIcon Glyph="&#xE8AC;" FontSize="14" />
+                                                        <TextBlock Text="GUIDs / UUIDs" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
                                             </StackPanel>
                                         </StackPanel>
 
@@ -1105,6 +1282,14 @@
                                                    <FontIcon Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
                                                              Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                                              ToolTipService.ToolTip="When on, PDF files are converted to text on a background queue (via the bundled Xpdf pdftotext) and their extracted text is searched. Off by default. Extraction runs on a separate thread so it never slows the file scan; PDF matches appear as they finish. Only the embedded text layer is read — scanned/image-only PDFs yield no text." />
+                                               </StackPanel>
+                                               <StackPanel x:Name="UseContentIndexRow" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                   <ToggleSwitch OnContent="Use content index" OffContent="Use content index"
+                                                                 IsOn="{x:Bind ViewModel.UseContentIndex, Mode=TwoWay}"
+                                                                 MinWidth="0" />
+                                                   <FontIcon Glyph="&#xE9F5;" FontSize="12" VerticalAlignment="Center"
+                                                             Foreground="{ThemeResource SystemFillColorAttentionBrush}"
+                                                             ToolTipService.ToolTip="When on, this search uses the opt-in persistent content index to skip files that cannot contain a match, then verifies the rest live — an accelerator only. Mirrors the Indexing settings default and requires content indexing to be enabled in Settings ▸ Indexing. It never changes results and is independent of image/PDF/archive search. Equivalent to the CLI --use-index / --no-index flags." />
                                                </StackPanel>
                                             </StackPanel>
                                         </StackPanel>
@@ -1348,14 +1533,10 @@
             </Grid>
         </Border>
 
-        <!-- Status / progress -->
+        <!-- Status / progress: session progress, fallback/error text, and the semantic-status row.
+             The SEARCH progress bar + percentage is a floating overlay (SearchProgressOverlay, below) so it
+             never reserves flow height nor pushes the results/preview panes down. -->
         <StackPanel x:Name="SearchStatusPanel" Grid.Row="3" Padding="16,2,16,2" Spacing="4">
-            <ProgressBar
-                Visibility="{x:Bind ViewModel.IsSearching, Mode=OneWay}"
-                Maximum="{x:Bind ViewModel.TotalFiles, Mode=OneWay}"
-                Value="{x:Bind ViewModel.FilesScanned, Mode=OneWay}"
-                IsIndeterminate="False" CornerRadius="3" Height="6"
-                ToolTipService.ToolTip="{x:Bind ViewModel.ProgressTooltip, Mode=OneWay}" />
             <Grid Visibility="{x:Bind ViewModel.IsSessionBusy, Mode=OneWay}" ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -1390,6 +1571,36 @@
             </StackPanel>
         </StackPanel>
 
+        <!-- Search progress overlay: the determinate bar + percentage float in the gap between the search
+             card and the results/preview panes. Grid.RowSpan into the split-pane (star) row means the Auto
+             ProgressRow never grows, so showing/hiding it never shifts the panes (unlike reserving height).
+             A small negative top margin centers the bar on the inter-card gap so it does not cover the
+             results header, and IsHitTestVisible=False keeps the header buttons underneath clickable. -->
+        <Grid x:Name="SearchProgressOverlay" Grid.Row="3" Grid.RowSpan="2"
+              VerticalAlignment="Top" HorizontalAlignment="Left" Margin="16,-6,16,0" ColumnSpacing="8"
+              Canvas.ZIndex="6" IsHitTestVisible="False"
+              Visibility="{x:Bind ViewModel.IsSearchActive, Mode=OneWay}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ProgressBar Grid.Column="0"
+                         Maximum="{x:Bind ViewModel.TotalFiles, Mode=OneWay}"
+                         Value="{x:Bind ViewModel.FilesScanned, Mode=OneWay}"
+                         IsIndeterminate="{x:Bind ViewModel.SearchProgressIndeterminate, Mode=OneWay}" CornerRadius="3" Height="6"
+                         VerticalAlignment="Center"
+                         ToolTipService.ToolTip="{x:Bind ViewModel.ProgressTooltip, Mode=OneWay}" />
+            <TextBlock x:Name="SearchProgressPercentText" Grid.Column="1"
+                       MinWidth="34"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Center"
+                       TextAlignment="Right"
+                       FontSize="11"
+                       FontWeight="SemiBold"
+                       Opacity="0.8"
+                       Text="{x:Bind ViewModel.SearchProgressRightLabel, Mode=OneWay}" />
+        </Grid>
+
         <!-- Split pane: results + preview -->
           <Grid x:Name="SplitPaneGrid" Grid.Row="4" Margin="16,2,16,4"
               SizeChanged="OnTopExpandedPreviewLayoutSourceSizeChanged">
@@ -1407,7 +1618,7 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="0" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
@@ -1419,21 +1630,32 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                        <DropDownButton Height="28" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Sort results">
+                        <CheckBox x:Name="SelectAllFilesCheckBox"
+                                  Style="{StaticResource CircularSelectionCheckBoxStyle}"
+                                  ToolTipService.ToolTip="Select / deselect all files"
+                                  IsThreeState="False"
+                                  IsChecked="False"
+                                  Width="24" Height="24" MinWidth="0" MinHeight="0" Padding="0"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  Loaded="OnSelectAllFilesLoaded"
+                                  Indeterminate="OnSelectAllFilesIndeterminate"
+                                  Checked="OnSelectAllFilesChecked"
+                                  Unchecked="OnSelectAllFilesUnchecked" />
+                        <DropDownButton Height="28" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" AccessKey="S" ToolTipService.ToolTip="Sort results">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE8CB;" FontSize="12" />
                                 <TextBlock Text="Sort" />
                             </StackPanel>
                             <DropDownButton.Flyout>
                                 <Flyout x:Name="SortFlyout" Placement="BottomEdgeAlignedLeft" Opening="OnSortFlyoutOpening">
-                                    <StackPanel MinWidth="154" Padding="8,6" Spacing="2">
+                                    <StackPanel MinWidth="154" Padding="8,4" Spacing="1">
                                         <Button x:Name="SortNoneButton" Content="None" Click="OnSortNone"
-                                            MinHeight="32" Padding="8,0"
+                                            MinHeight="28" Padding="8,0"
                                                 HorizontalAlignment="Stretch"
                                             HorizontalContentAlignment="Left"
                                             Background="Transparent"
                                             BorderThickness="0" />
-                                        <Grid MinHeight="32" ColumnSpacing="10" Padding="8,0">
+                                        <Grid MinHeight="28" ColumnSpacing="10" Padding="8,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
@@ -1454,7 +1676,7 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
-                                        <Grid MinHeight="32" ColumnSpacing="10" Padding="8,0">
+                                        <Grid MinHeight="28" ColumnSpacing="10" Padding="8,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
@@ -1475,7 +1697,7 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
-                                        <Grid MinHeight="32" ColumnSpacing="10" Padding="8,0">
+                                        <Grid MinHeight="28" ColumnSpacing="10" Padding="8,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
@@ -1496,7 +1718,7 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
-                                        <Grid MinHeight="32" ColumnSpacing="10" Padding="8,0">
+                                        <Grid MinHeight="28" ColumnSpacing="10" Padding="8,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
@@ -1517,7 +1739,7 @@
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
-                                        <Grid MinHeight="32" ColumnSpacing="10" Padding="8,0">
+                                        <Grid MinHeight="28" ColumnSpacing="10" Padding="8,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
@@ -1542,13 +1764,19 @@
                                 </Flyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
-                        <DropDownButton Height="28" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Group results by…">
+                        <DropDownButton Height="28" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" AccessKey="G" ToolTipService.ToolTip="Group results by…">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE8FD;" FontSize="12" />
                                 <TextBlock Text="Group" />
                             </StackPanel>
                             <DropDownButton.Flyout>
-                                <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                                <MenuFlyout Placement="BottomEdgeAlignedLeft" Opening="OnGroupMenuOpening">
+                                    <MenuFlyoutItem x:Name="GroupBreadcrumbItem" IsEnabled="False" Visibility="Collapsed">
+                                        <MenuFlyoutItem.Icon>
+                                            <FontIcon Glyph="&#xE73E;" FontSize="12" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutSeparator x:Name="GroupBreadcrumbSeparator" Visibility="Collapsed" />
                                     <MenuFlyoutItem Text="None" Click="OnGroupModeNone" />
                                     <MenuFlyoutSubItem Text="Folder">
                                         <MenuFlyoutItem Text="A-Z" Click="OnGroupFolderAZ" />
@@ -1577,13 +1805,19 @@
                                 </MenuFlyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
-                        <DropDownButton x:Name="ResultsFilterButton" Height="28" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Filter results">
+                        <DropDownButton x:Name="ResultsFilterButton" AccessKey="F" Height="28" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Filter results">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE71C;" FontSize="12" />
                                 <TextBlock Text="Filter" />
                             </StackPanel>
                             <DropDownButton.Flyout>
-                                <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                                <MenuFlyout Placement="BottomEdgeAlignedLeft" Opening="OnFilterMenuOpening">
+                                    <MenuFlyoutItem x:Name="FilterBreadcrumbItem" IsEnabled="False" Visibility="Collapsed">
+                                        <MenuFlyoutItem.Icon>
+                                            <FontIcon Glyph="&#xE73E;" FontSize="12" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutSeparator x:Name="FilterBreadcrumbSeparator" Visibility="Collapsed" />
                                     <MenuFlyoutSubItem Text="By date">
                                         <MenuFlyoutItem Text="Any date" Click="OnDateFilterNone" />
                                         <MenuFlyoutSeparator />
@@ -1662,40 +1896,22 @@
                                 </Flyout>
                             </Button.Flyout>
                         </Button>
+                        <Button x:Name="ExpandResultsButton"
+                                Click="OnExpandResultsPanel"
+                                Background="Transparent" BorderThickness="0"
+                                Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                Padding="0" VerticalAlignment="Center"
+                                ToolTipService.ToolTip="Expand file list / collapse preview">
+                            <FontIcon x:Name="ExpandResultsIcon" Glyph="&#xE740;" FontSize="12" />
+                        </Button>
                         </StackPanel>
                         <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.DegradedNoticeText, Mode=OneWay}"
                                    Visibility="{x:Bind ViewModel.MemoryPressureWarningVisibility, Mode=OneWay}"
                                    HorizontalAlignment="Right" VerticalAlignment="Center"
-                                   FontSize="12" Foreground="DarkOrange" Opacity="0.9" Margin="8,0,4,0" />
-                        <Button x:Name="ExpandResultsButton" Grid.Column="2"
-                                Click="OnExpandResultsPanel"
-                                Background="Transparent" BorderThickness="0"
-                                Width="28" Height="28" MinWidth="0" MinHeight="0"
-                                Padding="0" Margin="0,0,8,0" VerticalAlignment="Center"
-                                ToolTipService.ToolTip="Expand file list / collapse preview">
-                            <FontIcon x:Name="ExpandResultsIcon" Glyph="&#xE740;" FontSize="12" />
-                        </Button>
-                    </Grid>
-
-                    <Grid Grid.Row="1" Margin="22,6,34,6" ColumnSpacing="6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Grid Width="38" VerticalAlignment="Center">
-                            <CheckBox x:Name="SelectAllFilesCheckBox"
-                                      Style="{StaticResource CircularSelectionCheckBoxStyle}"
-                                      ToolTipService.ToolTip="Select / deselect all files"
-                                      IsThreeState="False"
-                                      IsChecked="False"
-                                      Width="24" Height="24" MinWidth="0" MinHeight="0" Padding="0"
-                                      HorizontalAlignment="Center" VerticalAlignment="Center"
-                                      Loaded="OnSelectAllFilesLoaded"
-                                      Indeterminate="OnSelectAllFilesIndeterminate"
-                                      Checked="OnSelectAllFilesChecked"
-                                      Unchecked="OnSelectAllFilesUnchecked" />
-                        </Grid>
-                        <Grid Grid.Column="1">
+                                   FontSize="12" Foreground="DarkOrange" Opacity="0.9" Margin="8,0,8,0" />
+                        <Grid Grid.Column="2" MinWidth="200" VerticalAlignment="Center"
+                              Margin="0,0,4,0"
+                              Visibility="{x:Bind ViewModel.ResultFileFilterVisibility, Mode=OneWay}">
                             <TextBox AutomationProperties.AutomationId="ResultFileFilterBox"
                                      PlaceholderText="Filter files…"
                                      Text="{x:Bind ViewModel.FileNameFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -2075,6 +2291,11 @@
                                         VerticalAlignment="Center"
                                         MaxWidth="640"
                                         Spacing="8">
+                                        <FontIcon x:Name="PreviewEmptyStateIcon"
+                                            Glyph="&#xE721;"
+                                            FontSize="64"
+                                            Margin="0,0,0,8"
+                                            Opacity="0.8" />
                                 <TextBlock Text="Nothing to show"
                                            FontSize="24"
                                            FontWeight="SemiBold"
@@ -2382,7 +2603,7 @@
         </Grid>
 
         <!-- Bottom status bar -->
-        <Grid Grid.Row="6" Padding="20,8,20,10"
+          <Grid x:Name="BottomStatusBar" Grid.Row="6" Padding="20,6,20,8"
               Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
               BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" ColumnSpacing="16">
             <Grid.ColumnDefinitions>
@@ -2390,13 +2611,12 @@
                 <ColumnDefinition Width="Auto" MinWidth="420" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}"
                      Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}"
                      Opacity="0.6" FontSize="12" FontFamily="Consolas" />
             <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.8" FontSize="12" FontFamily="Consolas" />
-            <Grid Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Stretch" Height="20"
+            <Grid Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Stretch" Height="16"
                 Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}">
                 <!-- Background utilization gauge -->
                 <Rectangle x:Name="DiskGaugeBar" HorizontalAlignment="Left" VerticalAlignment="Stretch"
@@ -2406,18 +2626,193 @@
                 <TextBlock x:Name="DiskGaugeLabel" VerticalAlignment="Center" HorizontalAlignment="Right"
                            FontFamily="Consolas" FontSize="11" Opacity="0.75" Margin="0,0,6,0" />
             </Grid>
-            <TextBlock Grid.Column="4" FontSize="12" Opacity="0.6" x:Name="SkipCountBlock"
-                       FontFamily="Consolas" Width="140" TextAlignment="Right"
-                       Visibility="{x:Bind ViewModel.SkippedCountVisibility, Mode=OneWay}"
-                       Tapped="OnSkipCountTapped" PointerEntered="OnSkipCountPointerEntered"
-                       PointerExited="OnSkipCountPointerExited">
-                <Run Text="Skipped: " />
-                <Run Text="{x:Bind ViewModel.FilesSkipped, Mode=OneWay}" />
-            </TextBlock>
-            <TextBlock Grid.Column="3" Foreground="DarkOrange" FontSize="12"
-                       Visibility="{x:Bind ViewModel.Truncated, Mode=OneWay}"
-                       Text="Results truncated — refine your query" />
+            <!-- Right-aligned status cluster: resource usage, then the content-index status (+ a truncated
+                 warning), then the skipped-count — in that order, flush to the right edge. Each item hides
+                 independently, so the cluster adapts to whatever is present; the search stats stay far left
+                 and the stretch column between keeps this group pinned to the right. -->
+            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                <!-- Yagu resource stats (disk temp + cached index storage + Yagu/worker RAM).
+                     Measurement is off-thread; index size refreshes at most once per minute and never
+                     while a search is active. -->
+                <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                    <TextBlock x:Name="TempUsageBlock" Text="{x:Bind ViewModel.TempUsageText, Mode=OneWay}"
+                               FontSize="12" FontFamily="Consolas" Opacity="0.7" VerticalAlignment="Center"
+                               AutomationProperties.Name="Yagu temporary disk usage">
+                        <ToolTipService.ToolTip>
+                            <ToolTip>
+                                <TextBlock Text="{x:Bind ViewModel.TempUsageTooltip, Mode=OneWay}" TextWrapping="Wrap" MaxWidth="360" />
+                            </ToolTip>
+                        </ToolTipService.ToolTip>
+                    </TextBlock>
+                    <TextBlock x:Name="IndexUsageBlock" Text="{x:Bind ViewModel.IndexUsageText, Mode=OneWay}"
+                               FontSize="12" FontFamily="Consolas" Opacity="0.7" VerticalAlignment="Center"
+                               AutomationProperties.Name="Yagu content index disk usage">
+                        <ToolTipService.ToolTip>
+                            <ToolTip>
+                                <TextBlock Text="{x:Bind ViewModel.IndexUsageTooltip, Mode=OneWay}" TextWrapping="Wrap" MaxWidth="400" />
+                            </ToolTip>
+                        </ToolTipService.ToolTip>
+                    </TextBlock>
+                    <TextBlock x:Name="RamUsageBlock" Text="{x:Bind ViewModel.RamUsageText, Mode=OneWay}"
+                               FontSize="12" FontFamily="Consolas" Opacity="0.7" VerticalAlignment="Center"
+                               AutomationProperties.Name="Yagu memory usage">
+                        <ToolTipService.ToolTip>
+                            <ToolTip>
+                                <TextBlock Text="{x:Bind ViewModel.RamUsageTooltip, Mode=OneWay}" TextWrapping="Wrap" MaxWidth="360" />
+                            </ToolTip>
+                        </ToolTipService.ToolTip>
+                    </TextBlock>
+                </StackPanel>
+                <StackPanel x:Name="IndexStatusIndicator" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
+                            Visibility="{x:Bind ViewModel.IndexStatusVisibility, Mode=OneWay}"
+                            IsTabStop="True"
+                            AutomationProperties.Name="Content index status"
+                            AutomationProperties.HelpText="{x:Bind ViewModel.IndexStatusAccessibleHelpText, Mode=OneWay}"
+                            Tapped="OnIndexStatusTapped"
+                            ContextRequested="OnIndexStatusContextRequested"
+                            KeyDown="OnIndexStatusKeyDown"
+                            PointerEntered="OnIndexStatusPointerEntered"
+                            PointerExited="OnIndexStatusPointerExited">
+                    <!-- Keep a stable slot so changing status/percent text cannot move the neighboring
+                         resource and Skipped labels, but center the visible icon+text inside that slot. -->
+                    <Grid Width="230" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" Spacing="4"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <!-- During index activity the native ProgressRing is compositor-animated;
+                                 rotating a tiny rasterized FontIcon visibly pixel-snaps/hitches. -->
+                            <Grid Width="16" Height="16" VerticalAlignment="Center">
+                                <FontIcon x:Name="IndexStatusIcon"
+                                        Glyph="{x:Bind ViewModel.IndexStatusGlyph, Mode=OneWay}"
+                                        FontSize="12" Opacity="0.7"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                <ProgressRing x:Name="IndexStatusProgressRing"
+                                           Width="14" Height="14"
+                                           IsActive="False" Visibility="Collapsed"
+                                           Opacity="0.8"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Grid>
+                            <TextBlock x:Name="IndexStatusTextBlock"
+                                     Text="{x:Bind ViewModel.IndexStatusText, Mode=OneWay}"
+                                     MaxWidth="210" TextTrimming="CharacterEllipsis"
+                                     FontSize="12" Opacity="0.7" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+                <TextBlock Foreground="DarkOrange" FontSize="12" VerticalAlignment="Center"
+                           Visibility="{x:Bind ViewModel.Truncated, Mode=OneWay}"
+                           Text="Results truncated — refine your query" />
+                <TextBlock FontSize="12" Opacity="0.6" x:Name="SkipCountBlock"
+                           FontFamily="Consolas"
+                           Visibility="{x:Bind ViewModel.SkippedCountVisibility, Mode=OneWay}"
+                           Tapped="OnSkipCountTapped" PointerEntered="OnSkipCountPointerEntered"
+                           PointerExited="OnSkipCountPointerExited">
+                    <Run Text="Skipped: " />
+                    <Run Text="{x:Bind ViewModel.FilesSkipped, Mode=OneWay}" />
+                </TextBlock>
+            </StackPanel>
         </Grid>
+
+        <!-- Index-status hover overlay. This deliberately matches the in-tree Skipped overlay below
+             instead of using a Flyout/Popup. Live indexing updates the percentage and explanatory text
+             frequently; keeping the surface in the main visual tree prevents WinUI from dismissing and
+             recreating a separate popup as its placement target is remeasured. -->
+        <Border x:Name="IndexStatusHoverOverlay"
+                Grid.Row="4"
+                Visibility="Collapsed"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,20,8"
+                MinWidth="320"
+                MaxWidth="460"
+                Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="12"
+                Canvas.ZIndex="101"
+                Translation="0,0,32"
+                PointerEntered="OnIndexStatusHoverPanelPointerEntered"
+                PointerExited="OnIndexStatusHoverPanelPointerExited">
+            <Border.Shadow>
+                <ThemeShadow />
+            </Border.Shadow>
+            <StackPanel MaxWidth="420" Spacing="10">
+                <StackPanel Spacing="6" Visibility="{x:Bind ViewModel.IndexBuildPercentVisibility, Mode=OneWay}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE895;" FontSize="18" VerticalAlignment="Center"
+                                  Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        <TextBlock Text="{x:Bind ViewModel.IndexBuildPercentText, Mode=OneWay}"
+                                   FontSize="30" FontWeight="SemiBold" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        <TextBlock Text="complete" FontSize="13" Opacity="0.7"
+                                   VerticalAlignment="Bottom" Margin="0,0,0,6" />
+                    </StackPanel>
+                    <ProgressBar Minimum="0" Maximum="100" Width="220"
+                                 Value="{x:Bind ViewModel.IndexBuildPercentValue, Mode=OneWay}"
+                                 IsIndeterminate="True" />
+                </StackPanel>
+                <TextBlock Text="{x:Bind ViewModel.IndexStatusTooltip, Mode=OneWay}"
+                           TextWrapping="Wrap" FontSize="12" />
+                <StackPanel x:Name="IndexStatusAutomaticIndexingPanel"
+                           Spacing="5"
+                           Visibility="Collapsed">
+                   <TextBlock Text="Turn on automatic indexing"
+                              FontSize="12"
+                              FontWeight="SemiBold" />
+                   <ComboBox x:Name="IndexStatusAutomaticIndexingComboBox"
+                             HorizontalAlignment="Stretch"
+                             MinWidth="280"
+                             PlaceholderText="Choose when indexing should run"
+                             AutomationProperties.Name="Automatic indexing schedule"
+                             DropDownOpened="OnIndexStatusAutomaticIndexingDropDownOpened"
+                             DropDownClosed="OnIndexStatusAutomaticIndexingDropDownClosed"
+                             SelectionChanged="OnIndexStatusAutomaticIndexingSelectionChanged">
+                       <ComboBoxItem Content="Continuously while Yagu is open (recommended)"
+                                     Tag="Continuous" />
+                       <ComboBoxItem Content="When the PC is idle"
+                                     Tag="WhenIdle" />
+                       <ComboBoxItem Content="At app startup"
+                                     Tag="AtStartup" />
+                       <ComboBoxItem Content="On the configured schedule"
+                                     Tag="OnSchedule" />
+                   </ComboBox>
+                   <TextBlock Text="The choice is saved immediately. If updates are still manual-only, Yagu switches them to safe incremental updates so existing indexes stay current."
+                              TextWrapping="Wrap"
+                              FontSize="11"
+                              Opacity="0.7" />
+                </StackPanel>
+                <StackPanel Spacing="4"
+                       Visibility="{x:Bind ViewModel.AllDriveIndexStatusVisibility, Mode=OneWay}">
+                    <Rectangle Height="1" Fill="{ThemeResource ControlStrokeColorDefaultBrush}"
+                           Opacity="0.7" Margin="0,2,0,5" />
+                    <TextBlock Text="All-drive and indexed-folder health"
+                           FontSize="12" FontWeight="SemiBold" />
+                    <ScrollViewer MaxHeight="280"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel x:Name="IndexStatusAllDriveHealthRows" Spacing="8" />
+                    </ScrollViewer>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                    <Button x:Name="IndexStatusRepairButton"
+                            Visibility="Collapsed"
+                            Click="OnIndexStatusRepairClick"
+                            MinWidth="0" Padding="10,6">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE72C;" FontSize="12" />
+                            <TextBlock x:Name="IndexStatusRepairButtonText" Text="Rebuild index" />
+                        </StackPanel>
+                    </Button>
+                    <Button Click="OnIndexStatusOpenSettingsFromHoverClick"
+                            MinWidth="0" Padding="10,6">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE713;" FontSize="12" />
+                            <TextBlock Text="Indexing settings" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </StackPanel>
+        </Border>
 
         <!-- Skip breakdown overlay — floats above status bar, toggled by skip-count click -->
         <Border x:Name="SkipBreakdownOverlay"
@@ -2471,11 +2866,11 @@
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="6">
                     <TextBlock Text="Shell:" Foreground="#B8B8B8" FontSize="12" VerticalAlignment="Center" />
                     <ComboBox x:Name="TerminalShellSelector"
-                              MinWidth="180"
+                              MinWidth="110"
                               FontSize="12"
                               SelectionChanged="OnTerminalShellSelectionChanged"
                               ToolTipService.ToolTip="Choose the shell used by the embedded terminal">
-                        <ComboBoxItem Content="Command Prompt (cmd.exe)" />
+                        <ComboBoxItem Content="Cmd.exe" />
                         <ComboBoxItem Content="PowerShell" />
                     </ComboBox>
                 </StackPanel>
@@ -2561,6 +2956,44 @@
                            TextWrapping="Wrap" FontSize="14" />
                 <TextBlock Text="{x:Bind ViewModel.SessionProgressPercentLabel, Mode=OneWay}"
                            HorizontalAlignment="Center" FontSize="22" FontWeight="SemiBold" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Full-content blocking overlay shown while the user triggers an on-demand index REBUILD from the
+             status-bar indicator's "Index date … (click to rebuild)" menu. Unlike a normal background build,
+             this deliberately blocks the rest of the UI (search card, results, split pane, terminal) until
+             the rebuild finishes; the custom title bar (row 0) stays usable. Driven by the blocking-rebuild
+             progress state (RebuildCurrentIndexBlockingAsync / ReportRebuildBlockingProgress). -->
+        <Grid x:Name="IndexRebuildBusyOverlay"
+              Grid.Row="2" Grid.RowSpan="4"
+              Canvas.ZIndex="260"
+              Visibility="{x:Bind ViewModel.IsIndexRebuildBlocking, Mode=OneWay}">
+            <Border Background="{ThemeResource AcrylicBackgroundFillColorBaseBrush}" Opacity="0.9" />
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="14" MaxWidth="600" Padding="28">
+                <FontIcon Glyph="&#xE72C;" FontSize="28" HorizontalAlignment="Center" />
+                <TextBlock Text="{x:Bind ViewModel.IndexRebuildOverlayTitle, Mode=OneWay}"
+                           HorizontalAlignment="Center" FontSize="18" FontWeight="SemiBold" />
+                <ProgressBar Minimum="0" Maximum="100"
+                             Value="{x:Bind ViewModel.IndexRebuildProgressPercent, Mode=OneWay}"
+                             IsIndeterminate="True"
+                             Width="360" Height="6" />
+                <TextBlock Text="{x:Bind ViewModel.IndexRebuildProgressText, Mode=OneWay}"
+                           HorizontalAlignment="Center" TextAlignment="Center"
+                           TextWrapping="Wrap" FontSize="13" Opacity="0.9" />
+                <TextBlock Text="{x:Bind ViewModel.IndexRebuildProgressPercentLabel, Mode=OneWay}"
+                           HorizontalAlignment="Center" FontSize="24" FontWeight="SemiBold" />
+                <TextBlock Text="The rest of Yagu is paused until the rebuild finishes or cancellation completes."
+                           HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                           FontSize="12" Opacity="0.7" />
+                <Button HorizontalAlignment="Center"
+                        Padding="16,7"
+                        IsEnabled="{x:Bind ViewModel.CanCancelIndexRebuild, Mode=OneWay}"
+                        Click="OnCancelIndexRebuildClick">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <FontIcon Glyph="&#xE711;" FontSize="12" />
+                        <TextBlock Text="{x:Bind ViewModel.IndexRebuildCancelButtonText, Mode=OneWay}" />
+                    </StackPanel>
+                </Button>
             </StackPanel>
         </Grid>
 

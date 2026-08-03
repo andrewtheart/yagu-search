@@ -799,6 +799,7 @@ public sealed class SettingsEffectTests : IDisposable
             ParallelismIndex = 3,
             LineTruncationLength = 999,
             MaxRecentItems = 50,
+            AutocompleteDropdownVisibleItems = 7,
             MemoryLimitMB = 4096,
             MemoryPressurePercent = 60,
             SdkChannelBufferSize = 8192,
@@ -842,6 +843,7 @@ public sealed class SettingsEffectTests : IDisposable
         Assert.Equal(original.ParallelismIndex, loaded.ParallelismIndex);
         Assert.Equal(original.LineTruncationLength, loaded.LineTruncationLength);
         Assert.Equal(original.MaxRecentItems, loaded.MaxRecentItems);
+        Assert.Equal(original.AutocompleteDropdownVisibleItems, loaded.AutocompleteDropdownVisibleItems);
         Assert.Equal(original.MemoryLimitMB, loaded.MemoryLimitMB);
         Assert.Equal(original.MemoryPressurePercent, loaded.MemoryPressurePercent);
         Assert.Equal(original.SdkChannelBufferSize, loaded.SdkChannelBufferSize);
@@ -913,6 +915,7 @@ public sealed class SettingsEffectTests : IDisposable
         Assert.Equal(4, s.ParallelismIndex);
         Assert.Equal(500, s.LineTruncationLength);
         Assert.Equal(20, s.MaxRecentItems);
+        Assert.Equal(5, s.AutocompleteDropdownVisibleItems);
         Assert.Equal(0, s.MemoryLimitMB);
         Assert.Equal(75, s.MemoryPressurePercent);
         Assert.Equal(4096, s.SdkChannelBufferSize);

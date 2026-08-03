@@ -112,8 +112,8 @@ public sealed class MultilineNewlineSuggestionTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
-        return dir?.FullName ?? throw new DirectoryNotFoundException("Could not locate repo root (Yagu.sln).");
+        return dir?.FullName ?? throw new DirectoryNotFoundException("Could not locate repo root (Yagu.slnx).");
     }
 }

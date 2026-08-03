@@ -45,16 +45,17 @@ public sealed class AdvancedOptionsTests
         string method = ExtractMethodWindow("OnAdvancedOptionsTabSelectionChanged", 600);
         AssertContainsInOrder(method,
             "int selectedIndex = AdvancedOptionsTabList.SelectedIndex;",
-            "if (selectedIndex < 0 || selectedIndex > 4)",
+            "if (selectedIndex < 0 || selectedIndex > 5)",
             "AdvancedOptionsTabList.SelectedIndex = 0;",
             "selectedIndex = 0;");
     }
 
     [Fact]
-    public void SetAdvancedOptionsTab_TogglesVisibilityForFiveTabs()
+    public void SetAdvancedOptionsTab_TogglesVisibilityForSixTabs()
     {
-        string method = ExtractMethodWindow("SetAdvancedOptionsTab", 600);
+        string method = ExtractMethodWindow("SetAdvancedOptionsTab", 700);
         Assert.Contains("AdvancedOptionsSearchTabContent", method);
+        Assert.Contains("AdvancedOptionsQuickSearchesTabContent", method);
         Assert.Contains("AdvancedOptionsFiltersTabContent", method);
         Assert.Contains("AdvancedOptionsSizeTabContent", method);
         Assert.Contains("AdvancedOptionsDatesTabContent", method);
@@ -73,6 +74,66 @@ public sealed class AdvancedOptionsTests
     {
         Assert.Contains("private static void SetAdvancedOptionsTabVisibility(FrameworkElement tabContent, bool isVisible)", AdvancedOptionsSource);
         Assert.Contains("tabContent.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed", AdvancedOptionsSource);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Quick searches tab (developer one-click presets)
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void QuickSearchesTab_IsListedSecondInTheNav()
+    {
+        int search = MainWindowXaml.IndexOf("Text=\"Search\" VerticalAlignment=\"Center\"", StringComparison.Ordinal);
+        int quick = MainWindowXaml.IndexOf("Text=\"Quick searches\" VerticalAlignment=\"Center\"", StringComparison.Ordinal);
+        int filters = MainWindowXaml.IndexOf("Text=\"Filters\" VerticalAlignment=\"Center\"", StringComparison.Ordinal);
+        Assert.True(search >= 0 && quick > search && filters > quick,
+            "The Quick searches nav item must sit between Search and Filters.");
+    }
+
+    [Fact]
+    public void QuickSearchesTab_HostsCodeAnnotationAndPresetButtons()
+    {
+        // Slice exactly the Quick searches panel (from its anchor to the next tab's anchor).
+        int panelStart = MainWindowXaml.IndexOf("x:Name=\"AdvancedOptionsQuickSearchesTabContent\"", StringComparison.Ordinal);
+        int panelEnd = MainWindowXaml.IndexOf("x:Name=\"AdvancedOptionsFiltersTabContent\"", StringComparison.Ordinal);
+        Assert.True(panelStart >= 0 && panelEnd > panelStart, "Quick searches panel must precede the Filters panel.");
+        string panel = MainWindowXaml[panelStart..panelEnd];
+
+        // The canonical code-annotation button moved here, keeping its identity + CLI-linked handler.
+        Assert.Contains("x:Name=\"FindCodeAnnotationsButton\"", panel);
+        Assert.Contains("Click=\"OnFindCodeAnnotations\"", panel);
+
+        // The additional developer presets are wired by Tag + the shared OnQuickSearch handler.
+        foreach (string key in new[] { "merge-conflicts", "debug-output", "secrets", "urls", "emails", "empty-catch", "deprecated", "guids" })
+            Assert.Contains($"Tag=\"{key}\" Click=\"OnQuickSearch\"", panel);
+    }
+
+    [Fact]
+    public void QuickSearchesTab_MovedTheCodeAnnotationButtonOutOfTheSearchTab()
+    {
+        int quickPanel = MainWindowXaml.IndexOf("AdvancedOptionsQuickSearchesTabContent", StringComparison.Ordinal);
+        int filtersPanel = MainWindowXaml.IndexOf("AdvancedOptionsFiltersTabContent", StringComparison.Ordinal);
+        int button = MainWindowXaml.IndexOf("FindCodeAnnotationsButton", StringComparison.Ordinal);
+        Assert.True(quickPanel >= 0 && quickPanel < button && button < filtersPanel,
+            "The code-annotation button must live inside the Quick searches tab, not the Search tab.");
+    }
+
+    [Fact]
+    public void QuickSearch_HandlerLooksUpPresetByTagThenSearches()
+    {
+        string handler = ExtractFrom(SearchInputSource, "private async void OnQuickSearch", 700);
+        AssertContainsInOrder(handler,
+            "is string key",
+            "Yagu.Helpers.QuickSearchPresets.Find(key) is { } preset",
+            "ViewModel.ApplyQuickSearchPreset(preset);",
+            "await StartSearchFromUiAsync();");
+
+        string vm = ExtractViewModelMethod("public void ApplyQuickSearchPreset", 400);
+        AssertContainsInOrder(vm,
+            "IsSemanticQueryMode = false;",
+            "UseRegex = true;",
+            "CaseSensitive = preset.CaseSensitive;",
+            "Query = preset.Pattern;");
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -294,6 +355,7 @@ public sealed class AdvancedOptionsTests
     {
         Assert.Contains("ImageOcrModel = _settings.ImageOcrModel;", MainViewModelSource);
         Assert.Contains("ImageOcrMaxSide = _settings.ImageOcrMaxSide;", MainViewModelSource);
+        Assert.Contains("ImageOcrWorkerParallelism = _settings.ImageOcrWorkerParallelism;", MainViewModelSource);
     }
 
     [Fact]
@@ -302,7 +364,10 @@ public sealed class AdvancedOptionsTests
         AssertContainsInOrder(MainViewModelSource,
             "ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine),",
             "ImageOcrModel = AppSettings.NormalizeImageOcrModel(ImageOcrModel),",
-            "ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(ImageOcrMaxSide),");
+            "ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(ImageOcrMaxSide),",
+            "ImageOcrWorkerParallelism = OcrWorkerParallelism.Resolve(");
+        Assert.Contains("LimitParallelismOnHdd,\r\n                    isHardDisk)", MainViewModelSource);
+        Assert.Contains("bool isHardDisk = Yagu.Helpers.DiskTypeDetector.IsHardDisk(root);", MainViewModelSource);
     }
 
     [Fact]
@@ -310,6 +375,7 @@ public sealed class AdvancedOptionsTests
     {
         Assert.Contains("_settings.ImageOcrModel", MainViewModelSource);
         Assert.Contains("_settings.ImageOcrMaxSide", MainViewModelSource);
+        Assert.Contains("_settings.ImageOcrWorkerParallelism = AppSettings.NormalizeImageOcrWorkerParallelism(ImageOcrWorkerParallelism);", MainViewModelSource);
     }
 
     // ── Startup directory pin ──
@@ -416,6 +482,133 @@ public sealed class AdvancedOptionsTests
 
         string subscription = ExtractFrom(MainWindowCodeBehindSource, "nameof(ViewModel.IsCurrentDirectoryPinned)", 900);
         Assert.Contains("UpdatePinStartupDirectoryIcon(ViewModel.IsCurrentDirectoryPinned);", subscription);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Directory-bar content-index toggle (next to the pin star)
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void IndexDirectoryButton_SitsBetweenPinStarAndBrowse()
+    {
+        // The indexing glyph is a ToggleButton immediately to the right of the pin star and left of Browse.
+        string overlay = ExtractXamlElement("x:Name=\"PinStartupDirectoryButton\"", 2600);
+        AssertContainsInOrder(overlay,
+            "x:Name=\"PinStartupDirectoryButton\"",
+            "x:Name=\"IndexDirectoryButton\"",
+            "Click=\"OnIndexCurrentDirectory\"",
+            "x:Name=\"IndexDirectoryIcon\"",
+            "x:Name=\"BrowseDirectoryButton\"");
+
+        // It is a ToggleButton (so it can show a "selected" highlight) with a hover tooltip explaining it,
+        // and its checked state is NOT a self-disabling OneWay x:Bind (driven from code-behind instead).
+        string button = ExtractXamlElement("x:Name=\"IndexDirectoryButton\"", 600);
+        Assert.StartsWith("<ToggleButton", button);
+        Assert.Contains("ToolTipService.ToolTip=\"Add this directory to the content index\"", button);
+        Assert.DoesNotContain("IsChecked=\"{x:Bind", button);
+    }
+
+    [Fact]
+    public void IndexDirectoryButton_HighlightDrivenFromDerivedIndexedState()
+    {
+        // The "selected" highlight tracks the derived IsCurrentDirectoryIndexed value (recomputed whenever
+        // the box directory changes), driven from code-behind for the same reason as the pin star.
+        string vmProp = ExtractViewModelMethod("public bool IsCurrentDirectoryIndexed", 400);
+        Assert.Contains("CurrentDirectoryIndexRoot is not null", vmProp);
+        Assert.Contains("IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, Directory!)", MainViewModelSource);
+
+        // Directory changes recompute both derived highlights.
+        Assert.Contains("[NotifyPropertyChangedFor(nameof(IsCurrentDirectoryIndexed))]", MainViewModelSource);
+
+        // Startup seeds the toggle; the PropertyChanged subscription refreshes it on directory change.
+        Assert.Contains("UpdateIndexDirectoryIcon(ViewModel.IsCurrentDirectoryIndexed);", StartupChecksSource);
+        string subscription = ExtractFrom(MainWindowCodeBehindSource, "nameof(ViewModel.IsCurrentDirectoryIndexed)", 900);
+        Assert.Contains("UpdateIndexDirectoryIcon(ViewModel.IsCurrentDirectoryIndexed);", subscription);
+
+        string updater = ExtractFrom(SearchInputSource, "private void UpdateIndexDirectoryIcon", 700);
+        Assert.Contains("IndexDirectoryButton.IsChecked = indexed;", updater);
+    }
+
+    [Fact]
+    public void DirectoryToggleButtons_SelectedTintsGlyphNotChrome()
+    {
+        // The pin/index toggles' selected (checked) state must NOT paint a blue fill/border; instead the
+        // glyph itself is tinted with the accent colour. Achieved by overriding the checked-state
+        // ToggleButton theme brushes scoped to the directory-overlay command group.
+        Assert.Contains("<SolidColorBrush x:Key=\"ToggleButtonForegroundChecked\" Color=\"{ThemeResource SystemAccentColor}\" />", MainWindowXaml);
+        Assert.Contains("<SolidColorBrush x:Key=\"ToggleButtonBackgroundChecked\" Color=\"Transparent\" />", MainWindowXaml);
+        Assert.Contains("<SolidColorBrush x:Key=\"ToggleButtonBorderBrushChecked\" Color=\"{ThemeResource CardStrokeColorDefault}\" />", MainWindowXaml);
+    }
+
+    [Fact]
+    public void AutocompleteDropdowns_HaveConfigurableVisibleItemCount()
+    {
+        // Both the directory and search-pattern AutoSuggestBoxes cap their suggestion list to a
+        // ViewModel-computed height, so a configurable number of items shows before scrolling (default 5).
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(
+            MainWindowXaml, "MaxSuggestionListHeight=\"\\{x:Bind ViewModel.AutocompleteDropdownMaxHeight").Count);
+
+        // The height derives from a configurable visible-item count (default 5), distinct from the
+        // "max ... to remember" history caps.
+        Assert.Contains("public partial int AutocompleteDropdownVisibleItems { get; set; } = 5;", MainViewModelSource);
+        Assert.Contains("public double AutocompleteDropdownMaxHeight =>", MainViewModelSource);
+    }
+
+    [Fact]
+    public void IndexDirectoryButtonHandler_AddsOrRemovesTheCurrentDirectory()
+    {
+        // Clicking toggles membership: add (with a large-folder confirmation) when it becomes checked,
+        // remove when it becomes unchecked, then re-sync the highlight to the derived indexed state.
+        string handler = ExtractFrom(SearchInputSource, "private async void OnIndexCurrentDirectory", 3000);
+        AssertContainsInOrder(handler,
+            "bool wantIndexed = (sender as ToggleButton)?.IsChecked == true;",
+            "if (!await ConfirmLargeFolderIfNeededAsync(folder))",
+            "await ViewModel.AddFolderToIndexAndBuildAsync(folder);",
+            "await ViewModel.RemoveFolderFromIndexAsync(folder);",
+            "UpdateIndexDirectoryIcon(ViewModel.IsCurrentDirectoryIndexed);");
+        Assert.Contains("if (!IndexedRootsPolicy.Contains(ViewModel.Settings.IndexedRoots, folder))", handler);
+        Assert.Contains("is covered by the broader index root", handler);
+
+        // The VM add/remove paths notify the derived indexed state so the toggle updates immediately.
+        // Registration was extracted into RegisterFolderForIndexAsync (shared with the blocking
+        // pre-search path); it now owns the settings opt-in, persist, and IsCurrentDirectoryIndexed
+        // notification, while AddFolderToIndexAndBuildAsync delegates to it and then kicks off the
+        // background build. Behavior is unchanged (the add path still fires the notification via the
+        // helper) — pin both halves so the delegation can't silently drop it.
+        string add = ExtractViewModelMethod("public async Task AddFolderToIndexAndBuildAsync", 1500);
+        Assert.Contains("await RegisterFolderForIndexAsync(folder)", add);
+        Assert.Contains("StartBackgroundIndexBuild(effectiveRoot);", add);
+        string register = ExtractViewModelMethod("private async Task<string?> RegisterFolderForIndexAsync", 1500);
+        Assert.Contains("OnPropertyChanged(nameof(IsCurrentDirectoryIndexed));", register);
+        string remove = ExtractViewModelMethod("public async Task RemoveFolderFromIndexAsync", 900);
+        AssertContainsInOrder(remove,
+            "IndexedRootsPolicy.Remove(_settings.IndexedRoots, root)",
+            "OnPropertyChanged(nameof(IsCurrentDirectoryIndexed));");
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Alt access keys on the primary directory-bar / results-toolbar commands
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void PrimaryCommands_HaveAltAccessKeys()
+    {
+        // Pressing Alt reveals a key tip on each primary command so it can be activated by keyboard.
+        Assert.Contains("AccessKey=\"P\"", ExtractXamlElement("x:Name=\"PinStartupDirectoryButton\"", 300));
+        Assert.Contains("AccessKey=\"I\"", ExtractXamlElement("x:Name=\"IndexDirectoryButton\"", 300));
+        Assert.Contains("AccessKey=\"B\"", ExtractXamlElement("x:Name=\"BrowseDirectoryButton\"", 300));
+        Assert.Contains("AccessKey=\"A\"", ExtractXamlElement("x:Name=\"AdvancedOptionsToggle\"", 200));
+
+        // The three results-toolbar dropdowns (Sort/Group/Filter) each carry a unique access key.
+        Assert.Contains("AccessKey=\"S\" ToolTipService.ToolTip=\"Sort results\"", MainWindowXaml);
+        Assert.Contains("AccessKey=\"G\" ToolTipService.ToolTip=\"Group results by…\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"ResultsFilterButton\" AccessKey=\"F\"", MainWindowXaml);
+
+        // The documented Alt+C/R/M/E option-toggle shortcuts are wired via AccessKey.
+        Assert.Contains("AccessKey=\"C\"", ExtractXamlElement("x:Name=\"CaseSensitiveToggle\"", 200));
+        Assert.Contains("AccessKey=\"R\"", ExtractXamlElement("x:Name=\"RegexToggle\"", 200));
+        Assert.Contains("AccessKey=\"M\"", ExtractXamlElement("x:Name=\"MultilineToggle\"", 200));
+        Assert.Contains("AccessKey=\"E\"", ExtractXamlElement("x:Name=\"ExactMatchToggle\"", 200));
     }
 
     [Fact]
@@ -546,7 +739,7 @@ public sealed class AdvancedOptionsTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+            if (File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
                 return dir.FullName;
             dir = dir.Parent;
         }

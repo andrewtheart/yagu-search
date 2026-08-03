@@ -1,11 +1,15 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Windows.System;
+using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Index;
+using Yagu.Services.Logging;
 using System.Collections.ObjectModel;
 using System.Globalization;
 namespace Yagu;
@@ -15,6 +19,12 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
+    // Missing/stale index warnings are actionable but should not nag before every search. A root that
+    // the user explicitly chose to scan live is suppressed only for this process; rebuilding/adding or
+    // restarting naturally gives the readiness preflight another opportunity to report current state.
+    private readonly HashSet<string> _contentIndexReadinessWarningsAcknowledged = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _cloudScanWarningsAcknowledged = new(StringComparer.OrdinalIgnoreCase);
+
     private void OnAutoScrollTick(object? sender, object e)
     {
         if (!_autoScrollEnabled || ViewModel.ResultRows.Count == 0) return;
@@ -137,11 +147,16 @@ public sealed partial class MainWindow
         if (ViewModel.IsSearching)
         {
             await ViewModel.CancelAsync();
+            return;
         }
-        else
+        if (ViewModel.IsPreparingSearch)
         {
-            await StartSearchFromUiAsync();
+            // Still in the pre-scan gate phase (no file scan to cancel yet) — abort the preparation so
+            // the pending run never starts.
+            ViewModel.CancelSearchPreparation();
+            return;
         }
+        await StartSearchFromUiAsync();
     }
 
     // SplitButton primary action — only visible while idle, so it always starts a search.
@@ -175,36 +190,71 @@ public sealed partial class MainWindow
         await StartSearchFromUiAsync();
     }
 
+    // Developer "quick search" buttons on the Advanced Options ▸ Quick searches tab. Each button's Tag
+    // is a QuickSearchPresets key; loading the matching preset's regex (Traditional mode) and running the
+    // search surfaces the target in one click.
+    private async void OnQuickSearch(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is string key
+            && Yagu.Helpers.QuickSearchPresets.Find(key) is { } preset)
+        {
+            ViewModel.ApplyQuickSearchPreset(preset);
+            await StartSearchFromUiAsync();
+        }
+    }
+
+    private bool _querySubmitInProgress;
+
     private async void OnQuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
     {
         var submittedQuery = (args.ChosenSuggestion as Yagu.Models.HistorySuggestion)?.Value;
         if (string.IsNullOrEmpty(submittedQuery))
             submittedQuery = args.QueryText;
-        if (string.IsNullOrEmpty(submittedQuery))
-            submittedQuery = sender.Text;
 
-        bool textApplied = false;
-        if (!string.IsNullOrEmpty(submittedQuery))
+        await SubmitQueryAsync(sender, submittedQuery);
+    }
+
+    private async Task SubmitQueryAsync(AutoSuggestBox sender, string? submittedQuery = null)
+    {
+        // KeyDown is registered with handledEventsToo because the inner TextBox can consume Enter.
+        // If AutoSuggestBox did raise QuerySubmitted first, both routes converge here and this guard
+        // prevents one key press from launching two searches.
+        if (_querySubmitInProgress)
+            return;
+
+        _querySubmitInProgress = true;
+        try
         {
-            // Show the chosen text in the box as the VERY FIRST thing, before any search work. Setting
-            // sender.Text directly makes a clicked history item appear immediately instead of only once
-            // the UI thread next yields — the delay the user sees in Semantic mode, where translation
-            // briefly occupies the thread before the bound text repaints.
-            if (sender.Text != submittedQuery)
-                sender.Text = submittedQuery;
-            ViewModel.Query = submittedQuery;
-            textApplied = true;
+            if (string.IsNullOrEmpty(submittedQuery))
+                submittedQuery = sender.Text;
+
+            bool textApplied = false;
+            if (!string.IsNullOrEmpty(submittedQuery))
+            {
+                // Show the chosen text in the box as the VERY FIRST thing, before any search work. Setting
+                // sender.Text directly makes a clicked history item appear immediately instead of only once
+                // the UI thread next yields — the delay the user sees in Semantic mode, where translation
+                // briefly occupies the thread before the bound text repaints.
+                if (sender.Text != submittedQuery)
+                    sender.Text = submittedQuery;
+                ViewModel.Query = submittedQuery;
+                textApplied = true;
+            }
+
+            HideQuerySuggestions(sender);
+
+            // Let the box paint the chosen text before the (possibly slow) search pipeline begins.
+            if (textApplied)
+                await YieldUntilRenderedAsync();
+
+            if (!await ClearPreviewPanelForNewSearchAsync()) return;
+            CollapseAdvancedOptionsForSearch();
+            await SubmitSearchWithSlowModelWatchAsync();
         }
-
-        HideQuerySuggestions(sender);
-
-        // Let the box paint the chosen text before the (possibly slow) search pipeline begins.
-        if (textApplied)
-            await YieldUntilRenderedAsync();
-
-        if (!await ClearPreviewPanelForNewSearchAsync()) return;
-        CollapseAdvancedOptionsForSearch();
-        await SubmitSearchWithSlowModelWatchAsync();
+        finally
+        {
+            _querySubmitInProgress = false;
+        }
     }
 
     /// <summary>
@@ -230,9 +280,445 @@ public sealed partial class MainWindow
     /// </summary>
     private async Task<bool> RunPreSearchWarningGatesAsync()
     {
-        if (!await CheckHddAndWarnAsync()) return false;
-        if (!await CheckExcludedExtensionAndWarnAsync()) return false;
-        return await CheckMatchEverythingPatternAndWarnAsync();
+        if (ViewModel.IsSearchPreparationCancellationRequested) return false;
+        if (!await CheckCloudDriveScanAndWarnAsync()) return false;
+        if (ViewModel.IsSearchPreparationCancellationRequested) return false;
+        if (!await CheckEverythingIndexCoverageAndWarnAsync()) return false;
+        if (ViewModel.IsSearchPreparationCancellationRequested) return false;
+        if (!await CheckContentIndexReadinessAndWarnAsync()) return false;
+        if (ViewModel.IsSearchPreparationCancellationRequested) return false;
+        if (!await CheckIndexWarmupAndWarnAsync()) return false;
+        if (!await CheckHddAndWarnAsync())
+        {
+            ViewModel.ResumeContentIndexWarmupAfterSearch();
+            return false;
+        }
+        if (!await CheckExcludedExtensionAndWarnAsync())
+        {
+            ViewModel.ResumeContentIndexWarmupAfterSearch();
+            return false;
+        }
+        if (!await CheckMatchEverythingPatternAndWarnAsync())
+        {
+            ViewModel.ResumeContentIndexWarmupAfterSearch();
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Warns before the first scan of each cloud-backed drive in this app session. Even when Yagu skips
+    /// known online-only placeholders, provider metadata and ordinary-looking files may hydrate on access;
+    /// a broad scan can therefore consume bandwidth and local disk unexpectedly.
+    /// </summary>
+    private async Task<bool> CheckCloudDriveScanAndWarnAsync()
+    {
+        string[] cloudRoots = ViewModel.ResolveTargetRoots()
+            .Select(path => Path.GetPathRoot(path))
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Select(root => root!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(root => !_cloudScanWarningsAcknowledged.Contains(root))
+            .Where(root =>
+            {
+                try { return DriveEnumerator.IsLikelyCloudDrive(new DriveInfo(root)); }
+                catch { return false; }
+            })
+            .ToArray();
+        if (cloudRoots.Length == 0)
+            return true;
+        if (YaguDialog.HasOpenOwnedWindow(_hwnd))
+            return false;
+
+        var panel = new StackPanel { Spacing = 12, MinWidth = 440 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = cloudRoots.Length == 1
+                ? "This search includes a cloud-backed drive:"
+                : "This search includes cloud-backed drives:",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 14,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = string.Join(Environment.NewLine, cloudRoots),
+            FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
+            FontSize = 16,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Margin = new Thickness(12, 0, 0, 0),
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Scanning can cause the cloud provider to download files or metadata on demand. "
+                 + "This may use significant network bandwidth and local disk space, especially for a broad search.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Yagu will continue to skip placeholders it can identify as online-only unless “Search online-only cloud files” is enabled, but the provider ultimately controls hydration.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Opacity = 0.8,
+        });
+
+        YaguDialogResult result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Cloud drive scan may download files",
+                TitleGlyph = "\uE753",
+                TitleGlyphColor = Microsoft.UI.Colors.Gold,
+                Content = panel,
+                PrimaryButtonText = "Search cloud drive",
+                CloseButtonText = "Cancel",
+                DefaultButton = YaguDialogDefaultButton.Close,
+                RequestedTheme = RootGrid.ActualTheme,
+                ShowTitleBar = false,
+                ShowTopRightCloseButton = true,
+                Width = 640,
+                Height = 420,
+                MaxContentHeight = 320,
+            });
+        if (result != YaguDialogResult.Primary)
+            return false;
+
+        foreach (string root in cloudRoots)
+            _cloudScanWarningsAcknowledged.Add(root);
+        return true;
+    }
+
+    /// <summary>
+    /// Warns before an index-enabled search would silently fall back to a potentially very expensive
+    /// live scan because a target has no usable index or its change-journal checkpoint is no longer
+    /// provably fresh. Query-shape bypasses are omitted because rebuilding cannot help them. The check
+    /// uses manifest/file-id metadata plus the same bounded USN replay as the mapped worker; no index is
+    /// opened, mapped, built, or mutated unless the user selects an explicit action.
+    /// </summary>
+    private async Task<bool> CheckContentIndexReadinessAndWarnAsync()
+    {
+        if (!ViewModel.Settings.EnableContentIndex || !ViewModel.UseContentIndex)
+            return true;
+
+        IReadOnlyList<string> roots = ViewModel.ResolveTargetRoots();
+        if (roots.Count == 0)
+            return true;
+
+        string query = ViewModel.Query;
+        bool caseSensitive = ViewModel.CaseSensitive;
+        bool useRegex = ViewModel.UseRegex;
+        bool exactMatch = ViewModel.ExactMatch;
+        bool multiline = ViewModel.Multiline;
+        bool multilineDotAll = ViewModel.MultilineDotAll;
+        bool skipBinary = ViewModel.SkipBinary;
+        string storageDir = ViewModel.Settings.IndexStorageDirectory;
+        string[] registeredRoots = ViewModel.Settings.IndexedRoots.ToArray();
+        string[] acknowledgedWarnings = _contentIndexReadinessWarningsAcknowledged.ToArray();
+        int retained = AppSettings.NormalizeIndexRetainedGenerationCount(ViewModel.Settings.IndexRetainedGenerationCount);
+        int maxCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(ViewModel.Settings.IndexMaxJournalCatchupRecords);
+
+        ContentIndexReadinessIssue[] issues;
+        try
+        {
+            issues = await Task.Run(() =>
+            {
+                var paths = DefaultContentIndexPathProvider.Create(storageDir);
+                ContentIndexFreshnessEvaluator.JournalReader reader =
+                    ContentIndexFreshnessEvaluator.CreateReader(
+                        maxCatchupRecords,
+                        TimeSpan.FromSeconds(AppSettings.NormalizeFileIoTimeoutSeconds(ViewModel.Settings.FileIoTimeoutSeconds)));
+                var found = new List<ContentIndexReadinessIssue>();
+                foreach (string root in roots)
+                {
+                    string normalizedRoot = IndexScopeIdentity.NormalizePath(root);
+                    string? registeredCover = IndexedRootsPolicy.FindBestCoveringRoot(registeredRoots, normalizedRoot);
+                    string warningRoot = IndexScopeIdentity.NormalizePath(registeredCover ?? normalizedRoot);
+                    // Once Search live acknowledged this physical root's missing/stale state, avoid even
+                    // replaying its large change journal on later searches in the same process.
+                    if (acknowledgedWarnings.Contains($"{ContentIndexReadinessIssueKind.Missing}|{warningRoot}", StringComparer.OrdinalIgnoreCase)
+                        || acknowledgedWarnings.Contains($"{ContentIndexReadinessIssueKind.RefreshRequired}|{warningRoot}", StringComparer.OrdinalIgnoreCase))
+                        continue;
+
+                    var options = new SearchOptions
+                    {
+                        Directory = root,
+                        Query = query,
+                        CaseSensitive = caseSensitive,
+                        UseRegex = useRegex,
+                        ExactMatch = exactMatch,
+                        Multiline = multiline,
+                        MultilineDotAll = multilineDotAll,
+                        SkipBinary = skipBinary,
+                        UseContentIndex = true,
+                    };
+                    ContentIndexReadinessIssue? issue = ContentIndexReadinessChecker.CheckRoot(
+                        paths, root, registeredRoots, options, retained, reader);
+                    if (issue is not null
+                        && !found.Any(existing => string.Equals(existing.WarningKey, issue.WarningKey, StringComparison.OrdinalIgnoreCase)))
+                        found.Add(issue);
+                }
+                return found.ToArray();
+            }).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            // Notification preflight fails open. The authoritative search gate still fails safe.
+            YaguLog.For("ContentIndex").LogDebug(ex, "Content-index readiness UI preflight failed; continuing search.");
+            return true;
+        }
+
+        issues = issues
+            .Where(issue => !_contentIndexReadinessWarningsAcknowledged.Contains(issue.WarningKey))
+            .ToArray();
+        if (issues.Length == 0)
+            return true;
+        if (YaguDialog.HasOpenOwnedWindow(_hwnd))
+            return false;
+
+        YaguLog.For("ContentIndex").LogInformation(
+            "Pre-search readiness warning: {IssueCount} actionable index issue(s): {Issues}",
+            issues.Length,
+            string.Join("; ", issues.Select(issue => $"{issue.SearchRoot}: {issue.Reason}")));
+
+        var panel = new StackPanel { Spacing = 12, MinWidth = 500 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = issues.Length == 1
+                ? "This search includes a drive or folder whose content index needs attention."
+                : "This search includes drives or folders whose content indexes need attention.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 14,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Without a usable, fresh index Yagu must scan that root live, which can take much longer. "
+                 + "For a folder that is not indexed yet, you can wait behind the blocking progress overlay, "
+                 + "or let indexing run in the background while this search continues live. You can also search "
+                 + "live without indexing, or cancel.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Opacity = 0.8,
+        });
+
+        ContentIndexReadinessIssue? requestedAction = null;
+        string? requestedActionKind = null;
+        YaguDialog? readinessDialog = null;
+        foreach (ContentIndexReadinessIssue issue in issues)
+        {
+            var row = new Grid { ColumnSpacing = 12, Padding = new Thickness(8) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var details = new StackPanel { Spacing = 3 };
+            details.Children.Add(new TextBlock
+            {
+                Text = issue.SearchRoot,
+                FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
+                FontSize = 14,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            details.Children.Add(new TextBlock
+            {
+                Text = DescribeContentIndexReadinessIssue(issue),
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 12,
+                Opacity = 0.8,
+            });
+            row.Children.Add(details);
+
+            var actions = new StackPanel { Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+            void AddAction(string label, string kind)
+            {
+                var action = new Button
+                {
+                    Content = label,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    MinWidth = 128,
+                };
+                action.Click += (_, _) =>
+                {
+                    requestedAction = issue;
+                    requestedActionKind = kind;
+                    readinessDialog?.AcceptClose();
+                };
+                actions.Children.Add(action);
+            }
+
+            if (issue.Kind == ContentIndexReadinessIssueKind.Missing)
+            {
+                if (issue.CanRebuild)
+                {
+                    AddAction("Build & wait", "rebuild");
+                    AddAction("Build & search now", "build-search");
+                }
+                else
+                {
+                    AddAction("Index & wait", "add-wait");
+                    AddAction("Index & search now", "add-search");
+                }
+            }
+            else if (!issue.Repairable)
+            {
+                // The index remains visible in Settings as needing attention, but this volume cannot
+                // provide a supported change journal, so neither update nor rebuild can restore freshness.
+            }
+            else if (CanAttemptIncrementalIndexRefresh(issue))
+            {
+                AddAction(IsJournalCatchupLimitIssue(issue) ? "Increase limit & update" : "Update index", "incremental");
+                AddAction("Rebuild index", "rebuild");
+            }
+            else
+            {
+                if (issue.CanRebuild)
+                {
+                    AddAction("Rebuild index", "rebuild");
+                }
+                else
+                {
+                    AddAction("Index & wait", "add-wait");
+                    AddAction("Index & search now", "add-search");
+                }
+            }
+            Grid.SetColumn(actions, 1);
+            row.Children.Add(actions);
+            panel.Children.Add(new Border
+            {
+                Background = TryGetPreviewBrushResource("CardBackgroundFillColorSecondaryBrush"),
+                BorderBrush = TryGetPreviewBrushResource("CardStrokeColorDefaultBrush"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Child = row,
+            });
+        }
+
+        YaguDialogResult result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Content index needs attention",
+                TitleGlyph = "\uE7BA",
+                TitleGlyphColor = Microsoft.UI.Colors.Gold,
+                Content = panel,
+                PrimaryButtonText = "Search live",
+                CloseButtonText = "Cancel",
+                DefaultButton = YaguDialogDefaultButton.Close,
+                RequestedTheme = RootGrid.ActualTheme,
+                ShowTitleBar = false,
+                ShowTopRightCloseButton = true,
+                Width = 680,
+                Height = Math.Min(620, 330 + (issues.Length * 100)),
+                MaxContentHeight = 500,
+            },
+            dialog => readinessDialog = dialog);
+
+        if (requestedAction is { } actionIssue)
+        {
+            if (requestedActionKind == "incremental")
+            {
+                int? increasedLimit = IsJournalCatchupLimitIssue(actionIssue)
+                    ? ComputeRaisedJournalCatchupLimit(ViewModel.Settings.IndexMaxJournalCatchupRecords)
+                    : null;
+                await ViewModel.RefreshCurrentIndexIncrementallyAsync(actionIssue.IndexRoot, increasedLimit);
+                foreach (ContentIndexReadinessIssue issue in issues)
+                    _contentIndexReadinessWarningsAcknowledged.Add(issue.WarningKey);
+                return true; // continue the pending search; live scan remains authoritative if repair did not complete
+            }
+            else if (requestedActionKind == "rebuild" && actionIssue.CanRebuild)
+            {
+                await ViewModel.RebuildCurrentIndexBlockingAsync(new[] { actionIssue.IndexRoot });
+                foreach (ContentIndexReadinessIssue issue in issues)
+                    _contentIndexReadinessWarningsAcknowledged.Add(issue.WarningKey);
+                return true;
+            }
+            else if (requestedActionKind == "add-wait")
+            {
+                if (!await ConfirmLargeFolderIfNeededAsync(actionIssue.SearchRoot))
+                    return false;
+                await ViewModel.AddFolderToIndexAndBuildBlockingAsync(actionIssue.SearchRoot);
+                foreach (ContentIndexReadinessIssue issue in issues)
+                    _contentIndexReadinessWarningsAcknowledged.Add(issue.WarningKey);
+                return true;
+            }
+            else if (requestedActionKind == "add-search" && await ConfirmLargeFolderIfNeededAsync(actionIssue.SearchRoot))
+            {
+                await ViewModel.AddFolderToIndexAndBuildAsync(actionIssue.SearchRoot);
+                foreach (ContentIndexReadinessIssue issue in issues)
+                    _contentIndexReadinessWarningsAcknowledged.Add(issue.WarningKey);
+                return true; // the background build runs while this search uses the authoritative live path
+            }
+            else if (requestedActionKind == "build-search" && actionIssue.CanRebuild)
+            {
+                ViewModel.RebuildRegisteredIndexNow(actionIssue.IndexRoot);
+                foreach (ContentIndexReadinessIssue issue in issues)
+                    _contentIndexReadinessWarningsAcknowledged.Add(issue.WarningKey);
+                return true; // the registered root builds in the background while this search runs live
+            }
+            return false;
+        }
+
+        if (result != YaguDialogResult.Primary)
+            return false;
+
+        foreach (ContentIndexReadinessIssue issue in issues)
+            _contentIndexReadinessWarningsAcknowledged.Add(issue.WarningKey);
+        return true;
+    }
+
+    private static string DescribeContentIndexReadinessIssue(ContentIndexReadinessIssue issue)
+    {
+        if (issue.Kind == ContentIndexReadinessIssueKind.Missing)
+            return "No usable content index exists for this root. It will be scanned live.";
+        if (issue.Reason.Contains("Incomplete", StringComparison.OrdinalIgnoreCase))
+            return "The bounded change-journal replay reached its record limit. This can happen on a busy drive soon after a rebuild. "
+                 + "Increase the limit and try a safe incremental update first; if continuity still cannot be proven, Yagu keeps the existing index unchanged.";
+        if (issue.Reason.Contains("UnsupportedChangeJournal", StringComparison.OrdinalIgnoreCase))
+            return "This volume does not provide a supported change journal, so Yagu cannot freshness-validate this index. Searches safely scan this folder live; rebuilding would not help.";
+        if (issue.Reason.Contains("GapDetected", StringComparison.OrdinalIgnoreCase))
+            return "The drive change journal no longer covers the index checkpoint. Rebuild to restore freshness.";
+        if (issue.Reason.Contains("CheckpointAhead", StringComparison.OrdinalIgnoreCase))
+            return "The saved index checkpoint is ahead of the drive's live change journal, usually because the journal was reset or recreated. Rebuild to establish a valid checkpoint.";
+        if (issue.Reason.Contains("JournalIdChanged", StringComparison.OrdinalIgnoreCase))
+            return "The drive change journal was reset after this index was built. Rebuild to establish a new checkpoint.";
+        if (issue.Reason.Contains("Unavailable", StringComparison.OrdinalIgnoreCase)
+            || issue.Reason.Contains("JournalUnavailable", StringComparison.OrdinalIgnoreCase))
+            return "The drive change journal could not be read, so index freshness cannot be proven. Rebuild or retry when the drive is available.";
+        if (issue.Reason.Contains("UnknownRecordVersion", StringComparison.OrdinalIgnoreCase))
+            return "The drive returned an unsupported change-journal record version. Rebuild the index; Yagu will scan live if freshness remains unprovable.";
+        if (issue.Reason.Contains("CheckpointInvalid", StringComparison.OrdinalIgnoreCase))
+            return "This index layer has no usable change-journal checkpoint. Rebuild to establish a fresh checkpoint.";
+        if (issue.Reason.Contains("freshness inputs unreadable", StringComparison.OrdinalIgnoreCase))
+            return "The index layer's freshness metadata could not be read. Rebuild to replace the unreadable layer safely.";
+        if (issue.Reason.Contains("Error", StringComparison.OrdinalIgnoreCase))
+            return "The change journal returned an error, so index freshness cannot be proven. Rebuild or search live.";
+        return "Index freshness cannot be proven. Rebuild before searching for normal accelerated performance.";
+    }
+
+    private static bool IsJournalCatchupLimitIssue(ContentIndexReadinessIssue issue)
+        => issue.Reason.Contains("Incomplete", StringComparison.OrdinalIgnoreCase);
+
+    private static bool CanAttemptIncrementalIndexRefresh(ContentIndexReadinessIssue issue)
+    {
+        if (!issue.Registered || issue.Kind != ContentIndexReadinessIssueKind.RefreshRequired)
+            return false;
+        string reason = issue.Reason;
+        if (reason.Contains("GapDetected", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("CheckpointAhead", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("JournalIdChanged", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("CheckpointInvalid", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("UnknownRecordVersion", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("freshness inputs unreadable", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return reason.Contains("Incomplete", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("Unavailable", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("Error", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("layer not fresh", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ComputeRaisedJournalCatchupLimit(int current)
+    {
+        long normalized = AppSettings.NormalizeIndexMaxJournalCatchupRecords(current);
+        long raised = Math.Max(normalized + AppSettings.DefaultIndexMaxJournalCatchupRecords, normalized * 4L);
+        return (int)Math.Min(AppSettings.MaximumIndexMaxJournalCatchupRecords, raised);
     }
 
     /// <summary>
@@ -436,8 +922,12 @@ public sealed partial class MainWindow
 
     private async void OnQueryKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        // Enter is handled by OnQuerySubmitted — only handle Escape here.
-        if (e.Key == VirtualKey.Escape && ViewModel.IsTranslatingSemanticQuery)
+        if (e.Key == VirtualKey.Enter)
+        {
+            e.Handled = true;
+            await SubmitQueryAsync(sender as AutoSuggestBox ?? QueryBox);
+        }
+        else if (e.Key == VirtualKey.Escape && ViewModel.IsTranslatingSemanticQuery)
         {
             e.Handled = true;
             ViewModel.CancelSemanticTranslation();
@@ -576,15 +1066,73 @@ public sealed partial class MainWindow
             return;
         }
 
-        // Narrow the query history dropdown so its right edge lines up with the "Match case" (Aa)
-        // toggle instead of running the full width of the box (under the overlaid toggle strip).
-        // Runs after the popup has laid out (Low priority) so the framework's own width pinning is
-        // already applied and ours wins.
-        if (box.IsSuggestionListOpen && ReferenceEquals(box, QueryBox))
+        // Narrow each history dropdown to the right edge of its first overlaid command target instead
+        // of letting the popup run beneath every trailing button. Run after popup layout (Low priority)
+        // so the framework's own full-AutoSuggestBox-width pinning has already run and ours wins.
+        if (box.IsSuggestionListOpen)
         {
-            DispatcherQueue.TryEnqueue(
-                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
-                ConstrainQuerySuggestionListWidth);
+            if (ReferenceEquals(box, QueryBox))
+            {
+                DispatcherQueue.TryEnqueue(
+                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                    ConstrainQuerySuggestionListWidth);
+            }
+            else if (ReferenceEquals(box, DirectoryBox))
+            {
+                DispatcherQueue.TryEnqueue(
+                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                    ConstrainDirectorySuggestionListWidth);
+            }
+        }
+    }
+
+    // The directory history dropdown right edge should line up with the RIGHT edge of the pin-star
+    // button. The index and Browse controls remain outside the popup, matching the directory bar's
+    // visual command grouping while leaving the pin target included in the dropdown width.
+    private double _directorySuggestionTargetWidth;
+
+    private void ConstrainDirectorySuggestionListWidth()
+    {
+        var xamlRoot = DirectoryBox.XamlRoot;
+        if (xamlRoot is null || !DirectoryBox.IsSuggestionListOpen
+            || PinStartupDirectoryButton.ActualWidth <= 0)
+        {
+            return;
+        }
+
+        double pinRight = PinStartupDirectoryButton
+            .TransformToVisual(DirectoryBox)
+            .TransformPoint(new Windows.Foundation.Point(PinStartupDirectoryButton.ActualWidth, 0)).X;
+        if (pinRight <= 40 || pinRight > DirectoryBox.ActualWidth + 0.5)
+            return;
+        _directorySuggestionTargetWidth = pinRight;
+
+        foreach (var popup in Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(xamlRoot))
+        {
+            if (popup.Child is not FrameworkElement card || !IsDescendantOf(popup, DirectoryBox))
+                continue;
+
+            ApplyDirectorySuggestionCardWidth(card);
+            card.SizeChanged -= OnDirectorySuggestionCardSizeChanged;
+            card.SizeChanged += OnDirectorySuggestionCardSizeChanged;
+            break;
+        }
+    }
+
+    private void ApplyDirectorySuggestionCardWidth(FrameworkElement card)
+    {
+        card.HorizontalAlignment = HorizontalAlignment.Left;
+        card.MinWidth = 0;
+        card.MaxWidth = _directorySuggestionTargetWidth;
+    }
+
+    private void OnDirectorySuggestionCardSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (sender is FrameworkElement card
+            && _directorySuggestionTargetWidth > 0
+            && card.ActualWidth > _directorySuggestionTargetWidth + 0.5)
+        {
+            ApplyDirectorySuggestionCardWidth(card);
         }
     }
 
@@ -688,6 +1236,11 @@ public sealed partial class MainWindow
     {
         if (_launcherMode && e.NewSize.Height != e.PreviousSize.Height)
             PositionLauncherWindow();
+
+        if (ReferenceEquals(sender, DirectoryBox) && DirectoryBox.IsSuggestionListOpen)
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, ConstrainDirectorySuggestionListWidth);
+        else if (ReferenceEquals(sender, QueryBox) && QueryBox.IsSuggestionListOpen)
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, ConstrainQuerySuggestionListWidth);
     }
 
     private void OnQueryClearClick(object sender, RoutedEventArgs e)
@@ -726,13 +1279,6 @@ public sealed partial class MainWindow
             RestoreQuerySuggestions(sender as AutoSuggestBox);
     }
 
-    private static bool IsShiftDown()
-    {
-        var state = Microsoft.UI.Input.InputKeyboardSource
-            .GetKeyStateForCurrentThread(VirtualKey.Shift);
-        return (state & Windows.UI.Core.CoreVirtualKeyStates.Down) == Windows.UI.Core.CoreVirtualKeyStates.Down;
-    }
-
     private async void OnBrowseDirectory(object sender, RoutedEventArgs e)
     {
         _directoryBrowseInProgress = true;
@@ -748,11 +1294,12 @@ public sealed partial class MainWindow
                 DirectoryBox.ItemsSource = ViewModel.DirectorySuggestions;
                 DirectoryBox.Focus(FocusState.Programmatic);
                 DirectoryBox.IsSuggestionListOpen = suggestionCount > 0;
+                ViewModel.RefreshCurrentIndexStatus();
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", "Folder browse dialog failed.", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Folder browse dialog failed.");
             ViewModel.StatusText = "Could not open the folder browse dialog.";
         }
         finally
@@ -761,10 +1308,12 @@ public sealed partial class MainWindow
         }
     }
 
-    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML event handlers are bound as instance methods.")]
     private void OnDirectoryQuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
     {
-        // User pressed Enter in the directory box — just accept the text (already bound).
+        // QuerySubmitted can run before x:Bind has committed the latest edit. Copy the submitted text
+        // explicitly, then refresh proactive health for that root without starting a search.
+        ViewModel.Directory = sender.Text;
+        ViewModel.RefreshCurrentIndexStatus();
     }
 
     private async void OnPinStartupDirectory(object sender, RoutedEventArgs e)
@@ -801,6 +1350,73 @@ public sealed partial class MainWindow
             pinned
                 ? "Unpin — start with an empty directory next launch"
                 : "Pin this directory as the startup default");
+    }
+
+    /// <summary>Click handler for the index glyph next to the pin star. The <see cref="ToggleButton"/>'s
+    /// IsChecked has already flipped, so the new value is the user's intent: checked = add the current box
+    /// directory to the content index (and start a background build); unchecked = unregister it. A very
+    /// large root is confirmed first (same gate as the onboarding flow). The button's highlighted "selected"
+    /// state is then re-synced to the derived <see cref="MainViewModel.IsCurrentDirectoryIndexed"/> value.</summary>
+    private async void OnIndexCurrentDirectory(object sender, RoutedEventArgs e)
+    {
+        string folder = (ViewModel.Directory ?? string.Empty).Trim();
+        bool wantIndexed = (sender as ToggleButton)?.IsChecked == true;
+
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            ViewModel.StatusText = "Enter a folder in the directory box to add it to the content index.";
+            UpdateIndexDirectoryIcon(ViewModel.IsCurrentDirectoryIndexed);
+            return;
+        }
+
+        // Keep the query/directory suggestion dropdowns (their own top-level windows) parked shut across
+        // any confirmation modal shown below so they can't float above it.
+        using var suppression = ParkInputSuggestionsForModal();
+        try
+        {
+            if (wantIndexed && !ViewModel.IsCurrentDirectoryIndexed)
+            {
+                // Warn before an unattended build of a whole drive / very large system folder.
+                if (!await ConfirmLargeFolderIfNeededAsync(folder))
+                    return;
+                await ViewModel.AddFolderToIndexAndBuildAsync(folder);
+            }
+            else if (!wantIndexed && ViewModel.IsCurrentDirectoryIndexed)
+            {
+                if (!IndexedRootsPolicy.Contains(ViewModel.Settings.IndexedRoots, folder))
+                {
+                    ViewModel.StatusText = $"{folder} is covered by the broader index root {ViewModel.CurrentDirectoryIndexRoot}. Manage that root in Settings > Indexing.";
+                    return;
+                }
+                await ViewModel.RemoveFolderFromIndexAsync(folder);
+            }
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Toggling the directory content index failed.");
+        }
+        finally
+        {
+            // Re-assert the derived highlight (the raw toggle can differ from reality, e.g. a cancelled
+            // large-folder confirmation, or an already-indexed folder).
+            UpdateIndexDirectoryIcon(ViewModel.IsCurrentDirectoryIndexed);
+        }
+    }
+
+    /// <summary>Syncs the index toggle's "selected" highlight and tooltip to <paramref name="indexed"/>,
+    /// the derived "the box directory is a registered index root" value. Like the pin star, the checked
+    /// state is driven from code-behind (not a self-disabling OneWay x:Bind) so it stays correct as the box
+    /// directory changes.</summary>
+    private void UpdateIndexDirectoryIcon(bool indexed)
+    {
+        IndexDirectoryButton.IsChecked = indexed;
+        ToolTipService.SetToolTip(
+            IndexDirectoryButton,
+            indexed
+                ? IndexedRootsPolicy.Contains(ViewModel.Settings.IndexedRoots, ViewModel.Directory)
+                    ? "This directory is an explicit content-index root — click to remove it"
+                    : $"This directory is covered by the content-index root {ViewModel.CurrentDirectoryIndexRoot}. Manage it in Settings > Indexing."
+                : "Add this directory to the content index");
     }
 
     private void OnDirectoryTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)

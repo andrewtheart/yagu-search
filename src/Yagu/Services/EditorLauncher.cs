@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services;
 
@@ -37,7 +39,7 @@ public sealed class EditorLauncher
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("EditorLauncher", $"Failed to extract archive entry for editing: {filePath}", ex);
+                YaguLog.For("EditorLauncher").LogWarning(ex, "Failed to extract archive entry for editing: {FilePath}", filePath);
                 return false;
             }
         }
@@ -57,7 +59,7 @@ public sealed class EditorLauncher
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("EditorLauncher", $"Failed to open editor for {filePath}:{line}", ex);
+            YaguLog.For("EditorLauncher").LogWarning(ex, "Failed to open editor for {FilePath}:{Line}", filePath, line);
             return false;
         }
     }
@@ -81,7 +83,7 @@ public sealed class EditorLauncher
             LaunchProcess(psi);
             return true;
         }
-        catch (Exception ex) { LogService.Instance.Warning("EditorLauncher", $"Failed to open folder for {filePath}", ex); return false; }
+        catch (Exception ex) { YaguLog.For("EditorLauncher").LogWarning(ex, "Failed to open folder for {FilePath}", filePath); return false; }
     }
 
 
@@ -102,7 +104,7 @@ public sealed class EditorLauncher
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("EditorLauncher", "wt.exe not available, trying powershell", ex);
+            YaguLog.For("EditorLauncher").LogDebug(ex, "wt.exe not available, trying powershell");
             try
             {
                 var psi = new ProcessStartInfo
@@ -114,7 +116,7 @@ public sealed class EditorLauncher
                 LaunchProcess(psi);
                 return true;
             }
-            catch (Exception ex2) { LogService.Instance.Warning("EditorLauncher", "Failed to open terminal", ex2); return false; }
+            catch (Exception ex2) { YaguLog.For("EditorLauncher").LogWarning(ex2, "Failed to open terminal"); return false; }
         }
     }
 

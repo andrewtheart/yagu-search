@@ -30,7 +30,7 @@ public sealed class MainViewModelSearchStatusRegressionTests
     {
         int start = MainViewModelSource.IndexOf("public string ProgressTooltip", StringComparison.Ordinal);
         Assert.True(start >= 0, "Expected ProgressTooltip in MainViewModel.cs");
-        string body = MainViewModelSource.Substring(start, Math.Min(1400, MainViewModelSource.Length - start));
+        string body = MainViewModelSource.Substring(start, Math.Min(2000, MainViewModelSource.Length - start));
 
         // Known total -> percentage, clamped so it never reads over 100% on a stale snapshot.
         Assert.Contains("if (TotalFiles > 0)", body);
@@ -50,8 +50,10 @@ public sealed class MainViewModelSearchStatusRegressionTests
             "\"Waiting for file list\" must be the idle fallback after the IsSearching branch.");
 
         // The tooltip recomputes when any of its inputs change.
-        Assert.Contains("OnFilesScannedChanged(int value) => OnPropertyChanged(nameof(ProgressTooltip));", MainViewModelSource);
-        Assert.Contains("OnTotalFilesChanged(int value) => OnPropertyChanged(nameof(ProgressTooltip));", MainViewModelSource);
+        Assert.Contains("partial void OnFilesScannedChanged(int value)", MainViewModelSource);
+        Assert.Contains("partial void OnTotalFilesChanged(int value)", MainViewModelSource);
+        Assert.Contains("OnPropertyChanged(nameof(ProgressTooltip));", MainViewModelSource);
+        Assert.Contains("OnPropertyChanged(nameof(SearchProgressRightLabel));", MainViewModelSource);
         Assert.Contains("OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); OnPropertyChanged(nameof(ProgressTooltip)); }", MainViewModelSource);
         Assert.Contains("[NotifyPropertyChangedFor(nameof(ProgressTooltip))]", MainViewModelSource);
     }
@@ -74,6 +76,8 @@ public sealed class MainViewModelSearchStatusRegressionTests
         string updateMethod = ExtractWindow(MainViewModelSource, "private void UpdateFilesPerSecond()", "partial void OnFileNameFilterChanged");
         Assert.Contains("if (_searchTimer is null)", updateMethod);
         Assert.DoesNotContain("_searchTimer is null || FilesScanned == 0", updateMethod);
+        Assert.Contains("_sourceBackedSearchProgress?.BuildPhaseLabel(FilesScanned, TotalFiles)", updateMethod);
+        Assert.Contains("string phaseSuffix = sourcePhase is null ? string.Empty : $\" — {sourcePhase}\";", updateMethod);
         Assert.Contains("StatusText = $\"{MatchesFound:N0} matches in", updateMethod);
         Assert.Contains("displayDt >= 2.0 && FilesScanned > 0", updateMethod);
         Assert.Contains("dt >= 0.15 && FilesScanned > 0", updateMethod);
@@ -265,12 +269,12 @@ public sealed class MainViewModelSearchStatusRegressionTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "Yagu.sln")))
+            if (File.Exists(Path.Combine(directory.FullName, "Yagu.slnx")))
                 return directory.FullName;
 
             directory = directory.Parent;
         }
 
-        throw new DirectoryNotFoundException("Could not locate Yagu.sln from the test output directory.");
+        throw new DirectoryNotFoundException("Could not locate Yagu.slnx from the test output directory.");
     }
 }

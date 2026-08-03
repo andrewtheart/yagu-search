@@ -142,8 +142,10 @@ internal static class SessionLoadDialog
         container.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         container.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-        // Column header
-        var headerGrid = new Grid { Padding = new Thickness(10, 6, 10, 6) };
+        // Column header. ColumnSpacing MUST match BuildTableRow's row grid (8) so each header aligns
+        // exactly with the cell values beneath it — otherwise every column after Name drifts left by a
+        // cumulative 8px.
+        var headerGrid = new Grid { Padding = new Thickness(10, 6, 10, 6), ColumnSpacing = 8 };
         headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(200) }); // Name
         headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Directory
         headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) }); // Size

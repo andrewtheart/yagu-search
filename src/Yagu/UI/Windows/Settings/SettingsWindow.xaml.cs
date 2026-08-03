@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
@@ -11,6 +12,9 @@ using Windows.System;
 using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Index;
+using Yagu.Services.Logging;
+using Yagu.Services.Ocr;
 using Yagu.ViewModels;
 using System.Diagnostics;
 using System.Globalization;
@@ -31,6 +35,7 @@ public sealed partial class SettingsWindow : Window
     private readonly Action? _applyPreviewSectionBackgrounds;
     private readonly Action _openHelp;
     private readonly Action? _suppressOwnerHideToTray;
+    private readonly Action<IntPtr>? _checkForUpdatesNow;
     private readonly List<UIElement> _tabPages = new();
     private readonly List<string> _tabHeaders = new();
     private readonly HashSet<UIElement> _dirtyTrackedElements = new();
@@ -51,6 +56,7 @@ public sealed partial class SettingsWindow : Window
     private bool _settingsCloseConfirmed;
     private bool _settingsClosePromptOpen;
     private bool _searchableEntriesExtracted;
+    private ContentIndexSettingsSnapshot? _cleanContentIndexSettings;
 
     private static readonly Windows.UI.Color ContrastReadableGreen = Windows.UI.Color.FromArgb(0xFF, 0x2E, 0xA0, 0x43);
     private static readonly Windows.UI.Color ContrastUnreadableRed = Windows.UI.Color.FromArgb(0xFF, 0xD1, 0x34, 0x38);
@@ -98,7 +104,7 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    public SettingsWindow(MainViewModel viewModel, HotkeyService hotkeyService, IntPtr mainHwnd, Action<bool>? applyWordWrap, Action? applyPreviewSectionBackgrounds, Action openHelp, Action? suppressOwnerHideToTray = null)
+    public SettingsWindow(MainViewModel viewModel, HotkeyService hotkeyService, IntPtr mainHwnd, Action<bool>? applyWordWrap, Action? applyPreviewSectionBackgrounds, Action openHelp, Action? suppressOwnerHideToTray = null, Action<IntPtr>? checkForUpdatesNow = null)
     {
         _viewModel = viewModel;
         _hotkeyService = hotkeyService;
@@ -107,6 +113,7 @@ public sealed partial class SettingsWindow : Window
         _applyPreviewSectionBackgrounds = applyPreviewSectionBackgrounds;
         _openHelp = openHelp;
         _suppressOwnerHideToTray = suppressOwnerHideToTray;
+        _checkForUpdatesNow = checkForUpdatesNow;
         InitializeComponent();
 
         InitializeHelpKeyboardShortcut();
@@ -126,7 +133,7 @@ public sealed partial class SettingsWindow : Window
         // rail, pane padding and vertical scrollbar) fits without horizontal scrolling — which
         // stays disabled — and so most tabs need little or no vertical scrolling. The helper
         // clamps to the monitor work area, so this is safe on smaller displays.
-        const int w = 1040, h = 920;
+        const int w = 1040, h = 980;
         WindowForegroundHelper.CenterWindowOverOwner(appWindow, mainHwnd, w, h);
 
         ApplySettingsTheme();
@@ -154,6 +161,14 @@ public sealed partial class SettingsWindow : Window
             CaptureCleanFirstTimeIntroductoryTooltipValues();
 
         RefreshDefaultResetButtons();
+
+        if (e.PropertyName == nameof(MainViewModel.IsIndexBuildActive)
+            || e.PropertyName == nameof(MainViewModel.IndexBuildPercentValue)
+            || e.PropertyName == nameof(MainViewModel.IsIndexingPaused))
+        {
+            OnIndexBuildStateChangedForRows(e.PropertyName);
+            return;
+        }
 
         if (e.PropertyName == nameof(MainViewModel.ThemeModeIndex))
         {
@@ -237,7 +252,7 @@ public sealed partial class SettingsWindow : Window
         }
         catch (System.Exception ex)
         {
-            LogService.Instance.Warning("Settings", $"Failed to open log file in Notepad: {ex.Message}", ex);
+            YaguLog.For("Settings").LogWarning(ex, "Failed to open log file in Notepad: {Error}", ex.Message);
         }
     }
 
@@ -370,8 +385,7 @@ public sealed partial class SettingsWindow : Window
     private async void OnSaveClick(object sender, RoutedEventArgs e)
     {
         SaveButton.IsEnabled = false;
-        await _viewModel.PersistSettingsAsync();
-        MarkSettingsClean();
+        await SaveSettingsAndOfferIndexRebuildAsync();
     }
 
     private void AttachSettingDirtyHandlers()
@@ -393,6 +407,10 @@ public sealed partial class SettingsWindow : Window
             case NumberBox numberBox:
                 numberBox.ValueChanged += (_, _) => MarkSettingsDirty();
                 ApplyNumericInputMaxLength(numberBox);
+                // Numeric setting boxes hold at most a 10-character value, so size them to fit that rather
+                // than letting them stretch to the full group width. Left-aligned + fixed width.
+                numberBox.HorizontalAlignment = HorizontalAlignment.Left;
+                numberBox.Width = NumericSettingBoxWidth;
                 break;
             case ComboBox comboBox:
                 comboBox.SelectionChanged += (_, _) => MarkSettingsDirty();
@@ -423,6 +441,11 @@ public sealed partial class SettingsWindow : Window
     // value across the full range of the backing type while blocking absurd over-long input. Only
     // typed/pasted input is limited — NumberBox still displays programmatically-set values in full.
     private const int NumericSettingMaxInputLength = 10;
+
+    // Physical width (px) for every numeric setting box: enough for the 10-character max plus the box
+    // chrome (clear button / compact spin buttons when focused), but not the full group width they would
+    // otherwise stretch to.
+    private const double NumericSettingBoxWidth = 150;
 
     // NumberBox hosts its editable text in a templated inner TextBox, so the max length can only be
     // applied once the control template is realized (after the control loads into the visual tree).
@@ -473,6 +496,7 @@ public sealed partial class SettingsWindow : Window
         _settingsDirty = false;
         SaveButton.IsEnabled = false;
         CaptureCleanSettingValues();
+        _cleanContentIndexSettings = ContentIndexSettingsChangeAdvisor.Capture(_viewModel.Settings);
     }
 
     private void OnSettingsWindowClosed(object sender, WindowEventArgs e)
@@ -835,9 +859,9 @@ public sealed partial class SettingsWindow : Window
             if (result == YaguDialogResult.Primary)
             {
                 SaveButton.IsEnabled = false;
-                await _viewModel.PersistSettingsAsync();
-                MarkSettingsClean();
-                CloseSettingsWindowWithoutPrompt();
+                bool keepOpen = await SaveSettingsAndOfferIndexRebuildAsync();
+                if (!keepOpen)
+                    CloseSettingsWindowWithoutPrompt();
             }
             else if (result == YaguDialogResult.Secondary)
             {
@@ -1986,6 +2010,7 @@ public sealed partial class SettingsWindow : Window
         "Developer Options" => "\uE713",
         "Shortcuts & History" => "\uE765",
         "AI" => "\uE99A",
+        "Indexing" => "\uE8F1",
         _ => "\uE7FC",
     };
 
@@ -2191,7 +2216,7 @@ public sealed partial class SettingsWindow : Window
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Settings", "Terminal working directory browse dialog failed.", ex);
+            YaguLog.For("Settings").LogWarning(ex, "Terminal working directory browse dialog failed.");
         }
     }
 
@@ -2215,7 +2240,7 @@ public sealed partial class SettingsWindow : Window
             contextGroup.Children.Add(prevCtx);
             contextGroup.Children.Add(new TextBlock { Text = "Used when Yagu builds preview snippets around each match. Larger values give more context but render more text.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            var includeHeader = new Grid { ColumnSpacing = 8, HorizontalAlignment = HorizontalAlignment.Stretch, Width = 620 };
+            var includeHeader = new Grid { ColumnSpacing = 8, HorizontalAlignment = HorizontalAlignment.Left, Width = 620 };
             includeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             includeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             includeHeader.Children.Add(NextSearchLabel("Default include patterns (comma/semicolon-separated):"));
@@ -2233,7 +2258,7 @@ public sealed partial class SettingsWindow : Window
             includeHeader.Children.Add(incMode);
             filterGroup.Children.Add(includeHeader);
 
-            var incGlobs = new TextBox { Text = _viewModel.IncludeGlobs, PlaceholderText = _viewModel.IncludeFilterPlaceholder, Width = 620, HorizontalAlignment = HorizontalAlignment.Stretch };
+            var incGlobs = new TextBox { Text = _viewModel.IncludeGlobs, PlaceholderText = _viewModel.IncludeFilterPlaceholder, Width = 620, HorizontalAlignment = HorizontalAlignment.Left };
             incGlobs.TextChanged += (_, _) => _viewModel.IncludeGlobs = incGlobs.Text;
             incMode.SelectionChanged += (_, _) =>
             {
@@ -2244,7 +2269,7 @@ public sealed partial class SettingsWindow : Window
             filterGroup.Children.Add(incGlobs);
             filterGroup.Children.Add(new TextBlock { Text = "Leave blank to include every eligible file. Multiple entries can be separated with commas or semicolons.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            var excludeHeader = new Grid { ColumnSpacing = 8, HorizontalAlignment = HorizontalAlignment.Stretch, Width = 620 };
+            var excludeHeader = new Grid { ColumnSpacing = 8, HorizontalAlignment = HorizontalAlignment.Left, Width = 620 };
             excludeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             excludeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             excludeHeader.Children.Add(NextSearchLabel("Default exclude patterns (comma/semicolon-separated):"));
@@ -2262,7 +2287,7 @@ public sealed partial class SettingsWindow : Window
             excludeHeader.Children.Add(excMode);
             filterGroup.Children.Add(excludeHeader);
 
-            var excGlobs = new TextBox { Text = _viewModel.ExcludeGlobs, PlaceholderText = _viewModel.ExcludeFilterPlaceholder, Width = 620, HorizontalAlignment = HorizontalAlignment.Stretch };
+            var excGlobs = new TextBox { Text = _viewModel.ExcludeGlobs, PlaceholderText = _viewModel.ExcludeFilterPlaceholder, Width = 620, HorizontalAlignment = HorizontalAlignment.Left };
             excGlobs.TextChanged += (_, _) => _viewModel.ExcludeGlobs = excGlobs.Text;
             excMode.SelectionChanged += (_, _) =>
             {
@@ -2605,6 +2630,7 @@ public sealed partial class SettingsWindow : Window
             var g = AddTab("OCR");
             var ocrEnableGroup = AddSettingsGroupBox(g, "Image Text Search");
             var ocrQualityGroup = AddSettingsGroupBox(g, "Recognition Quality");
+            var ocrWorkerGroup = AddSettingsGroupBox(g, "Worker Resources");
 
             // Master OCR toggle (migrated from the Search Limits tab).
             var searchImageText = new ToggleSwitch { OnContent = NextSearchLabel("Search image text (OCR)"), OffContent = NextSearchLabel("Search image text (OCR)"), IsOn = _viewModel.SearchImageText };
@@ -2630,6 +2656,26 @@ public sealed partial class SettingsWindow : Window
                 string.Equals(AppSettings.NormalizeImageOcrEngine(_viewModel.ImageOcrEngine), "tesseract", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
             ocrEnableGroup.Children.Add(ocrEngineCombo);
             ocrEnableGroup.Children.Add(new TextBlock { Text = "PaddleSharp (the default) generally gives higher accuracy on screenshots and documents. It runs on the CPU (MKL-accelerated) — no GPU or NPU is required or used. Tesseract is a lighter alternative that can be faster on low-end CPUs. The selected engine's runtime and models are downloaded on first use.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            ocrWorkerGroup.Children.Add(NextSearchLabel("OCR worker processes (0 = automatic):"));
+            var ocrWorkerParallelism = new NumberBox
+            {
+                Value = AppSettings.NormalizeImageOcrWorkerParallelism(_viewModel.ImageOcrWorkerParallelism),
+                Minimum = 0,
+                Maximum = AppSettings.MaximumImageOcrWorkerParallelism,
+                SmallChange = 1,
+                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
+            };
+            ocrWorkerParallelism.ValueChanged += (_, args) =>
+                _viewModel.ImageOcrWorkerParallelism = AppSettings.NormalizeImageOcrWorkerParallelism((int)args.NewValue);
+            ocrWorkerGroup.Children.Add(ocrWorkerParallelism);
+            var ocrWorkerParallelismDescription = new TextBlock
+            {
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            };
+            ocrWorkerGroup.Children.Add(ocrWorkerParallelismDescription);
 
             // ── Recognition Quality (applies to PaddleSharp; Tesseract uses a fixed pipeline) ──
             ocrQualityGroup.Children.Add(new TextBlock { Text = "These settings tune the PaddleSharp engine. The Tesseract engine uses a fixed recognition pipeline and ignores them.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
@@ -2697,10 +2743,21 @@ public sealed partial class SettingsWindow : Window
 
             void UpdateQualityEnabled()
             {
-                bool paddle = !string.Equals(AppSettings.NormalizeImageOcrEngine(_viewModel.ImageOcrEngine), "tesseract", StringComparison.OrdinalIgnoreCase);
+                string engine = AppSettings.NormalizeImageOcrEngine(_viewModel.ImageOcrEngine);
+                bool paddle = !string.Equals(engine, "tesseract", StringComparison.OrdinalIgnoreCase);
                 presetCombo.IsEnabled = paddle;
                 modelCombo.IsEnabled = paddle;
                 resolutionCombo.IsEnabled = paddle;
+                int automatic = OcrWorkerParallelism.Resolve(
+                    OcrWorkerParallelism.Automatic,
+                    engine,
+                    Environment.ProcessorCount,
+                    limitParallelismOnHdd: false,
+                    isHardDisk: false);
+                ocrWorkerParallelismDescription.Text =
+                    $"Each lane is an independent Yagu.OcrWorker process. 0 chooses {automatic} for the selected engine on this machine. "
+                    + "Paddle automatic stays at one because oneDNN already parallelizes internally and every extra model process can use hundreds of MB; Tesseract automatic uses at most two. "
+                    + "Explicit range 1–4. When Performance ▸ Limit disk-intensive parallelism on HDDs is enabled, an HDD search root always uses one OCR process.";
             }
 
             // Seed the selections from the view model BEFORE attaching change handlers so the initial
@@ -2802,16 +2859,35 @@ public sealed partial class SettingsWindow : Window
             searchEngineGroup.Children.Add(oversub);
             searchEngineGroup.Children.Add(new TextBlock { Text = "How many concurrent file-scan worker threads the native scanner spawns, as a multiple of the parallelism setting above. Oversubscription overlaps per-file disk latency during cold sweeps but wastes CPU (and generates heat) when files are already cached. Auto uses 1× on SSD/NVMe and 2× on rotational HDDs.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            searchEngineGroup.Children.Add(NextSearchLabel("Per-file I/O timeout (seconds):"));
+            var fileIoTimeout = new NumberBox
+            {
+                Value = AppSettings.NormalizeFileIoTimeoutSeconds(_viewModel.FileIoTimeoutSeconds),
+                Minimum = AppSettings.MinimumFileIoTimeoutSeconds,
+                Maximum = AppSettings.MaximumFileIoTimeoutSeconds,
+                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
+            };
+            fileIoTimeout.ValueChanged += (_, args) =>
+                _viewModel.FileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds((int)args.NewValue);
+            searchEngineGroup.Children.Add(fileIoTimeout);
+            searchEngineGroup.Children.Add(new TextBlock
+            {
+                Text = "Maximum time Yagu waits for one file open/read or low-level index-volume I/O operation. Default 30 seconds. Timed-out search files are skipped; index mutations fail safe or keep the file eligible for live scanning.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
             var hddToggle = new ToggleSwitch
             {
                 IsOn = _viewModel.LimitParallelismOnHdd,
-                OnContent = "Limit parallelism on HDD (set to 1 thread)",
-                OffContent = "Limit parallelism on HDD (set to 1 thread)",
+                OnContent = "Limit disk-intensive parallelism on HDDs (force one lane)",
+                OffContent = "Limit disk-intensive parallelism on HDDs (force one lane)",
                 Margin = new Thickness(0, 4, 0, 0),
             };
             hddToggle.Toggled += (_, _) => _viewModel.LimitParallelismOnHdd = hddToggle.IsOn;
             searchEngineGroup.Children.Add(hddToggle);
-            searchEngineGroup.Children.Add(new TextBlock { Text = "When enabled, if the search target is on a rotational hard disk, Yagu automatically sets parallelism to 1 to avoid excessive disk thrashing. Disable to allow any parallelism level on HDDs.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            searchEngineGroup.Children.Add(new TextBlock { Text = "Authoritative HDD safety override. For a rotational search/build root, Yagu limits content-scan CPU parallelism, OCR worker processes, content-index query lanes, and content-index build lanes to one. The native scanner's separately configured I/O oversubscription can still overlap sequential reads. Disable this only when deliberate HDD concurrency is acceptable.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             var hddWarnToggle = new ToggleSwitch
             {
@@ -3171,6 +3247,36 @@ public sealed partial class SettingsWindow : Window
             previewViewerGroup.Children.Add(fullFileLimit);
             previewViewerGroup.Children.Add(new TextBlock { Text = "Maximum file size allowed for the full-file preview tab. Files larger than this limit will show an error instead. 0 uses the default (1024 MB / 1 GB).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Full-file preview render lines (0 = 20000):" });
+            var fullFileRenderLines = new NumberBox { Value = _viewModel.FullFilePreviewMaxRenderLines, Minimum = 0, Maximum = 2_000_000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
+            fullFileRenderLines.ValueChanged += (_, args) => _viewModel.FullFilePreviewMaxRenderLines = (int)args.NewValue;
+            previewViewerGroup.Children.Add(fullFileRenderLines);
+            previewViewerGroup.Children.Add(new TextBlock { Text = "How many lines the read-only full-file preview renders before it shows a truncation notice. The built-in editor still opens the whole file (loaded in chunks); this only bounds the non-virtualized preview so a large file cannot pin the UI. 0 uses the default (20,000).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Full-file preview render characters (0 = 1000000):" });
+            var fullFileRenderChars = new NumberBox { Value = _viewModel.FullFilePreviewMaxRenderChars, Minimum = 0, Maximum = 100_000_000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
+            fullFileRenderChars.ValueChanged += (_, args) => _viewModel.FullFilePreviewMaxRenderChars = (int)args.NewValue;
+            previewViewerGroup.Children.Add(fullFileRenderChars);
+            previewViewerGroup.Children.Add(new TextBlock { Text = "The character budget for the full-file preview render (also caps a single very long line). 0 uses the default (1,000,000).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Max rendered matches per section before 'open in editor' (0 = 4000):" });
+            var maxRenderedPerSection = new NumberBox { Value = _viewModel.MaxRenderedMatchesPerSection, Minimum = 0, Maximum = 1_000_000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
+            maxRenderedPerSection.ValueChanged += (_, args) => _viewModel.MaxRenderedMatchesPerSection = (int)args.NewValue;
+            previewViewerGroup.Children.Add(maxRenderedPerSection);
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Ceiling on how many matches a single preview section renders across all 'Load more' expansions before it stops and directs you to the built-in editor for the rest. Higher values render more in-pane but risk a WinUI layout failure on extremely dense files. 0 uses the default (4,000).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Max files per multi-file preview (0 = 1000):" });
+            var maxSelectedFiles = new NumberBox { Value = _viewModel.MaxSelectedFilesPerPreview, Minimum = 0, Maximum = 1_000_000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
+            maxSelectedFiles.ValueChanged += (_, args) => _viewModel.MaxSelectedFilesPerPreview = (int)args.NewValue;
+            previewViewerGroup.Children.Add(maxSelectedFiles);
+            previewViewerGroup.Children.Add(new TextBlock { Text = "When you preview a large checked selection ('Preview all selected'), Yagu prepares at most this many files so the preview stays responsive; it reports in the status bar when the selection was truncated. Higher values preview more files at once but can make preparation slow. 0 uses the default (1,000).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Max match references per multi-file preview (0 = 100000):" });
+            var maxSelectedResults = new NumberBox { Value = _viewModel.MaxSelectedResultsPerPreview, Minimum = 0, Maximum = 100_000_000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
+            maxSelectedResults.ValueChanged += (_, args) => _viewModel.MaxSelectedResultsPerPreview = (int)args.NewValue;
+            previewViewerGroup.Children.Add(maxSelectedResults);
+            previewViewerGroup.Children.Add(new TextBlock { Text = "The total match references prepared across all files of a multi-file preview. Prevents a few match-dense files from rebuilding millions of result entries just to render a preview. 0 uses the default (100,000).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             editorAppearanceGroup.Children.Add(new TextBlock { Text = "Built-in editor font", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 0, 0, 0) });
 
             editorAppearanceGroup.Children.Add(new TextBlock { Text = "Font family:" });
@@ -3519,9 +3625,48 @@ public sealed partial class SettingsWindow : Window
         // ── Developer Options ──
         {
             var g = AddTab("Developer Options");
+            var updatesGroup = AddSettingsGroupBox(g, "Application Updates");
             var diagnosticsGroup = AddSettingsGroupBox(g, "Diagnostics UI");
+            var indexTestingGroup = AddSettingsGroupBox(g, "Index Maintenance Testing");
             var remindersGroup = AddSettingsGroupBox(g, "Reminders and Warnings");
             var loggingGroup = AddSettingsGroupBox(g, "Logging");
+
+            updatesGroup.Children.Add(new TextBlock { Text = "Check GitHub for Yagu updates:", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+            var appUpdateMode = new ComboBox { MinWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
+            appUpdateMode.Items.Add("Automatically (a quiet check about once a week)");
+            appUpdateMode.Items.Add("Only when I ask");
+            appUpdateMode.Items.Add("Off (never check)");
+            appUpdateMode.SelectedIndex = _viewModel.Settings.AppUpdateCheckMode switch
+            {
+                AppUpdateCheckMode.Automatic => 0,
+                AppUpdateCheckMode.Off => 2,
+                _ => 1, // Manual, or the undecided Prompt state, shows as "Only when I ask"
+            };
+            appUpdateMode.SelectionChanged += (_, _) =>
+            {
+                AppUpdateCheckMode mode = appUpdateMode.SelectedIndex switch
+                {
+                    0 => AppUpdateCheckMode.Automatic,
+                    2 => AppUpdateCheckMode.Off,
+                    _ => AppUpdateCheckMode.Manual,
+                };
+                _viewModel.Settings.AppUpdateCheckMode = mode;
+                _viewModel.Settings.AppUpdateChecksEnabled = mode != AppUpdateCheckMode.Off;
+                MarkSettingsDirty(requireValueChanges: false);
+            };
+            updatesGroup.Children.Add(appUpdateMode);
+
+            var checkForUpdatesNow = new Button { Content = "Check for updates now", Margin = new Thickness(0, 8, 0, 0) };
+            checkForUpdatesNow.Click += (_, _) => _checkForUpdatesNow?.Invoke(_settingsHwnd);
+            updatesGroup.Children.Add(checkForUpdatesNow);
+
+            updatesGroup.Children.Add(new TextBlock
+            {
+                Text = "Yagu only ever contacts the official GitHub Releases page and never sends your data. Automatic checks are silent unless a newer version exists — shown as a dismissible banner. For a newer version, release notes are shown before download, and installation is offered only after SHA-256 and same-publisher Authenticode verification pass.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
 
             var showMemoryPressureLabel = new CheckBox
             {
@@ -3582,6 +3727,35 @@ public sealed partial class SettingsWindow : Window
             diagnosticsGroup.Children.Add(new TextBlock
             {
                 Text = "Shows the results-toolbar Auto-scroll checkbox for testing searches that continuously append result rows. Hidden by default.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var simulateSystemIdle = new Button
+            {
+                Content = _viewModel.SimulateSystemIdle
+                    ? "Stop simulating system idle"
+                    : "Simulate system idle",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+            };
+            simulateSystemIdle.Click += async (_, _) =>
+            {
+                _viewModel.SimulateSystemIdle = !_viewModel.SimulateSystemIdle;
+                simulateSystemIdle.Content = _viewModel.SimulateSystemIdle
+                    ? "Stop simulating system idle"
+                    : "Simulate system idle";
+                if (_viewModel.SimulateSystemIdle
+                    && _viewModel.RequestIdleIndexMaintenanceAsync is { } requestMaintenance)
+                {
+                    await requestMaintenance();
+                }
+            };
+            indexTestingGroup.Children.Add(simulateSystemIdle);
+            indexTestingGroup.Children.Add(new TextBlock
+            {
+                Text = "Session-only. While enabled, the When idle scheduler treats this machine as idle. Enabling it requests an immediate real maintenance check; all normal trigger, update-mode, pause, search, power, and disk-space safeguards still apply.",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,
@@ -3662,6 +3836,31 @@ public sealed partial class SettingsWindow : Window
                 TextWrapping = TextWrapping.Wrap,
             });
 
+            var resetIndexWarmSearchWarning = new Button
+            {
+                Content = "Reset index warm-up search warning",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetIndexWarmSearchWarning.Click += async (_, _) =>
+            {
+                await _viewModel.ResetIndexWarmSearchWarningAsync();
+                MarkSettingsDirty(requireValueChanges: false);
+                resetIndexWarmSearchWarning.Content = "Index warm-up search warning reset";
+                resetIndexWarmSearchWarning.IsEnabled = false;
+            };
+            RegisterDefaultResetButton(resetIndexWarmSearchWarning,
+                () => !_viewModel.SuppressIndexWarmSearchWarning);
+            remindersGroup.Children.Add(resetIndexWarmSearchWarning);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Re-enables the warning shown when starting a search would pause an in-progress content-index warm-up.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
             var resetFirstTimeIntroTips = new Button
             {
                 Content = "Reset first-time introductory tooltips",
@@ -3736,6 +3935,31 @@ public sealed partial class SettingsWindow : Window
                 TextWrapping = TextWrapping.Wrap,
             });
 
+            var resetWindowStylePrompt = new Button
+            {
+                Content = "Reset window style prompt (re-prompt on startup)",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetWindowStylePrompt.Click += (_, _) =>
+            {
+                _viewModel.Settings.HasPromptedWindowMode = false;
+                MarkSettingsDirty(requireValueChanges: false);
+                RefreshDefaultResetButtons();
+                resetWindowStylePrompt.Content = "Window style prompt reset";
+            };
+            RegisterDefaultResetButton(resetWindowStylePrompt,
+                () => !_viewModel.Settings.HasPromptedWindowMode);
+            remindersGroup.Children.Add(resetWindowStylePrompt);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Shows the one-time \u201cChoose your window style\u201d prompt (Traditional / Compact launcher / Launcher on top) again on the next launch.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
             // Reset admin warning
             if (_viewModel.SuppressAdminWarning)
             {
@@ -3767,6 +3991,33 @@ public sealed partial class SettingsWindow : Window
                 remindersGroup.Children.Add(resetEverythingPrompt);
                 remindersGroup.Children.Add(new TextBlock { Text = "The \u201cEverything Search is not running\u201d prompt was previously dismissed with \u201cDon\u2019t show this again\u201d. Click to show it again on next launch.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
             }
+
+            // Reset Everything index-coverage warning. Keep this control visible even when the warning is
+            // already enabled (disabled/default state) so users can always discover where the preference
+            // lives; hiding it made the newly-added reset look missing until after opting out.
+            var resetEverythingCoverage = new Button
+            {
+                Content = "Re-enable Everything drive-index warning",
+                FontSize = 12,
+                Padding = new Thickness(8, 4, 8, 4),
+                Margin = new Thickness(0, 4, 0, 0),
+            };
+            resetEverythingCoverage.Click += (_, _) =>
+            {
+                _viewModel.SuppressEverythingIndexCoverageWarning = false;
+                MarkSettingsDirty(requireValueChanges: false);
+                resetEverythingCoverage.Content = "Everything drive-index warning re-enabled \u2713";
+                resetEverythingCoverage.IsEnabled = false;
+            };
+            RegisterDefaultResetButton(resetEverythingCoverage, () => !_viewModel.SuppressEverythingIndexCoverageWarning);
+            remindersGroup.Children.Add(resetEverythingCoverage);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Re-enables the pre-search warning for drives not confirmed in Everything's configured volume/folder indexes. This button is enabled after you choose 'Don't warn me again'.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
 
             loggingGroup.Children.Add(new TextBlock { Text = "File log level:" });
             var fileLogRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
@@ -3889,6 +4140,12 @@ public sealed partial class SettingsWindow : Window
             semanticRecent.ValueChanged += (_, args) => _viewModel.MaxSemanticRecentItems = (int)args.NewValue;
             historyGroup.Children.Add(semanticRecent);
             historyGroup.Children.Add(new TextBlock { Text = "Controls how many natural-language Semantic-mode queries Yagu keeps for autocomplete, separate from Traditional search history.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            historyGroup.Children.Add(new TextBlock { Text = "Autocomplete items shown before scrolling:", Margin = new Thickness(0, 8, 0, 0) });
+            var dropdownVisible = new NumberBox { Value = _viewModel.AutocompleteDropdownVisibleItems, Minimum = 1, Maximum = 50 };
+            dropdownVisible.ValueChanged += (_, args) => { if (!double.IsNaN(args.NewValue)) _viewModel.AutocompleteDropdownVisibleItems = (int)args.NewValue; };
+            historyGroup.Children.Add(dropdownVisible);
+            historyGroup.Children.Add(new TextBlock { Text = "How many directory or search-pattern suggestions appear in the dropdown at once before you have to scroll. This does not change how many are remembered.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── AI ──
@@ -4166,6 +4423,27 @@ public sealed partial class SettingsWindow : Window
                 TextWrapping = TextWrapping.Wrap,
             });
 
+            var indexTelemetryToggle = new ToggleSwitch
+            {
+                IsOn = _viewModel.Settings.ShareAggregateIndexTelemetry,
+                OnContent = "Share aggregate content-index metrics",
+                OffContent = "Share aggregate content-index metrics",
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+            indexTelemetryToggle.Toggled += (_, _) =>
+            {
+                _viewModel.Settings.ShareAggregateIndexTelemetry = indexTelemetryToggle.IsOn;
+                MarkSettingsDirty(requireValueChanges: false);
+            };
+            helpGroup.Children.Add(indexTelemetryToggle);
+            helpGroup.Children.Add(new TextBlock
+            {
+                Text = "Default off. When on \u2014 and only if you also enabled the anonymous reports above \u2014 Yagu may include aggregate content-index metrics (build/refresh time, segment and compaction counts, index-used vs bypassed). Never includes folders, paths, queries, or file contents.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
             var bugReportToggle = new ToggleSwitch
             {
                 IsOn = _viewModel.BugReportingEnabledSetting,
@@ -4219,6 +4497,8 @@ public sealed partial class SettingsWindow : Window
                 TextWrapping = TextWrapping.Wrap,
             });
         }
+
+        BuildIndexingTab();
 
         SortTabsAlphabetically();
     }

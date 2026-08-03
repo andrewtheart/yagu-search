@@ -1,9 +1,11 @@
 using System.Globalization;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Logging;
 using System.Diagnostics;
 
 namespace Yagu;
@@ -81,7 +83,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             ViewModel.StatusText = $"Could not send generated CLI command to terminal: {ex.Message}";
-            LogService.Instance.Warning("Terminal", "Failed to send generated CLI command to terminal", ex);
+            YaguLog.For("Terminal").LogWarning(ex, "Failed to send generated CLI command to terminal");
             Debug.WriteLine($"Failed to send generated CLI command to terminal: {ex}");
         }
     }
@@ -181,7 +183,13 @@ public sealed partial class MainWindow
             parts.Add(ViewModel.SearchImageText ? "--image-text" : "--no-image-text");
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchPdfText == setting.SearchPdfText))
             parts.Add(ViewModel.SearchPdfText ? "--pdf-text" : "--no-pdf-text");
-        // OCR engine / recognition model / detection resolution only affect image-text search, so emit
+        // Content-index accelerator (plan §6.2/§6.3). The Advanced Options toggle mirrors the persisted
+        // UseContentIndexByDefault, so emit --use-index/--no-index only when it differs from that saved
+        // default (or when "include saved options" is on). It is orthogonal to the extraction toggles
+        // above: --no-index never disables image/PDF/archive search and --use-index never enables them.
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.UseContentIndex == setting.UseContentIndexByDefault))
+            parts.Add(ViewModel.UseContentIndex ? "--use-index" : "--no-index");
+        // OCR engine / recognition model / detection resolution / worker processes only affect image-text search, so emit
         // them only when it is on. Each is a persisted Setting, gated so it drops out when it matches
         // the saved settings file (unless "include saved options" is on).
         if (ViewModel.SearchImageText)
@@ -194,6 +202,8 @@ public sealed partial class MainWindow
                 AddValue(parts, "--ocr-model", ViewModel.ImageOcrModel, quote: false);
             if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.ImageOcrMaxSide == setting.ImageOcrMaxSide))
                 AddValue(parts, "--ocr-max-side", ViewModel.ImageOcrMaxSide.ToString(CultureInfo.InvariantCulture), quote: false);
+            if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.ImageOcrWorkerParallelism == setting.ImageOcrWorkerParallelism))
+                AddValue(parts, "--ocr-workers", ViewModel.ImageOcrWorkerParallelism.ToString(CultureInfo.InvariantCulture), quote: false);
         }
         var skipExtensions = FormatExtensionList(BuildEffectiveSkipExtensionsForCli());
         if (!string.IsNullOrWhiteSpace(skipExtensions)
@@ -217,6 +227,8 @@ public sealed partial class MainWindow
             AddValue(parts, "--max-matches-per-file", Math.Max(0, ViewModel.MaxMatchesPerFile).ToString(CultureInfo.InvariantCulture), quote: false);
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.MaxMatchesPerLine) == Math.Max(0, setting.MaxMatchesPerLine)))
             AddValue(parts, "--max-matches-per-line", Math.Max(0, ViewModel.MaxMatchesPerLine).ToString(CultureInfo.InvariantCulture), quote: false);
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => AppSettings.NormalizeFileIoTimeoutSeconds(ViewModel.FileIoTimeoutSeconds) == AppSettings.NormalizeFileIoTimeoutSeconds(setting.FileIoTimeoutSeconds)))
+            AddValue(parts, "--file-io-timeout", AppSettings.NormalizeFileIoTimeoutSeconds(ViewModel.FileIoTimeoutSeconds).ToString(CultureInfo.InvariantCulture), quote: false);
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.AbsoluteMaxResults) == Math.Max(0, setting.AbsoluteMaxResults)))
             AddValue(parts, "--absolute-max-results", Math.Max(0, ViewModel.AbsoluteMaxResults).ToString(CultureInfo.InvariantCulture), quote: false);
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => FormatMaxDepth(ViewModel.MaxSearchDepth) == Math.Max(0, setting.MaxSearchDepth).ToString(CultureInfo.InvariantCulture)))
@@ -347,8 +359,14 @@ public sealed partial class MainWindow
     private HashSet<string> BuildEffectiveSkipExtensionsForCli()
     {
         var effective = ParseExtensionSetForCli(ViewModel.SkipExtensions);
-        foreach (var extension in ParseExtensionSetForCli(ViewModel.BinaryExtensions))
-            effective.Add(extension);
+        // Match MainViewModel.BuildEffectiveSkipExtensionSet exactly: BinaryExtensions is a content-skip
+        // list, not a listing-skip list. Folding it into --skip-extensions for Both/FileNames/
+        // FileNameThenContent made generated commands hide filename matches for binary/build artifacts.
+        if ((SearchMode)ViewModel.SearchModeIndex == SearchMode.Content)
+        {
+            foreach (var extension in ParseExtensionSetForCli(ViewModel.BinaryExtensions))
+                effective.Add(extension);
+        }
         return effective;
     }
 

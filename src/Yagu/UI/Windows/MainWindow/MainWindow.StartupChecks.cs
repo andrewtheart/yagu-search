@@ -1,10 +1,13 @@
 using System.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml.Media;
 using Windows.System;
 using Yagu.Services;
 using Yagu.Services.Ai;
+using Yagu.Services.Index;
+using Yagu.Services.Logging;
 using System.Globalization;
 namespace Yagu;
 
@@ -13,6 +16,19 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
+    /// <summary>Optional FileSystemWatcher latency-hint service (plan §11.4); null unless the user opted in.</summary>
+    private ContentIndexWatcherHintService? _indexWatcherHints;
+    private int _indexWatcherHintsGeneration;
+
+    /// <summary>Ticks while Yagu runs so the OnSchedule build trigger can fire on time; null until started.</summary>
+    private DispatcherTimer? _indexScheduleTimer;
+    /// <summary>When the last scheduled build pass ran (local). Seeded to launch time so an interval counts
+    /// from launch and a weekly slot only fires if it is still upcoming today (never run retroactively).</summary>
+    private DateTimeOffset _lastScheduledIndexRun = DateTimeOffset.Now;
+    /// <summary>Prevents WhenIdle/Continuous maintenance from launching on every 30-second timer tick.
+    /// An idle machine or Continuous mode may run another pass after the configured interval elapses.</summary>
+    private DateTimeOffset _lastIdleIndexRunUtc = DateTimeOffset.MinValue;
+
     private async void OnContentLoaded(object sender, RoutedEventArgs e)
     {
         ((FrameworkElement)sender).Loaded -= OnContentLoaded;
@@ -20,6 +36,8 @@ public sealed partial class MainWindow
         ApplyWordWrap(ViewModel.PreviewWordWrap);
         ApplyPreviewColors();
         UpdatePinStartupDirectoryIcon(ViewModel.IsCurrentDirectoryPinned);
+        UpdateIndexDirectoryIcon(ViewModel.IsCurrentDirectoryIndexed);
+        ViewModel.RefreshAllDriveIndexStatus();
         if (_launcherMode) PositionLauncherWindow();
 
         // Apply maximize-on-startup setting (only in non-launcher mode)
@@ -45,13 +63,25 @@ public sealed partial class MainWindow
         }
 
         FocusSearchOnLaunch();
+        // Start a cold query-index load immediately at launch. The view model performs all metadata/size
+        // checks off the UI thread after showing "Indexing: preparing..." and makes the load cancellable
+        // so a user-started search can pause it instead of competing for memory and disk.
+        ViewModel.StartContentIndexWarmup(ViewModel.Directory);
         await ShowTelemetryConsentIfNeededAsync();
+        await CheckFirstRunWindowModeAsync();
         await CheckFirstRunResultStoreTempLocationAsync();
         await CheckEverythingAsync();
         await CheckFirstRunContextMenuAsync();
+        await CheckFirstRunIndexOnboardingAsync();
         await ShowFontContrastWarningIfNeededAsync();
         await ShowCpuSemanticWarningIfNeededAsync();
         await OfferSemanticModelQualificationIfNeededAsync();
+        // Update checks: the one-time consent prompt (only on a fresh install / undecided user) stays in
+        // the awaited startup-modal chain so it never races or stacks with first-run, telemetry, indexing,
+        // or semantic dialogs. The Automatic-mode background check is fire-and-forget and only ever
+        // surfaces a non-modal banner (never a launch modal), so it can't delay startup.
+        await MaybeShowAppUpdateConsentPromptAsync();
+        _ = MaybeRunAutomaticAppUpdateCheckAsync();
 
         if (_autoSearchOnLoad)
         {
@@ -74,6 +104,386 @@ public sealed partial class MainWindow
         // Non-blocking: alert (once) if Foundry Local has new/updated on-device models available.
         // Fire-and-forget so a slow catalog query never delays the search box or startup focus.
         _ = CheckForNewFoundryModelsAsync();
+
+        // Non-blocking: if content indexing is on and the build trigger is AtStartup, build any registered
+        // folders that have no index yet, in the background. Off by default (opt-in) and never blocks the UI
+        // or a search; publishing an index changes no results (plan §6.1/§6.2).
+        _ = RunAutoIndexBuildIfDueAsync();
+
+        // Start the maintenance timer so OnSchedule, WhenIdle, and Continuous triggers can fire while
+        // Yagu runs. Each tick gates on the selected triggers/master switch, so it is otherwise a cheap no-op.
+        StartIndexScheduleTimer();
+        QueueIndexWatcherHintsRecreation("startup");
+
+        // Let a right-click "Resume indexing" re-run the multi-root auto/scheduled pass (which this view
+        // owns) — not just single-folder builds — so resuming a paused auto/scheduled build actually resumes.
+        ViewModel.ResumeAutoIndexBuildAsync = ResumeAutoIndexBuildPassAsync;
+        ViewModel.RequestIdleIndexMaintenanceAsync = RunIdleIndexBuildIfDueAsync;
+    }
+
+    /// <summary>Starts the once-per-30s timer that drives <c>OnSchedule</c>, <c>WhenIdle</c>, and
+    /// <c>Continuous</c> maintenance. Idempotent.</summary>
+    private void StartIndexScheduleTimer()
+    {
+        if (_indexScheduleTimer is not null)
+            return;
+        _lastScheduledIndexRun = DateTimeOffset.Now;
+        _indexScheduleTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        _indexScheduleTimer.Tick += (_, _) =>
+        {
+            _ = RunScheduledIndexBuildIfDueAsync();
+            _ = RunIdleIndexBuildIfDueAsync();
+        };
+        _indexScheduleTimer.Start();
+
+        // Continuous means "act as if the PC is always idle". Evaluate it immediately instead of
+        // waiting for the first 30-second timer tick; the shared cooldown and active-build gates still
+        // prevent overlap and enforce the configured maintenance interval.
+        if (AppSettings.IndexBuildTriggerHas(
+                ViewModel.Settings.IndexBuildTrigger,
+                ContentIndexBuildScheduler.TriggerContinuous))
+            _ = RunIdleIndexBuildIfDueAsync();
+    }
+
+    /// <summary>Runs idle-style maintenance. WhenIdle requires the configured period of no input;
+    /// Continuous treats that idleness condition as permanently satisfied. Both run at most once per
+    /// configured interval and preserve battery, foreground-search, disk-space, and pause safeguards.</summary>
+    private async Task RunIdleIndexBuildIfDueAsync()
+    {
+        try
+        {
+            AppSettings settings = ViewModel.Settings;
+            TimeSpan requiredIdle = TimeSpan.FromMinutes(
+                AppSettings.NormalizeIndexIdleDelayMinutes(settings.IndexIdleDelayMinutes));
+            bool continuousMaintenance = AppSettings.IndexBuildTriggerHas(
+                settings.IndexBuildTrigger,
+                ContentIndexBuildScheduler.TriggerContinuous);
+            bool developerSimulatedIdle = ViewModel.SimulateSystemIdle;
+            bool bypassIdleGate = continuousMaintenance || developerSimulatedIdle;
+            TimeSpan? idleTime = bypassIdleGate
+                ? requiredIdle
+                : Yagu.Helpers.SystemIdleDetector.TryGetIdleTime();
+            if (!bypassIdleGate && !Yagu.Helpers.SystemIdleDetector.HasBeenIdleFor(idleTime, requiredIdle))
+                return;
+
+            DateTimeOffset nowUtc = DateTimeOffset.UtcNow;
+            if (nowUtc - _lastIdleIndexRunUtc < requiredIdle || ViewModel.IsIndexBuildActive
+                || ViewModel.IsIndexingPaused || ViewModel.IsSearching)
+                return;
+
+            IReadOnlyList<string> roots = ContentIndexBuildScheduler.RootsForIdleBuild(settings);
+            if (roots.Count == 0)
+                return;
+
+            // Mark before dispatch so adjacent timer ticks cannot start a second pass.
+            _lastIdleIndexRunUtc = nowUtc;
+            if (developerSimulatedIdle)
+            {
+                YaguLog.For("ContentIndex").LogInformation(
+                    "Developer idle simulation active; starting an index-maintenance pass over {RootCount} root(s).",
+                    roots.Count);
+            }
+            else if (continuousMaintenance)
+            {
+                YaguLog.For("ContentIndex").LogInformation(
+                    "Continuous index maintenance due; starting a pass over {RootCount} root(s).",
+                    roots.Count);
+            }
+            else
+            {
+                YaguLog.For("ContentIndex").LogInformation(
+                    "PC idle for {IdleMinutes:F1} minute(s); starting an index-maintenance pass over {RootCount} root(s).",
+                    idleTime!.Value.TotalMinutes, roots.Count);
+            }
+            await RunIndexBuildPassAsync(roots);
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Idle index maintenance check failed.");
+        }
+    }
+
+    /// <summary>
+    /// Re-runs the multi-root background build pass over every registered folder — invoked by
+    /// <see cref="MainViewModel.ResumeIndexing"/> when the paused build was an auto/startup/scheduled pass
+    /// with no single tracked folder, so "Resume indexing" actually resumes. Honors the update mode, so a
+    /// root whose index is already fresh is skipped; a no-op when no folders are registered.
+    /// </summary>
+    private async Task ResumeAutoIndexBuildPassAsync()
+    {
+        try
+        {
+            var roots = IndexedRootsPolicy.Normalize(ViewModel.Settings.IndexedRoots);
+            if (roots.Count == 0)
+                return;
+            await RunIndexBuildPassAsync(roots);
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Resume index build pass failed.");
+        }
+    }
+
+    /// <summary>
+    /// Timer tick for the <c>OnSchedule</c> build trigger: when the master feature is on, the trigger is
+    /// OnSchedule, and the user's schedule (interval, or chosen weekdays at a time) says a pass is due,
+    /// runs one background build pass. A no-op otherwise, so the always-on timer costs almost nothing.
+    /// </summary>
+    private async Task RunScheduledIndexBuildIfDueAsync()
+    {
+        try
+        {
+            // Never overlap a running pass, and honor an explicit user pause.
+            if (ViewModel.IsIndexBuildActive || ViewModel.IsIndexingPaused)
+                return;
+
+            AppSettings settings = ViewModel.Settings;
+            var roots = ContentIndexBuildScheduler.RootsForScheduledBuild(settings);
+            if (roots.Count == 0)
+                return; // not OnSchedule, master off, or no registered folders
+
+            DateTimeOffset now = DateTimeOffset.Now;
+            if (!ContentIndexScheduleEvaluator.IsDue(settings, _lastScheduledIndexRun, now))
+                return;
+
+            // Mark before building so a long pass isn't re-triggered by the next tick.
+            _lastScheduledIndexRun = now;
+            YaguLog.For("ContentIndex").LogInformation(
+                "Scheduled index build due ({Schedule}); starting a background pass.", ContentIndexScheduleEvaluator.Describe(settings));
+            await RunIndexBuildPassAsync(roots);
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Scheduled index build check failed.");
+        }
+    }
+
+    /// <summary>
+    /// Startup auto-build (plan §6.1 <c>IndexBuildTrigger = AtStartup</c>). Runs entirely off the UI thread
+    /// and swallows failures — a background index build never disrupts the app. Does nothing unless the
+    /// master feature is on and the trigger is AtStartup (the default is Manual, so nothing happens).
+    /// </summary>
+    private async Task RunAutoIndexBuildIfDueAsync()
+    {
+        AppSettings settings = ViewModel.Settings;
+        var roots = ContentIndexBuildScheduler.RootsDueAtStartup(settings);
+        if (roots.Count == 0)
+            return;
+        await RunIndexBuildPassAsync(roots);
+    }
+
+    /// <summary>
+    /// Runs one background index build/refresh pass over <paramref name="roots"/> — shared by the
+    /// <c>AtStartup</c> trigger and the <c>OnSchedule</c> timer. Honors the pause conditions (battery /
+    /// foreground search / low disk / user pause), runs entirely off the UI thread, and swallows failures.
+    /// Publishing an index changes no search results (plan §6.1/§6.2).
+    /// </summary>
+    private async Task RunIndexBuildPassAsync(IReadOnlyList<string> roots)
+    {
+        bool indexBuildActivityStarted = false;
+        try
+        {
+            AppSettings settings = ViewModel.Settings;
+
+            // Respect the pause conditions (plan §6.1): don't drain the battery, fight a running search,
+            // or fill a nearly-full disk with an unattended build.
+            long indexDriveFreeMb;
+            try
+            {
+                var probeProvider = DefaultContentIndexPathProvider.Create(settings.IndexStorageDirectory);
+                string? indexDriveRoot = Path.GetPathRoot(probeProvider.IndexRoot);
+                indexDriveFreeMb = string.IsNullOrEmpty(indexDriveRoot)
+                    ? -1
+                    : new DriveInfo(indexDriveRoot).AvailableFreeSpace / (1024 * 1024);
+            }
+            catch
+            {
+                indexDriveFreeMb = -1; // unknown → fail open (never block on an unreadable drive)
+            }
+
+            if (ContentIndexBuildScheduler.ShouldPauseAutoBuild(
+                    settings, Yagu.Helpers.PowerLineStatus.IsOnBattery(), ViewModel.IsSearching, indexDriveFreeMb))
+            {
+                YaguLog.For("ContentIndex").LogInformation(
+                    "Startup auto-build paused (on battery, a foreground search is active, or the index drive is low on space).");
+                return;
+            }
+
+            // Honor a user pause (right-click ▸ Pause indexing) — don't start a background pass while paused.
+            if (ViewModel.IsIndexingPaused)
+            {
+                YaguLog.For("ContentIndex").LogInformation("Startup auto-build skipped: indexing is paused by the user.");
+                return;
+            }
+
+            var provider = DefaultContentIndexPathProvider.Create(settings.IndexStorageDirectory);
+            int retained = AppSettings.NormalizeIndexRetainedGenerationCount(settings.IndexRetainedGenerationCount);
+            var policy = IndexIngestionPolicy.FromSettings(settings);
+            string updateMode = AppSettings.NormalizeIndexUpdateMode(settings.IndexUpdateMode);
+
+            // Surface "Indexing…" in the main-window index indicator while this background pass runs.
+            ViewModel.BeginIndexBuildActivity();
+            indexBuildActivityStarted = true;
+
+            // The auto-builder reports each root's folder + percent-complete straight into the indicator
+            // (the folder so the tooltip names the drive being indexed; the percent for full builds AND
+            // incremental refreshes). It caches drive denominators internally, so this is a thin forwarder.
+            void ReportRootProgress(string root, int percent, string stage) => ViewModel.ReportIndexBuildProgress(root, percent, stage);
+
+            var buildTimer = Stopwatch.StartNew();
+            IndexMaintenanceSuccess result;
+            IndexRefreshKind refreshKind;
+            string maintenanceMode;
+            bool rebuildWhenDirty = false;
+            if (string.Equals(updateMode, AppSettings.IndexUpdateModeAutomaticIncremental, StringComparison.Ordinal))
+            {
+                maintenanceMode = IndexMaintenanceOperation.ModeIncremental;
+                refreshKind = IndexRefreshKind.IncrementalSegment;
+            }
+            else
+            {
+                // AutomaticFullRebuildWhenDirty (plan §6.1, V1) also rebuilds an indexed root the change
+                // journal proves has changed since it was built; ManualFullRebuild (default) only builds
+                // missing roots.
+                rebuildWhenDirty = string.Equals(
+                    updateMode,
+                    AppSettings.IndexUpdateModeAutomaticFullRebuildWhenDirty,
+                    StringComparison.Ordinal);
+                maintenanceMode = IndexMaintenanceOperation.ModeBuildDue;
+                refreshKind = IndexRefreshKind.FullBuild;
+            }
+
+            IndexMaintenanceOperation operation = IndexBuildOperationFactory.CreateMaintenance(
+                settings, roots, maintenanceMode, rebuildWhenDirty);
+            var coordinator = new IndexBuildCoordinator();
+            result = await coordinator.RunMaintenancePreferWorkerAsync(
+                operation,
+                settings.IndexUseNativeWorker,
+                ViewModel.IndexBuildCancellationToken,
+                ReportRootProgress).ConfigureAwait(true);
+            YaguLog.For("ContentIndex").LogInformation(
+                "Startup index maintenance ({Mode}): built {Built}, skipped {Skipped}, failed {Failed} of {Total} root(s).",
+                maintenanceMode, result.Built, result.Skipped, result.Failed, result.Built + result.Skipped + result.Failed);
+            buildTimer.Stop();
+
+            // Aggregate-only, opt-in telemetry (plan §6.4): inert unless the user shared index telemetry AND
+            // global telemetry is on/configured. Only counts + timing — never a root/path/query.
+            IndexTelemetry.ReportRefresh(
+                settings, refreshKind, buildTimer.Elapsed.TotalMilliseconds,
+                rootsBuilt: result.Built, rootsSkipped: result.Skipped, rootsFailed: result.Failed);
+
+            // Optional FileSystemWatcher latency hints (plan §11.4): only a hint — USN stays authoritative.
+            StartIndexWatcherHintsIfEnabled(settings, provider, retained, policy, roots);
+        }
+        catch (OperationCanceledException)
+        {
+            YaguLog.For("ContentIndex").LogInformation("Startup auto-build was paused/cancelled by the user.");
+        }
+        catch (IndexDiskFullException ex)
+        {
+            ViewModel.OnIndexBuildStoppedForDiskSpace(ex.DriveDisplayName, ex.UsedPercent, ex.ThresholdPercent);
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Startup auto-build failed");
+        }
+        finally
+        {
+            if (indexBuildActivityStarted)
+                ViewModel.EndIndexBuildActivity();
+        }
+    }
+
+    /// <summary>
+    /// Starts (or restarts) the optional watcher-hint service (plan §11.4). When a watched root goes quiet,
+    /// the service runs a single incremental refresh for just that root — reacting to changes sooner than the
+    /// next startup pass without ever bypassing the USN authority check. Registration runs off the UI thread
+    /// (deep-tree registration can be slow) and never throws; disabled by default.
+    /// </summary>
+    private void StartIndexWatcherHintsIfEnabled(
+        AppSettings settings, IContentIndexPathProvider provider, int retained, IndexIngestionPolicy policy, IReadOnlyList<string> roots)
+    {
+        int generation = Interlocked.Increment(ref _indexWatcherHintsGeneration);
+        DisposeIndexWatcherHints();
+        if (roots.Count == 0 || !ContentIndexWatcherHints.ShouldEnable(settings))
+            return;
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var service = new ContentIndexWatcherHintService(
+                    roots,
+                    changedRoot =>
+                    {
+                        try
+                        {
+                            // Honor a user pause (right-click ▸ Pause indexing).
+                            if (ViewModel.IsIndexingPaused)
+                                return;
+                            string mode = AppSettings.NormalizeIndexUpdateMode(settings.IndexUpdateMode);
+                            bool incremental = string.Equals(mode, AppSettings.IndexUpdateModeAutomaticIncremental, StringComparison.Ordinal);
+                            IndexMaintenanceOperation operation = IndexBuildOperationFactory.CreateMaintenance(
+                                settings,
+                                new[] { changedRoot },
+                                incremental ? IndexMaintenanceOperation.ModeIncremental : IndexMaintenanceOperation.ModeBuildDue,
+                                rebuildWhenDirty: !incremental);
+                            // The watcher observed an in-scope path change directly. Force the incremental
+                            // journal pass so a newly created file (whose identity is not in the old index
+                            // yet) cannot be mistaken for a fresh root by the identity-only preflight.
+                            operation.ForceRefresh = incremental;
+                            var coordinator = new IndexBuildCoordinator();
+                            IndexMaintenanceSuccess r = coordinator.RunMaintenancePreferWorkerAsync(
+                                operation,
+                                settings.IndexUseNativeWorker,
+                                ViewModel.IndexBuildCancellationToken).GetAwaiter().GetResult();
+                            if (r.Built > 0)
+                                YaguLog.For("ContentIndex").LogInformation("Watcher-hinted incremental refresh updated '{ChangedRoot}'.", changedRoot);
+                        }
+                        catch (Exception ex)
+                        {
+                            YaguLog.For("ContentIndex").LogWarning(ex, "Watcher-hinted refresh failed");
+                        }
+                    },
+                    excludedStorageRoot: provider.IndexRoot);
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (_disposed || generation != Volatile.Read(ref _indexWatcherHintsGeneration))
+                    {
+                        service.Dispose();
+                        return;
+                    }
+                    _indexWatcherHints = service;
+                    YaguLog.For("ContentIndex").LogInformation(
+                        "Watcher hints active on {ActiveWatchCount} of {RootCount} root(s).",
+                        service.ActiveWatchCount,
+                        roots.Count);
+                });
+            }
+            catch (Exception ex)
+            {
+                YaguLog.For("ContentIndex").LogWarning(ex, "Failed to start watcher hints");
+            }
+        });
+    }
+
+    private void QueueIndexWatcherHintsRecreation(string reason)
+    {
+        if (_disposed)
+            return;
+        AppSettings settings = ViewModel.Settings;
+        var roots = IndexedRootsPolicy.Normalize(settings.IndexedRoots);
+        var provider = DefaultContentIndexPathProvider.Create(settings.IndexStorageDirectory);
+        int retained = AppSettings.NormalizeIndexRetainedGenerationCount(settings.IndexRetainedGenerationCount);
+        IndexIngestionPolicy policy = IndexIngestionPolicy.FromSettings(settings);
+        YaguLog.For("ContentIndex").LogDebug("Recreating watcher hints: {Reason}.", reason);
+        StartIndexWatcherHintsIfEnabled(settings, provider, retained, policy, roots);
+    }
+
+    private void DisposeIndexWatcherHints()
+    {
+        _indexWatcherHints?.Dispose();
+        _indexWatcherHints = null;
     }
 
     private void FocusSearchBox(bool suppressSuggestions = false)
@@ -238,7 +648,7 @@ public sealed partial class MainWindow
         }
         catch (System.Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", $"CheckForNewFoundryModelsAsync failed: {ex.Message}", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "CheckForNewFoundryModelsAsync failed: {Error}", ex.Message);
             return;
         }
 
@@ -400,12 +810,12 @@ public sealed partial class MainWindow
     {
         var esPath = FileLister.FindEsExe();
         bool everythingRunning = Process.GetProcessesByName("Everything").Length > 0;
-        LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: esPath={esPath ?? "(null)"}, everythingRunning={everythingRunning}");
+        YaguLog.For("MainWindow").LogInformation("CheckEverythingAsync: esPath={EsPath}, everythingRunning={EverythingRunning}", esPath ?? "(null)", everythingRunning);
 
         // Everything is running — SDK will work regardless of es.exe presence
         if (everythingRunning)
         {
-            LogService.Instance.Info("MainWindow", "CheckEverythingAsync: Everything process is running — SDK will work, no action needed");
+            YaguLog.For("MainWindow").LogInformation("CheckEverythingAsync: Everything process is running — SDK will work, no action needed");
             return;
         }
 
@@ -413,12 +823,12 @@ public sealed partial class MainWindow
         if (esPath != null)
         {
             var everythingExe = FindEverythingExe(esPath);
-            LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: es.exe found at '{esPath}', Everything.exe resolve={everythingExe ?? "(null)"}");
+            YaguLog.For("MainWindow").LogInformation("CheckEverythingAsync: es.exe found at '{EsPath}', Everything.exe resolve={EverythingExe}", esPath, everythingExe ?? "(null)");
             if (everythingExe != null)
             {
                 if (ViewModel.SuppressEverythingNotRunningPrompt)
                 {
-                    LogService.Instance.Info("MainWindow", "CheckEverythingAsync: 'Everything not running' prompt suppressed by user setting \u2014 skipping");
+                    YaguLog.For("MainWindow").LogInformation("CheckEverythingAsync: 'Everything not running' prompt suppressed by user setting \u2014 skipping");
                     return;
                 }
 
@@ -455,7 +865,7 @@ public sealed partial class MainWindow
                     catch (Exception ex)
                     {
                         ViewModel.StatusText = $"Could not start Everything: {ex.Message}. Using built-in file enumeration.";
-                        LogService.Instance.Warning("MainWindow", "Failed to start Everything", ex);
+                        YaguLog.For("MainWindow").LogWarning(ex, "Failed to start Everything");
                     }
                 }
                 return;
@@ -466,10 +876,10 @@ public sealed partial class MainWindow
         var everythingExeStandalone = FindEverythingExeStandalone();
         if (everythingExeStandalone != null)
         {
-            LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: Everything.exe found at '{everythingExeStandalone}' (no es.exe), offering to start");
+            YaguLog.For("MainWindow").LogInformation("CheckEverythingAsync: Everything.exe found at '{EverythingExeStandalone}' (no es.exe), offering to start", everythingExeStandalone);
             if (ViewModel.SuppressEverythingNotRunningPrompt)
             {
-                LogService.Instance.Info("MainWindow", "CheckEverythingAsync: 'Everything not running' prompt suppressed by user setting \u2014 skipping");
+                YaguLog.For("MainWindow").LogInformation("CheckEverythingAsync: 'Everything not running' prompt suppressed by user setting \u2014 skipping");
                 return;
             }
 
@@ -506,14 +916,14 @@ public sealed partial class MainWindow
                 catch (Exception ex)
                 {
                     ViewModel.StatusText = $"Could not start Everything: {ex.Message}. Using built-in file enumeration.";
-                    LogService.Instance.Warning("MainWindow", "Failed to start Everything", ex);
+                    YaguLog.For("MainWindow").LogWarning(ex, "Failed to start Everything");
                 }
             }
             return;
         }
 
         // Nothing found — offer to download and install
-        LogService.Instance.Warning("MainWindow", "CheckEverythingAsync: Everything not found anywhere — showing install dialog");
+        YaguLog.For("MainWindow").LogWarning("CheckEverythingAsync: Everything not found anywhere — showing install dialog");
         bool installEverything = await YaguDialog.ShowAsync(
             _hwnd,
             new YaguDialogOptions
@@ -544,7 +954,7 @@ public sealed partial class MainWindow
         if (installerFromBundle)
         {
             installerPath = bundledInstaller!;
-            LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: using bundled Everything installer at '{installerPath}' (offline edition) \u2014 no download");
+            YaguLog.For("MainWindow").LogInformation("CheckEverythingAsync: using bundled Everything installer at '{InstallerPath}' (offline edition) \u2014 no download", installerPath);
         }
         else
         {
@@ -568,7 +978,7 @@ public sealed partial class MainWindow
         if (!AuthenticodeVerifier.IsTrustedPublisher(installerPath, EverythingAssetPaths.TrustedPublisher, out string signatureFailure))
         {
             if (!installerFromBundle) TryDeleteFile(installerPath);
-            LogService.Instance.Warning("MainWindow", $"Refusing to run Everything installer: {signatureFailure}");
+            YaguLog.For("MainWindow").LogWarning("Refusing to run Everything installer: {SignatureFailure}", signatureFailure);
             ViewModel.StatusText = "Everything Search installer failed signature verification and was not run. Using built-in file enumeration.";
             return;
         }
@@ -612,7 +1022,7 @@ public sealed partial class MainWindow
                     }
                     catch (Exception ex)
                     {
-                        LogService.Instance.Warning("MainWindow", "Failed to start Everything after install", ex);
+                        YaguLog.For("MainWindow").LogWarning(ex, "Failed to start Everything after install");
                     }
                 }
             }
@@ -622,12 +1032,12 @@ public sealed partial class MainWindow
         catch (System.ComponentModel.Win32Exception)
         {
             ViewModel.StatusText = "Everything Search installation was cancelled. Using built-in file enumeration.";
-            LogService.Instance.Info("MainWindow", "Everything install UAC declined");
+            YaguLog.For("MainWindow").LogInformation("Everything install UAC declined");
         }
         catch (Exception ex)
         {
             ViewModel.StatusText = $"Failed to install Everything: {ex.Message}. Using built-in file enumeration.";
-            LogService.Instance.Warning("MainWindow", "Everything install failed", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Everything install failed");
         }
     }
 
@@ -719,14 +1129,14 @@ public sealed partial class MainWindow
         {
             TryDeleteFile(tempPath);
             ViewModel.StatusText = "Everything Search download cancelled. Using built-in file enumeration.";
-            LogService.Instance.Info("MainWindow", "Everything installer download cancelled by user");
+            YaguLog.For("MainWindow").LogInformation("Everything installer download cancelled by user");
             return false;
         }
 
         if (error is not null)
         {
             TryDeleteFile(tempPath);
-            LogService.Instance.Warning("MainWindow", "Everything installer download failed", error);
+            YaguLog.For("MainWindow").LogWarning(error, "Everything installer download failed");
             ViewModel.StatusText = "Could not download Everything Search. Using built-in file enumeration.";
             await ShowEverythingDownloadFailedAsync(error).ConfigureAwait(true);
             return false;
@@ -812,7 +1222,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("MainWindow", $"Could not delete temp file '{path}': {ex.Message}", ex);
+            YaguLog.For("MainWindow").LogDebug(ex, "Could not delete temp file '{Path}': {Error}", path, ex.Message);
         }
     }
 
@@ -858,7 +1268,7 @@ public sealed partial class MainWindow
             var candidate = Path.Combine(dir, "Everything.exe");
             if (File.Exists(candidate))
             {
-                LogService.Instance.Info("MainWindow", $"FindEverythingExe: found at {candidate}");
+                YaguLog.For("MainWindow").LogInformation("FindEverythingExe: found at {Candidate}", candidate);
                 return candidate;
             }
         }
@@ -872,11 +1282,11 @@ public sealed partial class MainWindow
         {
             if (File.Exists(path))
             {
-                LogService.Instance.Info("MainWindow", $"FindEverythingExe: found at {path}");
+                YaguLog.For("MainWindow").LogInformation("FindEverythingExe: found at {Path}", path);
                 return path;
             }
         }
-        LogService.Instance.Warning("MainWindow", $"FindEverythingExe: NOT FOUND (esPath was '{esPath}', dir was '{dir}')");
+        YaguLog.For("MainWindow").LogWarning("FindEverythingExe: NOT FOUND (esPath was '{EsPath}', dir was '{Dir}')", esPath, dir);
         return null;
     }
 
@@ -888,7 +1298,7 @@ public sealed partial class MainWindow
             var candidate = Path.Combine(installDir, "Everything.exe");
             if (File.Exists(candidate))
             {
-                LogService.Instance.Info("MainWindow", $"FindEverythingExeStandalone: found via registry at {candidate}");
+                YaguLog.For("MainWindow").LogInformation("FindEverythingExeStandalone: found via registry at {Candidate}", candidate);
                 return candidate;
             }
         }
@@ -902,11 +1312,11 @@ public sealed partial class MainWindow
         {
             if (File.Exists(path))
             {
-                LogService.Instance.Info("MainWindow", $"FindEverythingExeStandalone: found at {path}");
+                YaguLog.For("MainWindow").LogInformation("FindEverythingExeStandalone: found at {Path}", path);
                 return path;
             }
         }
-        LogService.Instance.Info("MainWindow", "FindEverythingExeStandalone: Everything.exe not found in any standard location");
+        YaguLog.For("MainWindow").LogInformation("FindEverythingExeStandalone: Everything.exe not found in any standard location");
         return null;
     }
 

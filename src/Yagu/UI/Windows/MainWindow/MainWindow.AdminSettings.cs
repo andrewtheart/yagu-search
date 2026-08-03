@@ -1,7 +1,9 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Windows.ApplicationModel.DataTransfer;
+using Yagu.Services.Logging;
 namespace Yagu;
 
 /// <summary>
@@ -108,7 +110,7 @@ public sealed partial class MainWindow
             catch { _settingsWindow = null; }
         }
 
-        _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap, ApplyPreviewSectionBackgrounds, OpenHelpWindow, SuppressLauncherHideToTrayForOwnedWindowClose);
+        _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap, ApplyPreviewSectionBackgrounds, OpenHelpWindow, SuppressLauncherHideToTrayForOwnedWindowClose, ownerHwnd => _ = RunManualAppUpdateCheckAsync(ownerHwnd));
         _settingsWindow.Closed += (_, _) =>
         {
             SuppressLauncherHideToTrayForOwnedWindowClose();
@@ -129,8 +131,76 @@ public sealed partial class MainWindow
     private readonly HashSet<string> _hddWarningShownDrives = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Warns when a search is requested while the query index is still warming. Proceeding cancels the
+    /// cancellable warm so it cannot compete with the search; the view model restarts it automatically
+    /// after the search. The persisted checkbox suppresses only this notice, not the protective pause.
+    /// </summary>
+    private async Task<bool> CheckIndexWarmupAndWarnAsync()
+    {
+        if (!ViewModel.IsIndexWarmActive)
+            return true;
+
+        if (ViewModel.SuppressIndexWarmSearchWarning)
+        {
+            ViewModel.PauseContentIndexWarmupForSearch();
+            return true;
+        }
+
+        var contentPanel = new StackPanel { Spacing = 10, MinWidth = 380 };
+        contentPanel.Children.Add(new TextBlock
+        {
+            Text = "Indexing is warming up. If you proceed with the search, search speed will not be accelerated and indexing will be paused.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        contentPanel.Children.Add(new TextBlock
+        {
+            Text = "The warm-up resumes automatically when this search finishes.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11,
+            Opacity = 0.7,
+        });
+        var dontShowAgain = new CheckBox
+        {
+            Content = "Don't show this warning again",
+            IsChecked = false,
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+        contentPanel.Children.Add(dontShowAgain);
+
+        YaguDialogResult result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Content index is warming up",
+                TitleGlyph = "\uE895",
+                TitleGlyphColor = Microsoft.UI.Colors.Gold,
+                Content = contentPanel,
+                PrimaryButtonText = "Proceed with search",
+                CloseButtonText = "Wait for index",
+                DefaultButton = YaguDialogDefaultButton.Close,
+                RequestedTheme = RootGrid.ActualTheme,
+                ShowTitleBar = false,
+                Width = 590,
+                Height = 350,
+                MaxContentHeight = 240,
+            });
+
+        if (dontShowAgain.IsChecked == true)
+        {
+            ViewModel.SuppressIndexWarmSearchWarning = true;
+            await ViewModel.PersistSettingsAsync().ConfigureAwait(true);
+        }
+
+        if (result != YaguDialogResult.Primary)
+            return false;
+
+        ViewModel.PauseContentIndexWarmupForSearch();
+        return true;
+    }
+
+    /// <summary>
     /// Checks if the search directory is on a rotational HDD and, if LimitParallelismOnHdd is enabled,
-    /// forces parallelism to 1. Shows a warning dialog unless SuppressHddParallelismWarnings is set.
+    /// applies the per-root one-lane safeguards. Shows a warning unless SuppressHddParallelismWarnings is set.
     /// Returns false if the user cancels.
     /// </summary>
     private async Task<bool> CheckHddAndWarnAsync()
@@ -144,20 +214,10 @@ public sealed partial class MainWindow
         if (hddRoots.Count == 0) return true;
 
         bool singleRoot = roots.Count == 1;
-        if (singleRoot)
-        {
-            // Single explicit directory on an HDD: force parallelism to 1 (sequential) for this
-            // session only. This temporary override is NOT written back to the persisted
-            // ParallelismIndex setting, so the user's saved preference is preserved across restarts.
-            // (All-drives runs apply per-drive parallelism in StartSearchAsync instead, so the
-            // non-HDD drives keep the configured parallelism.)
-            ViewModel.SetSessionParallelismOverride(1);
-        }
 
-        // Parallelism limiting above always applies while LimitParallelismOnHdd is on. The warning
-        // dialog is a separate, independently suppressible notice: when the user has opted out of the
-        // warning, still limit parallelism but skip the dialog. Changing the parallelism behavior
-        // itself requires the Settings page.
+        // HDD limiting is applied later, per root, while SearchOptions are built. Do not install a
+        // session-wide override here: a single HDD search must never throttle a later SSD/NVMe search.
+        // The warning is separately suppressible; suppression does not disable the per-root safety limit.
         if (ViewModel.SuppressHddParallelismWarnings) return true;
 
         // Only warn once per HDD-drive-set per session; subsequent searches on the same disks
@@ -173,9 +233,9 @@ public sealed partial class MainWindow
         {
             Text = singleRoot
                 ? "The selected search directory is on a rotational hard disk (HDD). " +
-                  "Parallelism has been set to 1 thread to avoid excessive disk thrashing."
+                                    "Base content-scan parallelism and specialized OCR/index worker lanes are limited to one to avoid excessive disk thrashing."
                 : $"{hddRoots.Count} of the drives being searched are on rotational hard disks (HDD). " +
-                  "Parallelism is limited to 1 thread on those drives to avoid excessive disk thrashing; " +
+                                    "Base content-scan parallelism and specialized OCR/index worker lanes are limited to one on those drives; " +
                   "the other drives use your configured parallelism.",
             TextWrapping = TextWrapping.Wrap,
         });
@@ -185,7 +245,7 @@ public sealed partial class MainWindow
         // and never changes the persisted setting.
         contentPanel.Children.Add(new TextBlock
         {
-            Text = "Override parallelism for the HDD on this search:",
+            Text = "Override content-scan parallelism for the HDD on this search:",
             FontSize = 12,
             Opacity = 0.9,
         });
@@ -200,7 +260,7 @@ public sealed partial class MainWindow
         contentPanel.Children.Add(parallelismOverride);
         contentPanel.Children.Add(new TextBlock
         {
-            Text = "Applies to this search only and doesn't change your saved setting. Higher values can thrash a rotational disk.",
+            Text = "Applies only to the content scanner for this search and doesn't change your saved setting. OCR and index workers remain at one lane while the global HDD safeguard is enabled. Higher values can thrash a rotational disk.",
             FontSize = 11,
             Opacity = 0.6,
             TextWrapping = TextWrapping.Wrap,
@@ -243,7 +303,7 @@ public sealed partial class MainWindow
             _hwnd,
             new YaguDialogOptions
             {
-                Title = "HDD detected - parallelism limited",
+                Title = "HDD detected - disk workers limited",
                 TitleGlyph = "\uE7BA",
                 TitleGlyphColor = Microsoft.UI.Colors.Gold,
                 Content = contentPanel,
@@ -336,7 +396,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            Yagu.Services.LogService.Instance.Warning("Search", $"Low disk-space notice dialog failed: {ex.Message}", ex);
+            YaguLog.For("Search").LogWarning(ex, "Low disk-space notice dialog failed: {Error}", ex.Message);
         }
     }
 

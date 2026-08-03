@@ -16,7 +16,7 @@ public sealed partial class MainWindow
             return;
 
         int selectedIndex = AdvancedOptionsTabList.SelectedIndex;
-        if (selectedIndex < 0 || selectedIndex > 4)
+        if (selectedIndex < 0 || selectedIndex > 5)
         {
             AdvancedOptionsTabList.SelectedIndex = 0;
             selectedIndex = 0;
@@ -30,6 +30,7 @@ public sealed partial class MainWindow
         FrameworkElement[] tabContents =
         [
             AdvancedOptionsSearchTabContent,
+            AdvancedOptionsQuickSearchesTabContent,
             AdvancedOptionsFiltersTabContent,
             AdvancedOptionsSizeTabContent,
             AdvancedOptionsDatesTabContent,

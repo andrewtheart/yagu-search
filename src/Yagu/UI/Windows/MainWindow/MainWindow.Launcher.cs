@@ -1,7 +1,10 @@
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Yagu.Services;
+using Yagu.Services.Index;
+using Yagu.Services.Logging;
 
 namespace Yagu;
 
@@ -111,7 +114,7 @@ public sealed partial class MainWindow
             }
             catch { }
 
-            LogService.Instance.Info("Launcher", $"PositionLauncherWindow: desiredH={desiredHeightDip:F1} dip, scale={scale:F2}, chromeH={chromeHeight}px, outer={AppWindow.Size.Height}, client={AppWindow.ClientSize.Height}");
+            YaguLog.For("Launcher").LogInformation("PositionLauncherWindow: desiredH={DesiredHeightDip:F1} dip, scale={Scale:F2}, chromeH={ChromeHeight}px, outer={Outer}, client={Client}", desiredHeightDip, scale, chromeHeight, AppWindow.Size.Height, AppWindow.ClientSize.Height);
 
             int width = (int)(1400 * scale);
             int height = (int)((desiredHeightDip + 2) * scale) + chromeHeight;
@@ -151,7 +154,7 @@ public sealed partial class MainWindow
                     (int newX, int newY) = ComputeLauncherPosition(wa, newWidth, newHeight, deferredScale);
                     AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(newX, newY, newWidth, newHeight));
                     RootGrid.UpdateLayout();
-                    LogService.Instance.Info("Launcher", $"PositionLauncherWindow (deferred): h={h:F1} dip, scale={deferredScale:F2}, chrome={chrome}px, newHeight={newHeight}px");
+                    YaguLog.For("Launcher").LogInformation("PositionLauncherWindow (deferred): h={H:F1} dip, scale={DeferredScale:F2}, chrome={Chrome}px, newHeight={NewHeight}px", h, deferredScale, chrome, newHeight);
                 }
                 catch { }
             });
@@ -313,7 +316,7 @@ public sealed partial class MainWindow
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         if (_hwnd == IntPtr.Zero)
         {
-            LogService.Instance.Warning("Hotkey", "Could not initialize global hotkey: window handle was not available");
+            YaguLog.For("Hotkey").LogWarning("Could not initialize global hotkey: window handle was not available");
             return;
         }
 
@@ -321,7 +324,7 @@ public sealed partial class MainWindow
         _hotkeyHookInstalled = SetWindowSubclass(_hwnd, _hotkeySubclassProc, HotkeySubclassId, UIntPtr.Zero);
         if (!_hotkeyHookInstalled)
         {
-            LogService.Instance.Warning("Hotkey", "Could not install global hotkey window hook");
+            YaguLog.For("Hotkey").LogWarning("Could not install global hotkey window hook");
             return;
         }
 
@@ -350,17 +353,23 @@ public sealed partial class MainWindow
                 finally { _suppressHotkeySettingChange = false; }
             }
 
-            LogService.Instance.Info("Hotkey", $"Registered global hotkey {HotkeyService.FormatCtrlShift(selectedKey)}");
+            YaguLog.For("Hotkey").LogInformation("Registered global hotkey {Hotkey}", HotkeyService.FormatCtrlShift(selectedKey));
             return;
         }
 
         _hotkeyService.Unregister();
         ViewModel.StatusText = "No available Ctrl+Shift+letter global hotkeys were found.";
-        LogService.Instance.Warning("Hotkey", "Could not register any Ctrl+Shift+letter global hotkey");
+        YaguLog.For("Hotkey").LogWarning("Could not register any Ctrl+Shift+letter global hotkey");
     }
 
     private IntPtr HotkeyWindowProc(IntPtr hWnd, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, UIntPtr refData)
     {
+        if (message == WmDeviceChange)
+            CaptureDeviceChangeAndDispatch(wParam, lParam);
+
+        if (message == WmQueryEndSession && TryBlockWindowsSessionEnd())
+            return IntPtr.Zero;
+
         if (message == WmGetMinMaxInfo && TryApplyMaximizedWorkArea(hWnd, lParam))
             return IntPtr.Zero;
 
@@ -596,10 +605,21 @@ public sealed partial class MainWindow
 
     private void OnAppWindowClosing(Microsoft.UI.Windowing.AppWindow sender, Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
-        if (_forceClose || !ViewModel.CloseToTray) return;
+        if (_forceClose)
+            return;
 
-        args.Cancel = true;
-        RequestCloseToTray();
+        if (ViewModel.CloseToTray)
+        {
+            args.Cancel = true;
+            RequestCloseToTray();
+            return;
+        }
+
+        if (ViewModel.IsIndexBuildActive)
+        {
+            args.Cancel = true;
+            RequestApplicationExit(IndexingCloseTrigger.UserExit);
+        }
     }
 
     /// <summary>
@@ -673,8 +693,7 @@ public sealed partial class MainWindow
             // The user chose to change the close behavior to fully exit; honor it now and onward.
             ViewModel.CloseToTray = false;
             await ViewModel.PersistSettingsAsync();
-            _forceClose = true;
-            Close();
+            RequestApplicationExit(IndexingCloseTrigger.UserExit);
             return;
         }
 
@@ -702,10 +721,13 @@ public sealed partial class MainWindow
             {
                 DispatcherQueue.TryEnqueue(() => RestoreWindowFromTray());
             };
+            _trayIcon.QuickSearchRequested += () =>
+            {
+                DispatcherQueue.TryEnqueue(async () => await ShowTrayQuickSearchAsync());
+            };
             _trayIcon.CloseRequested += () =>
             {
-                _forceClose = true;
-                DispatcherQueue.TryEnqueue(() => Close());
+                RequestApplicationExit(IndexingCloseTrigger.UserExit);
             };
             firstDock = !HasShownTrayNotification();
         }

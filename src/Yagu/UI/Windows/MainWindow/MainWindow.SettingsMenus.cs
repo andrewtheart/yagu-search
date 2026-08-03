@@ -1,8 +1,9 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.Win32;
 using Windows.System;
 using Yagu.Services;
+using Yagu.Services.Logging;
 namespace Yagu;
 
 /// <summary>
@@ -11,9 +12,6 @@ namespace Yagu;
 public sealed partial class MainWindow
 {
     // ── First-run context menu prompt ──────────────────────────────────
-    private const string ContextMenuRegKeyDir = @"Software\Classes\Directory\shell\Yagu";
-    private const string ContextMenuRegKeyBg  = @"Software\Classes\Directory\Background\shell\Yagu";
-    private const string ContextMenuText = "Search with Yagu";
 
     private async Task CheckFirstRunContextMenuAsync()
     {
@@ -62,7 +60,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("ContextMenu", "Failed to register context menu", ex);
+            YaguLog.For("ContextMenu").LogWarning(ex, "Failed to register context menu");
 
             await YaguDialog.ShowAsync(
                 _hwnd,
@@ -79,27 +77,9 @@ public sealed partial class MainWindow
         }
     }
 
-    private static bool IsContextMenuRegistered()
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(ContextMenuRegKeyDir);
-        return key != null;
-    }
+    private static bool IsContextMenuRegistered() => ExplorerContextMenu.IsRegistered();
 
-    private static void RegisterContextMenu()
-    {
-        var exePath = Environment.ProcessPath
-            ?? Path.Combine(AppContext.BaseDirectory, "Yagu.exe");
-
-        foreach (var regPath in new[] { ContextMenuRegKeyDir, ContextMenuRegKeyBg })
-        {
-            using var shellKey = Registry.CurrentUser.CreateSubKey(regPath);
-            shellKey.SetValue(null, ContextMenuText);
-            shellKey.SetValue("Icon", exePath);
-
-            using var cmdKey = Registry.CurrentUser.CreateSubKey(regPath + @"\command");
-            cmdKey.SetValue(null, $"\"{exePath}\" --dir \"%V\"");
-        }
-    }
+    private static void RegisterContextMenu() => ExplorerContextMenu.Register();
 
     // ── Skip-extensions dropdown ──────────────────────────────────
     private void OnSkipExtToggled(object sender, RoutedEventArgs e) => ViewModel.OnSkipExtensionToggled();

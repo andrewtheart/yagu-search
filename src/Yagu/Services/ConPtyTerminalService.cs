@@ -2,6 +2,8 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services;
 
@@ -55,7 +57,7 @@ internal sealed class ConPtyTerminalService : IDisposable
         else
             ConfigureCommandShellStartInfo(startInfo);
 
-        LogService.Instance.Info("Terminal", $"Launching redirected shell '{shellPath}' ({shellKind}) with cwd='{resolvedWorkingDirectory}'");
+        YaguLog.For("Terminal").LogInformation("Launching redirected shell '{ShellPath}' ({ShellKind}) with cwd='{ResolvedWorkingDirectory}'", shellPath, shellKind, resolvedWorkingDirectory);
 
         try
         {
@@ -94,7 +96,7 @@ internal sealed class ConPtyTerminalService : IDisposable
     {
         if (_input is null)
         {
-            LogService.Instance.Warning("Terminal", "Ignored terminal input because the shell input stream is not ready.");
+            YaguLog.For("Terminal").LogWarning("Ignored terminal input because the shell input stream is not ready.");
             return;
         }
 
@@ -103,7 +105,7 @@ internal sealed class ConPtyTerminalService : IDisposable
             if (!_loggedFirstInput && text.Length > 0)
             {
                 _loggedFirstInput = true;
-                LogService.Instance.Info("Terminal", $"First terminal input written: chars={text.Length}");
+                YaguLog.For("Terminal").LogInformation("First terminal input written: chars={Chars}", text.Length);
             }
 
             string echo = echoInput ? BuildLocalEcho(text) : string.Empty;
@@ -120,7 +122,7 @@ internal sealed class ConPtyTerminalService : IDisposable
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         {
-            LogService.Instance.Warning("Terminal", "Failed to write terminal input", ex);
+            YaguLog.For("Terminal").LogWarning(ex, "Failed to write terminal input");
         }
     }
 
@@ -150,7 +152,7 @@ internal sealed class ConPtyTerminalService : IDisposable
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         {
-            LogService.Instance.Warning("Terminal", "Failed to send terminal cancellation input", ex);
+            YaguLog.For("Terminal").LogWarning(ex, "Failed to send terminal cancellation input");
         }
     }
 
@@ -174,7 +176,7 @@ internal sealed class ConPtyTerminalService : IDisposable
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception)
             {
-                LogService.Instance.Verbose("Terminal", $"Terminal cancellation skipped process {processId}", ex);
+                YaguLog.For("Terminal").LogDebug(ex, "Terminal cancellation skipped process {ProcessId}", processId);
             }
         }
 
@@ -264,7 +266,7 @@ internal sealed class ConPtyTerminalService : IDisposable
             if (!_loggedFirstOutput)
             {
                 _loggedFirstOutput = true;
-                LogService.Instance.Info("Terminal", $"First shell output received: chars={charsRead}");
+                YaguLog.For("Terminal").LogInformation("First shell output received: chars={CharsRead}", charsRead);
             }
 
             OutputReceived?.Invoke(output);

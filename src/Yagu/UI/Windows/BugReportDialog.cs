@@ -1,9 +1,11 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Yagu.Helpers;
 using Yagu.Services;
+using Yagu.Services.Logging;
 using Yagu.Services.Telemetry;
 using System.Text;
 
@@ -35,7 +37,7 @@ internal static class BugReportDialog
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("BugReport", $"Bug-report dialog failed: {ex.Message}", ex);
+                YaguLog.For("BugReport").LogWarning(ex, "Bug-report dialog failed: {Error}", ex.Message);
             }
         });
     }
@@ -96,7 +98,7 @@ internal static class BugReportDialog
             if (!string.IsNullOrWhiteSpace(payload.Email))
             {
                 try { await window.ViewModel.SetBugReportContactEmailAsync(payload.Email).ConfigureAwait(true); }
-                catch (Exception ex) { LogService.Instance.Verbose("BugReport", $"Could not persist email: {ex.Message}"); }
+                catch (Exception ex) { YaguLog.For("BugReport").LogDebug("Could not persist email: {Error}", ex.Message); }
             }
 
             BugReportResponse? response = await BugReportService.Instance.SubmitAsync(payload).ConfigureAwait(true);

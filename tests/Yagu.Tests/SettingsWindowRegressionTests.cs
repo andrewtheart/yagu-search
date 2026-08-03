@@ -29,6 +29,8 @@ public sealed class SettingsWindowRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+    private static readonly string SettingsWindowIndexRebuildAdviceSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.IndexRebuildAdvice.cs"));
     private static readonly string SettingsWindowXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml"));
     private static readonly string SettingsServiceSource = File.ReadAllText(
@@ -325,9 +327,15 @@ public sealed class SettingsWindowRegressionTests
     {
         string saveMethod = ExtractMethod(SettingsWindowSource, "OnSaveClick");
         Assert.Contains("SaveButton.IsEnabled = false;", saveMethod);
-        Assert.Contains("await _viewModel.PersistSettingsAsync();", saveMethod);
-        Assert.Contains("MarkSettingsClean();", saveMethod);
+        Assert.Contains("await SaveSettingsAndOfferIndexRebuildAsync();", saveMethod);
         Assert.DoesNotContain("Close()", saveMethod);
+
+        string sharedSave = ExtractMethod(SettingsWindowIndexRebuildAdviceSource, "SaveSettingsAndOfferIndexRebuildAsync", window: 1800);
+        AssertContainsInOrder(sharedSave,
+            "ContentIndexSettingsChangeAdvisor.Analyze(before, after)",
+            "await _viewModel.PersistSettingsAsync();",
+            "MarkSettingsClean();",
+            "OfferIndexRebuildAfterSettingsChangeAsync(advice)");
     }
 
     [Fact]
@@ -338,7 +346,7 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("ShowEditorSavedOverlay = _settings.ShowEditorSavedOverlay;", MainViewModelSource);
         Assert.Contains("_settings.ShowEditorSavedOverlay = ShowEditorSavedOverlay;", MainViewModelSource);
 
-        string editorSettings = ExtractMethod(SettingsWindowSource, "BuildSettingsContent", window: 90000);
+        string editorSettings = ExtractMethod(SettingsWindowSource, "BuildSettingsContent", window: 104000);
         AssertContainsInOrder(editorSettings,
             "var saveSafetyGroup = AddSettingsGroupBox(g, \"Built-In Editor Saves\");",
             "Content = \"Show saved confirmation after saving\"",
@@ -451,11 +459,12 @@ public sealed class SettingsWindowRegressionTests
             "_settingsDirty = true;",
             "SaveButton.IsEnabled = true;");
 
-        string cleanMethod = ExtractMethod(SettingsWindowSource, "MarkSettingsClean", window: 500);
+        string cleanMethod = ExtractMethod(SettingsWindowSource, "MarkSettingsClean", window: 800);
         AssertContainsInOrder(cleanMethod,
             "_settingsDirty = false;",
             "SaveButton.IsEnabled = false;",
-            "CaptureCleanSettingValues();");
+            "CaptureCleanSettingValues();",
+            "_cleanContentIndexSettings = ContentIndexSettingsChangeAdvisor.Capture(_viewModel.Settings);");
 
         string pointerMethod = ExtractMethod(SettingsWindowSource, "OnSettingsContentPointerPressed", window: 1200);
         AssertContainsInOrder(pointerMethod,
@@ -619,7 +628,7 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
-    public void SettingsWindow_OcrTab_HostsEngineModelAndResolutionControls()
+    public void SettingsWindow_OcrTab_HostsEngineQualityAndWorkerControls()
     {
         // The OCR controls were migrated off the Search Limits tab into a dedicated OCR tab.
         Assert.Contains("AddTab(\"OCR\")", SettingsWindowSource);
@@ -633,6 +642,12 @@ public sealed class SettingsWindowRegressionTests
         // Model + resolution write through to the view-model.
         Assert.Contains("_viewModel.ImageOcrModel", SettingsWindowSource);
         Assert.Contains("_viewModel.ImageOcrMaxSide", SettingsWindowSource);
+        // True process-level OCR parallelism lives in the OCR tab and explains the shared HDD override.
+        Assert.Contains("AddSettingsGroupBox(g, \"Worker Resources\")", SettingsWindowSource);
+        Assert.Contains("OCR worker processes (0 = automatic):", SettingsWindowSource);
+        Assert.Contains("_viewModel.ImageOcrWorkerParallelism", SettingsWindowSource);
+        Assert.Contains("OcrWorkerParallelism.Resolve(", SettingsWindowSource);
+        Assert.Contains("Limit disk-intensive parallelism on HDDs", SettingsWindowSource);
         // OCR tab carries its own icon.
         Assert.Contains("\"OCR\" =>", SettingsWindowSource);
     }
@@ -906,7 +921,7 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("_terminalService = terminalService;", MainWindowTerminalSource);
         Assert.Contains("if (ReferenceEquals(_terminalService, terminalService))", MainWindowTerminalSource);
         Assert.Contains("_terminalService = null;", MainWindowTerminalSource);
-        Assert.Contains("LogService.Instance.Warning(\"Terminal\", \"Failed to start terminal shell session\", ex);", MainWindowTerminalSource);
+        Assert.Contains("YaguLog.For(\"Terminal\").LogWarning(ex, \"Failed to start terminal shell session\");", MainWindowTerminalSource);
         Assert.Contains("Terminal shell session started: shellPid=", MainWindowTerminalSource);
         Assert.Contains("[Terminal failed to start:", MainWindowTerminalSource);
 
@@ -1144,8 +1159,8 @@ public sealed class SettingsWindowRegressionTests
             "ShowTopRightCloseButton = true");
         AssertContainsInOrder(prompt,
             "if (result == YaguDialogResult.Primary)",
-            "await _viewModel.PersistSettingsAsync();",
-            "MarkSettingsClean();",
+            "bool keepOpen = await SaveSettingsAndOfferIndexRebuildAsync();",
+            "if (!keepOpen)",
             "CloseSettingsWindowWithoutPrompt();",
             "else if (result == YaguDialogResult.Secondary)",
             "RestoreUnsavedSettingsIfNeeded();",
@@ -1155,6 +1170,32 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("if (options.ShowTopRightCloseButton)", YaguDialogSource);
         Assert.Contains("ToolTipService.SetToolTip(topRightClose, \"Close\");", YaguDialogSource);
         Assert.Contains("topRightClose.Click += (_, _) => Complete(YaguDialogResult.Close);", YaguDialogSource);
+    }
+
+    [Fact]
+    public void SettingsWindow_IndexBuildOutputChangesOfferTitlelessAtomicRebuilds()
+    {
+        string advice = SettingsWindowIndexRebuildAdviceSource;
+        Assert.Contains("ContentIndexSettingsChangeAdvisor.Capture(_viewModel.Settings)", advice);
+        Assert.Contains("Title = advice.AffectedRoots.Count == 1", advice);
+        Assert.Contains("\"Index rebuild recommended\"", advice);
+        Assert.Contains("PrimaryButtonText = action", advice);
+        Assert.Contains("SecondaryButtonText = \"Later\"", advice);
+        Assert.Contains("ShowTitleBar = false", advice);
+        Assert.Contains("ShowTopRightCloseButton = true", advice);
+        Assert.Contains("Search results remain correct before rebuilding", advice);
+        Assert.Contains("Rebuilding updates acceleration coverage", advice);
+        Assert.Contains("RunRecommendedIndexRebuildsAsync(advice.AffectedRoots)", advice);
+
+        string rebuilds = ExtractMethod(advice, "RunRecommendedIndexRebuildsAsync", window: 7200);
+        AssertContainsInOrder(rebuilds,
+            "IndexedRootsPolicy.Normalize(requestedRoots)",
+            "for (int i = 0; i < roots.Length; i++)",
+            "IndexBuildOperationFactory.CreateBuild(",
+            "rebuild: true",
+            "BuildFullScopePreferWorkerAsync(",
+            "RefreshAllDriveIndexStatus();",
+            "RefreshIndexStorageStatsAsync();");
     }
 
     [Fact]
@@ -1330,6 +1371,35 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("Glyph=\"&#xE711;\"", HelpWindowXaml);   // ChromeClose "X", matching the app's own close button
         Assert.Contains("Key=\"Escape\"", HelpWindowXaml);
         Assert.Contains("Invoked=\"OnCloseAccelerator\"", HelpWindowXaml);
+    }
+
+    [Fact]
+    public void HelpWindow_RendersCollapsibleTocNavigationBlade()
+    {
+        // The help navigation "blade" is the pandoc table of contents rendered inside the WebView,
+        // NOT a native WinUI control. That requires three things to stay wired together:
+        //   1. the build runs pandoc with --toc so a nav#TOC is emitted;
+        //   2. help-style.html turns that nav into a fixed collapsible left sidebar; and
+        //   3. HelpWindow injects the app title into the blade header and the WebView fills the window.
+        string csproj = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "Yagu.csproj"));
+        Assert.Contains("--toc", csproj);
+
+        string helpStyle = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "help-style.html"));
+        Assert.Contains("#TOC", helpStyle);                 // the blade selector
+        Assert.Contains("position: fixed", helpStyle);      // fixed left sidebar
+        Assert.Contains("toc-caret", helpStyle);            // expand/collapse carets
+        Assert.Contains("has-sub", helpStyle);              // sections that reveal subsections
+        Assert.Contains("#toc-brand", helpStyle);           // runtime-injected branding header
+        Assert.Contains("IntersectionObserver", helpStyle); // active-section highlight/auto-reveal
+
+        // The window is now a single full-width WebView; the old native branding column is gone.
+        Assert.DoesNotContain("x:Name=\"AppTitleText\"", HelpWindowXaml);
+        Assert.DoesNotContain("x:Name=\"HelpPathText\"", HelpWindowXaml);
+
+        // The app title is injected into the blade header (#toc-brand) at runtime.
+        Assert.Contains("_appTitle = appTitle;", HelpWindowSource);
+        Assert.Contains("getElementById('TOC')", HelpWindowSource);
+        Assert.Contains("'toc-brand'", HelpWindowSource);
     }
 
     [Fact]
@@ -1516,7 +1586,7 @@ public sealed class SettingsWindowRegressionTests
     public void MainWindow_WiresTextControlBoxErrorLogger()
     {
         Assert.Contains(
-            "TextControlBoxNS.TextControlBoxDiagnostics.ErrorLogger = (source, message, ex) => LogService.Instance.Warning(source, message, ex);",
+            "TextControlBoxNS.TextControlBoxDiagnostics.ErrorLogger = (source, message, ex) => YaguLog.For(source).LogWarning(ex, \"{Message}\", message);",
             MainWindowWindowSource);
     }
 
@@ -1628,6 +1698,17 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void RecentItems_ExposesAutocompleteDropdownVisibleItemCount()
+    {
+        // The "Shortcuts & History" ▸ "Recent Items" group offers the dropdown visible-item count next to
+        // the "max ... to remember" caps — it controls how many suggestions show before scrolling, not how
+        // many are stored.
+        AssertContainsInOrder(SettingsWindowSource,
+            "Autocomplete items shown before scrolling:",
+            "_viewModel.AutocompleteDropdownVisibleItems");
+    }
+
+    [Fact]
     public void TerminalPane_HasVerticalResizeGripper()
     {
         // XAML: a draggable gripper row sits at the top of the terminal pane — above the shell toolbar
@@ -1682,8 +1763,8 @@ public sealed class SettingsWindowRegressionTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.sln)");
+        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.slnx)");
     }
 }

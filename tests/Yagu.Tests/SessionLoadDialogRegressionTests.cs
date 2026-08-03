@@ -111,7 +111,7 @@ public sealed class SessionLoadDialogRegressionTests
         AssertContainsInOrder(PreviewCommandsSource,
             "ClearPreviewStateForSessionLoad();",
             "var header = await ViewModel.LoadSessionAsync(path);",
-            "Load session failed: {path}");
+            "Load session failed: {Path}");
     }
 
     [Fact]
@@ -219,6 +219,15 @@ public sealed class SessionLoadDialogRegressionTests
     }
 
     [Fact]
+    public void LoadSession_HeaderColumnSpacingMatchesRow_SoHeadersAlignToCells()
+    {
+        // The column header grid and BuildTableRow's row grid must use the SAME ColumnSpacing (8), or every
+        // header after Name drifts left of its cells by a cumulative 8px per column.
+        Assert.Contains("new Grid { Padding = new Thickness(10, 6, 10, 6), ColumnSpacing = 8 };", SessionLoadDialogSource);
+        Assert.Contains("var row = new Grid { ColumnSpacing = 8 };", SessionLoadDialogSource);
+    }
+
+    [Fact]
     public void LoadSession_TableRowShowsFormattedSizeAndDate()
     {
         Assert.Contains("session.SizeBytes.HasValue ? FormatByteSize(session.SizeBytes.Value) : ", SessionLoadDialogSource);
@@ -270,7 +279,7 @@ public sealed class SessionLoadDialogRegressionTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+            if (File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
                 return dir.FullName;
 
             dir = dir.Parent;

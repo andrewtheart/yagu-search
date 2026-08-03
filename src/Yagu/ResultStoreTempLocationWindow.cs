@@ -21,6 +21,7 @@ internal sealed class ResultStoreTempLocationWindow : Window
     private readonly IntPtr _ownerHwnd;
     private readonly ResultStoreTempLocationWindowResult _dismissedResult = new(false, null);
     private ResultStoreTempLocationWindowResult? _result;
+    private readonly AppWindow _appWindow;
 
     private ResultStoreTempLocationWindow(
         IntPtr ownerHwnd,
@@ -43,6 +44,7 @@ internal sealed class ResultStoreTempLocationWindow : Window
         WindowForegroundHelper.ConfigureOwnedWindow(hwnd, _ownerHwnd);
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
+        _appWindow = appWindow;
         appWindow.Title = Title;
 
         int width = 720;
@@ -92,6 +94,18 @@ internal sealed class ResultStoreTempLocationWindow : Window
         var root = new Grid
         {
             Padding = new Thickness(32, 28, 32, 28),
+        };
+        root.Loaded += (_, _) =>
+        {
+            // The 720x470 guess above (WindowForegroundHelper.CenterWindowOverOwner) is a rough
+            // upper bound, not the actual content height, so without this pass the fixed-size Star
+            // row leaves a large empty gap above the footer button. Fit the window to the real
+            // content height once the content is measurable, and once more after layout settles
+            // (text can wrap to an extra line on the first pass).
+            AutoSizeHeightToContent(root);
+            DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                () => AutoSizeHeightToContent(root));
         };
         // Honor the Yagu theme (Auto/Dark/Light) instead of the previous hardcoded dark surface.
         AppThemeService.ApplyThemedDialogSurface(root, ElementTheme.Default);
@@ -231,6 +245,68 @@ internal sealed class ResultStoreTempLocationWindow : Window
         Close();
     }
 
+    /// <summary>
+    /// Grows or shrinks the window's height to exactly fit its content (mirrors
+    /// YaguDialog.AutoSizeHeightToContent), so the fixed 720x470 guess passed to
+    /// <see cref="WindowForegroundHelper.CenterWindowOverOwner"/> in the constructor never leaves dead
+    /// space below the footer button. The width stays fixed; the content's natural height is measured
+    /// at that width (unbounded height) and the window is resized and re-centered —
+    /// <see cref="WindowForegroundHelper.CenterWindowOverOwner"/> clamps the result to the monitor work area.
+    /// </summary>
+    private void AutoSizeHeightToContent(FrameworkElement root)
+    {
+        var xamlRoot = root.XamlRoot;
+        if (xamlRoot is null)
+            return;
+
+        double scale = xamlRoot.RasterizationScale;
+        if (scale <= 0)
+            scale = 1.0;
+
+        var currentSize = _appWindow.Size; // physical pixels
+        if (currentSize.Width <= 0)
+            return;
+
+        // Measure at the CLIENT width (outer width minus the left/right frame) so text wrapping matches
+        // what is actually rendered; fall back to the outer width before the client size is reported.
+        int clientWidthPhysical = _appWindow.ClientSize.Width > 0 ? _appWindow.ClientSize.Width : currentSize.Width;
+        double widthDip = clientWidthPhysical / scale;
+
+        // Natural content height at the current width. Measuring outside the layout pass (in Loaded)
+        // is safe; DesiredSize reflects what the content wants before the window constrained it.
+        root.Measure(new Windows.Foundation.Size(widthDip, double.PositiveInfinity));
+        double desiredHeightDip = root.DesiredSize.Height;
+        if (desiredHeightDip <= 0)
+            return;
+
+        // desiredHeightDip is the CLIENT (content) height; add back the non-client frame (border +
+        // resize grip) so the outer window height passed to CenterWindowOverOwner doesn't clip the
+        // last line of content. A small safety pad absorbs sub-pixel measurement rounding.
+        int chromeHeight = NonClientFrameHeight();
+        int desiredHeightPhysical = (int)Math.Ceiling((desiredHeightDip + 2) * scale) + chromeHeight;
+        if (Math.Abs(desiredHeightPhysical - currentSize.Height) <= 2)
+            return; // already the right height
+
+        WindowForegroundHelper.CenterWindowOverOwner(_appWindow, _ownerHwnd, currentSize.Width, desiredHeightPhysical, minHeight: 300);
+    }
+
+    /// <summary>Top+bottom non-client frame height in physical pixels at this window's DPI (border +
+    /// padded resize grip), so the auto-sized CLIENT content height is not clipped by the frame.</summary>
+    private int NonClientFrameHeight()
+    {
+        try
+        {
+            int dpi = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this));
+            int frameY = GetSystemMetricsForDpi(33 /* SM_CYFRAME */, (uint)dpi);
+            int padded = GetSystemMetricsForDpi(92 /* SM_CXPADDEDBORDER */, (uint)dpi);
+            return (frameY + padded) * 2;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
     private void OnClosed(object sender, WindowEventArgs args)
     {
         OpenWindows.Remove(this);
@@ -249,5 +325,11 @@ internal sealed class ResultStoreTempLocationWindow : Window
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern int GetDpiForWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetricsForDpi(int nIndex, uint dpi);
 
 }

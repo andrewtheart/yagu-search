@@ -5,8 +5,10 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using System.Security.Principal;
+using Microsoft.Extensions.Logging;
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Logging;
 using Yagu.ViewModels;
 
 namespace Yagu;
@@ -197,11 +199,17 @@ public sealed partial class MainWindow : Window, IDisposable
             RefreshDrawerLabelThemes();
             QueueFontContrastCheck();
         };
-        TextControlBoxNS.TextControlBoxDiagnostics.VerboseLogger = (source, message) => LogService.Instance.Verbose(source, message);
+        TextControlBoxNS.TextControlBoxDiagnostics.VerboseLogger = (source, message) => YaguLog.For(source).LogDebug("{Message}", message);
         TextControlBoxNS.TextControlBoxDiagnostics.IsVerboseEnabledProvider = () => LogService.Instance.IsVerboseEnabled;
-        TextControlBoxNS.TextControlBoxDiagnostics.ErrorLogger = (source, message, ex) => LogService.Instance.Warning(source, message, ex);
+        TextControlBoxNS.TextControlBoxDiagnostics.ErrorLogger = (source, message, ex) => YaguLog.For(source).LogWarning(ex, "{Message}", message);
         QueryBox.AddHandler(UIElement.PointerPressedEvent,
             new PointerEventHandler(OnQueryBoxPointerPressed),
+            handledEventsToo: true);
+        // AutoSuggestBox's inner TextBox can mark Enter handled without raising QuerySubmitted
+        // (notably after its wrapping TextBoxStyle is applied). Observe handled key events too so
+        // pressing Enter in the search term box always reaches OnQueryKeyDown.
+        QueryBox.AddHandler(UIElement.KeyDownEvent,
+            new KeyEventHandler(OnQueryKeyDown),
             handledEventsToo: true);
         // The directory history dropdown (an AutoSuggestBox suggestion list) only closes on focus
         // loss, so a press on a non-focusable surface leaves it open. A window-wide pointer hook
@@ -266,6 +274,7 @@ public sealed partial class MainWindow : Window, IDisposable
             AppWindow.SetIcon(icoPath);
 
         InitializeGlobalHotkey();
+        InitializeSearchRequestListener();
 
         ViewModel.SearchTerminatedByLowDiskSpace += message =>
         {
@@ -285,7 +294,7 @@ public sealed partial class MainWindow : Window, IDisposable
                     _previewContextDebounceTimer.Tick += (_, _) =>
                     {
                         _previewContextDebounceTimer.Stop();
-                        RefreshCurrentPreview(preserveScroll: true);
+                        _ = RefreshCurrentPreview(preserveScroll: true);
                     };
                 }
                 _previewContextDebounceTimer.Stop();
@@ -305,6 +314,32 @@ public sealed partial class MainWindow : Window, IDisposable
                 // and tooltip. The highlight is set in code-behind on purpose — a OneWay x:Bind to the
                 // toggle's IsChecked self-disables after the first user click and would freeze the star.
                 UpdatePinStartupDirectoryIcon(ViewModel.IsCurrentDirectoryPinned);
+            }
+
+            if (e.PropertyName == nameof(ViewModel.IsCurrentDirectoryIndexed))
+            {
+                // Keep the index toggle's "selected" highlight in sync as the box directory changes (typed,
+                // cleared, Browse, or a folder being added/removed from the index). IsCurrentDirectoryIndexed
+                // is recomputed whenever Directory changes. Driven from code-behind for the same reason as the
+                // pin star (a OneWay x:Bind to a toggle's IsChecked self-disables after the first user click).
+                UpdateIndexDirectoryIcon(ViewModel.IsCurrentDirectoryIndexed);
+            }
+
+            if (e.PropertyName == nameof(ViewModel.IsIndexBuildActive)
+                || e.PropertyName == nameof(ViewModel.IsIndexingPaused)
+                || e.PropertyName == nameof(ViewModel.IsIndexWarmActive)
+                || e.PropertyName == nameof(ViewModel.IsIndexWarmPausedForSearch))
+            {
+                // Spin the status-bar index glyph while a build or query-cache warm is active.
+                UpdateIndexBuildSpinAnimation();
+            }
+
+            if (e.PropertyName == nameof(ViewModel.AllDriveIndexStatusText)
+                && IndexStatusHoverOverlay?.Visibility == Visibility.Visible)
+            {
+                // The all-drive health check completes asynchronously. Refresh the interactive rows in
+                // place when its snapshot arrives while the user is already hovering the indicator.
+                UpdateIndexStatusHoverActions();
             }
 
             if (e.PropertyName == nameof(ViewModel.ShowBuildNumberInTitleBar))
@@ -387,12 +422,14 @@ public sealed partial class MainWindow : Window, IDisposable
         {
             if (e.PropertyName != nameof(ViewModel.IsSearching) &&
                 e.PropertyName != nameof(ViewModel.IsTranslatingSemanticQuery) &&
+                e.PropertyName != nameof(ViewModel.IsPreparingSearch) &&
                 e.PropertyName != nameof(ViewModel.IsCancelling)) return;
 
-            // "Busy" covers both the semantic translation phase and the actual file scan, so the
-            // Search button morphs into the red Cancel action the instant the user clicks Search —
-            // even in semantic mode, before a single file has been scanned.
-            bool busy = ViewModel.IsSearching || ViewModel.IsTranslatingSemanticQuery;
+            // "Busy" covers the pre-search preparation (gate) phase, the semantic translation phase, and
+            // the actual file scan, so the Search button morphs into the red Cancel action the instant the
+            // user clicks Search — before a single file has been scanned, and before the multi-second
+            // pre-search gates (e.g. content-index journal replay) finish.
+            bool busy = ViewModel.IsSearching || ViewModel.IsTranslatingSemanticQuery || ViewModel.IsPreparingSearch;
             if (busy)
             {
                 if (_launcherMode) ExitLauncherMode();
@@ -489,7 +526,7 @@ public sealed partial class MainWindow : Window, IDisposable
         this.Closed += (_, _) =>
         {
             Dispose();
-            LogService.Instance.Info("MainWindow", "Window closing — flushing logs");
+            YaguLog.For("MainWindow").LogInformation("Window closing — flushing logs");
             LogService.Instance.Flush();
         };
 
@@ -528,10 +565,15 @@ public sealed partial class MainWindow : Window, IDisposable
         _previewLoadCts?.Dispose();
         _previewLoadCts = null;
         RemoveGlobalHotkeyHook();
+        DisposeSearchRequestListener();
         _trayIcon?.Dispose();
         _trayIcon = null;
         _hotkeyService.Dispose();
         _diskUtilService.Dispose();
+        Interlocked.Increment(ref _indexWatcherHintsGeneration);
+        DisposeIndexWatcherHints();
+        _indexScheduleTimer?.Stop();
+        _indexScheduleTimer = null;
         ViewModel.Dispose();
         GC.SuppressFinalize(this);
     }
