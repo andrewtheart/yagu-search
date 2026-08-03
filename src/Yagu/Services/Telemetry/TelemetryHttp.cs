@@ -1,6 +1,8 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Telemetry;
 
@@ -40,7 +42,7 @@ internal static class TelemetryHttp
             using HttpResponseMessage response = await Client.SendAsync(request, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                LogService.Instance.Verbose("Telemetry", $"POST {endpoint.AbsolutePath} returned {(int)response.StatusCode}.");
+                YaguLog.For("Telemetry").LogDebug("POST {Path} returned {StatusCode}.", endpoint.AbsolutePath, (int)response.StatusCode);
                 return null;
             }
 
@@ -49,7 +51,7 @@ internal static class TelemetryHttp
         catch (Exception ex)
         {
             // Telemetry must never disrupt the app; swallow all transport errors.
-            LogService.Instance.Verbose("Telemetry", $"POST {endpoint.AbsolutePath} failed: {ex.Message}");
+            YaguLog.For("Telemetry").LogDebug("POST {Path} failed: {Error}", endpoint.AbsolutePath, ex.Message);
             return null;
         }
     }

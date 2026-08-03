@@ -1,7 +1,9 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Yagu.Services.Ai;
+using Yagu.Services.Logging;
 using System.Diagnostics.CodeAnalysis;
 
 namespace Yagu.Services.Telemetry;
@@ -92,7 +94,7 @@ public sealed class BugReportService
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("BugReport", $"Submit failed: {ex.Message}", ex);
+            YaguLog.For("BugReport").LogWarning(ex, "Submit failed: {Error}", ex.Message);
             return null;
         }
     }

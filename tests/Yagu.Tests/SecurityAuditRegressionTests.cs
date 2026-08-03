@@ -99,6 +99,47 @@ public sealed class SecurityAuditRegressionTests
             Assert.True(allowed);
     }
 
+    [Fact]
+    public void IsInstallerTrustedForHostPublisher_RequiresTrustedMatchingPublishers()
+    {
+        static (bool Trusted, string FailureReason) Trusted(string _) => (true, string.Empty);
+        static (bool Trusted, string FailureReason) Untrusted(string _) => (false, "bad signature");
+        static string? MatchingSigner(string _) => "CN=Yagu Publisher";
+        static string? DifferentSigner(string _) => "CN=Other Publisher";
+        static string? MissingSigner(string _) => null;
+
+        Assert.False(AuthenticodeVerifier.IsInstallerTrustedForHostPublisher(
+            "setup.exe", null, Trusted, MatchingSigner, out string unsignedReason));
+        Assert.Equal("the running Yagu build is not Authenticode-signed", unsignedReason);
+
+        Assert.False(AuthenticodeVerifier.IsInstallerTrustedForHostPublisher(
+            "setup.exe", "CN=Yagu Publisher", Untrusted, MatchingSigner, out string untrustedReason));
+        Assert.Equal("bad signature", untrustedReason);
+
+        Assert.False(AuthenticodeVerifier.IsInstallerTrustedForHostPublisher(
+            "setup.exe", "CN=Yagu Publisher", Trusted, MissingSigner, out string missingReason));
+        Assert.Equal("installer signer certificate could not be read", missingReason);
+
+        Assert.False(AuthenticodeVerifier.IsInstallerTrustedForHostPublisher(
+            "setup.exe", "CN=Yagu Publisher", Trusted, DifferentSigner, out string mismatchReason));
+        Assert.Contains("does not match host publisher", mismatchReason);
+
+        Assert.True(AuthenticodeVerifier.IsInstallerTrustedForHostPublisher(
+            "setup.exe", "cn=yagu publisher", Trusted, MatchingSigner, out string successReason));
+        Assert.Empty(successReason);
+    }
+
+    [Fact]
+    public void IsInstallerTrustedForHostPublisher_PublicContractFailsSafeForMissingInstaller()
+    {
+        string missing = Path.Combine(Path.GetTempPath(), $"yagu-no-installer-{Guid.NewGuid():N}.exe");
+
+        bool trusted = AuthenticodeVerifier.IsInstallerTrustedForHostPublisher(missing, out string reason);
+
+        Assert.False(trusted);
+        Assert.False(string.IsNullOrWhiteSpace(reason));
+    }
+
     // ── AuthenticodeVerifier: source-pin the security-critical policy flags ────────────────────────
 
     [Fact]
@@ -179,6 +220,21 @@ public sealed class SecurityAuditRegressionTests
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         AssertVerifyBeforeRunAs(source);
+    }
+
+    [Fact]
+    public void YaguUpdateInstaller_VerifiesHashAndSamePublisherBeforeRunAs()
+    {
+        string source = File.ReadAllText(Path.Combine(
+            FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AppUpdate.cs"));
+
+        int hashIndex = source.IndexOf("AppUpdateChecker.VerifyDownloadedAssetAsync", StringComparison.Ordinal);
+        int publisherIndex = source.IndexOf("AuthenticodeVerifier.IsInstallerTrustedForHostPublisher", StringComparison.Ordinal);
+        int runAsIndex = source.IndexOf("Verb = \"runas\"", StringComparison.Ordinal);
+        Assert.True(hashIndex >= 0 && publisherIndex > hashIndex && runAsIndex > publisherIndex,
+            "A Yagu update must pass GitHub hash and same-publisher Authenticode checks before elevation.");
+        Assert.Contains("File.Delete(download.FilePath)", source);
+        Assert.Contains("Nothing was executed.", source);
     }
 
     [Fact]
@@ -267,7 +323,7 @@ public sealed class SecurityAuditRegressionTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
         return dir?.FullName ?? Directory.GetCurrentDirectory();
     }

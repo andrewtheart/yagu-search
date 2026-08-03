@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services;
 
@@ -137,6 +139,55 @@ internal static class AuthenticodeVerifier
         return true;
     }
 
+    /// <summary>
+    /// Returns true only when both the running Yagu executable and a downloaded Yagu installer carry
+    /// valid Authenticode signatures from the exact same publisher. Unlike worker validation, an unsigned
+    /// development host is deliberately rejected: update installers cross a network trust boundary and
+    /// may run elevated, so no publisher identity means Yagu must never auto-launch them.
+    /// </summary>
+    public static bool IsInstallerTrustedForHostPublisher(string installerPath, out string failureReason)
+        => IsInstallerTrustedForHostPublisher(
+            installerPath,
+            HostSignerSubject.Value,
+            path =>
+            {
+                bool trusted = IsTrustedPublisher(path, null, out string reason);
+                return (trusted, reason);
+            },
+            TryGetSignerSubject,
+            out failureReason);
+
+    internal static bool IsInstallerTrustedForHostPublisher(
+        string installerPath,
+        string? hostSubject,
+        Func<string, (bool Trusted, string FailureReason)> verifyPublisher,
+        Func<string, string?> readSignerSubject,
+        out string failureReason)
+    {
+        failureReason = string.Empty;
+        if (string.IsNullOrEmpty(hostSubject))
+        {
+            failureReason = "the running Yagu build is not Authenticode-signed";
+            return false;
+        }
+
+        (bool trusted, failureReason) = verifyPublisher(installerPath);
+        if (!trusted)
+            return false;
+        string? installerSubject = readSignerSubject(installerPath);
+        if (string.IsNullOrEmpty(installerSubject))
+        {
+            failureReason = "installer signer certificate could not be read";
+            return false;
+        }
+        if (!string.Equals(hostSubject, installerSubject, StringComparison.OrdinalIgnoreCase))
+        {
+            failureReason = $"installer publisher '{installerSubject}' does not match host publisher '{hostSubject}'";
+            return false;
+        }
+        return true;
+    }
+
     private static string? ReadHostSignerSubject()
     {
         string? hostPath = Environment.ProcessPath;
@@ -196,7 +247,7 @@ internal static class AuthenticodeVerifier
         catch (Exception ex)
         {
             failureReason = $"verification error: {ex.Message}";
-            LogService.Instance.Warning("Authenticode", $"WinVerifyTrust failed for {filePath}", ex);
+            YaguLog.For("Authenticode").LogWarning(ex, "WinVerifyTrust failed for {FilePath}", filePath);
             return false;
         }
         finally
@@ -222,7 +273,7 @@ internal static class AuthenticodeVerifier
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Authenticode", $"Could not read signer certificate for {filePath}", ex);
+            YaguLog.For("Authenticode").LogWarning(ex, "Could not read signer certificate for {FilePath}", filePath);
             return null;
         }
     }
