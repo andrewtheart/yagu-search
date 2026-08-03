@@ -572,7 +572,8 @@ public sealed class InstallerPackagingRegressionTests
 
         // Release notes are Copilot-generated from bounded local context, normalized, then deterministically augmented.
         Assert.Contains("function Get-ReleaseChangeContext", buildAll);
-        Assert.Contains("git --no-pager -C $RepoRoot log --no-merges", buildAll);
+        Assert.Contains("git --no-pager -C $RepoRoot log --no-merges '--pretty=format:%h|%s|%b' $range", buildAll);
+        Assert.Contains("'diff', '--no-color', '--minimal', $range, '--'", buildAll);
         Assert.Contains("src/Yagu/HELP.html", buildAll);
         Assert.Contains("src/Yagu/Properties/AppInfo.g.cs", buildAll);
         Assert.Contains("src/Yagu/Properties/build-version.txt", buildAll);

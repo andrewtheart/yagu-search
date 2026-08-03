@@ -245,7 +245,7 @@ function Get-ReleaseChangeContext {
   }
 
   $range = "$baseCommit..$HeadSha"
-  $commitLines = @(& git --no-pager -C $RepoRoot log --no-merges --pretty=format:%h|%s|%b $range 2>$null)
+  $commitLines = @(& git --no-pager -C $RepoRoot log --no-merges '--pretty=format:%h|%s|%b' $range 2>$null)
   $commitContext = ($commitLines -join [Environment]::NewLine).Trim()
   if ([string]::IsNullOrWhiteSpace($commitContext)) {
     $commitContext = "(no non-merge commits found in range)"
@@ -257,7 +257,7 @@ function Get-ReleaseChangeContext {
   }
 
   $patchArgs = @(
-    '--no-pager', '-C', $RepoRoot, 'diff', '--no-color', '--minimal', '--',
+    '--no-pager', '-C', $RepoRoot, 'diff', '--no-color', '--minimal', $range, '--',
     '.',
     ':(exclude)src/Yagu/HELP.html',
     ':(exclude)src/Yagu/Properties/AppInfo.g.cs',
@@ -268,8 +268,7 @@ function Get-ReleaseChangeContext {
     ':(exclude)**/*.zip',
     ':(exclude)**/*.msix',
     ':(exclude)**/*.nupkg',
-    ':(exclude)**/*.snupkg',
-    $range
+    ':(exclude)**/*.snupkg'
   )
   $patchText = (@(& git --no-pager @patchArgs 2>$null) -join [Environment]::NewLine)
   if ($patchText.Length -gt 120000) {
