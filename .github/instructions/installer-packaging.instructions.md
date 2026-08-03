@@ -49,8 +49,8 @@ Runtime, which the installer bundles and installs. Building from source needs th
 ## Commit/push safety
 
 - `-Push` (and `build-all-installers.ps1 -Commit`) organizes a dirty tree **before** building through
-  reviewed `git add --patch` groups. The user selects one functional group and supplies its commit
-  message; the scripts never assign source hunks automatically.
+  reviewed, validated whole-file atomic commit plans. The user must explicitly approve the full plan;
+  if the planner is uncertain, paths are grouped conservatively and the workflow can be aborted.
 - Conflicts, renames/copies, dirty non-interactive runs, and unexpected post-build files stop the
   workflow before push.
 - After a successful build, only the explicit release-generated version/README paths may be staged.

@@ -488,7 +488,7 @@ public sealed class InstallerPackagingRegressionTests
         string buildInstaller = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
         string gitHelper = File.ReadAllText(Path.Combine(root, "scripts", "installer-git-commits.ps1"));
 
-        Assert.Contains("Invoke-YaguFocusedPendingCommits -RepoRoot $repoRoot", buildAll);
+        Assert.Contains("Invoke-YaguFocusedPendingCommits -RepoRoot $repoRoot -CopilotExecutable $copilotCli", buildAll);
         Assert.Contains("Invoke-YaguInstallerReleaseCommit -RepoRoot $repoRoot", buildAll);
         Assert.DoesNotContain("& git -C $repoRoot add -A", buildAll);
 
@@ -512,15 +512,29 @@ public sealed class InstallerPackagingRegressionTests
         Assert.DoesNotContain("gh release", buildInstaller);
         Assert.DoesNotContain("--generate-notes", buildInstaller);
 
-        Assert.Contains("& git -C $RepoRoot add --patch", gitHelper);
-        Assert.Contains("add --intent-to-add -- @batch", gitHelper);
+        Assert.Contains("function ConvertFrom-YaguCopilotCommitPlan", gitHelper);
+        Assert.Contains("function Assert-YaguAtomicCommitPlan", gitHelper);
+        Assert.Contains("function New-YaguCopilotAtomicCommitPlan", gitHelper);
+        Assert.Contains("function Test-YaguAtomicCommitStaging", gitHelper);
+        Assert.Contains("function Invoke-YaguAtomicCommitPlan", gitHelper);
+        Assert.Contains("UNTRACKED FILE PREVIEW (READ-ONLY FILE READS, BOUNDED)", gitHelper);
+        Assert.Contains("-C $RepoRoot -p $prompt --silent --no-color", gitHelper);
+        Assert.Contains("--no-custom-instructions --no-ask-user --disable-builtin-mcps --allow-all-tools", gitHelper);
+        Assert.Contains("--deny-tool shell --deny-tool write", gitHelper);
+        Assert.DoesNotContain("--prompt-file", gitHelper);
+        Assert.DoesNotContain(" --no-ask ", gitHelper);
+        Assert.Contains("Apply this whole-file commit plan? [yes/abort]", gitHelper);
+        Assert.Contains("if ($choice -cne 'yes')", gitHelper);
+        Assert.Contains("$env:GIT_INDEX_FILE = $tempIndex", gitHelper);
+        Assert.Contains("<# DEFERRED: Interactive hunk workflow retained for possible future restoration.", gitHelper);
+        Assert.DoesNotContain("Interactive hunk selection:", gitHelper);
         Assert.Contains("diff --name-only --diff-filter=U", gitHelper);
         Assert.Contains("diff --name-status --find-renames", gitHelper);
         Assert.Contains("Focused commits are not allowed from a detached HEAD", gitHelper);
         Assert.Contains("'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply'", gitHelper);
         Assert.Contains("[Console]::IsInputRedirected", gitHelper);
         Assert.Contains("Unexpected post-build change(s) will not be committed or pushed", gitHelper);
-        Assert.Contains("& git -C $RepoRoot add -A -- @releaseChanges", gitHelper);
+        Assert.Contains("& git --no-pager -C $RepoRoot add -A -- @releaseChanges", gitHelper);
         Assert.Contains("commit --only -m $Message -- @releaseChanges", gitHelper);
         Assert.Contains("'README.md'", buildAll);
 
@@ -558,7 +572,7 @@ public sealed class InstallerPackagingRegressionTests
 
         // Release notes are Copilot-generated from bounded local context, normalized, then deterministically augmented.
         Assert.Contains("function Get-ReleaseChangeContext", buildAll);
-        Assert.Contains("git -C $RepoRoot log --no-merges", buildAll);
+        Assert.Contains("git --no-pager -C $RepoRoot log --no-merges", buildAll);
         Assert.Contains("src/Yagu/HELP.html", buildAll);
         Assert.Contains("src/Yagu/Properties/AppInfo.g.cs", buildAll);
         Assert.Contains("src/Yagu/Properties/build-version.txt", buildAll);
@@ -568,7 +582,9 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("--deny-tool', 'shell'", buildAll);
         Assert.Contains("--deny-tool', 'write'", buildAll);
         Assert.Contains("--no-custom-instructions", buildAll);
-        Assert.Contains("--no-ask", buildAll);
+        Assert.Contains("--no-ask-user", buildAll);
+        Assert.Contains("'-p', $prompt", buildAll);
+        Assert.DoesNotContain("--prompt-file", buildAll);
         Assert.Contains("function Add-DeterministicReleaseSections", buildAll);
         Assert.Contains("## Assets", buildAll);
         Assert.Contains("## Validation", buildAll);
@@ -590,6 +606,29 @@ public sealed class InstallerPackagingRegressionTests
 
         // Full changelog is appended exactly once by Add-ReleaseCompareLink.
         Assert.Contains("if ($notesWithLink.Contains($compareUrl)) { return $notesWithLink }", buildAll);
+    }
+
+    [Fact]
+    public void InstallerReleaseScripts_UseExplicitGitNoPagerEverywhere()
+    {
+        string root = FindRepoRoot();
+        string buildAll = File.ReadAllText(Path.Combine(root, "build-all-installers.ps1"));
+        string helper = File.ReadAllText(Path.Combine(root, "scripts", "installer-git-commits.ps1"));
+
+        string stripDeferred = @"<#[\s\S]*?#>";
+        string buildAllActive = System.Text.RegularExpressions.Regex.Replace(buildAll, stripDeferred, string.Empty);
+        string helperActive = System.Text.RegularExpressions.Regex.Replace(helper, stripDeferred, string.Empty);
+
+        Assert.DoesNotMatch(@"(?m)(?<![#\w-])&?\s*git\s+-C\s+", buildAllActive);
+        Assert.DoesNotMatch(@"(?m)(?<![#\w-])&?\s*git\s+-C\s+", helperActive);
+        Assert.DoesNotMatch(@"(?m)&\s*git\s+@(?![^\r\n]*--no-pager)", buildAllActive);
+        Assert.DoesNotMatch(@"(?m)&\s*git\s+@(?![^\r\n]*--no-pager)", helperActive);
+
+        Assert.Contains("git --no-pager -C $RepoRoot diff --stat", buildAll);
+        Assert.Contains("git --no-pager -C $repoRoot push", buildAll);
+        Assert.Contains("git --no-pager -C $RepoRoot log", buildAll);
+        Assert.Contains("git --no-pager -C $RepoRoot commit", helper);
+        Assert.Contains("git --no-pager -C $repoRoot push", buildAll);
     }
 
     [Fact]

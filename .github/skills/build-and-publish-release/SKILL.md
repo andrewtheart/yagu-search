@@ -26,9 +26,9 @@ This does, in order:
 2. Builds **x64, x86, arm64, and x64-offline** installers (self-contained Native AOT published, then
   Inno Setup compiled), each written as `installer/YaguSetup-<version>-<suffix>.exe` (ignored local output
   uploaded directly as a GitHub Release asset).
-3. If the working tree is dirty, interactively review `git add --patch` selections one functional
-  group at a time and commit each group with an explicit message. The script does not infer semantic
-  ownership or split source hunks automatically.
+3. If the working tree is dirty, review a validated whole-file atomic commit plan and explicitly approve
+  it before committing. The planner must cover every pending path exactly once, stages on a temporary
+  index for preflight validation, and aborts instead of guessing when uncertainty remains.
 4. After the build, commit only the known release-generated version/README paths, then push.
 5. Before push, GitHub Copilot generates constrained user-facing notes from the bounded commit/diff
   context. The script appends deterministic Assets, Validation, Installation, and Full changelog sections.
@@ -51,15 +51,15 @@ Useful flags:
 
 The publish scripts organize pending work **before** building, so release artifacts are never built
 from source that was silently swept into a catch-all commit. On a dirty interactive working tree,
-select the hunks for one functional change in `git add --patch`, quit patch mode, review the staged
-stat, and provide its focused commit message. Repeat until clean.
+review the proposed whole-file atomic commit groups and approve them only when they are coherent and
+complete.
 
 This workflow deliberately favors stopping over guessing:
 
 - Existing staged changes require explicit confirmation and a commit message.
 - Conflicts and detected renames/copies must be handled manually.
 - A dirty non-interactive/CI invocation stops instead of creating commits.
-- Untracked files enter patch mode via intent-to-add; their content is not staged automatically.
+- The reviewed plan must pass exact path coverage and temporary-index staging preflight before apply.
 - Post-build commits are path-scoped to `build-version.txt`, `AppInfo.g.cs`, and (for the all-variant
   script) `README.md`. Any other post-build change stops the push.
 
