@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
@@ -6,6 +7,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
 using Yagu.Services;
+using Yagu.Services.Logging;
 using System.Globalization;
 
 namespace Yagu;
@@ -74,6 +76,7 @@ public sealed partial class MainWindow
     private double _previewSelectionAutoScrollLastRequestedX = double.NaN;
     private double _previewSelectionAutoScrollPrevBeforeX = double.NaN;
     private double _previewSelectionAutoScrollPrevBeforeY = double.NaN;
+    private double _previewSelectionLastViewOffsetY = double.NaN;
     private int _previewSelectionAutoScrollStuckFrameCount;
 
     // Native RichTextBlock DoubleTapped is suppressed while the custom selection
@@ -153,8 +156,8 @@ public sealed partial class MainWindow
         {
             _previewSelectionLastClickTick = 0;
             _previewSelectionLastClickBlock = null;
-            LogService.Instance.Verbose("PreviewEditor",
-                $"Double-click detected: point=({pressPoint.X:N1},{pressPoint.Y:N1}), wrap={block.TextWrapping}, surface={(ReferenceEquals(block, PreviewBlock) ? "single" : "section")}");
+            YaguLog.For("PreviewEditor").LogDebug(
+                "Double-click detected: point=({PointX:N1},{PointY:N1}), wrap={Wrap}, surface={Surface}", pressPoint.X, pressPoint.Y, block.TextWrapping, ReferenceEquals(block, PreviewBlock) ? "single" : "section");
             StopPreviewSelectionAutoScroll("double-click-editor");
             ClearPreviewCustomSelection();
             e.Handled = true;
@@ -175,6 +178,7 @@ public sealed partial class MainWindow
         _previewSelectionAutoScrollPointerPointInVerticalScroller =
             e.GetCurrentPoint(_previewSelectionAutoScrollVerticalScroller).Position;
         _previewSelectionAutoScrollPointerYInVertical = _previewSelectionAutoScrollPointerPointInVerticalScroller.Y;
+        _previewSelectionLastViewOffsetY = _previewSelectionAutoScrollVerticalScroller.VerticalOffset;
         _previewSelectionAutoScrollLastTick = Environment.TickCount64;
         _previewSelectionAutoScrollWasAtEdge = false;
         ResetPreviewSelectionAutoScrollDiagnostics(_previewSelectionAutoScrollLastTick);
@@ -194,18 +198,18 @@ public sealed partial class MainWindow
     {
         if (_previewMutating)
         {
-            LogService.Instance.Verbose("PreviewEditor",
+            YaguLog.For("PreviewEditor").LogDebug(
                 "Pointer double-click editor entry skipped: preview is mutating");
             return;
         }
         DismissActiveIntroTip();
         _previewEditorPointerOpenTick = Environment.TickCount64;
         var filePath = ResolvePreviewBlockFilePath(block);
-        LogService.Instance.Verbose("PreviewEditor",
-            $"Pointer double-click editor entry: file='{(filePath is null ? "null" : Path.GetFileName(filePath))}', point=({point.X:N1},{point.Y:N1})");
+        YaguLog.For("PreviewEditor").LogDebug(
+            "Pointer double-click editor entry: file='{File}', point=({PointX:N1},{PointY:N1})", filePath is null ? "null" : Path.GetFileName(filePath), point.X, point.Y);
         bool opened = await TryEnterPreviewEditorAtPointAsync(block, point, filePath);
-        LogService.Instance.Verbose("PreviewEditor",
-            $"Pointer double-click editor entry result: opened={opened}");
+        YaguLog.For("PreviewEditor").LogDebug(
+            "Pointer double-click editor entry result: opened={Opened}", opened);
     }
 
     private static bool IsPreviewShowMorePointerSource(object originalSource)
@@ -266,22 +270,27 @@ public sealed partial class MainWindow
                 _previewSelectionAutoScrollPointerPointInVerticalScroller.Y;
         }
         _previewSelectionAutoScrollPointerMoveCount++;
-        if (_previewCustomSelectionDragging)
-        {
-            UpdatePreviewCustomSelectionFromCurrentPointer();
-            e.Handled = true;
-        }
 
         bool horizontalEdge = TryGetPreviewSelectionAutoScrollVelocity(
             _previewSelectionAutoScrollScroller,
             _previewSelectionAutoScrollPointerX,
             out double velocity);
+        double verticalVelocity = 0;
         bool verticalEdge = verticalScroller is not null
             && TryGetPreviewSelectionAutoScrollVerticalVelocity(
                 verticalScroller,
                 _previewSelectionAutoScrollPointerYInVertical,
-                out _);
+                out verticalVelocity);
         bool isAtEdge = horizontalEdge || verticalEdge;
+
+        if (_previewCustomSelectionDragging)
+        {
+            int outwardDirection = verticalEdge
+                ? Math.Sign(verticalVelocity)
+                : horizontalEdge ? Math.Sign(velocity) : 0;
+            UpdatePreviewCustomSelectionFromCurrentPointer(outwardDirection);
+            e.Handled = true;
+        }
 
         if (isAtEdge && !_previewSelectionAutoScrollWasAtEdge)
             LogPreviewSelectionAutoScrollEdge("edge-enter", _previewSelectionAutoScrollScroller, velocity);
@@ -459,7 +468,8 @@ public sealed partial class MainWindow
         {
             _previewSelectionAutoScrollNoOpFrameCount++;
             if (_previewCustomSelectionDragging)
-                UpdatePreviewCustomSelectionFromCurrentPointer();
+                UpdatePreviewCustomSelectionFromCurrentPointer(
+                    hasVerticalVelocity ? Math.Sign(verticalVelocity) : Math.Sign(velocity));
             MaybeLogPreviewSelectionAutoScrollSample(scroller, velocity, step, beforeX, targetX, false, frameMs, rawFrameMs, "noop");
             bool horizontalAtBoundary = !hasHorizontalVelocity
                 || (beforeX <= 0.5 && step < 0)
@@ -513,7 +523,8 @@ public sealed partial class MainWindow
             if (_previewSelectionAutoScrollStuckFrameCount >= 5)
             {
                 if (_previewCustomSelectionDragging)
-                    UpdatePreviewCustomSelectionFromCurrentPointer();
+                    UpdatePreviewCustomSelectionFromCurrentPointer(
+                        hasVerticalVelocity ? Math.Sign(verticalVelocity) : Math.Sign(velocity));
                 MaybeLogPreviewSelectionAutoScrollSample(scroller, velocity, step, beforeX, targetX, accepted, frameMs, rawFrameMs, "frame");
                 StopPreviewSelectionAutoScrollTimer("stuck-scroller");
                 _previewSelectionAutoScrollPrevBeforeX = beforeX;
@@ -529,7 +540,8 @@ public sealed partial class MainWindow
         _previewSelectionAutoScrollPrevBeforeY = beforeY;
 
         if (_previewCustomSelectionDragging)
-            UpdatePreviewCustomSelectionFromCurrentPointer();
+            UpdatePreviewCustomSelectionFromCurrentPointer(
+                hasVerticalVelocity ? Math.Sign(verticalVelocity) : Math.Sign(velocity));
         MaybeLogPreviewSelectionAutoScrollSample(scroller, velocity, step, beforeX, targetX, accepted, frameMs, rawFrameMs, "frame");
     }
 
@@ -606,8 +618,8 @@ public sealed partial class MainWindow
         try { block.Focus(FocusState.Pointer); } catch { }
 
         bool resolved = TryResolvePreviewSelectionIndexFromCurrentPointer(block, scroller, out int index);
-        LogService.Instance.Verbose("PreviewSelection",
-            $"BeginPreviewCustomSelection: clicked block={DescribePreviewSelectionBlock(block)}, indexResolved={resolved}, index={index}");
+        YaguLog.For("PreviewSelection").LogDebug(
+            "BeginPreviewCustomSelection: clicked block={Block}, indexResolved={IndexResolved}, index={Index}", DescribePreviewSelectionBlock(block), resolved, index);
         if (resolved)
         {
             _previewCustomSelectionAnchorIndex = index;
@@ -616,7 +628,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private void UpdatePreviewCustomSelectionFromCurrentPointer()
+    private void UpdatePreviewCustomSelectionFromCurrentPointer(int outwardDirection = 0)
     {
         var block = _previewCustomSelectionBlock;
         var scroller = _previewSelectionAutoScrollScroller;
@@ -626,11 +638,51 @@ public sealed partial class MainWindow
         if (!TryResolvePreviewSelectionIndexFromCurrentPointer(block, scroller, out int index))
             return;
 
+        // A ScrollViewer can report a transient stale hit-test position immediately after ChangeView,
+        // especially when a wrapped RichTextBlock is reflowing. While the view is moving outward at an
+        // edge, never let that stale position pull the endpoint back toward the anchor and visibly erase
+        // text the user already selected. An ordinary pointer drag inside the viewport passes direction 0,
+        // so intentionally reversing the selection with the mouse remains unchanged.
+        index = PreserveOutwardPreviewSelectionEndpoint(
+            _previewCustomSelectionCurrentIndex, index, outwardDirection);
+
         if (index == _previewCustomSelectionCurrentIndex)
             return;
 
         _previewCustomSelectionCurrentIndex = index;
         UpdatePreviewCustomSelectionHighlighter();
+    }
+
+    internal static int PreserveOutwardPreviewSelectionEndpoint(
+        int currentIndex,
+        int candidateIndex,
+        int outwardDirection)
+        => outwardDirection > 0
+            ? Math.Max(currentIndex, candidateIndex)
+            : outwardDirection < 0
+                ? Math.Min(currentIndex, candidateIndex)
+                : candidateIndex;
+
+    /// <summary>
+    /// Extends a held drag-selection when the preview is scrolled by the mouse wheel, touchpad, or
+    /// scrollbar. ViewChanged previously repainted the old range only; the endpoint did not follow the
+    /// text under the captured pointer unless the custom auto-scroll timer also happened to be running.
+    /// </summary>
+    private void UpdatePreviewCustomSelectionForViewChange()
+    {
+        if (!_previewCustomSelectionDragging)
+            return;
+
+        var verticalScroller = _previewSelectionAutoScrollVerticalScroller ?? PreviewScrollViewer;
+        double currentOffset = verticalScroller.VerticalOffset;
+        int direction = double.IsNaN(_previewSelectionLastViewOffsetY)
+            ? 0
+            : currentOffset > _previewSelectionLastViewOffsetY + 0.5
+                ? 1
+                : currentOffset < _previewSelectionLastViewOffsetY - 0.5 ? -1 : 0;
+        _previewSelectionLastViewOffsetY = currentOffset;
+        if (direction != 0)
+            UpdatePreviewCustomSelectionFromCurrentPointer(direction);
     }
 
     private bool TryResolvePreviewSelectionIndexFromCurrentPointer(RichTextBlock block, ScrollViewer scroller, out int index)
@@ -682,30 +734,71 @@ public sealed partial class MainWindow
         return true;
     }
 
-    private static int MapPreviewTextPointerToBlockIndex(RichTextBlock block, TextPointer pointer)
+    private int MapPreviewTextPointerToBlockIndex(RichTextBlock block, TextPointer pointer)
     {
         int pointerOffset = pointer.Offset;
-        int blockIndex = 0;
-        foreach (var textBlock in block.Blocks)
+        ParagraphMetrics metrics = GetPreviewSelectionParagraphMetrics(block);
+        Paragraph[] paragraphs = metrics.TextParagraphs!;
+        int[] textStarts = metrics.TextStarts!;
+        int[] textLengths = metrics.TextLengths!;
+        int[] nativeStarts = metrics.NativeStarts!;
+        int[] nativeEnds = metrics.NativeEnds!;
+        for (int i = 0; i < paragraphs.Length; i++)
+        {
+            if (pointerOffset <= nativeStarts[i])
+                return textStarts[i];
+            if (pointerOffset <= nativeEnds[i])
+            {
+                int localIndex = MapPreviewTextPointerToParagraphIndex(paragraphs[i], pointerOffset, textLengths[i]);
+                return textStarts[i] + localIndex;
+            }
+        }
+        return paragraphs.Length == 0
+            ? 0
+            : textStarts[^1] + textLengths[^1] + 1;
+    }
+
+    /// <summary>
+    /// Returns the custom-selection paragraph map for <paramref name="block"/>. Character lengths and
+    /// native TextPointer offsets are computed once per stable Blocks collection rather than once per
+    /// pointer frame. The shared paragraph cache is invalidated at every preview mutation site.
+    /// </summary>
+    private ParagraphMetrics GetPreviewSelectionParagraphMetrics(RichTextBlock block)
+    {
+        ParagraphMetrics metrics = GetParagraphMetrics(block);
+        if (metrics.TextParagraphs is not null
+            && metrics.TextMetricsBlockCount == block.Blocks.Count)
+        {
+            return metrics;
+        }
+
+        var paragraphs = new List<Paragraph>(block.Blocks.Count);
+        var textStarts = new List<int>(block.Blocks.Count);
+        var textLengths = new List<int>(block.Blocks.Count);
+        var nativeStarts = new List<int>(block.Blocks.Count);
+        var nativeEnds = new List<int>(block.Blocks.Count);
+        int textStart = 0;
+        foreach (Block textBlock in block.Blocks)
         {
             if (textBlock is not Paragraph paragraph)
                 continue;
 
-            int paragraphLength = GetParagraphTextLength(paragraph);
-            int paragraphStart = paragraph.ContentStart.Offset;
-            int paragraphEnd = paragraph.ContentEnd.Offset;
-            if (pointerOffset <= paragraphStart)
-                return blockIndex;
-            if (pointerOffset <= paragraphEnd)
-            {
-                int localIndex = MapPreviewTextPointerToParagraphIndex(paragraph, pointerOffset, paragraphLength);
-                return blockIndex + localIndex;
-            }
-
-            blockIndex += paragraphLength + 1;
+            int textLength = GetParagraphTextLength(paragraph);
+            paragraphs.Add(paragraph);
+            textStarts.Add(textStart);
+            textLengths.Add(textLength);
+            nativeStarts.Add(paragraph.ContentStart.Offset);
+            nativeEnds.Add(paragraph.ContentEnd.Offset);
+            textStart += textLength + 1;
         }
 
-        return blockIndex;
+        metrics.TextParagraphs = paragraphs.ToArray();
+        metrics.TextStarts = textStarts.ToArray();
+        metrics.TextLengths = textLengths.ToArray();
+        metrics.NativeStarts = nativeStarts.ToArray();
+        metrics.NativeEnds = nativeEnds.ToArray();
+        metrics.TextMetricsBlockCount = block.Blocks.Count;
+        return metrics;
     }
 
     private static int MapPreviewTextPointerToParagraphIndex(Paragraph paragraph, int pointerOffset, int paragraphLength)
@@ -775,6 +868,31 @@ public sealed partial class MainWindow
         DrawPreviewCustomSelectionOverlay(block, startIndex, endIndex);
     }
 
+    // The selection overlay Canvas shares its top edge with the sticky file header that
+    // floats over the top of the preview content when a section header has scrolled out
+    // of view. Because the overlay sits at a higher z-index than that header, a selection
+    // band whose top lands above the header bottom — e.g. while dragging/auto-scrolling
+    // the selection upward — would paint over it. This returns the overlay-space Y of the
+    // header's bottom edge so bands can be clamped below it (0 when nothing is pinned,
+    // which also keeps a partially-scrolled band from spilling above the overlay).
+    private double ResolvePreviewSelectionOverlayTopClip()
+    {
+        if (StickyFileHeader.Visibility != Visibility.Visible || StickyFileHeader.ActualHeight <= 0)
+            return 0;
+
+        try
+        {
+            double headerBottom = StickyFileHeader
+                .TransformToVisual(PreviewSelectionOverlay)
+                .TransformPoint(new Point(0, StickyFileHeader.ActualHeight)).Y;
+            return Math.Max(0, headerBottom);
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
     private void DrawPreviewCustomSelectionOverlay(
         RichTextBlock block,
         int selectionStart,
@@ -818,19 +936,35 @@ public sealed partial class MainWindow
         }
         double scrollerLeftBound = Math.Max(0, scrollerLeftOverlay);
         double contentRightBound = Math.Min(overlayWidth, scrollerLeftOverlay + scrollerViewportWidth);
+        double topClipBound = ResolvePreviewSelectionOverlayTopClip();
         bool hasInlineGutter = !_sectionGutterBlocks.ContainsKey(block);
 
         int markerIndex = 0;
-        int blockIndex = 0;
-        foreach (var textBlock in block.Blocks)
+        ParagraphMetrics metrics = GetPreviewSelectionParagraphMetrics(block);
+        Paragraph[] paragraphs = metrics.TextParagraphs!;
+        int[] paragraphStarts = metrics.TextStarts!;
+        int[] paragraphLengths = metrics.TextLengths!;
+        int firstParagraphIndex = 0;
+        int lastParagraphIndex = paragraphs.Length - 1;
+        if (TryResolveVisiblePreviewSelectionIndexRange(
+                block, out int visibleStartIndex, out int visibleEndIndex))
         {
-            if (textBlock is not Paragraph paragraph)
-                continue;
+            // One-paragraph overscan avoids a one-frame seam while a wrapped paragraph crosses the
+            // viewport edge. More importantly, selection painting is now O(visible paragraphs), not
+            // O(every paragraph selected since the original mouse-down).
+            firstParagraphIndex = Math.Max(
+                0, FindPreviewSelectionParagraphIndex(paragraphStarts, paragraphLengths, visibleStartIndex) - 1);
+            lastParagraphIndex = Math.Min(
+                paragraphs.Length - 1,
+                FindPreviewSelectionParagraphIndex(paragraphStarts, paragraphLengths, visibleEndIndex) + 1);
+        }
 
-            int paragraphLength = GetParagraphTextLength(paragraph);
-            int paragraphStart = blockIndex;
+        for (int paragraphIndex = firstParagraphIndex; paragraphIndex <= lastParagraphIndex; paragraphIndex++)
+        {
+            Paragraph paragraph = paragraphs[paragraphIndex];
+            int paragraphLength = paragraphLengths[paragraphIndex];
+            int paragraphStart = paragraphStarts[paragraphIndex];
             int paragraphEnd = paragraphStart + paragraphLength;
-            blockIndex += paragraphLength + 1;
 
             if (paragraphEnd <= selectionStart)
                 continue;
@@ -873,7 +1007,7 @@ public sealed partial class MainWindow
 
             if (block.TextWrapping == TextWrapping.Wrap
                 && TryBuildWrappedPreviewSelectionRows(
-                    block, paragraph, localStart, localEnd, rect, markerHeight, scrollerLeftBound, contentRightBound, overlayHeight, out var wrappedRows))
+                    block, paragraph, localStart, localEnd, rect, markerHeight, scrollerLeftBound, contentRightBound, topClipBound, overlayHeight, out var wrappedRows))
             {
                 bool wrapCapReached = false;
                 foreach (var rowRect in wrappedRows)
@@ -945,12 +1079,24 @@ public sealed partial class MainWindow
             if (width <= 0)
                 continue;
 
+            // Clamp the band's top below any pinned sticky file header so an upward drag
+            // does not paint the highlight over that header (the overlay is drawn on top).
+            double bandTop = top;
+            double bandHeight = markerHeight;
+            if (bandTop < topClipBound)
+            {
+                bandHeight -= topClipBound - bandTop;
+                bandTop = topClipBound;
+            }
+            if (bandHeight <= 0)
+                continue;
+
             var marker = GetPreviewCustomSelectionOverlayMarker(markerIndex++);
             marker.Width = width;
-            marker.Height = markerHeight;
+            marker.Height = bandHeight;
             marker.Visibility = Visibility.Visible;
             Canvas.SetLeft(marker, visibleLeft);
-            Canvas.SetTop(marker, top);
+            Canvas.SetTop(marker, bandTop);
 
             if (markerIndex >= PreviewCustomSelectionOverlayMaxMarkers)
                 break;
@@ -960,6 +1106,67 @@ public sealed partial class MainWindow
             _previewCustomSelectionOverlayMarkers[index].Visibility = Visibility.Collapsed;
 
         PreviewSelectionOverlay.Visibility = Visibility.Visible;
+    }
+
+    private bool TryResolveVisiblePreviewSelectionIndexRange(
+        RichTextBlock block,
+        out int visibleStartIndex,
+        out int visibleEndIndex)
+    {
+        visibleStartIndex = 0;
+        visibleEndIndex = 0;
+        var verticalScroller = _previewSelectionAutoScrollVerticalScroller ?? PreviewScrollViewer;
+        double viewportWidth = verticalScroller.ViewportWidth > 0
+            ? verticalScroller.ViewportWidth
+            : verticalScroller.ActualWidth;
+        double viewportHeight = verticalScroller.ViewportHeight > 0
+            ? verticalScroller.ViewportHeight
+            : verticalScroller.ActualHeight;
+        if (viewportWidth <= 1 || viewportHeight <= 1 || block.ActualWidth <= 1 || block.ActualHeight <= 1)
+            return false;
+
+        try
+        {
+            GeneralTransform toBlock = verticalScroller.TransformToVisual(block);
+            Point topPoint = toBlock.TransformPoint(new Point(viewportWidth / 2, 0));
+            Point bottomPoint = toBlock.TransformPoint(new Point(viewportWidth / 2, viewportHeight));
+            topPoint.X = Math.Clamp(topPoint.X, 0, block.ActualWidth - 1);
+            bottomPoint.X = Math.Clamp(bottomPoint.X, 0, block.ActualWidth - 1);
+            topPoint.Y = Math.Clamp(topPoint.Y, 0, block.ActualHeight - 1);
+            bottomPoint.Y = Math.Clamp(bottomPoint.Y, 0, block.ActualHeight - 1);
+
+            TextPointer? topPointer = block.GetPositionFromPoint(topPoint);
+            TextPointer? bottomPointer = block.GetPositionFromPoint(bottomPoint);
+            if (topPointer is null || bottomPointer is null)
+                return false;
+
+            int topIndex = MapPreviewTextPointerToBlockIndex(block, topPointer);
+            int bottomIndex = MapPreviewTextPointerToBlockIndex(block, bottomPointer);
+            visibleStartIndex = Math.Min(topIndex, bottomIndex);
+            visibleEndIndex = Math.Max(topIndex, bottomIndex);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int FindPreviewSelectionParagraphIndex(
+        int[] paragraphStarts,
+        int[] paragraphLengths,
+        int textIndex)
+    {
+        if (paragraphStarts.Length == 0)
+            return 0;
+        int found = Array.BinarySearch(paragraphStarts, textIndex);
+        if (found >= 0)
+            return found;
+        int insertion = ~found;
+        int previous = Math.Clamp(insertion - 1, 0, paragraphStarts.Length - 1);
+        return textIndex <= paragraphStarts[previous] + paragraphLengths[previous] + 1
+            ? previous
+            : Math.Clamp(insertion, 0, paragraphStarts.Length - 1);
     }
 
     // Builds the highlight rectangles (in PreviewSelectionOverlay coordinates) for a
@@ -976,6 +1183,7 @@ public sealed partial class MainWindow
         double markerHeight,
         double clampLeft,
         double contentRightBound,
+        double topClip,
         double overlayHeight,
         out List<Windows.Foundation.Rect> rows)
     {
@@ -1028,21 +1236,21 @@ public sealed partial class MainWindow
         if (sameRow)
         {
             AddOverlayBandRect(toOverlay, startRect.X, startRect.Y, endRect.X, startRect.Y + rowHeight,
-                clampLeft, contentRightBound, overlayHeight, rows);
+                clampLeft, contentRightBound, topClip, overlayHeight, rows);
         }
         else
         {
             // Partial first row: selection start -> content right edge.
             AddOverlayBandRect(toOverlay, startRect.X, startRect.Y, contentRightBlock, startRect.Y + rowHeight,
-                clampLeft, contentRightBound, overlayHeight, rows);
+                clampLeft, contentRightBound, topClip, overlayHeight, rows);
             // Full-width middle band covering every row strictly between start and end.
             double midTopBlock = startRect.Y + rowHeight;
             if (endRect.Y - midTopBlock > 1)
                 AddOverlayBandRect(toOverlay, contentLeftBlock, midTopBlock, contentRightBlock, endRect.Y,
-                    clampLeft, contentRightBound, overlayHeight, rows);
+                    clampLeft, contentRightBound, topClip, overlayHeight, rows);
             // Partial last row: content left edge -> selection end.
             AddOverlayBandRect(toOverlay, contentLeftBlock, endRect.Y, endRect.X, endRect.Y + rowHeight,
-                clampLeft, contentRightBound, overlayHeight, rows);
+                clampLeft, contentRightBound, topClip, overlayHeight, rows);
         }
 
         return rows.Count > 0;
@@ -1059,6 +1267,7 @@ public sealed partial class MainWindow
         double bottomBlock,
         double clampLeft,
         double clampRight,
+        double topClip,
         double overlayHeight,
         List<Windows.Foundation.Rect> rows)
     {
@@ -1086,14 +1295,17 @@ public sealed partial class MainWindow
 
         double visibleLeft = Math.Max(clampLeft, left);
         double visibleRight = Math.Min(clampRight, right);
+        // Clamp the band below any pinned sticky file header (topClip) so an upward drag
+        // does not paint the highlight over that header.
+        double clampedTop = Math.Max(topClip, top);
         double width = visibleRight - visibleLeft;
-        double height = bottom - top;
+        double height = bottom - clampedTop;
         if (width <= 0 || height <= 0)
             return;
-        if (top + height < 0 || top > overlayHeight)
+        if (clampedTop > overlayHeight)
             return;
 
-        rows.Add(new Windows.Foundation.Rect(visibleLeft, top, width, height));
+        rows.Add(new Windows.Foundation.Rect(visibleLeft, clampedTop, width, height));
     }
 
     // Resolves the overlay-space X of a paragraph-local character edge using the real
@@ -1294,17 +1506,17 @@ public sealed partial class MainWindow
     {
         var block = _previewCustomSelectionBlock;
         bool hasSelection = block is not null && HasPreviewCustomSelection(block);
-        LogService.Instance.Verbose("PreviewSelection",
-            $"TryCopyActivePreviewCustomSelection: block={DescribePreviewSelectionBlock(block)}, hasSelection={hasSelection}, " +
-            $"anchor={_previewCustomSelectionAnchorIndex}, current={_previewCustomSelectionCurrentIndex}, " +
-            $"sourceWithinPreview={(source is null ? "n/a" : IsElementWithin(source, PreviewScrollViewer).ToString())}");
+        YaguLog.For("PreviewSelection").LogDebug(
+            "TryCopyActivePreviewCustomSelection: block={Block}, hasSelection={HasSelection}, " +
+            "anchor={Anchor}, current={Current}, " +
+            "sourceWithinPreview={SourceWithinPreview}", DescribePreviewSelectionBlock(block), hasSelection, _previewCustomSelectionAnchorIndex, _previewCustomSelectionCurrentIndex, source is null ? "n/a" : IsElementWithin(source, PreviewScrollViewer).ToString());
         if (block is null || !hasSelection)
             return false;
         if (source is not null
             && !IsElementWithin(source, PreviewScrollViewer)
             && !ReferenceEquals(source, block))
         {
-            LogService.Instance.Verbose("PreviewSelection", "TryCopyActivePreviewCustomSelection: aborted \u2014 source outside preview");
+            YaguLog.For("PreviewSelection").LogDebug("TryCopyActivePreviewCustomSelection: aborted \u2014 source outside preview");
             return false;
         }
 
@@ -1329,7 +1541,7 @@ public sealed partial class MainWindow
     {
         if (source is not null && !IsElementWithin(source, PreviewScrollViewer))
         {
-            LogService.Instance.Verbose("PreviewSelection", "TrySelectAllPreviewContent: aborted \u2014 source outside preview");
+            YaguLog.For("PreviewSelection").LogDebug("TrySelectAllPreviewContent: aborted \u2014 source outside preview");
             return false;
         }
 
@@ -1375,8 +1587,8 @@ public sealed partial class MainWindow
         }
 
         int totalLength = block is null ? 0 : GetBlockTotalTextLength(block);
-        LogService.Instance.Verbose("PreviewSelection",
-            $"TrySelectAllPreviewContent: branch={branch}, block={DescribePreviewSelectionBlock(block)}, totalLength={totalLength}");
+        YaguLog.For("PreviewSelection").LogDebug(
+            "TrySelectAllPreviewContent: branch={Branch}, block={Block}, totalLength={TotalLength}", branch, DescribePreviewSelectionBlock(block), totalLength);
 
         if (block is null)
             return false;
@@ -1453,6 +1665,7 @@ public sealed partial class MainWindow
         _previewSelectionAutoScrollVerticalScroller = null;
         _previewSelectionAutoScrollPointerId = 0;
         _previewSelectionAutoScrollPointerX = 0;
+        _previewSelectionLastViewOffsetY = double.NaN;
         _previewSelectionAutoScrollWasAtEdge = false;
         _previewCustomSelectionDragging = false;
         block?.ReleasePointerCaptures();
@@ -1494,8 +1707,8 @@ public sealed partial class MainWindow
         if (!LogService.Instance.IsVerboseEnabled)
             return;
 
-        LogService.Instance.Verbose("PreviewSelectionAutoScroll",
-            $"start: surface={DescribePreviewSelectionAutoScrollSurface(block)}, pointerCaptured={pointerCaptured}, pointerX={_previewSelectionAutoScrollPointerX:N1}, offsetX={scroller.HorizontalOffset:N1}, viewportW={scroller.ViewportWidth:N1}, actualW={scroller.ActualWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}, wrap={block.TextWrapping}, horizontalMode={scroller.HorizontalScrollMode}");
+        YaguLog.For("PreviewSelectionAutoScroll").LogDebug(
+            "start: surface={Surface}, pointerCaptured={PointerCaptured}, pointerX={PointerX:N1}, offsetX={OffsetX:N1}, viewportW={ViewportW:N1}, actualW={ActualW:N1}, scrollableW={ScrollableW:N1}, wrap={Wrap}, horizontalMode={HorizontalMode}", DescribePreviewSelectionAutoScrollSurface(block), pointerCaptured, _previewSelectionAutoScrollPointerX, scroller.HorizontalOffset, scroller.ViewportWidth, scroller.ActualWidth, scroller.ScrollableWidth, block.TextWrapping, scroller.HorizontalScrollMode);
     }
 
     private void LogPreviewSelectionAutoScrollEdge(string state, ScrollViewer scroller, double velocity)
@@ -1503,8 +1716,8 @@ public sealed partial class MainWindow
         if (!LogService.Instance.IsVerboseEnabled)
             return;
 
-        LogService.Instance.Verbose("PreviewSelectionAutoScroll",
-            $"{state}: pointerX={_previewSelectionAutoScrollPointerX:N1}, velocity={velocity:N1}, offsetX={scroller.HorizontalOffset:N1}, viewportW={scroller.ViewportWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}, moves={_previewSelectionAutoScrollPointerMoveCount}");
+        YaguLog.For("PreviewSelectionAutoScroll").LogDebug(
+            "{State}: pointerX={PointerX:N1}, velocity={Velocity:N1}, offsetX={OffsetX:N1}, viewportW={ViewportW:N1}, scrollableW={ScrollableW:N1}, moves={Moves}", state, _previewSelectionAutoScrollPointerX, velocity, scroller.HorizontalOffset, scroller.ViewportWidth, scroller.ScrollableWidth, _previewSelectionAutoScrollPointerMoveCount);
     }
 
     private void LogPreviewSelectionAutoScrollTimerState(string state)
@@ -1512,8 +1725,8 @@ public sealed partial class MainWindow
         if (!LogService.Instance.IsVerboseEnabled)
             return;
 
-        LogService.Instance.Verbose("PreviewSelectionAutoScroll",
-            $"{state}: frames={_previewSelectionAutoScrollFrameCount}, accepted={_previewSelectionAutoScrollChangeViewAcceptedCount}, rejected={_previewSelectionAutoScrollChangeViewRejectedCount}, delayed={_previewSelectionAutoScrollDelayedFrameCount}, maxFrameMs={_previewSelectionAutoScrollMaxFrameMs:N1}, maxRawFrameMs={_previewSelectionAutoScrollMaxRawFrameMs:N1}, maxLag={_previewSelectionAutoScrollMaxLagDip:N1}");
+        YaguLog.For("PreviewSelectionAutoScroll").LogDebug(
+            "{State}: frames={Frames}, accepted={Accepted}, rejected={Rejected}, delayed={Delayed}, maxFrameMs={MaxFrameMs:N1}, maxRawFrameMs={MaxRawFrameMs:N1}, maxLag={MaxLag:N1}", state, _previewSelectionAutoScrollFrameCount, _previewSelectionAutoScrollChangeViewAcceptedCount, _previewSelectionAutoScrollChangeViewRejectedCount, _previewSelectionAutoScrollDelayedFrameCount, _previewSelectionAutoScrollMaxFrameMs, _previewSelectionAutoScrollMaxRawFrameMs, _previewSelectionAutoScrollMaxLagDip);
     }
 
     private void MaybeLogPreviewSelectionAutoScrollSample(
@@ -1539,8 +1752,8 @@ public sealed partial class MainWindow
             return;
 
         _previewSelectionAutoScrollLastLogTick = now;
-        LogService.Instance.Verbose("PreviewSelectionAutoScroll",
-            $"sample:{source}: frame={_previewSelectionAutoScrollFrameCount}, frameMs={frameMs:N1}, rawFrameMs={rawFrameMs:N1}, pointerX={_previewSelectionAutoScrollPointerX:N1}, velocity={velocity:N1}, step={step:N1}, beforeX={beforeX:N1}, targetX={targetX:N1}, currentX={scroller.HorizontalOffset:N1}, accepted={accepted}, viewportW={scroller.ViewportWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}, moves={_previewSelectionAutoScrollPointerMoveCount}, delayed={_previewSelectionAutoScrollDelayedFrameCount}, maxLag={_previewSelectionAutoScrollMaxLagDip:N1}");
+        YaguLog.For("PreviewSelectionAutoScroll").LogDebug(
+            "sample:{Source}: frame={Frame}, frameMs={FrameMs:N1}, rawFrameMs={RawFrameMs:N1}, pointerX={PointerX:N1}, velocity={Velocity:N1}, step={Step:N1}, beforeX={BeforeX:N1}, targetX={TargetX:N1}, currentX={CurrentX:N1}, accepted={Accepted}, viewportW={ViewportW:N1}, scrollableW={ScrollableW:N1}, moves={Moves}, delayed={Delayed}, maxLag={MaxLag:N1}", source, _previewSelectionAutoScrollFrameCount, frameMs, rawFrameMs, _previewSelectionAutoScrollPointerX, velocity, step, beforeX, targetX, scroller.HorizontalOffset, accepted, scroller.ViewportWidth, scroller.ScrollableWidth, _previewSelectionAutoScrollPointerMoveCount, _previewSelectionAutoScrollDelayedFrameCount, _previewSelectionAutoScrollMaxLagDip);
     }
 
     private void LogPreviewSelectionAutoScrollStop(string reason)
@@ -1550,8 +1763,8 @@ public sealed partial class MainWindow
 
         var scroller = _previewSelectionAutoScrollScroller;
         long durationMs = Math.Max(0, Environment.TickCount64 - _previewSelectionAutoScrollStartedTick);
-        LogService.Instance.Verbose("PreviewSelectionAutoScroll",
-            $"stop: reason={reason}, durationMs={durationMs}, frames={_previewSelectionAutoScrollFrameCount}, pointerMoves={_previewSelectionAutoScrollPointerMoveCount}, accepted={_previewSelectionAutoScrollChangeViewAcceptedCount}, rejected={_previewSelectionAutoScrollChangeViewRejectedCount}, noop={_previewSelectionAutoScrollNoOpFrameCount}, delayed={_previewSelectionAutoScrollDelayedFrameCount}, maxFrameMs={_previewSelectionAutoScrollMaxFrameMs:N1}, maxRawFrameMs={_previewSelectionAutoScrollMaxRawFrameMs:N1}, maxLag={_previewSelectionAutoScrollMaxLagDip:N1}, requestedDip={_previewSelectionAutoScrollTotalRequestedDip:N1}, finalOffsetX={scroller?.HorizontalOffset:N1}, scrollableW={scroller?.ScrollableWidth:N1}");
+        YaguLog.For("PreviewSelectionAutoScroll").LogDebug(
+            "stop: reason={Reason}, durationMs={DurationMs}, frames={Frames}, pointerMoves={PointerMoves}, accepted={Accepted}, rejected={Rejected}, noop={Noop}, delayed={Delayed}, maxFrameMs={MaxFrameMs:N1}, maxRawFrameMs={MaxRawFrameMs:N1}, maxLag={MaxLag:N1}, requestedDip={RequestedDip:N1}, finalOffsetX={FinalOffsetX:N1}, scrollableW={ScrollableW:N1}", reason, durationMs, _previewSelectionAutoScrollFrameCount, _previewSelectionAutoScrollPointerMoveCount, _previewSelectionAutoScrollChangeViewAcceptedCount, _previewSelectionAutoScrollChangeViewRejectedCount, _previewSelectionAutoScrollNoOpFrameCount, _previewSelectionAutoScrollDelayedFrameCount, _previewSelectionAutoScrollMaxFrameMs, _previewSelectionAutoScrollMaxRawFrameMs, _previewSelectionAutoScrollMaxLagDip, _previewSelectionAutoScrollTotalRequestedDip, scroller?.HorizontalOffset, scroller?.ScrollableWidth);
     }
 
     private void DisposePreviewSelectionAutoScroll()

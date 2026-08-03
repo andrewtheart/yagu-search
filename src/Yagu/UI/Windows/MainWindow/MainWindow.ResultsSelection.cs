@@ -10,6 +10,8 @@ using Windows.System;
 using Yagu.Models;
 using Yagu.Services;
 using Yagu.ViewModels;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 namespace Yagu;
 
 /// <summary>
@@ -18,6 +20,12 @@ namespace Yagu;
 public sealed partial class MainWindow
 {
     private const int FileGroupCollapseVisibleResultsClearDelayMs = 250;
+    private const int BusyFileGroupInitialPageSize = 50;
+
+    private int EffectiveFileGroupInitialPageSize
+        => ViewModel.IsSearching || ViewModel.IsIndexBuildActive || ViewModel.IsIndexWarmActive
+            ? BusyFileGroupInitialPageSize
+            : FileGroup.PageSize;
 
     private readonly HashSet<FileGroup> _visibleResultsEnsureInProgress = new();
 
@@ -37,11 +45,13 @@ public sealed partial class MainWindow
 
             try
             {
-                // Iter 16: ensure any compact evicted-stubs are materialized into Items
-                // before the EnsureVisible code path reads group.Count and indexes into
-                // the group via ShowMore.
-                g.MaterializeEvictedStubs();
-                await EnsureVisibleResultsForExpandedGroupSerializedAsync(g, "expanding").ConfigureAwait(true);
+                // Materialize only the first page that will actually be rendered. Decoding every compact
+                // disk-backed stub here made the IsExpanded gesture block for seconds under concurrent
+                // search/index pressure even though the drawer displayed only one page.
+                await EnsureVisibleResultsForExpandedGroupSerializedAsync(
+                    g,
+                    "expanding",
+                    EffectiveFileGroupInitialPageSize).ConfigureAwait(true);
 
                 if (!ReferenceEquals(sender.DataContext, g))
                     return;
@@ -52,12 +62,12 @@ public sealed partial class MainWindow
                 sender.InvalidateMeasure();
                 QueueResultsFileOverlayUpdate();
 
-                LogService.Instance.Info("Preview", $"OnFileGroupExpanding: expand only file='{g.FilePath}', matchCount={g.Count}");
+                YaguLog.For("Preview").LogInformation("OnFileGroupExpanding: expand only file='{File}', matchCount={MatchCount}", g.FilePath, g.Count);
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("Preview",
-                    $"OnFileGroupExpanding threw: {ex.GetType().Name}: {ex.Message}");
+                YaguLog.For("Preview").LogWarning(
+                    "OnFileGroupExpanding threw: {ErrorType}: {Error}", ex.GetType().Name, ex.Message);
             }
         }
     }
@@ -99,35 +109,35 @@ public sealed partial class MainWindow
                 {
                     if (!group.IsExpanded)
                     {
-                        LogService.Instance.Info("Preview", $"OnFileGroupCollapsed: clearing visible results file='{group.FilePath}', matchCount={group.Count}");
+                        YaguLog.For("Preview").LogInformation("OnFileGroupCollapsed: clearing visible results file='{File}', matchCount={MatchCount}", group.FilePath, group.Count);
                         group.ClearVisibleResults();
                         QueueResultsFileOverlayUpdate();
                     }
                     else if (LogService.Instance.IsVerboseEnabled)
                     {
-                        LogService.Instance.Verbose("Preview", $"OnFileGroupCollapsed: ignored transient collapse file='{group.FilePath}', matchCount={group.Count}");
+                        YaguLog.For("Preview").LogDebug("OnFileGroupCollapsed: ignored transient collapse file='{File}', matchCount={MatchCount}", group.FilePath, group.Count);
                     }
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Warning("Preview", $"OnFileGroupCollapsed clear failed for '{group.FilePath}': {ex.GetType().Name}: {ex.Message}", ex);
+                    YaguLog.For("Preview").LogWarning(ex, "OnFileGroupCollapsed clear failed for '{File}': {ErrorType}: {Error}", group.FilePath, ex.GetType().Name, ex.Message);
                 }
             });
 
             if (!enqueued)
-                LogService.Instance.Warning("Preview", $"OnFileGroupCollapsed clear was skipped because the dispatcher rejected the callback for '{group.FilePath}'");
+                YaguLog.For("Preview").LogWarning("OnFileGroupCollapsed clear was skipped because the dispatcher rejected the callback for '{File}'", group.FilePath);
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview", $"OnFileGroupCollapsed clear scheduling failed for '{group.FilePath}': {ex.GetType().Name}: {ex.Message}", ex);
+            YaguLog.For("Preview").LogWarning(ex, "OnFileGroupCollapsed clear scheduling failed for '{File}': {ErrorType}: {Error}", group.FilePath, ex.GetType().Name, ex.Message);
         }
     }
 
-    private async Task EnsureVisibleResultsForExpandedGroupAsync(FileGroup group)
+    private async Task EnsureVisibleResultsForExpandedGroupAsync(FileGroup group, int initialPageSize = FileGroup.PageSize)
     {
-        LogService.Instance.Info("FileGroup",
-            $"EnsureVisible START: file='{Path.GetFileName(group.FilePath)}', " +
-            $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}, IsExpanded={group.IsExpanded}");
+        YaguLog.For("FileGroup").LogInformation(
+            "EnsureVisible START: file='{File}', " +
+            "Count={Count}, VisibleCount={VisibleCount}, HasMore={HasMore}, IsExpanded={IsExpanded}", Path.GetFileName(group.FilePath), group.Count, group.VisibleResults.Count, group.HasMore, group.IsExpanded);
 
         // OOM safety net: under critical memory pressure, materializing more rows
         // into the XAML tree can trigger a non-recoverable failfast. Pause and
@@ -137,24 +147,24 @@ public sealed partial class MainWindow
 
         try
         {
-            if (group.VisibleResults.Count == 0 && group.Count > 0)
+            if (group.VisibleResults.Count == 0 && group.HasMore)
             {
-                await ShowMoreVisibleResultsIncrementalAsync(group, FileGroup.PageSize).ConfigureAwait(true);
+                await ShowMoreVisibleResultsIncrementalAsync(group, initialPageSize).ConfigureAwait(true);
 
                 // Dump sample items to diagnose render issue
                 int sampleCount = Math.Min(10, group.VisibleResults.Count);
                 for (int i = 0; i < sampleCount; i++)
                 {
                     var r = group.VisibleResults[i];
-                    LogService.Instance.Info("FileGroup",
-                        $"EnsureVisible SAMPLE[{i}]: line={r.LineNumber}, IsEvicted={r.IsEvicted}, " +
-                        $"MatchLine.Length={r.MatchLine.Length}, DiskOffset={r.DiskOffset}, " +
-                        $"MatchLine='{(r.MatchLine.Length > 60 ? r.MatchLine[..60] : r.MatchLine)}'");
+                    YaguLog.For("FileGroup").LogInformation(
+                        "EnsureVisible SAMPLE[{Index}]: line={Line}, IsEvicted={IsEvicted}, " +
+                        "MatchLine.Length={MatchLineLength}, DiskOffset={DiskOffset}, " +
+                        "MatchLine='{MatchLine}'", i, r.LineNumber, r.IsEvicted, r.MatchLine.Length, r.DiskOffset, (r.MatchLine.Length > 60 ? r.MatchLine[..60] : r.MatchLine));
                 }
 
-                LogService.Instance.Info("FileGroup",
-                    $"EnsureVisible AFTER ShowMore: file='{Path.GetFileName(group.FilePath)}', " +
-                    $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}");
+                YaguLog.For("FileGroup").LogInformation(
+                    "EnsureVisible AFTER ShowMore: file='{File}', " +
+                    "Count={Count}, VisibleCount={VisibleCount}, HasMore={HasMore}", Path.GetFileName(group.FilePath), group.Count, group.VisibleResults.Count, group.HasMore);
                 return;
             }
 
@@ -166,18 +176,21 @@ public sealed partial class MainWindow
         }
     }
 
-    private async Task EnsureVisibleResultsForExpandedGroupSerializedAsync(FileGroup group, string caller)
+    private async Task EnsureVisibleResultsForExpandedGroupSerializedAsync(
+        FileGroup group,
+        string caller,
+        int initialPageSize = FileGroup.PageSize)
     {
         if (!_visibleResultsEnsureInProgress.Add(group))
         {
-            LogService.Instance.Verbose("FileGroup",
-                $"EnsureVisible skipped duplicate caller={caller} file='{Path.GetFileName(group.FilePath)}'");
+            YaguLog.For("FileGroup").LogDebug(
+                "EnsureVisible skipped duplicate caller={Caller} file='{File}'", caller, Path.GetFileName(group.FilePath));
             return;
         }
 
         try
         {
-            await EnsureVisibleResultsForExpandedGroupAsync(group).ConfigureAwait(true);
+            await EnsureVisibleResultsForExpandedGroupAsync(group, initialPageSize).ConfigureAwait(true);
         }
         finally
         {
@@ -187,9 +200,9 @@ public sealed partial class MainWindow
 
     private void EnsureVisibleResultsForExpandedGroup(FileGroup group)
     {
-        LogService.Instance.Info("FileGroup",
-            $"EnsureVisible SYNC START: file='{Path.GetFileName(group.FilePath)}', " +
-            $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}, IsExpanded={group.IsExpanded}");
+        YaguLog.For("FileGroup").LogInformation(
+            "EnsureVisible SYNC START: file='{File}', " +
+            "Count={Count}, VisibleCount={VisibleCount}, HasMore={HasMore}, IsExpanded={IsExpanded}", Path.GetFileName(group.FilePath), group.Count, group.VisibleResults.Count, group.HasMore, group.IsExpanded);
 
         if (group.VisibleResults.Count == 0 && group.Count > 0)
         {
@@ -199,15 +212,15 @@ public sealed partial class MainWindow
             for (int i = 0; i < sampleCount; i++)
             {
                 var r = group.VisibleResults[i];
-                LogService.Instance.Info("FileGroup",
-                    $"EnsureVisible SYNC SAMPLE[{i}]: line={r.LineNumber}, IsEvicted={r.IsEvicted}, " +
-                    $"MatchLine.Length={r.MatchLine.Length}, DiskOffset={r.DiskOffset}, " +
-                    $"MatchLine='{(r.MatchLine.Length > 60 ? r.MatchLine[..60] : r.MatchLine)}'");
+                YaguLog.For("FileGroup").LogInformation(
+                    "EnsureVisible SYNC SAMPLE[{Index}]: line={Line}, IsEvicted={IsEvicted}, " +
+                    "MatchLine.Length={MatchLineLength}, DiskOffset={DiskOffset}, " +
+                    "MatchLine='{MatchLine}'", i, r.LineNumber, r.IsEvicted, r.MatchLine.Length, r.DiskOffset, (r.MatchLine.Length > 60 ? r.MatchLine[..60] : r.MatchLine));
             }
 
-            LogService.Instance.Info("FileGroup",
-                $"EnsureVisible SYNC AFTER ShowMore: file='{Path.GetFileName(group.FilePath)}', " +
-                $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}");
+            YaguLog.For("FileGroup").LogInformation(
+                "EnsureVisible SYNC AFTER ShowMore: file='{File}', " +
+                "Count={Count}, VisibleCount={VisibleCount}, HasMore={HasMore}", Path.GetFileName(group.FilePath), group.Count, group.VisibleResults.Count, group.HasMore);
             return;
         }
 
@@ -240,9 +253,9 @@ public sealed partial class MainWindow
                 evicted.Add(group[i]);
         }
 
-        LogService.Instance.Info("FileGroup",
-            $"HydrateRange: file='{Path.GetFileName(group.FilePath)}', " +
-            $"range=[{start},{end}), evictedToHydrate={evicted.Count}, totalInRange={end - start}");
+        YaguLog.For("FileGroup").LogInformation(
+            "HydrateRange: file='{File}', " +
+            "range=[{Start},{End}), evictedToHydrate={EvictedToHydrate}, totalInRange={TotalInRange}", Path.GetFileName(group.FilePath), start, end, evicted.Count, end - start);
 
         if (evicted.Count == 0) return;
 
@@ -253,9 +266,9 @@ public sealed partial class MainWindow
         int stillEmpty = evicted.Count(r => r.MatchLine.Length == 0);
         if (stillEvicted > 0 || stillEmpty > 0)
         {
-            LogService.Instance.Warning("FileGroup",
-                $"HydrateRange AFTER: file='{Path.GetFileName(group.FilePath)}', " +
-                $"stillEvicted={stillEvicted}, stillEmptyMatchLine={stillEmpty} (of {evicted.Count} attempted)");
+            YaguLog.For("FileGroup").LogWarning(
+                "HydrateRange AFTER: file='{File}', " +
+                "stillEvicted={StillEvicted}, stillEmptyMatchLine={StillEmpty} (of {Attempted} attempted)", Path.GetFileName(group.FilePath), stillEvicted, stillEmpty, evicted.Count);
         }
     }
 
@@ -268,9 +281,9 @@ public sealed partial class MainWindow
                 evicted.Add(group[i]);
         }
 
-        LogService.Instance.Info("FileGroup",
-            $"HydrateRange SYNC: file='{Path.GetFileName(group.FilePath)}', " +
-            $"range=[{start},{end}), evictedToHydrate={evicted.Count}, totalInRange={end - start}");
+        YaguLog.For("FileGroup").LogInformation(
+            "HydrateRange SYNC: file='{File}', " +
+            "range=[{Start},{End}), evictedToHydrate={EvictedToHydrate}, totalInRange={TotalInRange}", Path.GetFileName(group.FilePath), start, end, evicted.Count, end - start);
 
         if (evicted.Count == 0) return;
 
@@ -280,9 +293,9 @@ public sealed partial class MainWindow
         int stillEmpty = evicted.Count(r => r.MatchLine.Length == 0);
         if (stillEvicted > 0 || stillEmpty > 0)
         {
-            LogService.Instance.Warning("FileGroup",
-                $"HydrateRange SYNC AFTER: file='{Path.GetFileName(group.FilePath)}', " +
-                $"stillEvicted={stillEvicted}, stillEmptyMatchLine={stillEmpty} (of {evicted.Count} attempted)");
+            YaguLog.For("FileGroup").LogWarning(
+                "HydrateRange SYNC AFTER: file='{File}', " +
+                "stillEvicted={StillEvicted}, stillEmptyMatchLine={StillEmpty} (of {Attempted} attempted)", Path.GetFileName(group.FilePath), stillEvicted, stillEmpty, evicted.Count);
         }
     }
 
@@ -337,7 +350,7 @@ public sealed partial class MainWindow
 
         if (IsInsideHeaderCommand(e.OriginalSource as DependencyObject, header))
         {
-            LogService.Instance.Info("Preview", $"OnFileGroupHeaderDoubleTapped: command click ignored file='{g.FilePath}', isExpanded={g.IsExpanded}");
+            YaguLog.For("Preview").LogInformation("OnFileGroupHeaderDoubleTapped: command click ignored file='{File}', isExpanded={IsExpanded}", g.FilePath, g.IsExpanded);
             return;
         }
 
@@ -347,7 +360,7 @@ public sealed partial class MainWindow
 
     private async Task SelectFileGroupMatchesAndPreviewAsync(FileGroup group, string reason, bool? preserveExpansionState = null)
     {
-        LogService.Instance.Info("Preview", $"SelectFileGroupMatchesAndPreviewAsync: reason='{reason}', file='{group.FilePath}', matchCount={group.Count}");
+        YaguLog.For("Preview").LogInformation("SelectFileGroupMatchesAndPreviewAsync: reason='{Reason}', file='{File}', matchCount={MatchCount}", reason, group.FilePath, group.Count);
 
         if (preserveExpansionState.HasValue)
             group.IsExpanded = preserveExpansionState.Value;
@@ -410,7 +423,7 @@ public sealed partial class MainWindow
         if (group.AllSelected && group.SelectedCount == group.Count)
             return;
 
-        LogService.Instance.Info("Preview", $"SelectFileGroupMatches: file='{group.FilePath}', matchCount={group.Count}");
+        YaguLog.For("Preview").LogInformation("SelectFileGroupMatches: file='{File}', matchCount={MatchCount}", group.FilePath, group.Count);
         _suppressPreviewUpdate = true;
         try
         {
@@ -443,8 +456,8 @@ public sealed partial class MainWindow
         {
             result.IsSelected = !result.IsSelected;
             UpdateSelectionForMatchLine(result, nameof(OnMatchLineTapped));
-            LogService.Instance.Info("Preview",
-                $"OnMatchLineTapped: selection preview file='{result.FilePath}', line={result.LineNumber}, isSelected={result.IsSelected}");
+            YaguLog.For("Preview").LogInformation(
+                "OnMatchLineTapped: selection preview file='{File}', line={Line}, isSelected={IsSelected}", result.FilePath, result.LineNumber, result.IsSelected);
             await UpdatePreviewForMatchSelectionAsync(result);
         }
     }
@@ -478,8 +491,8 @@ public sealed partial class MainWindow
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("Preview",
-                    $"UpdatePreviewForMatchSelectionAsync: failed to add selected line to preview for '{result.FilePath}' line {result.LineNumber}: {ex.GetType().Name}: {ex.Message}");
+                YaguLog.For("Preview").LogWarning(
+                    "UpdatePreviewForMatchSelectionAsync: failed to add selected line to preview for '{File}' line {Line}: {ErrorType}: {Error}", result.FilePath, result.LineNumber, ex.GetType().Name, ex.Message);
             }
 
             return;
@@ -517,7 +530,7 @@ public sealed partial class MainWindow
         FindParentGroup(result)?.NotifySelectionChanged();
 
         var selected = ViewModel.GetAllSelectedResults();
-        LogService.Instance.Info("Preview", $"{caller}: selection only file='{result.FilePath}', line={result.LineNumber}, isSelected={result.IsSelected}, totalSelected={selected.Count}");
+        YaguLog.For("Preview").LogInformation("{Caller}: selection only file='{File}', line={Line}, isSelected={IsSelected}, totalSelected={TotalSelected}", caller, result.FilePath, result.LineNumber, result.IsSelected, selected.Count);
     }
 
     private async Task EnsureCheckedMatchInPreviewAsync(SearchResult result)
@@ -527,8 +540,8 @@ public sealed partial class MainWindow
 
         ViewModel.HydrateResult(result);
 
-        LogService.Instance.Info("Preview",
-            $"EnsureCheckedMatchInPreviewAsync: file='{result.FilePath}', line={result.LineNumber}");
+        YaguLog.For("Preview").LogInformation(
+            "EnsureCheckedMatchInPreviewAsync: file='{File}', line={Line}", result.FilePath, result.LineNumber);
 
         if (!TryFindPreviewSection(result.FilePath, out var expander, out var section))
         {
@@ -576,8 +589,8 @@ public sealed partial class MainWindow
             ReorderMatchParagraphsToPreviewSectionOrder();
             if (!TryFindPreviewMatchParagraph(section, result, out paragraph, out matchInPara))
             {
-                LogService.Instance.Warning("Preview",
-                    $"EnsureCheckedMatchInPreviewAsync: appended line but could not locate match paragraph for '{result.FilePath}' line {result.LineNumber}");
+                YaguLog.For("Preview").LogWarning(
+                    "EnsureCheckedMatchInPreviewAsync: appended line but could not locate match paragraph for '{File}' line {Line}", result.FilePath, result.LineNumber);
                 TryScrollToPreviewSection(result.FilePath);
                 return;
             }
@@ -611,8 +624,8 @@ public sealed partial class MainWindow
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            LogService.Instance.Verbose("Preview",
-                $"AppendCheckedMatchContextAsync: using stored context for '{result.FilePath}' line {result.LineNumber}: {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("Preview").LogDebug(
+                "AppendCheckedMatchContextAsync: using stored context for '{File}' line {Line}: {ErrorType}: {Error}", result.FilePath, result.LineNumber, ex.GetType().Name, ex.Message);
         }
 
         _previewMutating = true;
@@ -1036,7 +1049,7 @@ public sealed partial class MainWindow
             }
 
             if (LogService.Instance.IsVerboseEnabled)
-                LogService.Instance.Verbose("Preview", $"TryFindPreviewMatchParagraph: path=exact, line={result.LineNumber}, srcCol={result.SourceMatchStartColumn}, matchCol={result.MatchStartColumn}, matchLen={result.MatchLength}, windowStart={exactWindowStart}, runSrcCols=[{exactRunCols}], resolvedMatchInPara={matchInPara}, fallbacks={fallbackCandidates.Count}");
+                YaguLog.For("Preview").LogDebug("TryFindPreviewMatchParagraph: path=exact, line={Line}, srcCol={SrcCol}, matchCol={MatchCol}, matchLen={MatchLen}, windowStart={WindowStart}, runSrcCols=[{RunSrcCols}], resolvedMatchInPara={ResolvedMatchInPara}, fallbacks={Fallbacks}", result.LineNumber, result.SourceMatchStartColumn, result.MatchStartColumn, result.MatchLength, exactWindowStart, exactRunCols, matchInPara, fallbackCandidates.Count);
             return true;
         }
 
@@ -1049,7 +1062,7 @@ public sealed partial class MainWindow
                 paragraph = fallbackCandidates[0].paragraph;
                 matchInPara = fallbackCandidates[0].matchInPara;
                 if (LogService.Instance.IsVerboseEnabled)
-                    LogService.Instance.Verbose("Preview", $"TryFindPreviewMatchParagraph: path=single, line={result.LineNumber}, srcCol={result.SourceMatchStartColumn}, matchCol={result.MatchStartColumn}, resolvedMatchInPara={matchInPara}, fallbacks={fallbackCandidates.Count}");
+                    YaguLog.For("Preview").LogDebug("TryFindPreviewMatchParagraph: path=single, line={Line}, srcCol={SrcCol}, matchCol={MatchCol}, resolvedMatchInPara={ResolvedMatchInPara}, fallbacks={Fallbacks}", result.LineNumber, result.SourceMatchStartColumn, result.MatchStartColumn, matchInPara, fallbackCandidates.Count);
                 return true;
             }
 
@@ -1088,7 +1101,7 @@ public sealed partial class MainWindow
                 // This occurrence is not inside any rendered same-line window; signal
                 // the caller to append a dedicated window for it.
                 if (LogService.Instance.IsVerboseEnabled)
-                    LogService.Instance.Verbose("Preview", $"TryFindPreviewMatchParagraph: path=append(no-window), line={result.LineNumber}, srcCol={result.SourceMatchStartColumn}, matchCol={result.MatchStartColumn}, fallbacks={fallbackCandidates.Count}");
+                    YaguLog.For("Preview").LogDebug("TryFindPreviewMatchParagraph: path=append(no-window), line={Line}, srcCol={SrcCol}, matchCol={MatchCol}, fallbacks={Fallbacks}", result.LineNumber, result.SourceMatchStartColumn, result.MatchStartColumn, fallbackCandidates.Count);
                 return false;
             }
 
@@ -1099,7 +1112,7 @@ public sealed partial class MainWindow
                 paragraph = chosen.paragraph;
                 matchInPara = resolvedIdx;
                 if (LogService.Instance.IsVerboseEnabled)
-                    LogService.Instance.Verbose("Preview", $"TryFindPreviewMatchParagraph: path={(containing is not null ? "containing" : "fullLine")}, line={result.LineNumber}, srcCol={result.SourceMatchStartColumn}, matchCol={result.MatchStartColumn}, sourceColumn={sourceColumn}, windowStart={chosenWindowStart}, runSrcCols=[{runCols}], resolvedMatchInPara={matchInPara}, fallbacks={fallbackCandidates.Count}");
+                    YaguLog.For("Preview").LogDebug("TryFindPreviewMatchParagraph: path={Path}, line={Line}, srcCol={SrcCol}, matchCol={MatchCol}, sourceColumn={SourceColumn}, windowStart={WindowStart}, runSrcCols=[{RunSrcCols}], resolvedMatchInPara={ResolvedMatchInPara}, fallbacks={Fallbacks}", (containing is not null ? "containing" : "fullLine"), result.LineNumber, result.SourceMatchStartColumn, result.MatchStartColumn, sourceColumn, chosenWindowStart, runCols, matchInPara, fallbackCandidates.Count);
                 return true;
             }
 

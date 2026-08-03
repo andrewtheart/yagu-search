@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -5,6 +6,8 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.System;
 using Yagu.Services;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu;
 
@@ -17,6 +20,7 @@ public sealed partial class MainWindow
     private bool _previewEditorFindHighlightMatchCase;
     private int _previewEditorActiveFindSelectionVersion;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewEditorActiveFindSelectionRetryTimer;
+    private int _replaceAllFilesOperationVersion;
 
     private bool _findBarDragging;
     private Windows.Foundation.Point _findBarDragStart;
@@ -261,7 +265,7 @@ public sealed partial class MainWindow
     private static void LogFindVerbose(string message)
     {
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("FindReplace", message);
+            YaguLog.For("FindReplace").LogDebug("{Message}", message);
     }
 
     private string FindSurfaceDescription()
@@ -570,7 +574,7 @@ public sealed partial class MainWindow
                     // Match starts in this paragraph
                     int localOffset = blockTextLen + (globalIndex - offset - blockSearchLen);
                     ApplyFindHighlighter(block, localOffset, length);
-                    ScrollBlockIntoView(block);
+                    ScrollFindMatchIntoView(block, p);
                     return;
                 }
 
@@ -583,7 +587,7 @@ public sealed partial class MainWindow
             {
                 int localOffset = MapSearchOffsetToBlockOffset(block, globalIndex - offset);
                 ApplyFindHighlighter(block, localOffset, length);
-                ScrollBlockIntoView(block);
+                ScrollFindMatchIntoView(block, FindParagraphAtSearchOffset(block, globalIndex - offset));
                 return;
             }
 
@@ -644,19 +648,43 @@ public sealed partial class MainWindow
         block.TextHighlighters.Add(highlighter);
     }
 
-    private void ScrollBlockIntoView(RichTextBlock block)
+    private void ScrollFindMatchIntoView(
+        RichTextBlock block,
+        Microsoft.UI.Xaml.Documents.Paragraph? paragraph)
     {
+        if (paragraph is not null)
+        {
+            // Match navigation already has a layout-settling retry ladder for exact paragraphs.
+            // Reuse it here: centering the whole RichTextBlock always computes the same offset, so
+            // Next/Previous appeared inert whenever every find hit lived in one tall preview section.
+            ScrollPreviewToLine(block, paragraph, forceCenter: true);
+            return;
+        }
+
+        // A cross-paragraph needle can start in a separator for which no exact paragraph resolves.
+        // Keep a safe block-level fallback rather than dropping navigation entirely.
         try
         {
-            var transform = block.TransformToVisual(PreviewScrollViewer);
-            var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
-            // Center the block in the viewport rather than parking it 1/3 from the top.
-            double targetOffset = PreviewScrollViewer.VerticalOffset + point.Y
-                                  - (PreviewScrollViewer.ViewportHeight - block.ActualHeight) / 2;
-            targetOffset = Math.Max(0, Math.Min(targetOffset, PreviewScrollViewer.ScrollableHeight));
-            PreviewScrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
+            block.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = true });
         }
         catch { /* block might not be in visual tree */ }
+    }
+
+    private static Microsoft.UI.Xaml.Documents.Paragraph? FindParagraphAtSearchOffset(
+        RichTextBlock block,
+        int searchOffset)
+    {
+        int searchPos = 0;
+        foreach (var candidate in block.Blocks)
+        {
+            if (candidate is not Microsoft.UI.Xaml.Documents.Paragraph paragraph)
+                continue;
+            int paragraphLength = GetParagraphTextLength(paragraph);
+            if (searchOffset < searchPos + paragraphLength + 2)
+                return paragraph;
+            searchPos += paragraphLength + 2;
+        }
+        return null;
     }
 
     private void UpdateFindStatus()
@@ -706,7 +734,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("Find", $"Could not update editor find highlights for '{needle}'", ex);
+            YaguLog.For("Find").LogDebug(ex, "Could not update editor find highlights for '{Needle}'", needle);
         }
     }
 
@@ -722,7 +750,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("Find", "Could not clear editor find highlights", ex);
+            YaguLog.For("Find").LogDebug(ex, "Could not clear editor find highlights");
         }
     }
 
@@ -799,6 +827,114 @@ public sealed partial class MainWindow
         LogFindVerbose($"ReplaceAll: done, count={count}, forceSynced=true, {FindSurfaceDescription()}");
     }
 
+    private sealed record ReplaceFilePlan(string Path, long Count);
+
+    private sealed record ReplaceFileWriteResult(string Path, string? ReplacedText, string? Error)
+    {
+        public bool Written => ReplacedText is not null && Error is null;
+    }
+
+    private static ReplaceFilePlan? ScanFileForReplacementPlan(
+        string path,
+        string needle,
+        StringComparison comparison)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan);
+            Encoding encoding = Helpers.EncodingDetector.DetectEncoding(stream);
+            if (encoding is UTF8Encoding)
+                encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+            using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
+            long count = Helpers.LiteralTextOperations.CountNonOverlapping(reader, needle, comparison);
+            return count > 0 ? new ReplaceFilePlan(path, count) : null;
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("FindReplace").LogWarning(ex,
+                "Skipped file while planning replace-all (unreadable or unprocessable): {Path}", path);
+            return null;
+        }
+    }
+
+    private static ReplaceFileWriteResult RewriteOneReplacementFile(
+        ReplaceFilePlan plan,
+        string needle,
+        string replacement,
+        StringComparison comparison,
+        bool backupEnabled)
+    {
+        try
+        {
+            Encoding encoding;
+            string original;
+            using (var stream = new FileStream(plan.Path, FileMode.Open, FileAccess.Read,
+                       FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan))
+            {
+                encoding = Helpers.EncodingDetector.DetectEncoding(stream);
+                if (encoding is UTF8Encoding)
+                    encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+                using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
+                original = reader.ReadToEnd();
+                encoding = reader.CurrentEncoding;
+            }
+
+            var builder = new StringBuilder(original.Length);
+            int position = 0;
+            int replacements = 0;
+            while (true)
+            {
+                int match = original.IndexOf(needle, position, comparison);
+                if (match < 0)
+                {
+                    builder.Append(original, position, original.Length - position);
+                    break;
+                }
+                builder.Append(original, position, match - position);
+                builder.Append(replacement);
+                position = match + needle.Length;
+                replacements++;
+            }
+
+            if (replacements == 0)
+                return new ReplaceFileWriteResult(plan.Path, null, null); // file changed after planning
+
+            string replaced = builder.ToString();
+            if (TextHasUnencodableCharacters(replaced, encoding))
+                return new ReplaceFileWriteResult(plan.Path, null, "replacement cannot be represented by the file encoding");
+
+            if (backupEnabled)
+            {
+                string backupPath = plan.Path + ".yagubak";
+                if (!File.Exists(backupPath))
+                {
+                    File.Copy(plan.Path, backupPath, overwrite: false);
+                }
+                else
+                {
+                    int suffix = 2;
+                    while (File.Exists($"{plan.Path}.yagubak-{suffix}")) suffix++;
+                    File.Copy(plan.Path, $"{plan.Path}.yagubak-{suffix}", overwrite: false);
+                }
+            }
+
+            File.WriteAllText(plan.Path, replaced, encoding);
+            return new ReplaceFileWriteResult(plan.Path, replaced, null);
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("FindReplace").LogWarning(ex, "Failed to replace text in file: {Path}", plan.Path);
+            return new ReplaceFileWriteResult(plan.Path, null, ex.Message);
+        }
+    }
+
+    private void UpdateReplaceFilesProgress(string verb, int completed, int total)
+    {
+        int percent = total <= 0 ? 0 : (int)Math.Clamp(completed * 100L / total, 0, 100);
+        ShowProgressOverlay($"{verb} {completed:N0} of {total:N0} files\u2026", percent);
+    }
+
     private async void OnReplaceInAllFiles(object sender, RoutedEventArgs e)
     {
         var needle = FindTextBox.Text;
@@ -810,142 +946,137 @@ public sealed partial class MainWindow
 
         if (groups.Count == 0) { FindStatusText.Text = "No result files"; return; }
 
+        int operationVersion = ++_replaceAllFilesOperationVersion;
         ReplaceInFilesButton.IsEnabled = false;
         FindStatusText.Text = "Scanning files…";
+        ShowProgressOverlay($"Scanning {groups.Count:N0} result files for replacements\u2026", 0);
+        await Task.Yield(); // paint the overlay before disk I/O begins
 
-        // Collect changes off the UI thread.
-        var changes = await Task.Run(() =>
+        var scanStopwatch = Stopwatch.StartNew();
+        long scanStartWorkingSet = Environment.WorkingSet;
+        YaguLog.For("FindReplace").LogInformation(
+            "Replace-all planning started: files={FileCount:N0}, workingSet={WorkingSetMb:N0} MB",
+            groups.Count, scanStartWorkingSet / (1024 * 1024));
+
+        try
         {
-            var list = new List<(string Path, string Original, string Replaced, Encoding Encoding, int Count)>();
-            foreach (var group in groups)
+            // First pass retains only path + occurrence count. The previous implementation retained BOTH
+            // the original and rewritten full text for every matching file until the confirmation dialog;
+            // a broad search followed by Replace in Files therefore grew Yagu to multiple gigabytes.
+            var plans = await Task.Run(() =>
             {
-                if (group.IsArchiveEntry) continue;
-                var path = group.FilePath;
-                if (!File.Exists(path)) continue;
-                try
+                var list = new List<ReplaceFilePlan>();
+                for (int i = 0; i < groups.Count; i++)
                 {
-                    Encoding encoding;
-                    string original;
-                    using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
-                               FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan))
+                    var group = groups[i];
+                    if (!group.IsArchiveEntry && File.Exists(group.FilePath))
                     {
-                        encoding = Helpers.EncodingDetector.DetectEncoding(stream);
-                        if (encoding is UTF8Encoding)
-                            encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
-                        using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
-                        original = reader.ReadToEnd();
-                        encoding = reader.CurrentEncoding;
+                        var plan = ScanFileForReplacementPlan(group.FilePath, needle, comparison);
+                        if (plan is not null)
+                            list.Add(plan);
                     }
 
-                    var sb = new StringBuilder(original.Length);
-                    int replaceCount = 0;
-                    int pos = 0;
-                    while (true)
+                    int completed = i + 1;
+                    if ((completed & 0x3F) == 0 || completed == groups.Count)
                     {
-                        int idx = original.IndexOf(needle, pos, comparison);
-                        if (idx < 0) { sb.Append(original, pos, original.Length - pos); break; }
-                        sb.Append(original, pos, idx - pos);
-                        sb.Append(replacement);
-                        replaceCount++;
-                        pos = idx + needle.Length;
-                    }
-                    if (replaceCount > 0)
-                    {
-                        var replaced = sb.ToString();
-                        if (!TextHasUnencodableCharacters(replaced, encoding))
-                            list.Add((path, original, replaced, encoding, replaceCount));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Skip files we can't read/process, but record which one so a "replace all"
-                    // that silently misses a file is diagnosable by the user.
-                    LogService.Instance.Warning("FindReplace",
-                        $"Skipped file during replace-all (unreadable or unprocessable): {path}", ex);
-                }
-            }
-            return list;
-        });
-
-        if (changes.Count == 0)
-        {
-            FindStatusText.Text = "No matches in any file";
-            ReplaceInFilesButton.IsEnabled = true;
-            return;
-        }
-
-        int totalReplacements = changes.Sum(c => c.Count);
-
-        // Confirm before writing.
-        var choice = await YaguDialog.ShowAsync(
-            _hwnd,
-            new YaguDialogOptions
-            {
-                Title = "Replace in All Files",
-                TitleGlyph = "\uE721", // Find/Replace
-                Content = $"Replace {totalReplacements:N0} occurrence{(totalReplacements == 1 ? "" : "s")} across {changes.Count:N0} file{(changes.Count == 1 ? "" : "s")}?",
-                PrimaryButtonText = "Replace",
-                CloseButtonText = "Cancel",
-                DefaultButton = YaguDialogDefaultButton.Primary,
-                Width = 520,
-                Height = 270,
-            });
-        if (choice != YaguDialogResult.Primary)
-        {
-            FindStatusText.Text = "Cancelled";
-            ReplaceInFilesButton.IsEnabled = true;
-            return;
-        }
-
-        // Write changes to disk.
-        int written = 0;
-        int errors = 0;
-        bool backupEnabled = ViewModel.BackupBeforeSave;
-        await Task.Run(() =>
-        {
-            foreach (var (path, _, replaced, encoding, _) in changes)
-            {
-                try
-                {
-                    if (backupEnabled)
-                    {
-                        var bakPath = path + ".yagubak";
-                        if (!File.Exists(bakPath))
-                            File.Copy(path, bakPath, overwrite: false);
-                        else
+                        DispatcherQueue.TryEnqueue(() =>
                         {
-                            int suffix = 2;
-                            while (File.Exists($"{path}.yagubak-{suffix}")) suffix++;
-                            File.Copy(path, $"{path}.yagubak-{suffix}", overwrite: false);
-                        }
+                            if (operationVersion == _replaceAllFilesOperationVersion)
+                                UpdateReplaceFilesProgress("Scanned", completed, groups.Count);
+                        });
                     }
-                    File.WriteAllText(path, replaced, encoding);
-                    Interlocked.Increment(ref written);
                 }
-                catch
-                {
-                    Interlocked.Increment(ref errors);
-                }
+                return list;
+            });
+
+            HideProgressOverlay();
+            scanStopwatch.Stop();
+            YaguLog.For("FindReplace").LogInformation(
+                "Replace-all planning complete: matchingFiles={MatchingFiles:N0}, elapsed={ElapsedMs:N0} ms, workingSet={WorkingSetMb:N0} MB",
+                plans.Count, scanStopwatch.ElapsedMilliseconds, Environment.WorkingSet / (1024 * 1024));
+
+            if (plans.Count == 0)
+            {
+                FindStatusText.Text = "No matches in any file";
+                return;
             }
-        });
 
-        // Re-validate results for each changed file.
-        foreach (var (path, _, replaced, _, _) in changes)
-        {
-            ViewModel.RevalidateFileResults(path, replaced);
+            long totalReplacements = plans.Sum(plan => plan.Count);
+
+            // Confirm before writing. This is an in-content, title-bar-less YaguDialog—not an owned
+            // captioned Window—so it follows the same modal surface and theme rules as the rest of Yagu.
+            var choice = await YaguDialog.ShowAsync(
+                _hwnd,
+                new YaguDialogOptions
+                {
+                    Title = "Replace in All Files",
+                    TitleGlyph = "\uE721", // Find/Replace
+                    Content = $"Replace {totalReplacements:N0} occurrence{(totalReplacements == 1 ? "" : "s")} across {plans.Count:N0} file{(plans.Count == 1 ? "" : "s")}?",
+                    PrimaryButtonText = "Replace",
+                    CloseButtonText = "Cancel",
+                    DefaultButton = YaguDialogDefaultButton.Primary,
+                    ShowTitleBar = false,
+                    Width = 520,
+                    Height = 270,
+                });
+            if (choice != YaguDialogResult.Primary)
+            {
+                FindStatusText.Text = "Cancelled";
+                return;
+            }
+
+            // Second pass rewrites exactly one file at a time. Revalidation happens immediately on the UI
+            // thread, so at most one full rewritten document is retained instead of every document.
+            int written = 0;
+            int errors = 0;
+            bool backupEnabled = ViewModel.BackupBeforeSave;
+            bool currentPreviewAffected = false;
+            ShowProgressOverlay($"Replacing text in {plans.Count:N0} files\u2026", 0);
+            await Task.Yield();
+            for (int i = 0; i < plans.Count; i++)
+            {
+                ReplaceFileWriteResult outcome = await Task.Run(() => RewriteOneReplacementFile(
+                    plans[i], needle, replacement, comparison, backupEnabled));
+
+                if (outcome.Written && outcome.ReplacedText is not null)
+                {
+                    written++;
+                    ViewModel.RevalidateFileResults(outcome.Path, outcome.ReplacedText);
+                    if (_previewResult is { } current
+                        && string.Equals(outcome.Path, current.FilePath, StringComparison.OrdinalIgnoreCase))
+                        currentPreviewAffected = true;
+                }
+                else if (outcome.Error is not null)
+                {
+                    errors++;
+                }
+
+                UpdateReplaceFilesProgress("Updated", i + 1, plans.Count);
+            }
+
+            HideProgressOverlay();
+
+            // Refresh preview if the currently shown file was affected.
+            if (currentPreviewAffected && _previewResult is { } currentResult)
+                await ShowSingleFilePreviewAsync(currentResult, fullFile: false);
+
+            var statusParts = new List<string> { $"Replaced in {written:N0} file{(written == 1 ? "" : "s")}" };
+            if (errors > 0) statusParts.Add($"{errors} error{(errors == 1 ? "" : "s")}");
+            FindStatusText.Text = string.Join(", ", statusParts);
+            ViewModel.StatusText = FindStatusText.Text;
         }
-
-        // Refresh preview if the currently shown file was affected.
-        if (_previewResult is { } current && changes.Any(c =>
-                string.Equals(c.Path, current.FilePath, StringComparison.OrdinalIgnoreCase)))
+        catch (Exception ex)
         {
-            await ShowSingleFilePreviewAsync(current, fullFile: false);
+            YaguLog.For("FindReplace").LogError(ex, "Replace-all operation failed");
+            FindStatusText.Text = $"Replace failed: {ex.Message}";
         }
-
-        var statusParts = new List<string> { $"Replaced in {written:N0} file{(written == 1 ? "" : "s")}" };
-        if (errors > 0) statusParts.Add($"{errors} error{(errors == 1 ? "" : "s")}");
-        FindStatusText.Text = string.Join(", ", statusParts);
-        ViewModel.StatusText = FindStatusText.Text;
-        ReplaceInFilesButton.IsEnabled = true;
+        finally
+        {
+            if (operationVersion == _replaceAllFilesOperationVersion)
+            {
+                HideProgressOverlay();
+                ReplaceInFilesButton.IsEnabled = true;
+            }
+        }
     }
 }

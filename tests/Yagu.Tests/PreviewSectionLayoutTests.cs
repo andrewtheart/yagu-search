@@ -75,8 +75,8 @@ public class PreviewSectionLayoutTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.sln)");
+        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.slnx)");
     }
 }

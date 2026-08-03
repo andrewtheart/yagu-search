@@ -11,6 +11,8 @@ using Yagu.Services;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu;
 
@@ -43,6 +45,7 @@ public sealed partial class MainWindow
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewEditorRevealRetryTimer;
     private const int PreviewEditorSavedOverlayDurationMs = 700;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewEditorSavedOverlayTimer;
+    private bool _previewEditorSavedPreviewRefreshPending;
 
     private async void OnSavePreviewEdit(object sender, RoutedEventArgs e)
     {
@@ -57,9 +60,16 @@ public sealed partial class MainWindow
     private async void OnClosePreviewEdit(object sender, RoutedEventArgs e)
     {
         if (HasRealEditorChanges() && !await ConfirmDiscardPreviewEditAsync()) return;
+        bool refreshSavedPreview = _previewEditorSavedPreviewRefreshPending;
+        _previewEditorSavedPreviewRefreshPending = false;
         ClosePreviewEditor();
         RestorePreviewSurfaceAfterEditor();
-        await Task.CompletedTask;
+        if (refreshSavedPreview)
+        {
+            YaguLog.For("PreviewEditor").LogInformation(
+                "Back after save: rebuilding the read-only preview from disk.");
+            await RefreshCurrentPreview(preserveScroll: true, clearWhenNoResults: true);
+        }
     }
 
     /// <summary>
@@ -72,8 +82,8 @@ public sealed partial class MainWindow
     /// </summary>
     private async void OnPopOutPreviewEditor(object sender, RoutedEventArgs e)
     {
-        LogService.Instance.Info("PreviewEditor",
-            $"Pop-out clicked: editorVisible={PreviewEditor.Visibility == Visibility.Visible}, path='{_previewEditorPath}', hasEncoding={_previewEditorEncoding is not null}, chunked={_previewEditorChunked}.");
+        YaguLog.For("PreviewEditor").LogInformation(
+            "Pop-out clicked: editorVisible={EditorVisible}, path='{Path}', hasEncoding={HasEncoding}, chunked={Chunked}.", PreviewEditor.Visibility == Visibility.Visible, _previewEditorPath, _previewEditorEncoding is not null, _previewEditorChunked);
 
         if (PreviewEditor.Visibility != Visibility.Visible || _previewEditorPath is null || _previewEditorEncoding is null)
             return;
@@ -117,7 +127,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("PreviewEditor", $"Pop-out failed: {ex.Message}", ex);
+            YaguLog.For("PreviewEditor").LogWarning(ex, "Pop-out failed: {Error}", ex.Message);
             ViewModel.StatusText = $"Could not pop out the editor: {ex.Message}";
             return;
         }
@@ -153,7 +163,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("PreviewEditor", $"Pop-out reload failed: {filePath}", ex);
+            YaguLog.For("PreviewEditor").LogWarning(ex, "Pop-out reload failed: {FilePath}", filePath);
             ViewModel.StatusText = $"Could not pop out the editor: {ex.Message}";
             return null;
         }
@@ -236,7 +246,7 @@ public sealed partial class MainWindow
         if (string.IsNullOrWhiteSpace(filePath))
             return;
 
-        LogService.Instance.Info("PreviewEditor", $"Pop-out drawer clicked: path='{filePath}'.");
+        YaguLog.For("PreviewEditor").LogInformation("Pop-out drawer clicked: path='{FilePath}'.", filePath);
 
         PreviewTextDocument document;
         try
@@ -252,7 +262,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("PreviewEditor", $"Pop-out drawer load failed: {filePath}", ex);
+            YaguLog.For("PreviewEditor").LogWarning(ex, "Pop-out drawer load failed: {FilePath}", filePath);
             ViewModel.StatusText = $"Could not pop out the preview: {ex.Message}";
             return;
         }
@@ -301,7 +311,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("PreviewEditor", $"Pop-out drawer failed: {ex.Message}", ex);
+            YaguLog.For("PreviewEditor").LogWarning(ex, "Pop-out drawer failed: {Error}", ex.Message);
             ViewModel.StatusText = $"Could not pop out the preview: {ex.Message}";
         }
     }
@@ -394,7 +404,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("PreviewEditor", "InitializePreviewEditorZoom failed: " + ex.Message);
+            YaguLog.For("PreviewEditor").LogWarning("InitializePreviewEditorZoom failed: {Error}", ex.Message);
         }
     }
 
@@ -444,7 +454,7 @@ public sealed partial class MainWindow
         try { PreviewEditor.ZoomFactor = percent; }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("PreviewEditor", $"SetPreviewEditorZoom({percent}) failed: {ex.Message}");
+            YaguLog.For("PreviewEditor").LogWarning("SetPreviewEditorZoom({Percent}) failed: {Error}", percent, ex.Message);
         }
     }
 
@@ -553,16 +563,16 @@ public sealed partial class MainWindow
         {
             if (filePath is null)
             {
-                LogService.Instance.Verbose("PreviewEditor",
-                    $"TryEnterPreviewEditorAtPoint: abort — filePath null, point=({point.X:N1},{point.Y:N1})");
+                YaguLog.For("PreviewEditor").LogDebug(
+                    "TryEnterPreviewEditorAtPoint: abort — filePath null, point=({PointX:N1},{PointY:N1})", point.X, point.Y);
                 return false;
             }
 
             // Image/PDF previews show extracted text (OCR / pdftotext); double-click / inline editing is a NOOP.
             if (IsExtractedTextPreviewPath(filePath))
             {
-                LogService.Instance.Verbose("PreviewEditor",
-                    $"TryEnterPreviewEditorAtPoint: abort — image preview is read-only, file='{Path.GetFileName(filePath)}'");
+                YaguLog.For("PreviewEditor").LogDebug(
+                    "TryEnterPreviewEditorAtPoint: abort — image preview is read-only, file='{File}'", Path.GetFileName(filePath));
                 return false;
             }
 
@@ -572,8 +582,8 @@ public sealed partial class MainWindow
             // contact and would silently swallow a one-shot double-click.
             if (!IsPreviewSectionBodyLaidOutForPointer(block, out string layoutReason))
             {
-                LogService.Instance.Verbose("PreviewEditor",
-                    $"TryEnterPreviewEditorAtPoint: abort — section not laid out ({layoutReason}), file='{Path.GetFileName(filePath)}', point=({point.X:N1},{point.Y:N1})");
+                YaguLog.For("PreviewEditor").LogDebug(
+                    "TryEnterPreviewEditorAtPoint: abort — section not laid out ({LayoutReason}), file='{File}', point=({PointX:N1},{PointY:N1})", layoutReason, Path.GetFileName(filePath), point.X, point.Y);
                 return false;
             }
 
@@ -581,15 +591,15 @@ public sealed partial class MainWindow
             try { tp = block.GetPositionFromPoint(point); }
             catch (Exception ex)
             {
-                LogService.Instance.Verbose("PreviewEditor",
-                    $"TryEnterPreviewEditorAtPoint: GetPositionFromPoint threw {ex.GetType().Name}, point=({point.X:N1},{point.Y:N1})");
+                YaguLog.For("PreviewEditor").LogDebug(
+                    "TryEnterPreviewEditorAtPoint: GetPositionFromPoint threw {ErrorType}, point=({PointX:N1},{PointY:N1})", ex.GetType().Name, point.X, point.Y);
                 tp = null;
             }
             int lineNum = tp is null ? -1 : ResolveLineNumberAtPointer(block, tp);
             if (lineNum <= 0)
             {
-                LogService.Instance.Verbose("PreviewEditor",
-                    $"TryEnterPreviewEditorAtPoint: abort — no line at point=({point.X:N1},{point.Y:N1}), tpOffset={(tp is null ? "null" : tp.Offset.ToString(CultureInfo.InvariantCulture))}, lineNum={lineNum}, file='{Path.GetFileName(filePath)}'");
+                YaguLog.For("PreviewEditor").LogDebug(
+                    "TryEnterPreviewEditorAtPoint: abort — no line at point=({PointX:N1},{PointY:N1}), tpOffset={TpOffset}, lineNum={LineNum}, file='{File}'", point.X, point.Y, (tp is null ? "null" : tp.Offset.ToString(CultureInfo.InvariantCulture)), lineNum, Path.GetFileName(filePath));
                 return false;
             }
 
@@ -650,14 +660,14 @@ public sealed partial class MainWindow
             }
 
             await ShowFullFileEditorAsync(target, scrollToMatch: true);
-            LogService.Instance.Verbose("PreviewEditor",
-                $"TryEnterPreviewEditorAtPoint: opened editor file='{Path.GetFileName(filePath)}', line={lineNum}, matchIndex={clickedMatchIndex}, col={target.MatchStartColumn}, len={target.MatchLength}");
+            YaguLog.For("PreviewEditor").LogDebug(
+                "TryEnterPreviewEditorAtPoint: opened editor file='{File}', line={LineNum}, matchIndex={MatchIndex}, col={Col}, len={Len}", Path.GetFileName(filePath), lineNum, clickedMatchIndex, target.MatchStartColumn, target.MatchLength);
             return true;
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview",
-                $"TryEnterPreviewEditorAtPointAsync threw: {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("Preview").LogWarning(
+                "TryEnterPreviewEditorAtPointAsync threw: {ErrorType}: {Error}", ex.GetType().Name, ex.Message);
             return false;
         }
     }
@@ -766,16 +776,16 @@ public sealed partial class MainWindow
 
     private async Task ShowFullFileEditorAsync(SearchResult result, bool scrollToMatch)
     {
-        LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: start file='{Path.GetFileName(result.FilePath)}', scrollToMatch={scrollToMatch}");
+        YaguLog.For("Preview").LogInformation("ShowFullFileEditorAsync: start file='{File}', scrollToMatch={ScrollToMatch}", Path.GetFileName(result.FilePath), scrollToMatch);
         if (IsExtractedTextPreviewPath(result.FilePath))
         {
-            LogService.Instance.Info("Preview", "ShowFullFileEditorAsync: blocked - extracted-text (image/PDF) preview is read-only");
+            YaguLog.For("Preview").LogInformation("ShowFullFileEditorAsync: blocked - extracted-text (image/PDF) preview is read-only");
             return;
         }
         var editorSw = Stopwatch.StartNew();
         if (PreviewEditor.Visibility == Visibility.Visible && HasRealEditorChanges())
         {
-            LogService.Instance.Info("Preview", "ShowFullFileEditorAsync: blocked - editor has unsaved changes");
+            YaguLog.For("Preview").LogInformation("ShowFullFileEditorAsync: blocked - editor has unsaved changes");
             ViewModel.StatusText = "Save or close the current editor before loading another full file.";
             return;
         }
@@ -808,19 +818,19 @@ public sealed partial class MainWindow
                 catch (PreviewLoadException) { throw; }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Warning("Preview",
-                        $"ShowFullFileEditorAsync: could not preflight editor file: {ex.GetType().Name}: {ex.Message}");
+                    YaguLog.For("Preview").LogWarning(
+                        "ShowFullFileEditorAsync: could not preflight editor file: {ErrorType}: {Error}", ex.GetType().Name, ex.Message);
                 }
             }
 
-            var document = await LoadPreviewDocumentAsync(result.FilePath, cts.Token, enforceLimit: false).ConfigureAwait(true);
+            var document = await LoadPreviewDocumentAsync(result.FilePath, cts.Token, enforceLimit: false, allowBinary: true).ConfigureAwait(true);
             if (cts.IsCancellationRequested) return;
 
             if (TryGetPreviewEditorLimitReason(document, out var limitReason))
             {
                 var message = BuildPreviewEditorLimitMessage(result.FilePath, limitReason);
-                LogService.Instance.Warning("Preview",
-                    $"ShowFullFileEditorAsync: blocked editor load after read, bytes={document.ByteLength:N0}, textLen={document.Text.Length:N0}, maxLineLen={document.MaxLineLength:N0}, file='{result.FilePath}'");
+                YaguLog.For("Preview").LogWarning(
+                    "ShowFullFileEditorAsync: blocked editor load after read, bytes={Bytes:N0}, textLen={TextLen:N0}, maxLineLen={MaxLineLen:N0}, file='{File}'", document.ByteLength, document.Text.Length, document.MaxLineLength, result.FilePath);
                 RestorePreviewSurfaceAfterEditor();
                 ViewModel.StatusText = message;
                 return;
@@ -841,16 +851,17 @@ public sealed partial class MainWindow
             ResetPreviewEditorChunkState(clearUi: false);
             ApplyPreviewEditorSyntaxHighlighting(result.FilePath);
 
-            // Archive entries are read-only (cannot save back into zip)
+            // Archive entries are read-only (cannot save back into zip); binary files open read-only so a
+            // best-effort text decode can never be saved back and corrupt the original bytes.
             bool isArchive = ZipArchiveSearcher.IsArchivePath(result.FilePath);
-            PreviewEditor.IsReadOnly = isArchive;
+            PreviewEditor.IsReadOnly = isArchive || document.IsBinary;
 
             _previewEditorWrapOverride = wrapDecision.wrapOverride;
             ApplyPreviewEditorWordWrap(wrapDecision.wrap);
             if (document.MaxLineLength >= PreviewEditorWrapPromptLineLength)
             {
-                LogService.Instance.Info("Preview",
-                    $"ShowFullFileEditorAsync: long line, wrap={wrapDecision.wrap}, override={wrapDecision.wrapOverride}, maxLen={document.MaxLineLength:N0}");
+                YaguLog.For("Preview").LogInformation(
+                    "ShowFullFileEditorAsync: long line, wrap={Wrap}, override={Override}, maxLen={MaxLen:N0}", wrapDecision.wrap, wrapDecision.wrapOverride, document.MaxLineLength);
             }
 
             // Assign while collapsed so the editor does one document load instead of
@@ -862,7 +873,7 @@ public sealed partial class MainWindow
             _previewEditorOriginalText = GetPreviewEditorText();
             _suppressPreviewEditorTextChanged = false;
             textSetSw.Stop();
-            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: assigned editor text, textLen={text.Length:N0}, elapsed={textSetSw.ElapsedMilliseconds}ms");
+            YaguLog.For("Preview").LogInformation("ShowFullFileEditorAsync: assigned editor text, textLen={TextLen:N0}, elapsed={ElapsedMs}ms", text.Length, textSetSw.ElapsedMilliseconds);
 
             _previewEditorDirty = false;
             UpdateEditorDirtyIndicator();
@@ -870,7 +881,7 @@ public sealed partial class MainWindow
             var showEditorSw = Stopwatch.StartNew();
             SetPreviewEditorVisible(true);
             showEditorSw.Stop();
-            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: editor visible, elapsed={showEditorSw.ElapsedMilliseconds}ms");
+            YaguLog.For("Preview").LogInformation("ShowFullFileEditorAsync: editor visible, elapsed={ElapsedMs}ms", showEditorSw.ElapsedMilliseconds);
 
             PreviewEditor.Focus(FocusState.Programmatic);
 
@@ -879,13 +890,13 @@ public sealed partial class MainWindow
             {
                 ScrollEditorToMatch(text, result);
                 scrollSw.Stop();
-                LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: scrolled to match line={result.LineNumber}, elapsed={scrollSw.ElapsedMilliseconds}ms");
+                YaguLog.For("Preview").LogInformation("ShowFullFileEditorAsync: scrolled to match line={Line}, elapsed={ElapsedMs}ms", result.LineNumber, scrollSw.ElapsedMilliseconds);
             }
             else
             {
                 QueuePreviewEditorScrollToTop();
                 scrollSw.Stop();
-                LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: queued scroll to top, elapsed={scrollSw.ElapsedMilliseconds}ms");
+                YaguLog.For("Preview").LogInformation("ShowFullFileEditorAsync: queued scroll to top, elapsed={ElapsedMs}ms", scrollSw.ElapsedMilliseconds);
             }
 
             // The editor may fire deferred TextChanged after a bulk text
@@ -904,8 +915,11 @@ public sealed partial class MainWindow
                 }
             });
 
-            string label = isArchive ? "viewing (read-only)" : "editing";
-            ViewModel.StatusText = $"Loaded {Path.GetFileName(result.FilePath)} ({FormatBytes(document.ByteLength)}, {GetEncodingDisplayName(document.Encoding)}) for {label}.";
+            string label = (isArchive || document.IsBinary) ? "viewing (read-only)" : "editing";
+            string binaryNote = document.IsBinary && !isArchive
+                ? " This file looks binary, so it opened read-only to avoid corrupting it on save."
+                : string.Empty;
+            ViewModel.StatusText = $"Loaded {Path.GetFileName(result.FilePath)} ({FormatBytes(document.ByteLength)}, {GetEncodingDisplayName(document.Encoding)}) for {label}.{binaryNote}";
         }
         catch (OperationCanceledException)
         {
@@ -919,21 +933,21 @@ public sealed partial class MainWindow
         catch (OutOfMemoryException ex)
         {
             const string message = "Not enough memory to load this full file into the right-panel editor.";
-            LogService.Instance.Warning("Preview", message, ex);
+            YaguLog.For("Preview").LogWarning(ex, message);
             ShowPreviewMessage(message, showBackButton: _previewResult is not null);
             ViewModel.StatusText = message;
         }
         catch (Exception ex)
         {
             var message = $"Could not load full file: {ex.Message}";
-            LogService.Instance.Warning("Preview", $"Could not load full file: {result.FilePath}", ex);
+            YaguLog.For("Preview").LogWarning(ex, "Could not load full file: {File}", result.FilePath);
             ShowPreviewMessage(message, showBackButton: _previewResult is not null);
             ViewModel.StatusText = message;
         }
         finally
         {
             editorSw.Stop();
-            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: done file='{Path.GetFileName(result.FilePath)}', elapsed={editorSw.ElapsedMilliseconds}ms");
+            YaguLog.For("Preview").LogInformation("ShowFullFileEditorAsync: done file='{File}', elapsed={ElapsedMs}ms", Path.GetFileName(result.FilePath), editorSw.ElapsedMilliseconds);
             if (ReferenceEquals(_previewLoadCts, cts))
                 _previewLoadCts = null;
             cts.Dispose();
@@ -1055,10 +1069,28 @@ public sealed partial class MainWindow
             offset: 0,
             maxBytes: PreviewEditorChunkByteLength,
             encoding: null,
-            cancellationToken).ConfigureAwait(true);
+            cancellationToken,
+            allowBinary: true).ConfigureAwait(true);
+        bool chunkIsBinary = chunk.IsBinary;
 
         if (cancellationToken.IsCancellationRequested)
             return;
+
+        // A clicked preview match can be beyond the first 10 MB chunk. Asking TextControlBox to center
+        // an unloaded line makes it clamp to the current end of the buffer (for example, line 308,163
+        // incorrectly landed near line 185,647). Preload only as many sequential chunks as needed to
+        // include the complete target line, then assign the combined text once so the first visible editor
+        // frame is already centered correctly.
+        if (scrollToMatch && result.LineNumber > 0)
+        {
+            chunk = await LoadPreviewEditorThroughTargetLineAsync(
+                result.FilePath,
+                result.LineNumber,
+                chunk,
+                cancellationToken).ConfigureAwait(true);
+            if (cancellationToken.IsCancellationRequested)
+                return;
+        }
 
         bool chunkSingleLine = !chunk.Text.Contains('\n');
         var wrapDecision = await ResolvePreviewEditorWrapAsync(result.FilePath, chunk.MaxLineLength, chunkSingleLine);
@@ -1078,7 +1110,8 @@ public sealed partial class MainWindow
 
         ApplyPreviewEditorSyntaxHighlighting(result.FilePath);
 
-        PreviewEditor.IsReadOnly = false;
+        // Binary files open read-only so the partial best-effort decode can never be saved back.
+        PreviewEditor.IsReadOnly = chunkIsBinary;
         _previewEditorWrapOverride = wrapDecision.wrapOverride;
         ApplyPreviewEditorWordWrap(wrapDecision.wrap);
 
@@ -1092,17 +1125,102 @@ public sealed partial class MainWindow
 
         SetPreviewEditorVisible(true);
         PreviewEditor.Focus(FocusState.Programmatic);
+        bool matchNavigationReady = true;
         if (scrollToMatch)
-            ScrollEditorToMatch(chunk.Text, result);
+            matchNavigationReady = ScrollEditorToMatch(chunk.Text, result);
         else
             QueuePreviewEditorScrollToTop();
         UpdatePreviewEditorChunkUi();
         HookPreviewEditorChunkScroll();
 
         chunkSw.Stop();
-        LogService.Instance.Info("Preview",
-            $"ShowChunkedPreviewEditorAsync: loaded first chunk file='{fileInfo.Name}', totalBytes={fileInfo.Length:N0}, loadedBytes={_previewEditorLoadedByteLength:N0}, textLen={chunk.Text.Length:N0}, maxLineLen={chunk.MaxLineLength:N0}, elapsed={chunkSw.ElapsedMilliseconds}ms");
-        ViewModel.StatusText = $"Loaded {FormatBytes(_previewEditorLoadedByteLength)} of {FormatBytes(_previewEditorTotalByteLength)} for editing.";
+        YaguLog.For("Preview").LogInformation(
+            "ShowChunkedPreviewEditorAsync: loaded first chunk file='{File}', totalBytes={TotalBytes:N0}, loadedBytes={LoadedBytes:N0}, textLen={TextLen:N0}, maxLineLen={MaxLineLen:N0}, elapsed={ElapsedMs}ms", fileInfo.Name, fileInfo.Length, _previewEditorLoadedByteLength, chunk.Text.Length, chunk.MaxLineLength, chunkSw.ElapsedMilliseconds);
+        ViewModel.StatusText = !matchNavigationReady
+            ? $"Loaded {FormatBytes(_previewEditorLoadedByteLength)}, but line {result.LineNumber:N0} is no longer present in the file."
+            : chunkIsBinary
+                ? $"Loaded {FormatBytes(_previewEditorLoadedByteLength)} of {FormatBytes(_previewEditorTotalByteLength)} for viewing (read-only). This file looks binary, so it opened read-only to avoid corrupting it on save."
+                : $"Loaded {FormatBytes(_previewEditorLoadedByteLength)} of {FormatBytes(_previewEditorTotalByteLength)} for editing.";
+    }
+
+    private async Task<PreviewEditorChunk> LoadPreviewEditorThroughTargetLineAsync(
+        string filePath,
+        int targetLineNumber,
+        PreviewEditorChunk initialChunk,
+        CancellationToken cancellationToken)
+    {
+        var chunks = new List<string> { initialChunk.Text };
+        int currentLineNumber = 1;
+        bool previousEndedWithCarriageReturn = false;
+        currentLineNumber = AdvancePreviewEditorLineNumber(
+            initialChunk.Text,
+            currentLineNumber,
+            ref previousEndedWithCarriageReturn);
+
+        long nextByteOffset = initialChunk.NextByteOffset;
+        while (currentLineNumber <= targetLineNumber
+            && nextByteOffset < initialChunk.TotalByteLength)
+        {
+            ViewModel.StatusText = $"Loading through line {targetLineNumber:N0}...";
+            PreviewEditorChunk next = await LoadPreviewEditorChunkAsync(
+                filePath,
+                nextByteOffset,
+                PreviewEditorChunkByteLength,
+                initialChunk.Encoding,
+                cancellationToken).ConfigureAwait(true);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (next.Text.Length == 0 || next.NextByteOffset <= nextByteOffset)
+                break;
+
+            chunks.Add(next.Text);
+            currentLineNumber = AdvancePreviewEditorLineNumber(
+                next.Text,
+                currentLineNumber,
+                ref previousEndedWithCarriageReturn);
+            nextByteOffset = next.NextByteOffset;
+        }
+
+        if (chunks.Count == 1)
+            return initialChunk;
+
+        string combinedText = string.Concat(chunks);
+        YaguLog.For("Preview").LogInformation(
+            "Chunked editor preloaded through requested line: file='{File}', targetLine={TargetLine:N0}, reachedLine={ReachedLine:N0}, loadedBytes={LoadedBytes:N0}/{TotalBytes:N0}.",
+            Path.GetFileName(filePath), targetLineNumber, currentLineNumber, nextByteOffset, initialChunk.TotalByteLength);
+        return new PreviewEditorChunk(
+            combinedText,
+            initialChunk.Encoding,
+            initialChunk.TotalByteLength,
+            nextByteOffset,
+            GetMaxLineLength(combinedText));
+    }
+
+    /// <summary>Advances a 1-based line cursor across one decoded chunk. CRLF split across a chunk boundary
+    /// counts as one newline; lone CR and lone LF count independently, matching the editor's line model.</summary>
+    private static int AdvancePreviewEditorLineNumber(
+        string text,
+        int currentLineNumber,
+        ref bool previousEndedWithCarriageReturn)
+    {
+        foreach (char c in text)
+        {
+            if (c == '\r')
+            {
+                currentLineNumber++;
+                previousEndedWithCarriageReturn = true;
+            }
+            else if (c == '\n')
+            {
+                if (!previousEndedWithCarriageReturn)
+                    currentLineNumber++;
+                previousEndedWithCarriageReturn = false;
+            }
+            else
+            {
+                previousEndedWithCarriageReturn = false;
+            }
+        }
+        return currentLineNumber;
     }
 
     private async Task LoadMorePreviewEditorChunkAsync(bool force = false)
@@ -1146,14 +1264,14 @@ public sealed partial class MainWindow
             _previewEditorChunkEncoding = chunk.Encoding;
 
             loadMoreSw.Stop();
-            LogService.Instance.Info("Preview",
-                $"LoadMorePreviewEditorChunkAsync: appended chunk file='{Path.GetFileName(_previewEditorPath)}', fromBytes={previousBytes:N0}, toBytes={_previewEditorLoadedByteLength:N0}, textLen={chunk.Text.Length:N0}, maxLineLen={chunk.MaxLineLength:N0}, elapsed={loadMoreSw.ElapsedMilliseconds}ms");
+            YaguLog.For("Preview").LogInformation(
+                "LoadMorePreviewEditorChunkAsync: appended chunk file='{File}', fromBytes={FromBytes:N0}, toBytes={ToBytes:N0}, textLen={TextLen:N0}, maxLineLen={MaxLineLen:N0}, elapsed={ElapsedMs}ms", Path.GetFileName(_previewEditorPath), previousBytes, _previewEditorLoadedByteLength, chunk.Text.Length, chunk.MaxLineLength, loadMoreSw.ElapsedMilliseconds);
             ViewModel.StatusText = $"Loaded {FormatBytes(_previewEditorLoadedByteLength)} of {FormatBytes(_previewEditorTotalByteLength)} for editing.";
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview", "Could not load more editor text", ex);
+            YaguLog.For("Preview").LogWarning(ex, "Could not load more editor text");
             ViewModel.StatusText = $"Could not load more editor text: {ex.Message}";
         }
         finally
@@ -1172,7 +1290,8 @@ public sealed partial class MainWindow
         long offset,
         long maxBytes,
         Encoding? encoding,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowBinary = false)
     {
         await using var stream = new FileStream(
             filePath,
@@ -1186,6 +1305,7 @@ public sealed partial class MainWindow
         if (offset < 0 || offset > totalBytes)
             throw new PreviewLoadException("Could not load editor chunk: the saved file changed on disk.");
 
+        bool isBinary = false;
         if (offset == 0)
         {
             int probeSize = (int)Math.Min(BinaryDetector.SampleBytes, Math.Max(0, totalBytes));
@@ -1194,7 +1314,12 @@ public sealed partial class MainWindow
                 var probe = new byte[probeSize];
                 int probeRead = await stream.ReadAsync(probe.AsMemory(0, probeSize), cancellationToken).ConfigureAwait(false);
                 if (BinaryDetector.IsBinary(probe.AsSpan(0, probeRead)))
-                    throw new PreviewLoadException("Full-file editing is only available for non-binary text files.");
+                {
+                    if (!allowBinary)
+                        throw new PreviewLoadException("Full-file editing is only available for non-binary text files.");
+                    // Open best-effort as read-only text; binary bytes render as the replacement char '\uFFFD'.
+                    isBinary = true;
+                }
 
                 encoding ??= NormalizePreviewEncoding(EncodingDetector.DetectEncoding(probe.AsSpan(0, probeRead)));
                 offset = GetBomLength(probe.AsSpan(0, probeRead));
@@ -1206,7 +1331,7 @@ public sealed partial class MainWindow
 
         int bytesToRead = (int)Math.Min(Math.Max(0, totalBytes - offset), maxBytes + 8);
         if (bytesToRead == 0)
-            return new PreviewEditorChunk(string.Empty, encoding, totalBytes, offset, 0);
+            return new PreviewEditorChunk(string.Empty, encoding, totalBytes, offset, 0, isBinary);
 
         var bytes = new byte[bytesToRead];
         int bytesRead = 0;
@@ -1235,7 +1360,7 @@ public sealed partial class MainWindow
             throw new PreviewLoadException("Could not decode the next editor chunk.");
 
         string text = new(chars, 0, charsUsed);
-        return new PreviewEditorChunk(text, encoding, totalBytes, offset + bytesUsed, GetMaxLineLength(text));
+        return new PreviewEditorChunk(text, encoding, totalBytes, offset + bytesUsed, GetMaxLineLength(text), isBinary);
     }
 
     private static Encoding NormalizePreviewEncoding(Encoding encoding)
@@ -1291,7 +1416,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview", $"ResetPreviewEditorCaretToTop failed: {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("Preview").LogWarning("ResetPreviewEditorCaretToTop failed: {ErrorType}: {Error}", ex.GetType().Name, ex.Message);
         }
     }
 
@@ -1308,14 +1433,22 @@ public sealed partial class MainWindow
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("Preview", $"QueuePreviewEditorScrollToTop failed: {ex.GetType().Name}: {ex.Message}");
+                YaguLog.For("Preview").LogWarning("QueuePreviewEditorScrollToTop failed: {ErrorType}: {Error}", ex.GetType().Name, ex.Message);
             }
         });
     }
 
-    private void ScrollEditorToMatch(string text, SearchResult result)
+    private bool ScrollEditorToMatch(string text, SearchResult result)
     {
         var selection = ResolvePreviewEditorMatchSelection(text, result);
+        if (selection.Source == "line-missing")
+        {
+            YaguLog.For("PreviewEditor").LogWarning(
+                "ScrollEditorToMatch skipped: requested line {Line:N0} is not loaded for '{File}'.",
+                result.LineNumber,
+                Path.GetFileName(result.FilePath));
+            return false;
+        }
 
         // Defer the scroll+select to a Low-priority callback so the editor
         // control has completed its layout pass and knows its line positions.
@@ -1325,7 +1458,7 @@ public sealed partial class MainWindow
         int capturedLength = selection.Length;
         if (LogService.Instance.IsVerboseEnabled)
         {
-            LogService.Instance.Verbose("PreviewEditor", $"ScrollEditorToMatch: file='{Path.GetFileName(result.FilePath)}', line={result.LineNumber}, matchColumn={result.MatchStartColumn}, sourceMatchColumn={result.SourceMatchStartColumn}, resolvedColumn={selection.Column}, matchLength={result.MatchLength}, selectStart={capturedStart}, selectLength={capturedLength}, targetLineIndex={targetLineIndex}, source={selection.Source}, wordWrap={PreviewEditor.WordWrap}");
+            YaguLog.For("PreviewEditor").LogDebug("ScrollEditorToMatch: file='{File}', line={Line}, matchColumn={MatchColumn}, sourceMatchColumn={SourceMatchColumn}, resolvedColumn={ResolvedColumn}, matchLength={MatchLength}, selectStart={SelectStart}, selectLength={SelectLength}, targetLineIndex={TargetLineIndex}, source={Source}, wordWrap={WordWrap}", Path.GetFileName(result.FilePath), result.LineNumber, result.MatchStartColumn, result.SourceMatchStartColumn, selection.Column, result.MatchLength, capturedStart, capturedLength, targetLineIndex, selection.Source, PreviewEditor.WordWrap);
         }
 
         int revealVersion = ++_previewEditorRevealVersion;
@@ -1345,11 +1478,11 @@ public sealed partial class MainWindow
                 PreviewEditor.ScrollLineToCenter(targetLineIndex);
                 PreviewEditor.ScrollIntoViewHorizontallyCentered();
                 if (LogService.Instance.IsVerboseEnabled)
-                    LogService.Instance.Verbose("PreviewEditor", $"RevealEditorMatch: source={source}, line={targetLineIndex}, start={capturedStart}, length={capturedLength}, wordWrap={PreviewEditor.WordWrap}");
+                    YaguLog.For("PreviewEditor").LogDebug("RevealEditorMatch: source={Source}, line={Line}, start={Start}, length={Length}, wordWrap={WordWrap}", source, targetLineIndex, capturedStart, capturedLength, PreviewEditor.WordWrap);
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("Preview", $"ScrollEditorToMatch deferred scroll failed: {ex.GetType().Name}: {ex.Message}");
+                YaguLog.For("Preview").LogWarning("ScrollEditorToMatch deferred scroll failed: {ErrorType}: {Error}", ex.GetType().Name, ex.Message);
             }
         }
 
@@ -1368,6 +1501,7 @@ public sealed partial class MainWindow
             RevealMatch("timer");
         };
         retryTimer.Start();
+        return true;
     }
 
     private readonly record struct PreviewEditorMatchSelection(
@@ -1538,13 +1672,16 @@ public sealed partial class MainWindow
             {
                 // Re-validate search results for this file against the saved content.
                 bool fileStillHasMatches = ViewModel.RevalidateFileResults(_previewEditorPath, textToSave);
-                if (!fileStillHasMatches && _previewResult?.FilePath is not null &&
-                    string.Equals(_previewResult.FilePath, _previewEditorPath, StringComparison.OrdinalIgnoreCase))
+                if (_previewResult is { } previousResult
+                    && string.Equals(previousResult.FilePath, _previewEditorPath, StringComparison.OrdinalIgnoreCase))
                 {
-                    _previewResult = null;
+                    _previewResult = fileStillHasMatches
+                        ? ResolveRefreshedPreviewResult(_previewEditorPath, previousResult)
+                        : null;
                 }
             }
 
+            _previewEditorSavedPreviewRefreshPending = true;
             ViewModel.StatusText = $"Saved {_previewEditorPath}.";
             ShowPreviewEditorSavedOverlay();
             return true;
@@ -1552,7 +1689,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             var message = $"Could not save file: {ex.Message}";
-            LogService.Instance.Warning("Preview", $"Could not save editor contents: {_previewEditorPath}", ex);
+            YaguLog.For("Preview").LogWarning(ex, "Could not save editor contents: {Path}", _previewEditorPath);
             ViewModel.StatusText = message;
             return false;
         }
@@ -1560,6 +1697,20 @@ public sealed partial class MainWindow
         {
             UpdatePreviewEditorButtons();
         }
+    }
+
+    private SearchResult? ResolveRefreshedPreviewResult(string filePath, SearchResult previousResult)
+    {
+        var group = FindFileGroup(filePath);
+        if (group is null)
+            return null;
+
+        long previousColumn = Math.Max(previousResult.SourceMatchStartColumn, previousResult.MatchStartColumn);
+        return GetPreviewableResults((IEnumerable<SearchResult>)group)
+            .OrderBy(result => Math.Abs((long)result.LineNumber - previousResult.LineNumber))
+            .ThenBy(result => Math.Abs(
+                Math.Max(result.SourceMatchStartColumn, result.MatchStartColumn) - previousColumn))
+            .FirstOrDefault();
     }
 
     private async Task SavePreviewEditorTextToDiskAsync(string textToSave)
@@ -1846,7 +1997,7 @@ public sealed partial class MainWindow
         PreviewEditor.UpdateLayout();
         if (LogService.Instance.IsVerboseEnabled)
         {
-            LogService.Instance.Verbose("PreviewEditor", $"ApplyPreviewEditorWordWrap: before={before}, requested={wrap}, after={PreviewEditor.WordWrap}, override={_previewEditorWrapOverride}, setting={ViewModel.PreviewWordWrap}, visible={PreviewEditor.Visibility == Visibility.Visible}");
+            YaguLog.For("PreviewEditor").LogDebug("ApplyPreviewEditorWordWrap: before={Before}, requested={Requested}, after={After}, override={Override}, setting={Setting}, visible={Visible}", before, wrap, PreviewEditor.WordWrap, _previewEditorWrapOverride, ViewModel.PreviewWordWrap, PreviewEditor.Visibility == Visibility.Visible);
         }
     }
 
@@ -1867,7 +2018,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("PreviewEditor", $"ApplyPreviewEditorFontSettings failed: {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("PreviewEditor").LogWarning("ApplyPreviewEditorFontSettings failed: {ErrorType}: {Error}", ex.GetType().Name, ex.Message);
         }
     }
 
@@ -1901,13 +2052,13 @@ public sealed partial class MainWindow
 
             if (LogService.Instance.IsVerboseEnabled)
             {
-                LogService.Instance.Verbose("PreviewEditor",
-                    $"ApplyPreviewEditorSyntaxHighlighting: file='{Path.GetFileName(filePath)}', language={languageId}");
+                YaguLog.For("PreviewEditor").LogDebug(
+                    "ApplyPreviewEditorSyntaxHighlighting: file='{File}', language={Language}", Path.GetFileName(filePath), languageId);
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("PreviewEditor", $"ApplyPreviewEditorSyntaxHighlighting failed: {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("PreviewEditor").LogWarning("ApplyPreviewEditorSyntaxHighlighting failed: {ErrorType}: {Error}", ex.GetType().Name, ex.Message);
         }
     }
 
@@ -2146,7 +2297,7 @@ public sealed partial class MainWindow
     private void LoadPreviewEditorText(string text)
     {
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("PreviewEditor", $"LoadPreviewEditorText: length={text.Length}, wordWrap={PreviewEditor.WordWrap}");
+            YaguLog.For("PreviewEditor").LogDebug("LoadPreviewEditorText: length={Length}, wordWrap={WordWrap}", text.Length, PreviewEditor.WordWrap);
         PreviewEditor.LoadText(text, autodetectTabsSpaces: false);
         PreviewEditor.ClearUndoRedoHistory();
     }
@@ -2158,7 +2309,7 @@ public sealed partial class MainWindow
         int clampedLength = Math.Clamp(length, 0, Math.Max(0, textLength - clampedStart));
         if (LogService.Instance.IsVerboseEnabled)
         {
-            LogService.Instance.Verbose("PreviewEditor", $"SelectPreviewEditorText: requestedStart={start}, requestedLength={length}, textLength={textLength}, clampedStart={clampedStart}, clampedLength={clampedLength}, wordWrap={PreviewEditor.WordWrap}, searchOpen={PreviewEditor.SearchIsOpen}");
+            YaguLog.For("PreviewEditor").LogDebug("SelectPreviewEditorText: requestedStart={RequestedStart}, requestedLength={RequestedLength}, textLength={TextLength}, clampedStart={ClampedStart}, clampedLength={ClampedLength}, wordWrap={WordWrap}, searchOpen={SearchOpen}", start, length, textLength, clampedStart, clampedLength, PreviewEditor.WordWrap, PreviewEditor.SearchIsOpen);
         }
         PreviewEditor.SetActiveSearchSelection(clampedStart, clampedLength);
     }

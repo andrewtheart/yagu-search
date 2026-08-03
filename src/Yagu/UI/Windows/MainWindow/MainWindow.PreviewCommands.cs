@@ -14,6 +14,8 @@ using Yagu.Services;
 using System.Globalization;
 using System.Runtime;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 namespace Yagu;
 
 /// <summary>
@@ -25,19 +27,19 @@ public sealed partial class MainWindow
 
     private async void OnShowFullFile(object sender, RoutedEventArgs e)
     {
-        LogService.Instance.Info("Preview", "OnShowFullFile: button clicked");
+        YaguLog.For("Preview").LogInformation("OnShowFullFile: button clicked");
         var targets = GetFullFilePreviewTargets();
         if (targets.Count == 0)
         {
-            LogService.Instance.Info("Preview", "OnShowFullFile: no targets found");
+            YaguLog.For("Preview").LogInformation("OnShowFullFile: no targets found");
             ShowPreviewMessage("Select a file or match in the results list first.");
             ViewModel.StatusText = "Select a file or match before showing the full file.";
             return;
         }
 
-        LogService.Instance.Info("Preview", $"OnShowFullFile: {targets.Count} target(s), files=[{string.Join(", ", targets.Select(t => Path.GetFileName(t.FilePath)))}]");
+        YaguLog.For("Preview").LogInformation("OnShowFullFile: {Count} target(s), files=[{Files}]", targets.Count, string.Join(", ", targets.Select(t => Path.GetFileName(t.FilePath))));
         await ShowFullFilePreviewAsync(targets);
-        LogService.Instance.Info("Preview", "OnShowFullFile: completed");
+        YaguLog.For("Preview").LogInformation("OnShowFullFile: completed");
     }
 
     private void OnWrapModeOptionClicked(object sender, RoutedEventArgs e)
@@ -61,7 +63,7 @@ public sealed partial class MainWindow
         bool needsRebuild = previousMode == (int)Models.PreviewWrapMode.NoWrap
                          || mode == (int)Models.PreviewWrapMode.NoWrap;
         if (needsRebuild)
-            RefreshCurrentPreview(preserveScroll: true);
+            _ = RefreshCurrentPreview(preserveScroll: true);
         else
             _ = ApplyWrapModeAsync((Models.PreviewWrapMode)mode);
     }
@@ -171,7 +173,7 @@ public sealed partial class MainWindow
             EditorWordWrapDropDown.IsEnabled = false;
             bool wrap = mode == Models.PreviewWrapMode.Wrap;
             var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-            LogService.Instance.Info("Preview", $"ApplyWrapModeAsync: start mode={mode}");
+            YaguLog.For("Preview").LogInformation("ApplyWrapModeAsync: start mode={Mode}", mode);
 
             InvalidatePendingMatchScrolls();
             UnboxCurrentMatch();
@@ -221,11 +223,11 @@ public sealed partial class MainWindow
             }
 
             ViewModel.StatusText = string.Empty;
-            LogService.Instance.Info("Preview", $"ApplyWrapModeAsync: done mode={mode}, sections={totalSections}, processedExpanded={processed}");
+            YaguLog.For("Preview").LogInformation("ApplyWrapModeAsync: done mode={Mode}, sections={TotalSections}, processedExpanded={Processed}", mode, totalSections, processed);
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview", $"ApplyWrapModeAsync failed: mode={mode}", ex);
+            YaguLog.For("Preview").LogWarning(ex, "ApplyWrapModeAsync failed: mode={Mode}", mode);
             ViewModel.StatusText = "Could not apply word wrap to the current preview.";
         }
         finally
@@ -244,9 +246,9 @@ public sealed partial class MainWindow
         return tcs.Task;
     }
 
-    private async void RefreshCurrentPreview(bool preserveScroll = false)
+    private async Task RefreshCurrentPreview(bool preserveScroll = false, bool clearWhenNoResults = false)
     {
-        LogService.Instance.Verbose("Preview", $"RefreshCurrentPreview called preserveScroll={preserveScroll}");
+        YaguLog.For("Preview").LogDebug("RefreshCurrentPreview called preserveScroll={PreserveScroll}", preserveScroll);
         if (PreviewEditor.Visibility == Visibility.Visible) return;
 
         double restoreHorizontalOffset = PreviewScrollViewer.HorizontalOffset;
@@ -274,15 +276,37 @@ public sealed partial class MainWindow
             // check above misses it; falling through to ShowSingleFilePreviewAsync would collapse the
             // sections view to a single continuous block (the reported no-wrap->wrap inconsistency).
             if (PreviewSectionsPanel.Visibility == Visibility.Visible
-                && PreviewSectionsPanel.Children.OfType<Expander>().Any()
-                && TryBuildCurrentPreviewSectionResults(out var sectionFiles, out var sectionScrollTo))
+                && PreviewSectionsPanel.Children.OfType<Expander>().Any())
             {
-                ShowPreviewSectionsSurface();
-                await PrependPreviewSectionsForFilesAsync(sectionFiles, sectionScrollTo);
-                return;
+                if (TryBuildCurrentPreviewSectionResults(out var sectionFiles, out var sectionScrollTo))
+                {
+                    ShowPreviewSectionsSurface();
+                    await PrependPreviewSectionsForFilesAsync(sectionFiles, sectionScrollTo);
+                    return;
+                }
+
+                if (clearWhenNoResults)
+                {
+                    ShowPreviewSectionsSurface();
+                    PreviewToolbarContent.Visibility = Visibility.Collapsed;
+                    _previewResult = null;
+                    UpdateExpandAllButtonVisibility();
+                    UpdatePreviewEmptyState();
+                    return;
+                }
             }
 
-            if (_previewResult is null) return;
+            if (_previewResult is null)
+            {
+                if (clearWhenNoResults && PreviewBlock.Blocks.Count > 0)
+                {
+                    ShowPreviewBlockSurface();
+                    PreviewBlock.Blocks.Clear();
+                    PreviewToolbarContent.Visibility = Visibility.Collapsed;
+                    UpdatePreviewEmptyState();
+                }
+                return;
+            }
             ViewModel.HydrateResult(_previewResult);
             await ShowSingleFilePreviewAsync(_previewResult, fullFile: false);
         }
@@ -386,7 +410,7 @@ public sealed partial class MainWindow
         }
         catch (COMException ex)
         {
-            LogService.Instance.Warning("Preview", "RestoreActiveMatchAfterPreviewRefresh: skipping due to stale paragraph", ex);
+            YaguLog.For("Preview").LogWarning(ex, "RestoreActiveMatchAfterPreviewRefresh: skipping due to stale paragraph");
         }
     }
 
@@ -420,7 +444,7 @@ public sealed partial class MainWindow
         {
             Process.Start(new ProcessStartInfo(_previewResult.FilePath) { UseShellExecute = true });
         }
-        catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to open in default app: {_previewResult.FilePath}", ex); }
+        catch (Exception ex) { YaguLog.For("MainWindow").LogWarning(ex, "Failed to open in default app: {FilePath}", _previewResult.FilePath); }
     }
 
     private async void OnOpenInEditor(object sender, RoutedEventArgs e)
@@ -429,7 +453,7 @@ public sealed partial class MainWindow
         if (target is null)
         {
             ViewModel.StatusText = "Select or preview a file before opening the editor.";
-            LogService.Instance.Warning("Preview", "OnOpenInEditor: no preview result or selected result available");
+            YaguLog.For("Preview").LogWarning("OnOpenInEditor: no preview result or selected result available");
             return;
         }
 
@@ -536,7 +560,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", $"Save session failed: {path}", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Save session failed: {Path}", path);
             ViewModel.ErrorText = $"Save session failed: {ex.Message}";
         }
     }
@@ -564,7 +588,7 @@ public sealed partial class MainWindow
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("MainWindow", "FileSavePicker failed; falling back to Win32 Save dialog.", ex);
+                YaguLog.For("MainWindow").LogWarning(ex, "FileSavePicker failed; falling back to Win32 Save dialog.");
             }
         }
 
@@ -580,7 +604,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", "Win32 Save dialog failed.", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Win32 Save dialog failed.");
             ViewModel.ErrorText = $"Could not open the Save dialog: {ex.Message}";
             return null;
         }
@@ -606,22 +630,22 @@ public sealed partial class MainWindow
         }
         catch (OperationCanceledException ex)
         {
-            LogService.Instance.Warning("MainWindow", "Fast session discovery timed out; falling back to Windows picker.", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Fast session discovery timed out; falling back to Windows picker.");
             return await PickSessionFileWithWindowsDialogAsync(previousStatusText);
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", "Fast session discovery failed; falling back to Windows picker.", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Fast session discovery failed; falling back to Windows picker.");
             return await PickSessionFileWithWindowsDialogAsync(previousStatusText);
         }
 
         if (!discovery.FastSearchAvailable)
         {
-            LogService.Instance.Info("MainWindow", $"Fast session discovery unavailable: {discovery.Error ?? "unknown reason"}");
+            YaguLog.For("MainWindow").LogInformation("Fast session discovery unavailable: {Reason}", discovery.Error ?? "unknown reason");
             return await PickSessionFileWithWindowsDialogAsync(previousStatusText);
         }
 
-        LogService.Instance.Info("MainWindow", $"Fast session discovery found {discovery.Files.Count:N0} session file(s) via {discovery.Backend}.");
+        YaguLog.For("MainWindow").LogInformation("Fast session discovery found {Count:N0} session file(s) via {Backend}.", discovery.Files.Count, discovery.Backend);
         var hwnd = GetMainWindowHandle();
         var result = await SessionLoadDialog.ShowAsync(hwnd, discovery.Files, RootGrid.ActualTheme);
         return result.Action switch
@@ -652,7 +676,7 @@ public sealed partial class MainWindow
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("MainWindow", "FileOpenPicker failed; falling back to Win32 Open dialog.", ex);
+                YaguLog.For("MainWindow").LogWarning(ex, "FileOpenPicker failed; falling back to Win32 Open dialog.");
             }
         }
 
@@ -668,7 +692,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", "Win32 Open dialog failed.", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Win32 Open dialog failed.");
             ViewModel.ErrorText = $"Could not open the Open dialog: {ex.Message}";
             return RestoreStatusAfterCanceledSessionLoad(previousStatusText);
         }
@@ -689,12 +713,12 @@ public sealed partial class MainWindow
         try
         {
             var header = await ViewModel.LoadSessionAsync(path);
-            LogService.Instance.Info("MainWindow",
-                $"Loaded session: {header.ResultCount:N0} declared results, query='{header.Query}', root='{header.SearchRoot}'");
+            YaguLog.For("MainWindow").LogInformation(
+                "Loaded session: {ResultCount:N0} declared results, query='{Query}', root='{SearchRoot}'", header.ResultCount, header.Query, header.SearchRoot);
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", $"Load session failed: {path}", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Load session failed: {Path}", path);
             ViewModel.ErrorText = $"Load session failed: {ex.Message}";
         }
     }
@@ -740,7 +764,7 @@ public sealed partial class MainWindow
         {
             Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{_previewResult.FilePath}\"") { UseShellExecute = false });
         }
-        catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to show in Explorer: {_previewResult.FilePath}", ex); }
+        catch (Exception ex) { YaguLog.For("MainWindow").LogWarning(ex, "Failed to show in Explorer: {FilePath}", _previewResult.FilePath); }
     }
 
     private void OnShowFileGroupInExplorer(object sender, RoutedEventArgs e)
@@ -750,7 +774,17 @@ public sealed partial class MainWindow
         {
             Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = false });
         }
-        catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to show in Explorer: {path}", ex); }
+        catch (Exception ex) { YaguLog.For("MainWindow").LogWarning(ex, "Failed to show in Explorer: {Path}", path); }
+    }
+
+    private void OnOpenFileGroupWithDefaultApplication(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string path } || string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception ex) { YaguLog.For("MainWindow").LogWarning(ex, "Failed to open in default application: {Path}", path); }
     }
 
     // ── Group mode menu handlers ──────────────────────────────────
@@ -768,6 +802,21 @@ public sealed partial class MainWindow
     private void OnGroupExtensionZA(object sender, RoutedEventArgs e) { ViewModel.GroupModeIndex = (int)GroupMode.Extension; ViewModel.GroupSortDirectionIndex = 1; }
     private void OnGroupFileSizeSmallLarge(object sender, RoutedEventArgs e) { ViewModel.GroupModeIndex = (int)GroupMode.FileSize; ViewModel.GroupSortDirectionIndex = 0; }
     private void OnGroupFileSizeLargeSmall(object sender, RoutedEventArgs e) { ViewModel.GroupModeIndex = (int)GroupMode.FileSize; ViewModel.GroupSortDirectionIndex = 1; }
+
+    // Shows the current Group / Filter selection as a breadcrumb header at the top of each menu.
+    private void OnGroupMenuOpening(object sender, object e)
+        => ApplyMenuBreadcrumb(GroupBreadcrumbItem, GroupBreadcrumbSeparator, ViewModel.HasGroupBreadcrumb, ViewModel.GroupBreadcrumb);
+
+    private void OnFilterMenuOpening(object sender, object e)
+        => ApplyMenuBreadcrumb(FilterBreadcrumbItem, FilterBreadcrumbSeparator, ViewModel.HasFilterBreadcrumb, ViewModel.FilterBreadcrumb);
+
+    private static void ApplyMenuBreadcrumb(MenuFlyoutItem item, MenuFlyoutSeparator separator, bool show, string text)
+    {
+        item.Text = text;
+        Visibility visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        item.Visibility = visibility;
+        separator.Visibility = visibility;
+    }
 
     private void OnResultGroupHeaderClicked(object sender, RoutedEventArgs e)
     {
@@ -1160,8 +1209,8 @@ public sealed partial class MainWindow
         bool isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                        .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
-        LogService.Instance.Info("Preview",
-            $"OnFileGroupCheckBoxClicked: file='{group.FilePath}', shouldSelect={shouldSelect}, matchCount={group.Count}, index={currentIndex}");
+        YaguLog.For("Preview").LogInformation(
+            "OnFileGroupCheckBoxClicked: file='{FilePath}', shouldSelect={ShouldSelect}, matchCount={MatchCount}, index={CurrentIndex}", group.FilePath, shouldSelect, group.Count, currentIndex);
 
         _suppressPreviewUpdate = true;
         try
@@ -1213,8 +1262,8 @@ public sealed partial class MainWindow
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("Preview",
-                    $"OnFileGroupCheckBoxClicked: failed to add checked file(s) to preview: {ex.GetType().Name}: {ex.Message}");
+                YaguLog.For("Preview").LogWarning(
+                    "OnFileGroupCheckBoxClicked: failed to add checked file(s) to preview: {ExceptionType}: {Error}", ex.GetType().Name, ex.Message);
             }
         }
         else if (!shouldSelect)
@@ -1268,7 +1317,7 @@ public sealed partial class MainWindow
     {
         if (_suppressPreviewUpdate)
         {
-            LogService.Instance.Info("Preview", $"OnSelectAllChecked: SUPPRESSED (group={(sender is FrameworkElement f && f.DataContext is FileGroup fg ? fg.FilePath : "?")}");
+            YaguLog.For("Preview").LogInformation("OnSelectAllChecked: SUPPRESSED (group={Group}", sender is FrameworkElement f && f.DataContext is FileGroup fg ? fg.FilePath : "?");
             return;
         }
         if (sender is FrameworkElement fe && fe.DataContext is FileGroup g)
@@ -1278,12 +1327,12 @@ public sealed partial class MainWindow
             // but the model already has AllSelected == true.
             if (g.AllSelected)
             {
-                LogService.Instance.Info("Preview", $"OnSelectAllChecked: SKIP (model already AllSelected) file='{g.FilePath}'");
+                YaguLog.For("Preview").LogInformation("OnSelectAllChecked: SKIP (model already AllSelected) file='{FilePath}'", g.FilePath);
                 return;
             }
 
             int currentIndex = ViewModel.ResultGroups.IndexOf(g);
-            LogService.Instance.Info("Preview", $"OnSelectAllChecked: file='{g.FilePath}', matchCount={g.Count}, index={currentIndex}");
+            YaguLog.For("Preview").LogInformation("OnSelectAllChecked: file='{FilePath}', matchCount={MatchCount}, index={CurrentIndex}", g.FilePath, g.Count, currentIndex);
 
             // Shift+Click: check all from previous anchor to clicked item
             bool isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
@@ -1316,7 +1365,7 @@ public sealed partial class MainWindow
     {
         if (_suppressPreviewUpdate)
         {
-            LogService.Instance.Info("Preview", $"OnSelectAllUnchecked: SUPPRESSED (group={(sender is FrameworkElement f && f.DataContext is FileGroup fg ? fg.FilePath : "?")}");
+            YaguLog.For("Preview").LogInformation("OnSelectAllUnchecked: SUPPRESSED (group={Group}", sender is FrameworkElement f && f.DataContext is FileGroup fg ? fg.FilePath : "?");
             return;
         }
         if (sender is FrameworkElement fe && fe.DataContext is FileGroup g)
@@ -1326,12 +1375,12 @@ public sealed partial class MainWindow
             // and CheckBox.Unchecked fires even though the model is still selected.
             if (!g.AllSelected)
             {
-                LogService.Instance.Info("Preview", $"OnSelectAllUnchecked: SKIP (model already deselected) file='{g.FilePath}'");
+                YaguLog.For("Preview").LogInformation("OnSelectAllUnchecked: SKIP (model already deselected) file='{FilePath}'", g.FilePath);
                 return;
             }
 
             int currentIndex = ViewModel.ResultGroups.IndexOf(g);
-            LogService.Instance.Info("Preview", $"OnSelectAllUnchecked: file='{g.FilePath}', index={currentIndex}");
+            YaguLog.For("Preview").LogInformation("OnSelectAllUnchecked: file='{FilePath}', index={CurrentIndex}", g.FilePath, currentIndex);
 
             // Shift+Click: uncheck all from previous anchor to clicked item
             bool isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
@@ -1408,8 +1457,8 @@ public sealed partial class MainWindow
             catch (Exception ex)
             {
                 _resultsListShowMoreRestoreInProgress = false;
-                LogService.Instance.Warning("Results",
-                    $"OnShowMoreClicked failed for '{g.FilePath}': {ex.GetType().Name}: {ex.Message}");
+                YaguLog.For("Results").LogWarning(
+                    "OnShowMoreClicked failed for '{FilePath}': {ExceptionType}: {Error}", g.FilePath, ex.GetType().Name, ex.Message);
                 ViewModel.StatusText = "Could not show more matches for this file.";
             }
             finally
@@ -1427,15 +1476,15 @@ public sealed partial class MainWindow
 
     private async Task<int> ShowMoreVisibleResultsIncrementalAsync(FileGroup group, int requestedCount, double? restoreVerticalOffset = null)
     {
-        LogService.Instance.Info("FileGroup",
-            $"ShowMoreIncremental START: file='{Path.GetFileName(group.FilePath)}', " +
-            $"requested={requestedCount}, Count={group.Count}, VisibleCount={group.VisibleResults.Count}, " +
-            $"HasMore={group.HasMore}, RemainingCount={group.RemainingCount}");
+        YaguLog.For("FileGroup").LogInformation(
+            "ShowMoreIncremental START: file='{FileName}', " +
+            "requested={Requested}, Count={Count}, VisibleCount={VisibleCount}, " +
+            "HasMore={HasMore}, RemainingCount={RemainingCount}", Path.GetFileName(group.FilePath), requestedCount, group.Count, group.VisibleResults.Count, group.HasMore, group.RemainingCount);
 
         if (requestedCount <= 0 || !group.HasMore)
         {
-            LogService.Instance.Info("FileGroup",
-                $"ShowMoreIncremental EARLY EXIT: requested={requestedCount}, HasMore={group.HasMore}");
+            YaguLog.For("FileGroup").LogInformation(
+                "ShowMoreIncremental EARLY EXIT: requested={Requested}, HasMore={HasMore}", requestedCount, group.HasMore);
             return 0;
         }
 
@@ -1451,6 +1500,9 @@ public sealed partial class MainWindow
                 break;
 
             int chunkSize = Math.Min(VisibleResultShowMoreBatchSize, remainingToShow);
+            // Decode only what this UI batch can display (+1 for a possible hidden filename-match row).
+            // Unread compact stubs remain encoded for the next Show-more request.
+            group.MaterializeEvictedStubs(chunkSize + 1);
             int start = group.VisibleResults.Count;
             int end = Math.Min(group.Count, start + chunkSize);
             if (end <= start)
@@ -1473,8 +1525,8 @@ public sealed partial class MainWindow
         sw.Stop();
         if (sw.ElapsedMilliseconds >= 250)
         {
-            LogService.Instance.Info("Results",
-                $"ShowMoreVisibleResultsIncrementalAsync: file='{Path.GetFileName(group.FilePath)}', requested={requestedCount:N0}, elapsed={sw.ElapsedMilliseconds}ms");
+            YaguLog.For("Results").LogInformation(
+                "ShowMoreVisibleResultsIncrementalAsync: file='{FileName}', requested={Requested:N0}, elapsed={Elapsed}ms", Path.GetFileName(group.FilePath), requestedCount, sw.ElapsedMilliseconds);
         }
 
         return totalShown;
@@ -1482,15 +1534,15 @@ public sealed partial class MainWindow
 
     private void ShowMoreVisibleResultsIncremental(FileGroup group, int requestedCount)
     {
-        LogService.Instance.Info("FileGroup",
-            $"ShowMoreIncremental SYNC START: file='{Path.GetFileName(group.FilePath)}', " +
-            $"requested={requestedCount}, Count={group.Count}, VisibleCount={group.VisibleResults.Count}, " +
-            $"HasMore={group.HasMore}, RemainingCount={group.RemainingCount}");
+        YaguLog.For("FileGroup").LogInformation(
+            "ShowMoreIncremental SYNC START: file='{FileName}', " +
+            "requested={Requested}, Count={Count}, VisibleCount={VisibleCount}, " +
+            "HasMore={HasMore}, RemainingCount={RemainingCount}", Path.GetFileName(group.FilePath), requestedCount, group.Count, group.VisibleResults.Count, group.HasMore, group.RemainingCount);
 
         if (requestedCount <= 0 || !group.HasMore)
         {
-            LogService.Instance.Info("FileGroup",
-                $"ShowMoreIncremental SYNC EARLY EXIT: requested={requestedCount}, HasMore={group.HasMore}");
+            YaguLog.For("FileGroup").LogInformation(
+                "ShowMoreIncremental SYNC EARLY EXIT: requested={Requested}, HasMore={HasMore}", requestedCount, group.HasMore);
             return;
         }
 
@@ -1500,6 +1552,7 @@ public sealed partial class MainWindow
         while (remainingToShow > 0 && group.HasMore)
         {
             int chunkSize = Math.Min(VisibleResultShowMoreBatchSize, remainingToShow);
+            group.MaterializeEvictedStubs(chunkSize + 1);
             int start = group.VisibleResults.Count;
             int end = Math.Min(group.Count, start + chunkSize);
             if (end <= start)
@@ -1516,8 +1569,8 @@ public sealed partial class MainWindow
         sw.Stop();
         if (sw.ElapsedMilliseconds >= 25)
         {
-            LogService.Instance.Info("Results",
-                $"ShowMoreVisibleResultsIncremental SYNC: file='{Path.GetFileName(group.FilePath)}', requested={requestedCount:N0}, elapsed={sw.ElapsedMilliseconds}ms");
+            YaguLog.For("Results").LogInformation(
+                "ShowMoreVisibleResultsIncremental SYNC: file='{FileName}', requested={Requested:N0}, elapsed={Elapsed}ms", Path.GetFileName(group.FilePath), requestedCount, sw.ElapsedMilliseconds);
         }
     }
 
@@ -1570,7 +1623,9 @@ public sealed partial class MainWindow
             // Update copy/save items: plural only when >1 file checked
             int count = checkedCount > 0 ? checkedCount : 1; // at least the right-clicked file
             bool plural = count > 1;
-            // Items layout: [0]=Preview, [1]=PreviewAll, [2]=Sep, [3]=CopyPath, [4]=OpenFolder, [5]=Sep, [6]=CopyPaths, [7]=CopyWithContent, [8]=Sep, [9]=SavePaths, [10]=SaveWithContent
+            // Items layout: [0]=Preview, [1]=PreviewAll, [2]=Sep, [3]=CopyPath, [4]=OpenFolder,
+            // [5]=Sep, [6]=CopyPaths, [7]=CopyWithContent, [8]=Sep, [9]=SavePaths,
+            // [10]=SaveWithContent, [11]=Sep, [12]=OpenWithDefaultApplication
             foreach (var item in flyout.Items.OfType<MenuFlyoutItem>())
             {
                 if (item.Text.StartsWith("Copy Selected File Path", StringComparison.Ordinal))
@@ -1587,9 +1642,28 @@ public sealed partial class MainWindow
 
     private void OnResultsContextMenuOpening(object sender, object e)
     {
+        // A keyboard-opened context menu (Menu key / Shift+F10) has no preceding pointer capture, so
+        // resolve the target file from the focused results row instead — otherwise a keyboard user gets a
+        // menu with no file to act on. Only needed when nothing was captured by a mouse right-click and no
+        // rows are checked.
+        if (GetRecentResultsContextMenuGroup() is null && GetCheckedFileGroups().Count == 0)
+        {
+            var focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(ResultsList.XamlRoot) as DependencyObject;
+            if (FindContextFileGroup(focused) is not null)
+                CaptureResultsContextMenuGroup(focused);
+        }
+
         var checkedGroups = GetCheckedFileGroups();
         var contextGroup = checkedGroups.Count == 0 ? GetRecentResultsContextMenuGroup() : null;
         int checkedCount = checkedGroups.Count;
+
+        // Right-click in a blank area of the results list (no file under the pointer and nothing checked)
+        // has no file to act on, so suppress the menu entirely instead of showing dead copy/save commands.
+        if (contextGroup is null && checkedCount == 0)
+        {
+            (sender as MenuFlyout)?.Hide();
+            return;
+        }
 
         // "Preview <filename>" — always visible, shows right-clicked file name
         string fileName = contextGroup is not null
@@ -1659,7 +1733,7 @@ public sealed partial class MainWindow
 
         if (group is null) return;
 
-        LogService.Instance.Info("Preview", $"OnPreviewSingleFile: {Path.GetFileName(group.FilePath)}");
+        YaguLog.For("Preview").LogInformation("OnPreviewSingleFile: {FileName}", Path.GetFileName(group.FilePath));
         _suppressPreviewUpdate = true;
         try
         {
@@ -1694,41 +1768,81 @@ public sealed partial class MainWindow
         finally { _suppressPreviewUpdate = false; }
     }
 
+    // A flat WinUI preview surface cannot meaningfully expose hundreds of thousands of file drawers.
+    // Keep the prepared graph bounded: the user can still page through the configured number of files
+    // (default 1,000), while the status text explicitly reports when a larger checked selection was
+    // truncated. A second cap prevents a handful of match-dense files from recreating millions of evicted
+    // SearchResult stubs just to render a preview whose per-section XAML ceiling is much lower. Both caps
+    // are configurable in Settings ▸ Editor ▸ Preview section limits (0 = use the default).
+    private const int DefaultMaxSelectedFilesPerPreview = 1_000;
+    private const int DefaultMaxSelectedResultsPerPreview = 100_000;
+    private int EffectiveMaxSelectedFilesPerPreview =>
+        ViewModel.MaxSelectedFilesPerPreview > 0 ? ViewModel.MaxSelectedFilesPerPreview : DefaultMaxSelectedFilesPerPreview;
+    private int EffectiveMaxSelectedResultsPerPreview =>
+        ViewModel.MaxSelectedResultsPerPreview > 0 ? ViewModel.MaxSelectedResultsPerPreview : DefaultMaxSelectedResultsPerPreview;
+    private const int BulkPreviewSelectionScanYieldInterval = 4_096;
+    private const int BulkPreviewPreparationYieldInterval = 16;
+
     private async void OnPreviewSelectedFiles(object sender, RoutedEventArgs e)
     {
-        var selectedGroups = GetPreviewFileGroups(sender);
-        var groupNames = selectedGroups.Select(g => g.FilePath).ToList();
-        LogService.Instance.Info("Preview", $"OnPreviewSelectedFiles: {groupNames.Count} groups selected: [{string.Join(", ", groupNames.Select(Path.GetFileName))}]");
         _suppressPreviewUpdate = true;
+        BeginPreviewContentUpdate();
+        EnsurePreviewPanelVisible();
+        ShowProgressOverlay("Preparing selected-file preview\u2026", 0);
+        // Do not begin even the checked-group scan until Input/Render has painted the overlay.
+        await DispatchIdleAsync();
+
         try
         {
-            // Select all match results within each checked FileGroup.
-            foreach (var g in selectedGroups)
-                g.SelectAll();
+            var (selectedGroups, totalSelectedGroups) = await GetPreviewFileGroupsBoundedAsync(sender);
+            string sample = string.Join(", ", selectedGroups.Take(8).Select(g => Path.GetFileName(g.FilePath)));
+            YaguLog.For("Preview").LogInformation(
+                "OnPreviewSelectedFiles: selectedGroups={TotalSelectedGroups:N0}, preparing={PreparedGroups:N0}, sample=[{Sample}]",
+                totalSelectedGroups, selectedGroups.Count, sample);
 
-            // Gather results only from the checked groups.
-            var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var g in selectedGroups)
+            if (selectedGroups.Count == 0)
+                return;
+
+            // Checked groups already have AllSelected=true; do not call SelectAll again because that
+            // redundantly raises IsSelected/PropertyChanged for every match (the old 536k-file path spent
+            // most of its 20.6 s UI stall here and in unbounded snapshot creation).
+            // Build a bounded snapshot in small batches, yielding to Input/Render between them.
+            var byFile = new Dictionary<string, List<SearchResult>>(selectedGroups.Count, StringComparer.OrdinalIgnoreCase);
+            int remainingResultBudget = Math.Max(EffectiveMaxSelectedResultsPerPreview, selectedGroups.Count);
+            for (int i = 0; i < selectedGroups.Count; i++)
             {
-                foreach (var r in GetPreviewableResults(g))
+                FileGroup group = selectedGroups[i];
+                if (!group.AllSelected)
+                    group.SelectAll(); // context-menu fallback for one un-checked file
+
+                int remainingFiles = selectedGroups.Count - i;
+                int reservedForLaterFiles = Math.Max(0, remainingFiles - 1);
+                int availableForThisFile = Math.Max(1, remainingResultBudget - reservedForLaterFiles);
+                int perFileLimit = Math.Min(EffectiveMaxOverflowRenderedPerSection, availableForThisFile);
+                List<SearchResult> results = GetPreviewableResults(group, perFileLimit);
+                if (results.Count > 0)
                 {
-                    if (!byFile.TryGetValue(r.FilePath, out var list))
-                    {
-                        list = new List<SearchResult>();
-                        byFile[r.FilePath] = list;
-                    }
-                    list.Add(r);
+                    byFile[group.FilePath] = results;
+                    remainingResultBudget = Math.Max(0, remainingResultBudget - results.Count);
+                }
+
+                if ((i + 1) % BulkPreviewPreparationYieldInterval == 0)
+                {
+                    ShowProgressOverlay(
+                        $"Preparing {i + 1:N0} of {selectedGroups.Count:N0} files\u2026",
+                        5 + (i + 1) * 20 / selectedGroups.Count);
+                    await YieldLowAsync();
                 }
             }
             if (byFile.Count == 0)
             {
-                LogService.Instance.Info("Preview", "OnPreviewSelectedFiles: no selected results, returning");
+                YaguLog.For("Preview").LogInformation("OnPreviewSelectedFiles: no selected results, returning");
                 return;
             }
 
             // Determine which files are new vs already present on the right panel.
             var existing = GetExistingPreviewFilePaths();
-            LogService.Instance.Info("Preview", $"OnPreviewSelectedFiles: byFile={byFile.Count}, existingOnPanel={existing.Count}");
+            YaguLog.For("Preview").LogInformation("OnPreviewSelectedFiles: byFile={ByFile}, existingOnPanel={ExistingOnPanel}", byFile.Count, existing.Count);
             var newFiles = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
             string? firstExistingFile = null;
             foreach (var (filePath, results) in byFile)
@@ -1741,7 +1855,7 @@ public sealed partial class MainWindow
 
             bool isSingleFile = byFile.Count == 1;
 
-            LogService.Instance.Info("Preview", $"OnPreviewSelectedFiles: newFiles={newFiles.Count}, isSingleFile={isSingleFile}, firstExistingFile='{firstExistingFile}'");
+            YaguLog.For("Preview").LogInformation("OnPreviewSelectedFiles: newFiles={NewFiles}, isSingleFile={IsSingleFile}, firstExistingFile='{FirstExistingFile}'", newFiles.Count, isSingleFile, firstExistingFile);
             if (newFiles.Count > 0)
             {
                 // For single-file: scroll to the new file after prepending.
@@ -1752,7 +1866,7 @@ public sealed partial class MainWindow
             else if (isSingleFile && firstExistingFile is not null)
             {
                 // Single file already present — just scroll to it.
-                LogService.Instance.Info("Preview", $"OnPreviewSelectedFiles: single file already on panel, scrolling to '{firstExistingFile}'");
+                YaguLog.For("Preview").LogInformation("OnPreviewSelectedFiles: single file already on panel, scrolling to '{FirstExistingFile}'", firstExistingFile);
                 TryScrollToPreviewSection(firstExistingFile);
             }
             // Multi-file with all already present — nothing to do.
@@ -1767,18 +1881,69 @@ public sealed partial class MainWindow
                 if (toastTarget is not null)
                     ShowPreviewAddedToast(toastTarget, byFile.Count);
             }
+
+            if (totalSelectedGroups > selectedGroups.Count)
+            {
+                ViewModel.StatusText =
+                    $"Preview limited to the first {selectedGroups.Count:N0} of {totalSelectedGroups:N0} selected files to keep Yagu responsive.";
+                YaguLog.For("Preview").LogWarning(
+                    "Selected-file preview capped at {Prepared:N0}/{Requested:N0} files and {PreparedResults:N0} result references.",
+                    selectedGroups.Count, totalSelectedGroups, byFile.Values.Sum(results => results.Count));
+            }
         }
-        finally { _suppressPreviewUpdate = false; }
+        catch (Exception ex)
+        {
+            YaguLog.For("Preview").LogWarning(ex, "OnPreviewSelectedFiles failed.");
+            ViewModel.StatusText = $"Could not prepare selected-file preview: {ex.Message}";
+        }
+        finally
+        {
+            HideProgressOverlay();
+            if (_previewContentPending)
+                CompletePreviewContentUpdate();
+            _suppressPreviewUpdate = false;
+        }
     }
 
-    private List<FileGroup> GetPreviewFileGroups(object sender)
+    /// <summary>
+    /// Scans checked file groups in dispatcher-sized chunks so even a 500k-group selection keeps pumping
+    /// input and paint messages. Retains only the first <see cref="EffectiveMaxSelectedFilesPerPreview"/>
+    /// groups while still counting the full selection for an honest truncation message.
+    /// </summary>
+    private async Task<(List<FileGroup> Groups, int TotalCount)> GetPreviewFileGroupsBoundedAsync(object sender)
     {
-        var checkedGroups = GetCheckedFileGroups();
-        if (checkedGroups.Count > 0)
-            return checkedGroups;
+        int maxFiles = EffectiveMaxSelectedFilesPerPreview;
+        var groups = new List<FileGroup>(Math.Min(maxFiles, ViewModel.ResultGroups.Count));
+        int totalCount = 0;
+        int scanned = 0;
+        int scanTotal = ViewModel.ResultGroups.Count;
+        foreach (FileGroup group in ViewModel.ResultGroups)
+        {
+            if (group.AllSelected)
+            {
+                totalCount++;
+                if (groups.Count < maxFiles)
+                    groups.Add(group);
+            }
 
-        var contextGroup = GetFileHeaderContextGroup(sender);
-        return contextGroup is null ? checkedGroups : [contextGroup];
+            if (++scanned % BulkPreviewSelectionScanYieldInterval == 0)
+            {
+                UpdateProgressOverlay(scanTotal <= 0 ? 0 : Math.Min(5, scanned * 5 / scanTotal));
+                await YieldLowAsync();
+            }
+        }
+
+        if (totalCount == 0)
+        {
+            FileGroup? contextGroup = GetFileHeaderContextGroup(sender);
+            if (contextGroup is not null)
+            {
+                groups.Add(contextGroup);
+                totalCount = 1;
+            }
+        }
+
+        return (groups, totalCount);
     }
 
     private static List<SearchResult> GetPreviewableResults(IEnumerable<SearchResult> results)
@@ -1789,9 +1954,9 @@ public sealed partial class MainWindow
         return previewable;
     }
 
-    private static List<SearchResult> GetPreviewableResults(FileGroup group)
+    private static List<SearchResult> GetPreviewableResults(FileGroup group, int maxResults = int.MaxValue)
     {
-        int limit = GetPreviewResultSnapshotLimit();
+        int limit = Math.Min(GetPreviewResultSnapshotLimit(), Math.Max(0, maxResults));
         List<SearchResult> candidates = group.AllSelected
             ? group.GetPreviewSnapshot(limit)
             : limit == int.MaxValue
@@ -1890,7 +2055,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", "Could not copy selected files with content", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Could not copy selected files with content");
             ViewModel.StatusText = $"Could not copy selected files with content: {ex.Message}";
         }
     }
@@ -1912,7 +2077,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", "Could not save selected file paths", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Could not save selected file paths");
             ViewModel.StatusText = $"Could not save selected file paths: {ex.Message}";
         }
     }
@@ -1934,7 +2099,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", "Could not save selected files with content", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Could not save selected files with content");
             ViewModel.StatusText = $"Could not save selected files with content: {ex.Message}";
         }
     }
@@ -1974,7 +2139,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", "Win32 Save dialog failed for export.", ex);
+            YaguLog.For("MainWindow").LogWarning(ex, "Win32 Save dialog failed for export.");
             ViewModel.ErrorText = $"Could not open the Save dialog: {ex.Message}";
             return null;
         }
@@ -2045,7 +2210,7 @@ public sealed partial class MainWindow
         var selectedMatches = ViewModel.GetAllSelectedResults();
         if (selectedMatches.Count > 0)
         {
-            LogService.Instance.Info("Preview", $"GetFullFilePreviewTargets: using {selectedMatches.Count} selected matches");
+            YaguLog.For("Preview").LogInformation("GetFullFilePreviewTargets: using {Count} selected matches", selectedMatches.Count);
             return BuildFullFilePreviewTargets(selectedMatches);
         }
 
@@ -2054,7 +2219,7 @@ public sealed partial class MainWindow
             .ToList();
         if (selectedGroups.Count > 0)
         {
-            LogService.Instance.Info("Preview", $"GetFullFilePreviewTargets: using {selectedGroups.Count} checked file groups");
+            YaguLog.For("Preview").LogInformation("GetFullFilePreviewTargets: using {Count} checked file groups", selectedGroups.Count);
             var targets = new List<FullFilePreviewTarget>(selectedGroups.Count);
             foreach (var group in selectedGroups)
                 targets.Add(new FullFilePreviewTarget(group.FilePath, group.ToList()));
@@ -2063,13 +2228,13 @@ public sealed partial class MainWindow
 
         if (_previewResult is null)
         {
-            LogService.Instance.Info("Preview", "GetFullFilePreviewTargets: no preview result, returning empty");
+            YaguLog.For("Preview").LogInformation("GetFullFilePreviewTargets: no preview result, returning empty");
             return [];
         }
 
         var parent = FindParentGroup(_previewResult);
         var matches = parent is null ? new List<SearchResult> { _previewResult } : parent.ToList();
-        LogService.Instance.Info("Preview", $"GetFullFilePreviewTargets: fallback to current preview file='{Path.GetFileName(_previewResult.FilePath)}', matches={matches.Count}");
+        YaguLog.For("Preview").LogInformation("GetFullFilePreviewTargets: fallback to current preview file='{FileName}', matches={Matches}", Path.GetFileName(_previewResult.FilePath), matches.Count);
         return [new FullFilePreviewTarget(_previewResult.FilePath, matches)];
     }
 
@@ -2096,11 +2261,31 @@ public sealed partial class MainWindow
         return targets;
     }
 
+    private void OnMatchLineContextMenuOpening(object sender, object e)
+    {
+        if (sender is not MenuFlyout flyout || flyout.Items.Count < 5)
+            return;
+
+        SearchResult? target = (flyout.Target as FrameworkElement)?.DataContext as SearchResult;
+        var copyLine = flyout.Items[0] as MenuFlyoutItem;
+        var copyLines = flyout.Items[1] as MenuFlyoutItem;
+        var exportThis = flyout.Items[3] as MenuFlyoutItem;
+        var exportSelected = flyout.Items[4] as MenuFlyoutItem;
+        if (copyLine is null || copyLines is null || exportThis is null || exportSelected is null)
+            return;
+
+        copyLine.Tag = target;
+        exportThis.Tag = target;
+        bool multipleSelected = ViewModel.GetAllSelectedResults().Count > 1;
+        copyLines.Visibility = multipleSelected ? Visibility.Visible : Visibility.Collapsed;
+        exportSelected.Visibility = multipleSelected ? Visibility.Visible : Visibility.Collapsed;
+        copyLine.IsEnabled = target is not null;
+        exportThis.IsEnabled = target is not null;
+    }
+
     private void OnCopySelectedLines(object sender, RoutedEventArgs e)
     {
         var selected = ViewModel.GetAllSelectedResults();
-        if (selected.Count == 0 && sender is FrameworkElement fe && fe.DataContext is SearchResult single)
-            selected = new List<SearchResult> { single };
         if (selected.Count == 0) return;
 
         var sb = new StringBuilder();
@@ -2113,7 +2298,7 @@ public sealed partial class MainWindow
             pkg.SetText(sb.ToString());
             Clipboard.SetContent(pkg);
         }
-        catch (Exception ex) { LogService.Instance.Verbose("MainWindow", "Clipboard unavailable for copy selected", ex); }
+        catch (Exception ex) { YaguLog.For("MainWindow").LogDebug(ex, "Clipboard unavailable for copy selected"); }
     }
 
     private static void SetClipboardText(string text, string description)
@@ -2124,32 +2309,42 @@ public sealed partial class MainWindow
             pkg.SetText(text);
             Clipboard.SetContent(pkg);
         }
-        catch (Exception ex) { LogService.Instance.Verbose("MainWindow", $"Clipboard unavailable for copy {description}", ex); }
+        catch (Exception ex) { YaguLog.For("MainWindow").LogDebug(ex, "Clipboard unavailable for copy {Description}", description); }
     }
 
     private void OnCopySingleLine(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is SearchResult r)
-        {
-            try
-            {
-                var pkg = new DataPackage();
-                pkg.SetText($"{r.FilePath}:{r.LineNumber}: {r.MatchLine}");
-                Clipboard.SetContent(pkg);
-            }
-            catch (Exception ex) { LogService.Instance.Verbose("MainWindow", "Clipboard unavailable for copy single", ex); }
-        }
+        SearchResult? result = sender is FrameworkElement fe
+            ? fe.Tag as SearchResult ?? fe.DataContext as SearchResult
+            : null;
+        if (result is not null)
+            SetClipboardText($"{result.FilePath}:{result.LineNumber}: {result.MatchLine}", "match line");
+    }
+
+    private async void OnExportSingleLine(object sender, RoutedEventArgs e)
+    {
+        SearchResult? result = sender is FrameworkElement fe
+            ? fe.Tag as SearchResult ?? fe.DataContext as SearchResult
+            : null;
+        if (result is not null)
+            await ExportMatchLinesAsync(new[] { result }, "Export Match", "match");
     }
 
     private async void OnExportSelectedLines(object sender, RoutedEventArgs e)
     {
         var selected = ViewModel.GetAllSelectedResults();
-        if (selected.Count == 0 && sender is FrameworkElement fe && fe.DataContext is SearchResult single)
-            selected = new List<SearchResult> { single };
         if (selected.Count == 0) return;
 
+        await ExportMatchLinesAsync(selected, "Export Selected Matches", "selected match(es)");
+    }
+
+    private async Task ExportMatchLinesAsync(
+        IReadOnlyList<SearchResult> results,
+        string dialogTitle,
+        string statusDescription)
+    {
         string? path = PickExportFilePath(
-            "Export Selected Matches",
+            dialogTitle,
             "Yagu_Export",
             "txt",
             new[]
@@ -2164,7 +2359,7 @@ public sealed partial class MainWindow
         if (ext == ".csv")
         {
             sb.AppendLine("\"File\",\"Line\",\"Match\"");
-            foreach (var r in selected)
+            foreach (var r in results)
             {
                 var escaped = r.MatchLine.Replace("\"", "\"\"");
                 sb.AppendLine(CultureInfo.InvariantCulture, $"\"{r.FilePath}\",{r.LineNumber},\"{escaped}\"");
@@ -2172,19 +2367,19 @@ public sealed partial class MainWindow
         }
         else
         {
-            foreach (var r in selected)
+            foreach (var r in results)
                 sb.AppendLine(CultureInfo.InvariantCulture, $"{r.FilePath}:{r.LineNumber}: {r.MatchLine}");
         }
 
         try
         {
             await File.WriteAllTextAsync(path, sb.ToString()).ConfigureAwait(true);
-            ViewModel.StatusText = $"Exported {selected.Count:N0} selected match(es) to {path}.";
+            ViewModel.StatusText = $"Exported {results.Count:N0} {statusDescription} to {path}.";
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", "Could not export selected matches", ex);
-            ViewModel.StatusText = $"Could not export selected matches: {ex.Message}";
+            YaguLog.For("MainWindow").LogWarning(ex, "Could not export match lines");
+            ViewModel.StatusText = $"Could not export match lines: {ex.Message}";
         }
     }
 
@@ -2343,9 +2538,9 @@ public sealed partial class MainWindow
     {
         if (TryBuildPreviewCustomSelectionText(block, withLineNumbers, out string customSelectedText))
         {
-            LogService.Instance.Verbose("PreviewSelection",
-                $"CopyPreviewSelection: custom-selection path, block={DescribePreviewSelectionBlock(block)}, " +
-                $"withLineNumbers={withLineNumbers}, copiedChars={customSelectedText.Length}");
+            YaguLog.For("PreviewSelection").LogDebug(
+                "CopyPreviewSelection: custom-selection path, block={Block}, " +
+                "withLineNumbers={WithLineNumbers}, copiedChars={CopiedChars}", DescribePreviewSelectionBlock(block), withLineNumbers, customSelectedText.Length);
             var customDataPackage = new DataPackage();
             customDataPackage.SetText(customSelectedText);
             Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(customDataPackage);
@@ -2361,10 +2556,10 @@ public sealed partial class MainWindow
         // RichTextBlock (multi-section view). When inline, the first three Run inlines
         // of each paragraph are gutter chrome and must be stripped before re-prefixing.
         bool hasInlineGutter = !_sectionGutterBlocks.ContainsKey(block);
-        LogService.Instance.Info("Preview",
-            $"CopyPreviewSelection: withLineNumbers={withLineNumbers}, hasInlineGutter={hasInlineGutter}, " +
-            $"isPreviewBlock={ReferenceEquals(block, PreviewBlock)}, wrapMode={ViewModel.PreviewWrapModeIndex}, " +
-            $"selectedLen={selectedText.Length}, blockBlocks={block.Blocks.Count}");
+        YaguLog.For("Preview").LogInformation(
+            "CopyPreviewSelection: withLineNumbers={WithLineNumbers}, hasInlineGutter={HasInlineGutter}, " +
+            "isPreviewBlock={IsPreviewBlock}, wrapMode={WrapMode}, " +
+            "selectedLen={SelectedLen}, blockBlocks={BlockBlocks}", withLineNumbers, hasInlineGutter, ReferenceEquals(block, PreviewBlock), ViewModel.PreviewWrapModeIndex, selectedText.Length, block.Blocks.Count);
 
         if (withLineNumbers)
         {
@@ -2413,10 +2608,10 @@ public sealed partial class MainWindow
                     if (isContinuation) continuationCount++;
                     if (paraCount <= 5)
                     {
-                        LogService.Instance.Info("Preview",
-                            $"  para[{paraCount - 1}]: lineNum={lineNum}, cwtHit={cwtHit}, " +
-                            $"cwtTagType={rawTag?.GetType().Name ?? "null"}, contTag={contTag}, " +
-                            $"isContinuation={isContinuation}, inlinesCount={para.Inlines.Count}");
+                        YaguLog.For("Preview").LogInformation(
+                            "  para[{Index}]: lineNum={LineNum}, cwtHit={CwtHit}, " +
+                            "cwtTagType={CwtTagType}, contTag={ContTag}, " +
+                            "isContinuation={IsContinuation}, inlinesCount={InlinesCount}", paraCount - 1, lineNum, cwtHit, rawTag?.GetType().Name ?? "null", contTag, isContinuation, para.Inlines.Count);
                     }
 
                     if (!first) sb.AppendLine();
@@ -2434,9 +2629,9 @@ public sealed partial class MainWindow
                         sb.Append(CultureInfo.InvariantCulture, $"      \u2502 {lineText}");
                     }
                 }
-                LogService.Instance.Info("Preview",
-                    $"CopyPreviewSelection: emitted {paraCount} paragraphs, " +
-                    $"{missingLineNumCount} missing lineNum, {continuationCount} continuations.");
+                YaguLog.For("Preview").LogInformation(
+                    "CopyPreviewSelection: emitted {ParaCount} paragraphs, " +
+                    "{MissingLineNumCount} missing lineNum, {ContinuationCount} continuations.", paraCount, missingLineNumCount, continuationCount);
                 textToCopy = sb.ToString();
             }
         }
@@ -2647,7 +2842,7 @@ public sealed partial class MainWindow
 
     private async Task UpdatePreviewAsync(SearchResult r)
     {
-        LogService.Instance.Info("Preview", $"UpdatePreviewAsync: file='{r.FilePath}', line={r.LineNumber}");
+        YaguLog.For("Preview").LogInformation("UpdatePreviewAsync: file='{FilePath}', line={Line}", r.FilePath, r.LineNumber);
         if (!TryLeavePreviewEditorForPreviewChange()) return;
 
         BeginPreviewContentUpdate();
@@ -2668,7 +2863,7 @@ public sealed partial class MainWindow
 
     private async Task UpdateMultiSelectPreviewAsync(SearchResult? scrollTarget = null, bool scrollToTop = false)
     {
-        LogService.Instance.Info("Preview", $"UpdateMultiSelectPreviewAsync: scrollTarget='{scrollTarget?.FilePath}', scrollToTop={scrollToTop}");
+        YaguLog.For("Preview").LogInformation("UpdateMultiSelectPreviewAsync: scrollTarget='{ScrollTarget}', scrollToTop={ScrollToTop}", scrollTarget?.FilePath, scrollToTop);
         int gen = ++_previewUpdateGen;
 
         if (!TryLeavePreviewEditorForPreviewChange()) return;
@@ -2733,7 +2928,7 @@ public sealed partial class MainWindow
             ShowPreviewLoading($"Reading {byFile.Count:N0} files\u2026");
 
         PreviewToolbarContent.Visibility = Visibility.Visible;
-        LogService.Instance.Info("Preview", $"UpdateMultiSelectPreviewAsync: byFile={byFile.Count} files, {selected.Count} results, mode={ViewModel.PreviewModeIndex}, gen={gen}");
+        YaguLog.For("Preview").LogInformation("UpdateMultiSelectPreviewAsync: byFile={ByFile} files, {Selected} results, mode={Mode}, gen={Gen}", byFile.Count, selected.Count, ViewModel.PreviewModeIndex, gen);
         if (ViewModel.PreviewModeIndex == 1)
             await ShowMultiHighlightPreviewAsync(selected, byFile, scrollTarget, gen, scrollToTop);
         else
@@ -2745,7 +2940,7 @@ public sealed partial class MainWindow
         Dictionary<string, List<SearchResult>> byFile,
         SearchResult? scrollTarget, int gen, bool scrollToTop)
     {
-        LogService.Instance.Info("Preview", $"ShowConcatenatedPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
+        YaguLog.For("Preview").LogInformation("ShowConcatenatedPreviewAsync: {ByFile} files, {Selected} results, gen={Gen}", byFile.Count, selected.Count, gen);
         ShowPreviewSectionsSurface();
         _matchParagraphs.Clear();
         _sectionOverflow.Clear();
@@ -2854,7 +3049,7 @@ public sealed partial class MainWindow
             }
 
             fileSw.Stop();
-            LogService.Instance.Verbose("Preview", $"ShowConcatenatedPreviewAsync: file='{Path.GetFileName(filePath)}', results={results.Count}, paragraphs={parasInFile}, elapsed={fileSw.ElapsedMilliseconds}ms");
+            YaguLog.For("Preview").LogDebug("ShowConcatenatedPreviewAsync: file='{FileName}', results={Results}, paragraphs={Paragraphs}, elapsed={Elapsed}ms", Path.GetFileName(filePath), results.Count, parasInFile, fileSw.ElapsedMilliseconds);
 
             // Yield to the UI thread periodically so the app stays responsive.
             if (++fileIndex % PreviewYieldBatchSize == 0)
@@ -2892,7 +3087,7 @@ public sealed partial class MainWindow
         Dictionary<string, List<SearchResult>> byFile,
         SearchResult? scrollTarget, int gen, bool scrollToTop)
     {
-        LogService.Instance.Info("Preview", $"ShowMultiHighlightPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
+        YaguLog.For("Preview").LogInformation("ShowMultiHighlightPreviewAsync: {ByFile} files, {Selected} results, gen={Gen}", byFile.Count, selected.Count, gen);
         ShowPreviewSectionsSurface();
         _matchParagraphs.Clear();
         _sectionOverflow.Clear();
@@ -2930,7 +3125,7 @@ public sealed partial class MainWindow
             {
                 BuildConcatenatedSection(section, results, allLines, ViewModel.PreviewContextLines, rx: null);
                 fileSw.Stop();
-                LogService.Instance.Verbose("Preview", $"ShowMultiHighlightPreviewAsync: filename-only file='{Path.GetFileName(filePath)}', results={results.Count}, blocks={section.Blocks.Count}, elapsed={fileSw.ElapsedMilliseconds}ms");
+                YaguLog.For("Preview").LogDebug("ShowMultiHighlightPreviewAsync: filename-only file='{FileName}', results={Results}, blocks={Blocks}, elapsed={Elapsed}ms", Path.GetFileName(filePath), results.Count, section.Blocks.Count, fileSw.ElapsedMilliseconds);
 
                 if (++fileIndex % PreviewYieldBatchSize == 0)
                 {
@@ -2948,12 +3143,39 @@ public sealed partial class MainWindow
 
             if (allLines != null)
             {
+                // Full-span (Phase 3) multiline: collect cross-line spans so body/end lines (which are
+                // not any result's start line, so matchByLine misses them) still get colored, and so a
+                // window extends past the start line to the span end — mirrors BuildHighlightSectionAsync.
+                var multilineSpans = cappedResults
+                    .Where(result => result.IsMultilineMatch && result.MatchEndLineNumber is int)
+                    .Select(result => (result, endLine: result.MatchEndLineNumber!.Value))
+                    .ToList();
+                (int start, int end)? SpanForLine(int lineNumber, int lineLength)
+                {
+                    foreach (var (result, endLine) in multilineSpans)
+                    {
+                        if (lineNumber >= result.LineNumber && lineNumber <= endLine)
+                        {
+                            var span = ComputeMultilineLineSpan(result, lineNumber, lineLength);
+                            if (span is not null)
+                                return span;
+                        }
+                    }
+                    return null;
+                }
+
                 // Compute line ranges to display (union of all match windows)
                 var ranges = new List<(int start, int end)>();
                 foreach (var lineNum in cappedResults.Select(r => r.LineNumber).Distinct().OrderBy(n => n))
                 {
                     int s = Math.Max(0, lineNum - 1 - previewLines);
-                    int e = Math.Min(allLines.Length - 1, lineNum - 1 + previewLines);
+                    // Extend to the span end for a multiline match starting on this line.
+                    int spanEnd = cappedResults
+                        .Where(r => r.LineNumber == lineNum)
+                        .Select(r => r.MatchEndLineNumber ?? lineNum)
+                        .DefaultIfEmpty(lineNum)
+                        .Max();
+                    int e = Math.Min(allLines.Length - 1, spanEnd - 1 + previewLines);
                     ranges.Add((s, e));
                 }
 
@@ -2990,8 +3212,10 @@ public sealed partial class MainWindow
                         bool isMatchLine = matchByLine.TryGetValue(lineNum, out var matchResult);
                         matchResult ??= cappedResults[0];
                         _sectionMatchNavs.TryGetValue(section, out var sn);
-                        var firstPara = AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines, _matchParagraphs, sn, out _,
-                            maxParagraphs: MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
+                        var forcedSpan = SpanForLine(lineNum, allLines[i].Length);
+                        var firstPara = AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines && forcedSpan is null, _matchParagraphs, sn, out _,
+                            maxParagraphs: MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks),
+                            forcedSpan: forcedSpan);
                         lastRenderedLine1 = lineNum;
 
                         if (scrollTarget is not null && isMatchLine && lineNum == scrollTarget.LineNumber
@@ -3094,7 +3318,7 @@ public sealed partial class MainWindow
             }
 
             fileSw.Stop();
-            LogService.Instance.Verbose("Preview", $"ShowMultiHighlightPreviewAsync: file='{Path.GetFileName(filePath)}', results={results.Count}, blocks={section.Blocks.Count}, elapsed={fileSw.ElapsedMilliseconds}ms");
+            YaguLog.For("Preview").LogDebug("ShowMultiHighlightPreviewAsync: file='{FileName}', results={Results}, blocks={Blocks}, elapsed={Elapsed}ms", Path.GetFileName(filePath), results.Count, section.Blocks.Count, fileSw.ElapsedMilliseconds);
 
             // Yield to the UI thread periodically so the app stays responsive.
             if (++fileIndex % PreviewYieldBatchSize == 0)

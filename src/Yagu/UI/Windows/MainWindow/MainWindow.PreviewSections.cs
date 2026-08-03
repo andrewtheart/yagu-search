@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -8,6 +9,7 @@ using Microsoft.UI.Xaml.Media;
 using Windows.System;
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Logging;
 using System.Diagnostics;
 namespace Yagu;
 
@@ -47,6 +49,16 @@ public sealed partial class MainWindow
         public double[]? PrefixHeights;
         public int PrefixCharsPerLine;
         public double PrefixLineHeight;
+        // Lazily populated by the custom-selection path. Reusing these arrays avoids walking every Run
+        // in every preceding paragraph on each PointerMoved event (especially visible while search result
+        // streaming already keeps the UI thread busy). InvalidateParagraphIndexCache clears them together
+        // with the layout metrics whenever the block changes.
+        public Paragraph[]? TextParagraphs;
+        public int[]? TextStarts;
+        public int[]? TextLengths;
+        public int[]? NativeStarts;
+        public int[]? NativeEnds;
+        public int TextMetricsBlockCount;
     }
     private readonly Dictionary<RichTextBlock, ParagraphMetrics> _paragraphMetricsCache = new();
     private readonly Dictionary<Paragraph, List<(Run run, int column)>> _paragraphMatchRunCache = new();
@@ -89,6 +101,7 @@ public sealed partial class MainWindow
     private readonly Dictionary<RichTextBlock, int> _sectionTotalMatchCounts = new();
     private bool _previewViewChangedHooked;
     private bool _viewportMaterializePending;
+    private bool _viewportMaterializeInFlight;
     // Blocks whose section is being expanded by the scroll-driven
     // MaterializeVisibleLazySections sweep. Such sections must render their
     // content but must NOT become the active/selected section — otherwise
@@ -122,7 +135,7 @@ public sealed partial class MainWindow
         /// highlight mode to clip overlapping context windows so expansion
         /// continues directly from the last rendered line.</summary>
         public int LastRenderedLine;
-        /// <summary>True once <see cref="MaxOverflowRenderedPerSection"/> has been
+        /// <summary>True once <see cref="EffectiveMaxOverflowRenderedPerSection"/> has been
         /// reached and expansion was permanently stopped (a terminal notice is
         /// shown). Prevents further scroll/Next-match growth that would fail-fast
         /// WinUI text layout.</summary>
@@ -138,6 +151,8 @@ public sealed partial class MainWindow
     private bool _activeMatchOverlayRefreshPending;
     private int _activeMatchOverlayUpdateRequestId;
     private int _previewManualScrollVersion;
+    private int _manualScrollCancelledMatchRequestId = int.MinValue;
+    private int _manualScrollCancelledOverlayRequestId = int.MinValue;
     private bool _suppressInitialMatchAutoScroll;
     private RichTextBlock? _activeOverlayStabilityBlock;
     private double _activeOverlayLastBlockTop = double.NaN;
@@ -359,11 +374,32 @@ public sealed partial class MainWindow
     {
         UpdateAdvancedOptionsDrawerMaxHeight();
         UpdateTopExpandedPreviewMeasurements();
+        UpdateSearchProgressOverlayWidth();
     }
 
     private void OnTopExpandedPreviewLayoutSourceSizeChanged(object sender, SizeChangedEventArgs e)
     {
         UpdateTopExpandedPreviewMeasurements();
+        UpdateSearchProgressOverlayWidth();
+    }
+
+    /// <summary>
+    /// Confines the floating search-progress bar (+ percentage) to the RESULTS column width so it never
+    /// stretches across the whole window / over the preview pane. The overlay lives in the root grid and its
+    /// left edge already aligns with the results panel, so setting its width to the results panel's width
+    /// aligns the right edge (and the right-anchored "N%") to the results panel's right edge. Falls back to the
+    /// natural (full) width when the results panel is collapsed/not yet measured.
+    /// </summary>
+    private void UpdateSearchProgressOverlayWidth()
+    {
+        if (SearchProgressOverlay is null || ResultsPanelBorder is null)
+            return;
+
+        double resultsWidth = ResultsPanelBorder.Visibility == Visibility.Visible ? ResultsPanelBorder.ActualWidth : 0;
+        if (resultsWidth > 0)
+            SearchProgressOverlay.Width = resultsWidth;
+        else
+            SearchProgressOverlay.ClearValue(FrameworkElement.WidthProperty);
     }
 
     private void UpdateBottomStatusBarVisibility()
@@ -375,7 +411,10 @@ public sealed partial class MainWindow
 
         StatusBarRow.Height = showStatusBar ? GridLength.Auto : new GridLength(0);
         if (!showStatusBar)
+        {
+            HideIndexStatusHoverOverlay();
             SkipBreakdownOverlay.Visibility = Visibility.Collapsed;
+        }
         UpdateTerminalChevronVisibility();
     }
 
@@ -450,8 +489,8 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("FileGroup",
-                $"EnsureVisibleResultsForExpandedGroupAsync failed for '{group.FilePath}': {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("FileGroup").LogWarning(
+                "EnsureVisibleResultsForExpandedGroupAsync failed for '{FilePath}': {ExceptionType}: {Error}", group.FilePath, ex.GetType().Name, ex.Message);
         }
     }
 
@@ -561,8 +600,8 @@ public sealed partial class MainWindow
     {
         if (e.ClickedItem is FileGroup g && g.Count > 0)
         {
-            LogService.Instance.Info("Preview",
-                $"OnResultItemClick: no preview change file='{g.FilePath}', matchCount={g.Count}");
+            YaguLog.For("Preview").LogInformation(
+                "OnResultItemClick: no preview change file='{File}', matchCount={MatchCount}", g.FilePath, g.Count);
         }
     }
 
@@ -572,7 +611,7 @@ public sealed partial class MainWindow
     /// </summary>
     private bool TryScrollToPreviewSection(string filePath)
     {
-        LogService.Instance.Verbose("Preview", $"TryScrollToPreviewSection: looking for '{filePath}' among {PreviewSectionsPanel.Children.OfType<Expander>().Count()} sections");
+        YaguLog.For("Preview").LogDebug("TryScrollToPreviewSection: looking for '{FilePath}' among {Count} sections", filePath, PreviewSectionsPanel.Children.OfType<Expander>().Count());
         foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
         {
             if (_expanderFilePaths.TryGetValue(child, out var path)
@@ -725,10 +764,10 @@ public sealed partial class MainWindow
         ClearPreviewBlockContentBackground();
         if (PreviewSectionsPanel.Visibility == Visibility.Visible)
         {
-            LogService.Instance.Verbose("Preview", "EnsureSectionsSurface: already visible, preserving existing sections");
+            YaguLog.For("Preview").LogDebug("EnsureSectionsSurface: already visible, preserving existing sections");
             return;
         }
-        LogService.Instance.Verbose("Preview", "EnsureSectionsSurface: switching to sections mode, clearing PreviewBlock");
+        YaguLog.For("Preview").LogDebug("EnsureSectionsSurface: switching to sections mode, clearing PreviewBlock");
 
         PreviewBlock.Blocks.Clear();
         PreviewBlock.Visibility = Visibility.Collapsed;
@@ -874,10 +913,24 @@ public sealed partial class MainWindow
     private void NotePreviewManualScrollInput(string source)
     {
         _lastPreviewManualScrollTick = Environment.TickCount64;
+
+        // Precision touchpads can deliver thousands of wheel deltas per second. The first event must
+        // invalidate pending match-navigation/overlay retries, but repeating the same invalidation hides
+        // the same overlay and emits the same verbose log over and over, stealing UI time from interactive
+        // preview highlighting. Cancel again only if a new request generation was queued since the last
+        // manual-scroll event.
+        if (_matchScrollRequestId == _manualScrollCancelledMatchRequestId
+            && _activeMatchOverlayUpdateRequestId == _manualScrollCancelledOverlayRequestId)
+        {
+            return;
+        }
+
         _previewManualScrollVersion++;
         CancelPendingPreviewMatchNavigation();
+        _manualScrollCancelledMatchRequestId = _matchScrollRequestId;
+        _manualScrollCancelledOverlayRequestId = _activeMatchOverlayUpdateRequestId;
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("MatchNav", $"Preview manual scroll input: source={source}, version={_previewManualScrollVersion}");
+            YaguLog.For("MatchNav").LogDebug("Preview manual scroll input: source={Source}, version={Version}", source, _previewManualScrollVersion);
     }
 
     private bool IsPreviewManualScrollActive()
@@ -919,6 +972,7 @@ public sealed partial class MainWindow
     private void OnPreviewScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
         QueueActiveMatchOverlayRefresh();
+        UpdatePreviewCustomSelectionForViewChange();
         RefreshPreviewCustomSelectionOverlay();
         UpdateStickyFileHeader();
         TryAutoLoadMoreOnScroll();
@@ -962,6 +1016,7 @@ public sealed partial class MainWindow
 
             Expander? topMostInView = null;
             bool anyHeaderAboveViewport = false;
+            bool laterHeaderVisibleInViewport = false;
             foreach (var child in PreviewSectionsPanel.Children)
             {
                 if (child is not Expander exp) continue;
@@ -976,19 +1031,33 @@ public sealed partial class MainWindow
                 catch { continue; }
                 double expTop = topLeft.Y;
                 double expBottom = expTop + height;
-                if (expBottom <= vpTop) continue;       // entirely above
+                if (expBottom <= vpTop) continue;       // entirely above the viewport
                 if (expTop >= vpBottom) break;          // entirely below — children are in order
+
                 if (expTop < vpTop)
                 {
-                    anyHeaderAboveViewport = true;
-                    topMostInView = exp;
-                    break;                               // first visible-but-header-clipped expander wins
+                    // This section's own header is clipped above the viewport. The FIRST such
+                    // section owns the top of the viewport and is the sticky-header candidate;
+                    // keep scanning in case a later section's real header is also on screen.
+                    if (topMostInView is null)
+                    {
+                        anyHeaderAboveViewport = true;
+                        topMostInView = exp;
+                    }
+                    continue;
                 }
-                // Header is in view — no sticky needed for this section.
-                break;
+
+                // expTop >= vpTop: this section's real (Expander) header is visible in the viewport.
+                // If a candidate above it is already pinned, a real header now provides the file
+                // context, so the sticky overlay is redundant and must not double up.
+                if (topMostInView is not null)
+                    laterHeaderVisibleInViewport = true;
+                break;                                   // children are in order — nothing later is higher
             }
 
-            if (!anyHeaderAboveViewport || topMostInView is null
+            // Only one file header at any time: never pin the sticky overlay while a real
+            // section header is already visible in the viewport.
+            if (!anyHeaderAboveViewport || topMostInView is null || laterHeaderVisibleInViewport
                 || !_expanderFilePaths.TryGetValue(topMostInView, out var path))
             {
                 HideStickyFileHeader();
@@ -1016,8 +1085,8 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview",
-                $"UpdateStickyFileHeader threw: {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("Preview").LogWarning(
+                "UpdateStickyFileHeader threw: {ExceptionType}: {Error}", ex.GetType().Name, ex.Message);
         }
     }
 
@@ -1057,8 +1126,8 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview",
-                $"StickyFileHeader_Tapped threw: {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("Preview").LogWarning(
+                "StickyFileHeader_Tapped threw: {ExceptionType}: {Error}", ex.GetType().Name, ex.Message);
         }
     }
 
@@ -1137,8 +1206,8 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview",
-                $"AutoLoadMoreChunkAsync threw: {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("Preview").LogWarning(
+                "AutoLoadMoreChunkAsync threw: {ExceptionType}: {Error}", ex.GetType().Name, ex.Message);
         }
         finally
         {
@@ -1187,7 +1256,7 @@ public sealed partial class MainWindow
                 {
                     // Never grow a section past the global render ceiling; skip it
                     // so the prefetch continuation loop doesn't spin on it forever.
-                    if (ov.CeilingReached || ov.RenderedSoFar >= MaxOverflowRenderedPerSection)
+                    if (ov.CeilingReached || ov.RenderedSoFar >= EffectiveMaxOverflowRenderedPerSection)
                     {
                         MarkOverflowCeilingReached(section, ov);
                         continue;
@@ -1237,7 +1306,7 @@ public sealed partial class MainWindow
 
     /// <summary>
     /// Permanently stops overflow expansion for a section that has reached the
-    /// global <see cref="MaxOverflowRenderedPerSection"/> render ceiling,
+    /// global <see cref="EffectiveMaxOverflowRenderedPerSection"/> render ceiling,
     /// replacing its truncation notice with a terminal "open in editor" message.
     /// Idempotent — safe to call from every expansion path. The overflow state
     /// itself is kept (so the match-count denominator stays correct); only
@@ -1272,7 +1341,7 @@ public sealed partial class MainWindow
         // Past this many rendered matches WinUI's text layout fail-fasts
         // (0xc000027b / E_UNEXPECTED), worse under concurrent-search memory
         // pressure. Stop expanding and leave a terminal "open in editor" notice.
-        if (ov.CeilingReached || ov.RenderedSoFar >= MaxOverflowRenderedPerSection)
+        if (ov.CeilingReached || ov.RenderedSoFar >= EffectiveMaxOverflowRenderedPerSection)
         {
             MarkOverflowCeilingReached(section, ov);
             return;
@@ -1456,13 +1525,14 @@ public sealed partial class MainWindow
         UpdateSectionMatchNavPanels();
 
         sw.Stop();
-        LogService.Instance.Info("Preview", $"ExpandOverflowChunk(scroll): consumed={consumed}, addedEntries={addedCount}, renderedSoFar={ov.RenderedSoFar}, remaining={ov.RemainingResults.Count}, elapsed={sw.ElapsedMilliseconds}ms");
+        YaguLog.For("Preview").LogInformation("ExpandOverflowChunk(scroll): consumed={Consumed}, addedEntries={AddedEntries}, renderedSoFar={RenderedSoFar}, remaining={Remaining}, elapsed={Elapsed}ms", consumed, addedCount, ov.RenderedSoFar, ov.RemainingResults.Count, sw.ElapsedMilliseconds);
     }
 
     private void MaterializeVisibleLazySections()
     {
         try
         {
+            if (_viewportMaterializeInFlight) return;
             if (_lazySections.Count == 0) return;
             double vpH = PreviewScrollViewer.ViewportHeight;
             if (vpH <= 0) return;
@@ -1471,10 +1541,14 @@ public sealed partial class MainWindow
             // of blank/collapsed sections.
             double bufferPx = vpH * 1.5;
             var children = PreviewSectionsPanel.Children;
-            // Collect targets first so we don't mutate Expander state while
-            // walking the panel (the Expanding handler can reentrantly scroll
-            // and call back into us via ViewChanged).
-            var toExpand = new List<Expander>();
+            // Expand at most one section per sweep. Expanding a collapsed header can
+            // add thousands of pixels above later headers, invalidating every position
+            // captured during this pass. Queueing all initially-nearby headers made
+            // those now-distant sections materialize concurrently on the UI dispatcher.
+            // The Expanding handler schedules another sweep after the first section's
+            // content and layout settle, so every candidate is re-checked in its current
+            // position before any file read or RichTextBlock construction starts.
+            Expander? toExpand = null;
             for (int i = 0; i < children.Count; i++)
             {
                 if (children[i] is not Expander exp || exp.Tag is not RichTextBlock block) continue;
@@ -1500,17 +1574,15 @@ public sealed partial class MainWindow
                 // so once we're past the buffer we can stop.
                 if (itemY > vpH + bufferPx) break;
 
-                toExpand.Add(exp);
+                toExpand = exp;
+                break;
             }
 
-            // Expand each target on its own dispatcher tick so any synchronous
-            // work done by the Expanding handler (paragraph build, scroll into
-            // view, match-nav update) does not run inside the ViewChanged
-            // callback or recurse into MaterializeVisibleLazySections.
-            foreach (var exp in toExpand)
+            if (toExpand is not null)
             {
-                var captured = exp;
-                DispatcherQueue.TryEnqueue(() =>
+                var captured = toExpand;
+                _viewportMaterializeInFlight = true;
+                if (!DispatcherQueue.TryEnqueue(() =>
                 {
                     try
                     {
@@ -1524,19 +1596,27 @@ public sealed partial class MainWindow
                                 _autoMaterializingSections.Add(lazyBlock);
                             captured.IsExpanded = true;
                         }
+                        else
+                        {
+                            _viewportMaterializeInFlight = false;
+                        }
                     }
                     catch (Exception ex)
                     {
-                        LogService.Instance.Warning("Preview",
-                            $"MaterializeVisibleLazySections: IsExpanded threw: {ex.GetType().Name}: {ex.Message}");
+                        _viewportMaterializeInFlight = false;
+                        YaguLog.For("Preview").LogWarning(
+                            "MaterializeVisibleLazySections: IsExpanded threw: {ExceptionType}: {Error}", ex.GetType().Name, ex.Message);
                     }
-                });
+                }))
+                {
+                    _viewportMaterializeInFlight = false;
+                }
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview",
-                $"MaterializeVisibleLazySections: sweep threw: {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("Preview").LogWarning(
+                "MaterializeVisibleLazySections: sweep threw: {ExceptionType}: {Error}", ex.GetType().Name, ex.Message);
         }
     }
 
@@ -1549,26 +1629,46 @@ public sealed partial class MainWindow
         string? scrollToFile,
         SearchResult? scrollTarget = null)
     {
-        LogService.Instance.Info("Preview", $"PrependPreviewSectionsForFilesAsync: newFiles={newFiles.Count}, scrollToFile='{scrollToFile}'");
+        YaguLog.For("Preview").LogInformation("PrependPreviewSectionsForFilesAsync: newFiles={NewFiles}, scrollToFile='{ScrollToFile}'", newFiles.Count, scrollToFile);
         if (newFiles.Count == 0) return;
 
+        bool editorHidingPreview = PreviewEditor.Visibility == Visibility.Visible;
+        bool showPreparationOverlay = newFiles.Count > EffectivePreviewSectionPageSize / 2 && !editorHidingPreview;
+        if (showPreparationOverlay)
+        {
+            BeginPreviewContentUpdate();
+            EnsurePreviewPanelVisible();
+            ShowProgressOverlay($"Preparing {newFiles.Count:N0} files\u2026", 0);
+            // Paint the overlay before filtering/counting a large plan. Task.Yield reposts at Normal
+            // priority and can run before Render; a Low-priority dispatcher post lets Input/Render win.
+            await DispatchIdleAsync();
+        }
+
         var filesToPrepend = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
+        int preparedFileCount = 0;
         foreach (var (filePath, results) in newFiles)
         {
             if (_pendingPreviewFilePaths.Contains(filePath))
             {
-                LogService.Instance.Info("Preview", $"PrependPreviewSectionsForFilesAsync: skipping pending file '{filePath}'");
+                YaguLog.For("Preview").LogInformation("PrependPreviewSectionsForFilesAsync: skipping pending file '{FilePath}'", filePath);
                 continue;
             }
 
             if (PreviewSectionExists(filePath))
             {
-                LogService.Instance.Info("Preview", $"PrependPreviewSectionsForFilesAsync: skipping existing file '{filePath}'");
+                YaguLog.For("Preview").LogInformation("PrependPreviewSectionsForFilesAsync: skipping existing file '{FilePath}'", filePath);
                 continue;
             }
 
             _pendingPreviewFilePaths.Add(filePath);
             filesToPrepend[filePath] = results;
+
+            if (++preparedFileCount % 256 == 0)
+            {
+                if (showPreparationOverlay)
+                    UpdateProgressOverlay(Math.Min(5, preparedFileCount * 5 / newFiles.Count));
+                await YieldLowAsync();
+            }
         }
 
         if (filesToPrepend.Count == 0)
@@ -1577,6 +1677,12 @@ public sealed partial class MainWindow
                 await RevealCheckedMatchInPreviewSectionAsync(scrollTarget);
             else if (scrollToFile is not null && PreviewSectionExists(scrollToFile))
                 TryScrollToPreviewSection(scrollToFile);
+            if (showPreparationOverlay)
+            {
+                HideProgressOverlay();
+                if (_previewContentPending)
+                    CompletePreviewContentUpdate();
+            }
             return;
         }
 
@@ -1589,10 +1695,6 @@ public sealed partial class MainWindow
         Regex? rx = BuildSearchHighlightRegex();
         bool isHighlight = ViewModel.PreviewModeIndex == 1;
         int previewLines = ViewModel.PreviewContextLines;
-        AddPreviewMatchTotals(
-            filesToPrepend.Values.Sum(results => ComputeMatchCount(results, null, isHighlight, previewLines, rx)),
-            filesToPrepend.Count);
-        PreviewToolbarContent.Visibility = Visibility.Visible;
 
         // Cap the initial render at PreviewSectionPageSize. Adding 10k+
         // Expanders to a flat StackPanel can crash the WinUI layout engine
@@ -1600,11 +1702,39 @@ public sealed partial class MainWindow
         // in via "Show more" using the same machinery as LoadMoreSectionsAsync.
         var orderedFiles = filesToPrepend.ToList();
         int totalRequested = orderedFiles.Count;
+        // Exact regex recounting across a huge deferred plan was the second UI freeze in the 536k-file
+        // repro (9.7 s before the overlay appeared). Each SearchResult already represents one selected
+        // occurrence, so use its row count as the safe grand-total approximation for large plans; an
+        // individual section recomputes its exact total when it materializes.
+        bool useFastPlanCounts = totalRequested > EffectivePreviewSectionPageSize * 2;
+        var previewPlanMatchCounts = new int[totalRequested];
+        int previewPlanMatchTotal = 0;
+        for (int i = 0; i < orderedFiles.Count; i++)
+        {
+            List<SearchResult> results = orderedFiles[i].Value;
+            int count = useFastPlanCounts
+                ? results.Count(result => result.LineNumber > 0)
+                : ComputeMatchCount(results, null, isHighlight, previewLines, rx);
+            previewPlanMatchCounts[i] = count;
+            previewPlanMatchTotal = previewPlanMatchTotal > int.MaxValue - count
+                ? int.MaxValue
+                : previewPlanMatchTotal + count;
+
+            if ((i + 1) % BulkPreviewPreparationYieldInterval == 0)
+            {
+                if (showPreparationOverlay)
+                    UpdateProgressOverlay(5 + (i + 1) * 10 / totalRequested);
+                await YieldLowAsync();
+            }
+        }
+        AddPreviewMatchTotals(previewPlanMatchTotal, filesToPrepend.Count);
+        PreviewToolbarContent.Visibility = Visibility.Visible;
+
         int pageEnd = Math.Min(totalRequested, EffectivePreviewSectionPageSize);
         bool deferRemainder = pageEnd < totalRequested;
         if (deferRemainder)
-            LogService.Instance.Info("Preview",
-                $"PrependPreviewSectionsForFilesAsync: capping initial render at {pageEnd:N0}/{totalRequested:N0}; remainder deferred to 'Show more'.");
+            YaguLog.For("Preview").LogInformation(
+                "PrependPreviewSectionsForFilesAsync: capping initial render at {PageEnd:N0}/{TotalRequested:N0}; remainder deferred to 'Show more'.", pageEnd, totalRequested);
 
         // While the full-file editor covers the preview (PreviewScrollViewer is
         // Collapsed), any section we build now is NOT laid out until the surface
@@ -1615,8 +1745,6 @@ public sealed partial class MainWindow
         // only the ones in view, and TryScrollToPreviewSection expands the file
         // the toast jumps to. See note #49: never lay out many expanded sections
         // at once.
-        bool editorHidingPreview = PreviewEditor.Visibility == Visibility.Visible;
-
         bool showSpinner = (pageEnd > EffectivePreviewSectionPageSize / 2 || deferRemainder) && !editorHidingPreview;
         if (showSpinner)
             ShowProgressOverlay($"Adding {pageEnd:N0} of {totalRequested:N0} files\u2026", 0);
@@ -1661,7 +1789,9 @@ public sealed partial class MainWindow
             {
                 // Approximate match count without reading the file. Exact count
                 // is recomputed when the section materializes.
-                int lazyCount = ComputeMatchCount(results, null, isHighlight, previewLines, rx);
+                int lazyCount = useFastPlanCounts
+                    ? results.Count(result => result.LineNumber > 0)
+                    : ComputeMatchCount(results, null, isHighlight, previewLines, rx);
                 _lazySections[section] = new LazySection
                 {
                     FilePath = filePath,
@@ -1720,17 +1850,30 @@ public sealed partial class MainWindow
         // as the file-group flow.
         if (deferRemainder)
         {
-            var allSelectedRemainder = new List<SearchResult>();
-            for (int i = pageEnd; i < orderedFiles.Count; i++)
-                allSelectedRemainder.AddRange(orderedFiles[i].Value);
+            // LoadMoreSectionsAsync gets each page's results from orderedFiles; it never consumes a
+            // flattened remainder. The old duplicate list retained every deferred SearchResult a second
+            // time (multi-GB in the 536k-file repro), so keep only a non-null sentinel for auto-load state.
+            var deferredSelectionSentinel = new List<SearchResult>();
             int gen = ++_previewUpdateGen;
             // Stash deferred state so the match-nav label can include not-yet-
             // inserted matches and so scroll-to-bottom can auto-load the next chunk.
             _deferredOrderedFiles = orderedFiles;
             _deferredCursor = pageEnd;
-            _deferredAllSelected = allSelectedRemainder;
+            _deferredAllSelected = deferredSelectionSentinel;
             _deferredGen = gen;
-            AddShowMoreSectionsButton(orderedFiles, pageEnd, allSelectedRemainder, gen);
+            AddShowMoreSectionsButton(orderedFiles, pageEnd, deferredSelectionSentinel, gen);
+
+            int deferredMatches = 0;
+            for (int i = pageEnd; i < previewPlanMatchCounts.Length; i++)
+            {
+                int count = previewPlanMatchCounts[i];
+                deferredMatches = deferredMatches > int.MaxValue - count
+                    ? int.MaxValue
+                    : deferredMatches + count;
+            }
+            _cachedDeferredCountsList = orderedFiles;
+            _cachedDeferredCountsCursor = pageEnd;
+            _cachedDeferredCounts = (orderedFiles.Count - pageEnd, deferredMatches);
         }
 
         // Update match nav and file label to include the new sections.
@@ -1774,6 +1917,7 @@ public sealed partial class MainWindow
         }
         finally
         {
+            HideProgressOverlay();
             foreach (var filePath in filesToPrepend.Keys)
                 _pendingPreviewFilePaths.Remove(filePath);
             if (_previewContentPending)

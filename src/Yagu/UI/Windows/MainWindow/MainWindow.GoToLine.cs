@@ -3,6 +3,8 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Windows.System;
 using Yagu.Services;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu;
 
@@ -41,7 +43,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("GoToLine", "Editor GoToLine failed: " + ex.Message);
+            YaguLog.For("GoToLine").LogWarning("Editor GoToLine failed: {Error}", ex.Message);
         }
     }
 
@@ -52,14 +54,14 @@ public sealed partial class MainWindow
         var block = ResolveGoToLinePreviewBlock();
         if (block is null)
         {
-            LogService.Instance.Warning("GoToLine", "ResolveGoToLinePreviewBlock returned null");
+            YaguLog.For("GoToLine").LogWarning("ResolveGoToLinePreviewBlock returned null");
             return;
         }
 
         int maxLine = ComputeMaxPreviewLineNumber(block);
         if (maxLine <= 0)
         {
-            LogService.Instance.Warning("GoToLine", $"ComputeMaxPreviewLineNumber returned {maxLine}");
+            YaguLog.For("GoToLine").LogWarning("ComputeMaxPreviewLineNumber returned {MaxLine}", maxLine);
             return;
         }
 
@@ -69,11 +71,11 @@ public sealed partial class MainWindow
         var targetPara = FindParagraphForLine(block, target);
         if (targetPara is null)
         {
-            LogService.Instance.Warning("GoToLine", $"FindParagraphForLine returned null for line {target} in block with {block.Blocks.Count} paragraphs");
+            YaguLog.For("GoToLine").LogWarning("FindParagraphForLine returned null for line {Target} in block with {BlocksCount} paragraphs", target, block.Blocks.Count);
             return;
         }
 
-        LogService.Instance.Info("GoToLine", $"Scrolling to line {target}, block.Blocks.Count={block.Blocks.Count}, scrollableHeight={PreviewScrollViewer.ScrollableHeight:N1}, viewportHeight={PreviewScrollViewer.ViewportHeight:N1}, currentOffset={PreviewScrollViewer.VerticalOffset:N1}");
+        YaguLog.For("GoToLine").LogInformation("Scrolling to line {Target}, block.Blocks.Count={BlocksCount}, scrollableHeight={ScrollableHeight:N1}, viewportHeight={ViewportHeight:N1}, currentOffset={CurrentOffset:N1}", target, block.Blocks.Count, PreviewScrollViewer.ScrollableHeight, PreviewScrollViewer.ViewportHeight, PreviewScrollViewer.VerticalOffset);
 
         try
         {
@@ -81,7 +83,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("GoToLine", "Preview ScrollPreviewToLine failed: " + ex.Message);
+            YaguLog.For("GoToLine").LogWarning("Preview ScrollPreviewToLine failed: {Error}", ex.Message);
         }
     }
 

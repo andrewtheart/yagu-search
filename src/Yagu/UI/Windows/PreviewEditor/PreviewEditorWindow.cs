@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -9,6 +10,7 @@ using Microsoft.UI.Xaml.Media;
 using Windows.System;
 using Yagu.Helpers;
 using Yagu.Services;
+using Yagu.Services.Logging;
 
 namespace Yagu;
 
@@ -215,13 +217,13 @@ internal sealed class PreviewEditorWindow : Window
     /// <summary>Opens a new independent editor window for the given transferred state.</summary>
     public static PreviewEditorWindow Open(PreviewEditorWindowContext context)
     {
-        LogService.Instance.Info("PreviewEditorWindow", $"Opening pop-out editor for '{context.FilePath}' (open before={OpenWindows.Count}).");
+        YaguLog.For("PreviewEditorWindow").LogInformation("Opening pop-out editor for '{FilePath}' (open before={OpenBefore}).", context.FilePath, OpenWindows.Count);
         var window = new PreviewEditorWindow(context);
         OpenWindows.Add(window);
         window.Activate();
         window.BringToFront();
         ArrangeOpenWindows(context.OwnerHwnd, context.Arrangement);
-        LogService.Instance.Info("PreviewEditorWindow", $"Pop-out editor activated (open now={OpenWindows.Count}).");
+        YaguLog.For("PreviewEditorWindow").LogInformation("Pop-out editor activated (open now={OpenNow}).", OpenWindows.Count);
         return window;
     }
 
@@ -252,7 +254,7 @@ internal sealed class PreviewEditorWindow : Window
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("PreviewEditorWindow", $"Tile move failed: {ex.Message}");
+                YaguLog.For("PreviewEditorWindow").LogWarning("Tile move failed: {Error}", ex.Message);
             }
         }
     }
@@ -502,7 +504,7 @@ internal sealed class PreviewEditorWindow : Window
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("PreviewEditorWindow", $"CopyPath failed: {ex.Message}");
+            YaguLog.For("PreviewEditorWindow").LogWarning("CopyPath failed: {Error}", ex.Message);
         }
     }
 
@@ -548,7 +550,7 @@ internal sealed class PreviewEditorWindow : Window
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("PreviewEditorWindow", $"Save failed: {_context.FilePath}", ex);
+            YaguLog.For("PreviewEditorWindow").LogWarning(ex, "Save failed: {FilePath}", _context.FilePath);
             await YaguDialog.ShowAsync(
                 _hwnd,
                 new YaguDialogOptions

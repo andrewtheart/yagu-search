@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
@@ -11,6 +12,7 @@ using Microsoft.UI.Xaml.Media;
 using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Logging;
 
 namespace Yagu;
 
@@ -50,6 +52,21 @@ public sealed partial class MainWindow
     /// <summary>Max file sections to render in one page. Remaining are loaded on demand via "Show more".</summary>
     private const int DefaultPreviewSectionPageSize = 50;
     private int EffectivePreviewSectionPageSize => ViewModel.PreviewSectionPageSize > 0 ? ViewModel.PreviewSectionPageSize : DefaultPreviewSectionPageSize;
+
+    /// <summary>
+    /// Hard bounds on how much of a file the read-only "Full File" preview renders into its
+    /// (non-virtualized) RichTextBlock. Rendering every line of a large file creates millions of inline
+    /// XAML objects, which pins the UI thread and can exhaust memory (the app appears hung / not
+    /// responding). Past these bounds the render stops with a truncation notice; the built-in editor's
+    /// chunked, virtualized loader can still open the whole file. Configurable via Settings ▸ Editor ▸
+    /// Preview section limits (0 = default).
+    /// </summary>
+    private const int DefaultMaxFullFilePreviewRenderLines = 20_000;
+    private const long DefaultMaxFullFilePreviewRenderChars = 1_000_000;
+    private int EffectiveMaxFullFilePreviewRenderLines =>
+        ViewModel.FullFilePreviewMaxRenderLines > 0 ? ViewModel.FullFilePreviewMaxRenderLines : DefaultMaxFullFilePreviewRenderLines;
+    private long EffectiveMaxFullFilePreviewRenderChars =>
+        ViewModel.FullFilePreviewMaxRenderChars > 0 ? ViewModel.FullFilePreviewMaxRenderChars : DefaultMaxFullFilePreviewRenderChars;
 
     /// <summary>XAML paragraph chunk size for very long physical lines; all text is still rendered.</summary>
     private const int PreviewLineLayoutSegmentChars = 4096;
@@ -236,8 +253,11 @@ public sealed partial class MainWindow
     /// (<c>0xc000027b</c> / <c>E_UNEXPECTED</c>), worse under the memory pressure
     /// of a concurrent search. Once reached, expansion stops and the section
     /// directs the user to the full-file editor for the remaining matches.
+    /// Configurable via Settings ▸ Editor ▸ Preview section limits (0 = default).
     /// </summary>
-    private const int MaxOverflowRenderedPerSection = 4_000;
+    private const int DefaultMaxOverflowRenderedPerSection = 4_000;
+    private int EffectiveMaxOverflowRenderedPerSection =>
+        ViewModel.MaxRenderedMatchesPerSection > 0 ? ViewModel.MaxRenderedMatchesPerSection : DefaultMaxOverflowRenderedPerSection;
 
     // ── Gutter-height synchronization (word-wrap support) ─────────────────
     //
@@ -481,7 +501,7 @@ public sealed partial class MainWindow
 
     /// <summary>
     /// Terminal notice appended when a section reaches
-    /// <see cref="MaxOverflowRenderedPerSection"/>. Unlike
+    /// <see cref="EffectiveMaxOverflowRenderedPerSection"/>. Unlike
     /// <see cref="AppendTruncationNotice"/> it does NOT invite further loading
     /// (which would fail-fast WinUI layout); it points the user to the editor.
     /// </summary>
@@ -560,7 +580,7 @@ public sealed partial class MainWindow
         List<SearchResult> allSelected,
         int gen)
     {
-        LogService.Instance.Info("Preview", $"AutoLoadRemainingSectionsAsync: pageStart={pageStart}, totalFiles={orderedFiles.Count}, remaining={orderedFiles.Count - pageStart}, gen={gen}");
+        YaguLog.For("Preview").LogInformation("AutoLoadRemainingSectionsAsync: pageStart={PageStart}, totalFiles={TotalFiles}, remaining={Remaining}, gen={Gen}", pageStart, orderedFiles.Count, orderedFiles.Count - pageStart, gen);
         // Create a placeholder panel that LoadMoreSectionsAsync will remove.
         var placeholder = new StackPanel();
         PreviewSectionsPanel.Children.Add(placeholder);
@@ -613,7 +633,7 @@ public sealed partial class MainWindow
         List<SearchResult> allSelected,
         int gen)
     {
-        LogService.Instance.Info("Preview", $"LoadMoreSectionsAsync: pageStart={pageStart}, requestedEnd={requestedEnd}, totalFiles={orderedFiles.Count}, gen={gen}");
+        YaguLog.For("Preview").LogInformation("LoadMoreSectionsAsync: pageStart={PageStart}, requestedEnd={RequestedEnd}, totalFiles={TotalFiles}, gen={Gen}", pageStart, requestedEnd, orderedFiles.Count, gen);
         if (_previewUpdateGen != gen) return;
 
         // Remove the button panel.
@@ -853,7 +873,7 @@ public sealed partial class MainWindow
         }
 
         buildSw.Stop();
-        LogService.Instance.Info("Preview", $"BuildConcatenatedSection: results={results.Count}, rendered={renderedResults}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, activeSearch={ViewModel.IsSearching}, caps=(matches={maxMatches}, blocks={maxBlocks}), elapsed={buildSw.ElapsedMilliseconds}ms");
+        YaguLog.For("Preview").LogInformation("BuildConcatenatedSection: results={Results}, rendered={Rendered}, paragraphs={Paragraphs}, blocks={Blocks}, activeSearch={ActiveSearch}, caps=(matches={MaxMatches}, blocks={MaxBlocks}), elapsed={Elapsed}ms", results.Count, renderedResults, parasBuilt, section.Blocks.Count, ViewModel.IsSearching, maxMatches, maxBlocks, buildSw.ElapsedMilliseconds);
         LogPreviewShowMoreDiagnostics("BuildConcatenatedSection");
     }
 
@@ -875,8 +895,8 @@ public sealed partial class MainWindow
         results = results.Where(result => result.LineNumber > 0).ToList();
         if (allLines is not null && !HasReadablePreviewLine(results, allLines))
         {
-            LogService.Instance.Verbose("Preview",
-                $"BuildHighlightSection: current file contents do not contain requested line(s) for '{results[0].FilePath}', using stored match context");
+            YaguLog.For("Preview").LogDebug(
+                "BuildHighlightSection: current file contents do not contain requested line(s) for '{FilePath}', using stored match context", results[0].FilePath);
             allLines = null;
         }
 
@@ -1239,7 +1259,7 @@ public sealed partial class MainWindow
         }
 
         buildSw.Stop();
-        LogService.Instance.Info("Preview", $"BuildHighlightSection: results={results.Count}, rendered={renderedCount}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, hasAllLines={allLines != null}, activeSearch={ViewModel.IsSearching}, caps=(matches={maxMatches}, blocks={maxBlocks}), yields={yieldCount}, elapsed={buildSw.ElapsedMilliseconds}ms");
+        YaguLog.For("Preview").LogInformation("BuildHighlightSection: results={Results}, rendered={Rendered}, paragraphs={Paragraphs}, blocks={Blocks}, hasAllLines={HasAllLines}, activeSearch={ActiveSearch}, caps=(matches={MaxMatches}, blocks={MaxBlocks}), yields={Yields}, elapsed={Elapsed}ms", results.Count, renderedCount, parasBuilt, section.Blocks.Count, allLines != null, ViewModel.IsSearching, maxMatches, maxBlocks, yieldCount, buildSw.ElapsedMilliseconds);
         LogPreviewShowMoreDiagnostics("BuildHighlightSection");
     }
 
@@ -1297,7 +1317,7 @@ public sealed partial class MainWindow
             return false;
 
         var matSw = Stopwatch.StartNew();
-        LogService.Instance.Info("Preview", $"MaterializeLazySection: file='{Path.GetFileName(lazy.FilePath)}', matches={lazy.MatchCount}");
+        YaguLog.For("Preview").LogInformation("MaterializeLazySection: file='{File}', matches={Matches}", Path.GetFileName(lazy.FilePath), lazy.MatchCount);
 
         // Lazy file read: bulk inserts skip the upfront read for collapsed
         // sections. Read the single file now, on demand.
@@ -1307,8 +1327,8 @@ public sealed partial class MainWindow
             try { allLines = ReadAllLinesWithEncodingSync(lazy.FilePath); }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("Preview",
-                    $"MaterializeLazySection: read failed for '{lazy.FilePath}': {ex.GetType().Name}: {ex.Message}");
+                YaguLog.For("Preview").LogWarning(
+                    "MaterializeLazySection: read failed for '{FilePath}': {ExceptionType}: {Error}", lazy.FilePath, ex.GetType().Name, ex.Message);
                 allLines = null;
             }
         }
@@ -1321,7 +1341,7 @@ public sealed partial class MainWindow
 
         _lazyMatchCount -= lazy.MatchCount;
         matSw.Stop();
-        LogService.Instance.Info("Preview", $"MaterializeLazySection complete: file='{Path.GetFileName(lazy.FilePath)}', elapsed={matSw.ElapsedMilliseconds}ms, remainingLazy={_lazySections.Count}");
+        YaguLog.For("Preview").LogInformation("MaterializeLazySection complete: file='{File}', elapsed={Elapsed}ms, remainingLazy={RemainingLazy}", Path.GetFileName(lazy.FilePath), matSw.ElapsedMilliseconds, _lazySections.Count);
         return true;
     }
 
@@ -1336,7 +1356,7 @@ public sealed partial class MainWindow
 
         var lazyBlocks = _lazySections.Keys.ToList();
         int total = lazyBlocks.Count;
-        LogService.Instance.Info("Preview", $"MaterializeAllLazySectionsAsync: starting, total={total}");
+        YaguLog.For("Preview").LogInformation("MaterializeAllLazySectionsAsync: starting, total={Total}", total);
         ShowProgressOverlay($"Rendering {total:N0} sections\u2026", 0);
 
         try
@@ -1350,7 +1370,7 @@ public sealed partial class MainWindow
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Warning("Preview", "MaterializeLazySection failed for one section; skipping.", ex);
+                    YaguLog.For("Preview").LogWarning(ex, "MaterializeLazySection failed for one section; skipping.");
                 }
                 done++;
                 if (done % PreviewYieldBatchSize == 0 || done == total)
@@ -1367,7 +1387,7 @@ public sealed partial class MainWindow
                 }
             }
 
-            LogService.Instance.Info("Preview", $"MaterializeAllLazySectionsAsync: materialization complete, expanding sections");
+            YaguLog.For("Preview").LogInformation("MaterializeAllLazySectionsAsync: materialization complete, expanding sections");
             UpdateMatchNavPanel();
             UpdateSectionMatchNavPanels();
         }
@@ -1412,7 +1432,7 @@ public sealed partial class MainWindow
                     }
                     catch (Exception ex)
                     {
-                        LogService.Instance.Warning("Preview", "Failed to expand section.", ex);
+                        YaguLog.For("Preview").LogWarning(ex, "Failed to expand section.");
                     }
                 }
                 expanded++;
@@ -1424,7 +1444,7 @@ public sealed partial class MainWindow
         {
             _suppressExpandingHandler = false;
         }
-        LogService.Instance.Info("Preview", "MaterializeAllLazySectionsAsync: done");
+        YaguLog.For("Preview").LogInformation("MaterializeAllLazySectionsAsync: done");
     }
 
     private string[] ReadAllLinesWithEncodingSync(string filePath)
@@ -1533,7 +1553,7 @@ public sealed partial class MainWindow
         try { allLines = await ReadAllLinesWithEncodingAsync(filePath); }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview", $"Cannot read file for full-file section preview: {filePath}", ex);
+            YaguLog.For("Preview").LogWarning(ex, "Cannot read file for full-file section preview: {FilePath}", filePath);
             return;
         }
 
@@ -1571,15 +1591,40 @@ public sealed partial class MainWindow
         section.Blocks.Clear();
         InvalidateParagraphIndexCache(section);
         var sectionMatches = new List<(RichTextBlock block, Paragraph para, int matchInPara)>();
+        long renderedChars = 0;
+        int renderedLineCount = 0;
+        bool truncatedForSize = false;
         for (int i = 0; i < allLines.Length; i++)
         {
             int lineNum = i + 1;
+            // Guard against a pathologically large file: "Show full file" expands into a single,
+            // non-virtualized RichTextBlock, so rendering every line creates millions of inline objects
+            // that pin the UI thread (the app appears hung). Stop once the line/character budget is
+            // exceeded and show a notice — the built-in editor's chunked loader opens the whole file.
+            if (lineNum > EffectiveMaxFullFilePreviewRenderLines || renderedChars >= EffectiveMaxFullFilePreviewRenderChars)
+            {
+                truncatedForSize = true;
+                break;
+            }
+            string line = allLines[i];
+            // One pathological long line can blow the whole budget on its own — cap it.
+            if (line.Length > EffectiveMaxFullFilePreviewRenderChars)
+            {
+                line = line[..(int)EffectiveMaxFullFilePreviewRenderChars];
+                truncatedForSize = true;
+            }
             bool isMatch = hasContentMatches && matchLines.Contains(lineNum);
             var matchResult = isMatch
                 ? results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0]
                 : results[0];
-            AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatch, matchResult, rx, truncate: false, sectionMatches, sn, out _);
+            AddPreviewLineParagraphs(section, line, lineNum, isMatch, matchResult, rx, truncate: false, sectionMatches, sn, out _);
+            renderedChars += (long)line.Length + 1;
+            renderedLineCount = lineNum;
+            if (truncatedForSize)
+                break;
         }
+        if (truncatedForSize)
+            AddFullFilePreviewTruncationNotice(section, renderedLineCount);
 
         (Paragraph para, int matchInPara)? matchToReveal = null;
         if (sectionMatches.Count > 0)
@@ -1664,7 +1709,7 @@ public sealed partial class MainWindow
 
     private async Task ShowSingleFilePreviewAsync(SearchResult r, bool fullFile)
     {
-        LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync: file='{r.FilePath}', line={r.LineNumber}, fullFile={fullFile}");
+        YaguLog.For("Preview").LogInformation("ShowSingleFilePreviewAsync: file='{File}', line={Line}, fullFile={FullFile}", r.FilePath, r.LineNumber, fullFile);
         bool isFileNameOnlyPreview = r.LineNumber <= 0;
         fullFile |= isFileNameOnlyPreview;
         var singleSw = Stopwatch.StartNew();
@@ -1697,7 +1742,7 @@ public sealed partial class MainWindow
             try { allLines = await ReadAllLinesWithEncodingAsync(r.FilePath); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
-                LogService.Instance.Verbose("Preview", $"ShowSingleFilePreviewAsync: cannot read file '{r.FilePath}', using stored context: {ex.GetType().Name}");
+                YaguLog.For("Preview").LogDebug("ShowSingleFilePreviewAsync: cannot read file '{File}', using stored context: {ExceptionType}", r.FilePath, ex.GetType().Name);
             }
         }
 
@@ -1724,7 +1769,7 @@ public sealed partial class MainWindow
                 ? "No recognized text for this image. Turn on \u201CSearch image text\u201D and run a search to extract text."
                 : "No extracted text for this PDF. Turn on \u201CSearch PDF text\u201D and run a search to extract text.");
             singleSw.Stop();
-            LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync complete: extracted-text file with no text, elapsed={singleSw.ElapsedMilliseconds}ms");
+            YaguLog.For("Preview").LogInformation("ShowSingleFilePreviewAsync complete: extracted-text file with no text, elapsed={Elapsed}ms", singleSw.ElapsedMilliseconds);
         }
         else
         {
@@ -1734,7 +1779,7 @@ public sealed partial class MainWindow
         int maxLineLen = 0;
         foreach (var (l, _) in lines)
             if (l is not null && l.Length > maxLineLen) maxLineLen = l.Length;
-        LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync rebuild: wrapMode={ViewModel.PreviewWrapModeIndex}, segmentCap={GetEffectiveSegmentSize()}, truncate={truncatePreviewLines}, lines={lines.Count}, maxLineLen={maxLineLen}");
+        YaguLog.For("Preview").LogInformation("ShowSingleFilePreviewAsync rebuild: wrapMode={WrapMode}, segmentCap={SegmentCap}, truncate={Truncate}, lines={Lines}, maxLineLen={MaxLineLen}", ViewModel.PreviewWrapModeIndex, GetEffectiveSegmentSize(), truncatePreviewLines, lines.Count, maxLineLen);
         foreach (var (line, lineNum) in lines)
         {
             bool isMatchLine = isFileNameOnlyPreview || lineNum == r.LineNumber;
@@ -1745,7 +1790,7 @@ public sealed partial class MainWindow
             lineCount += addedParagraphs;
         }
         singleSw.Stop();
-        LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync complete: lines={lineCount}, blocks={PreviewBlock.Blocks.Count}, elapsed={singleSw.ElapsedMilliseconds}ms");
+        YaguLog.For("Preview").LogInformation("ShowSingleFilePreviewAsync complete: lines={Lines}, blocks={Blocks}, elapsed={Elapsed}ms", lineCount, PreviewBlock.Blocks.Count, singleSw.ElapsedMilliseconds);
         }
 
         }
@@ -1785,7 +1830,7 @@ public sealed partial class MainWindow
 
     private void ShowPreviewSectionsSurface()
     {
-        LogService.Instance.Info("Preview", $"ShowPreviewSectionsSurface: clearing {PreviewSectionsPanel.Children.Count} existing sections");
+        YaguLog.For("Preview").LogInformation("ShowPreviewSectionsSurface: clearing {Count} existing sections", PreviewSectionsPanel.Children.Count);
         PreviewScrollViewer.Padding = new Thickness(0, 0, 0, 0);
         PreviewBlock.Blocks.Clear();
         PreviewBlock.Visibility = Visibility.Collapsed;
@@ -2000,8 +2045,8 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("Preview",
-                $"ShowPreviewImageThumbnailAsync: failed for '{path}': {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("Preview").LogDebug(
+                "ShowPreviewImageThumbnailAsync: failed for '{Path}': {ExceptionType}: {Error}", path, ex.GetType().Name, ex.Message);
             HidePreviewImageThumbnail();
         }
     }
@@ -2105,8 +2150,8 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("Preview",
-                $"LoadSectionImageThumbnailAsync: failed for '{path}': {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("Preview").LogDebug(
+                "LoadSectionImageThumbnailAsync: failed for '{Path}': {ExceptionType}: {Error}", path, ex.GetType().Name, ex.Message);
         }
     }
 
@@ -2164,8 +2209,8 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview",
-                $"ShowFullSizeImageModalAsync: failed for '{path}': {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("Preview").LogWarning(
+                "ShowFullSizeImageModalAsync: failed for '{Path}': {ExceptionType}: {Error}", path, ex.GetType().Name, ex.Message);
         }
     }
 
@@ -2218,7 +2263,7 @@ public sealed partial class MainWindow
 
     private (RichTextBlock block, Expander expander) AddPreviewSection(string filePath, string? detail = null, List<SearchResult>? results = null, bool isExpanded = true, bool addToPanel = true)
     {
-        LogService.Instance.Verbose("Preview", $"AddPreviewSection: file='{Path.GetFileName(filePath)}', detail='{detail}', expanded={isExpanded}, addToPanel={addToPanel}");
+        YaguLog.For("Preview").LogDebug("AddPreviewSection: file='{File}', detail='{Detail}', expanded={Expanded}, addToPanel={AddToPanel}", Path.GetFileName(filePath), detail, isExpanded, addToPanel);
         bool wrap = ViewModel.PreviewWrapModeIndex == (int)Models.PreviewWrapMode.Wrap;
         string previewTextFontFamily = ResolvePreviewTextFontFamily();
         int previewTextFontSize = ResolvePreviewTextFontSize();
@@ -2384,14 +2429,23 @@ public sealed partial class MainWindow
                     if (!autoMaterialized)
                         ActivateSectionForBlock(b);
                     UpdateStickyHorizontalScrollBar();
+
+                    if (autoMaterialized)
+                    {
+                        _viewportMaterializeInFlight = false;
+                        DispatcherQueue.TryEnqueue(
+                            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                            MaterializeVisibleLazySections);
+                    }
                 }
             }
             catch (Exception ex)
             {
+                _viewportMaterializeInFlight = false;
                 // A managed exception that escapes a XAML callback fail-fasts the
                 // process via CoreMessagingXP. Catch + log so we survive.
-                LogService.Instance.Warning("Preview",
-                    $"Expander.Expanding handler threw: {ex.GetType().Name}: {ex.Message}");
+                YaguLog.For("Preview").LogWarning(
+                    "Expander.Expanding handler threw: {ExceptionType}: {Error}", ex.GetType().Name, ex.Message);
                 try { LogService.Instance.Flush(); } catch { }
             }
         };
@@ -2417,6 +2471,23 @@ public sealed partial class MainWindow
     private static int CountContentMatchResults(IEnumerable<SearchResult> results)
         => results.Count(result => result.LineNumber > 0);
 
+    /// <summary>
+    /// Resolves the foreground brush for a preview file-drawer header text run. When the configured
+    /// color is the (uncustomized) default, returns the theme's foreground brush so the header text
+    /// stays readable on the theme-aware drawer/sticky-header background in BOTH light and dark modes —
+    /// the previous hardcoded white default was invisible on the light-mode header. A user-customized
+    /// color is honored exactly as entered.
+    /// </summary>
+    private static Brush ResolvePreviewHeaderBrush(string? configuredColor, string defaultColor, string themeBrushKey)
+    {
+        if (string.IsNullOrWhiteSpace(configuredColor)
+            || string.Equals(configuredColor.Trim(), defaultColor, StringComparison.OrdinalIgnoreCase))
+            return ThemeBrush(themeBrushKey);
+
+        return new SolidColorBrush(
+            ColorStringHelper.Parse(configuredColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)));
+    }
+
     private Grid BuildPreviewSectionHeader(string filePath, string? detail, RichTextBlock? sectionBlock = null, List<SearchResult>? sectionResults = null)
     {
         var grid = new Grid
@@ -2434,11 +2505,14 @@ public sealed partial class MainWindow
             MinWidth = 0,
             ColumnSpacing = 8,
             VerticalAlignment = VerticalAlignment.Center,
+            // [icon][file name][match count][spacer] — keep the name + count clustered left next to the
+            // folder icon; the trailing star absorbs slack instead of pushing the count to the far right.
             ColumnDefinitions =
             {
                 new ColumnDefinition { Width = GridLength.Auto },
-                new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
                 new ColumnDefinition { Width = GridLength.Auto },
+                new ColumnDefinition { Width = GridLength.Auto },
+                new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
             },
         };
 
@@ -2458,11 +2532,13 @@ public sealed partial class MainWindow
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             FontSize = ViewModel.PreviewStickyHeaderFileNameFontSize,
             FontFamily = new Microsoft.UI.Xaml.Media.FontFamily(ViewModel.PreviewStickyHeaderFileNameFontFamily),
-            Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
-                ColorStringHelper.Parse(ViewModel.PreviewStickyHeaderFileNameFontColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF))),
+            Foreground = ResolvePreviewHeaderBrush(
+                ViewModel.PreviewStickyHeaderFileNameFontColor,
+                AppSettings.DefaultPreviewStickyHeaderFileNameFontColor,
+                "TextFillColorPrimaryBrush"),
             TextTrimming = TextTrimming.CharacterEllipsis,
             MinWidth = 0,
-            MaxWidth = 360,
+            MaxWidth = 720,
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
         };
@@ -2476,8 +2552,10 @@ public sealed partial class MainWindow
                 Text = detail,
                 FontSize = ViewModel.PreviewStickyHeaderDetailFontSize,
                 FontFamily = new Microsoft.UI.Xaml.Media.FontFamily(ViewModel.PreviewStickyHeaderDetailFontFamily),
-                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
-                    ColorStringHelper.Parse(ViewModel.PreviewStickyHeaderDetailFontColor, Windows.UI.Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF))),
+                Foreground = ResolvePreviewHeaderBrush(
+                    ViewModel.PreviewStickyHeaderDetailFontColor,
+                    AppSettings.DefaultPreviewStickyHeaderDetailFontColor,
+                    "TextFillColorSecondaryBrush"),
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 MaxWidth = 180,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -2560,7 +2638,7 @@ public sealed partial class MainWindow
         openBtn.Click += (_, _) =>
         {
             try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
-            catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to open in default app: {path}", ex); }
+            catch (Exception ex) { YaguLog.For("MainWindow").LogWarning(ex, "Failed to open in default app: {Path}", path); }
         };
         buttonPanel.Children.Add(openBtn);
 
@@ -2588,7 +2666,7 @@ public sealed partial class MainWindow
         explorerBtn.Click += (_, _) =>
         {
             try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = false }); }
-            catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to show in Explorer: {path}", ex); }
+            catch (Exception ex) { YaguLog.For("MainWindow").LogWarning(ex, "Failed to show in Explorer: {Path}", path); }
         };
         buttonPanel.Children.Add(explorerBtn);
 
@@ -2708,7 +2786,7 @@ public sealed partial class MainWindow
 
     private async Task ShowFullFilePreviewAsync(IReadOnlyList<FullFilePreviewTarget> targets)
     {
-        LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: {targets.Count} targets");
+        YaguLog.For("Preview").LogInformation("ShowFullFilePreviewAsync: {Count} targets", targets.Count);
         if (!TryLeavePreviewEditorForPreviewChange()) return;
 
         _previewLoadCts?.Cancel();
@@ -2741,9 +2819,9 @@ public sealed partial class MainWindow
 
                 try
                 {
-                    LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: loading file '{Path.GetFileName(target.FilePath)}', matches={target.Matches.Count}");
+                    YaguLog.For("Preview").LogInformation("ShowFullFilePreviewAsync: loading file '{File}', matches={Matches}", Path.GetFileName(target.FilePath), target.Matches.Count);
                     var document = await LoadPreviewDocumentAsync(target.FilePath, cts.Token, fileSizeLimit: EffectiveFullFilePreviewLimitBytes).ConfigureAwait(true);
-                    LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: loaded '{Path.GetFileName(target.FilePath)}', bytes={document.ByteLength:N0}, textLen={document.Text.Length:N0}");
+                    YaguLog.For("Preview").LogInformation("ShowFullFilePreviewAsync: loaded '{File}', bytes={Bytes:N0}, textLen={TextLen:N0}", Path.GetFileName(target.FilePath), document.ByteLength, document.Text.Length);
                     var section = AddFullFileSection(target, document.ByteLength);
                     _sectionMatchNavs.TryGetValue(section, out var sectionNav);
                     var renderedMatch = RenderFullFileDocument(section, target, document.Text, rx, _matchParagraphs, sectionNav, _previewResult);
@@ -2760,14 +2838,14 @@ public sealed partial class MainWindow
                 catch (OutOfMemoryException ex)
                 {
                     const string message = "Not enough memory to load this full file into the right-panel preview.";
-                    LogService.Instance.Warning("Preview", message, ex);
+                    YaguLog.For("Preview").LogWarning(ex, message);
                     var section = AddFullFileSection(target, byteLength: null);
                     AddFullFileError(section, message);
                 }
                 catch (Exception ex)
                 {
                     var message = $"Could not load full file: {ex.Message}";
-                    LogService.Instance.Warning("Preview", $"Could not load full file: {target.FilePath}", ex);
+                    YaguLog.For("Preview").LogWarning(ex, "Could not load full file: {FilePath}", target.FilePath);
                     var section = AddFullFileSection(target, byteLength: null);
                     AddFullFileError(section, message);
                 }
@@ -2819,6 +2897,25 @@ public sealed partial class MainWindow
         section.Blocks.Add(para);
     }
 
+    /// <summary>
+    /// Appends a truncation notice to a "Full File" preview section that was bounded by
+    /// <see cref="EffectiveMaxFullFilePreviewRenderLines"/> / <see cref="EffectiveMaxFullFilePreviewRenderChars"/> so a large
+    /// file cannot hang the (non-virtualized) RichTextBlock render. Directs the user to the built-in editor,
+    /// whose chunked loader opens the whole file.
+    /// </summary>
+    private static void AddFullFilePreviewTruncationNotice(RichTextBlock section, int renderedLines)
+    {
+        var para = new Paragraph { Margin = new Thickness(0, 8, 0, 0) };
+        var run = new Run
+        {
+            Text = $"\u26A0 This file is too large to fully preview here \u2014 showing the first {renderedLines:N0} lines. "
+                 + "Open it in the built-in editor (the Full File button) to view the rest.",
+        };
+        run.Foreground = new SolidColorBrush(Microsoft.UI.Colors.OrangeRed);
+        para.Inlines.Add(run);
+        section.Blocks.Add(para);
+    }
+
     private (
         (RichTextBlock block, Paragraph para, int matchInPara)? firstMatch,
         (RichTextBlock block, Paragraph para, int matchInPara)? preferredMatch)
@@ -2843,10 +2940,29 @@ public sealed partial class MainWindow
         string? line;
         int lineNumber = 1;
         bool wroteLine = false;
+        long renderedChars = 0;
+        bool truncatedForSize = false;
         (RichTextBlock block, Paragraph para, int matchInPara)? firstMatch = null;
         (RichTextBlock block, Paragraph para, int matchInPara)? preferredMatch = null;
         while ((line = reader.ReadLine()) is not null)
         {
+            // Guard against a pathologically large file: the "Full File" preview renders into a single,
+            // non-virtualized RichTextBlock, so rendering every line creates millions of inline objects that
+            // pin the UI thread and can exhaust memory (the app appears hung). Stop once the line/character
+            // budget is exceeded and show a truncation notice — the built-in editor opens the whole file.
+            if (lineNumber > EffectiveMaxFullFilePreviewRenderLines || renderedChars >= EffectiveMaxFullFilePreviewRenderChars)
+            {
+                truncatedForSize = true;
+                break;
+            }
+            // One pathological long line can blow the whole budget on its own — cap it so a single line can't
+            // hang the render (the editor's chunked loader can still show the full line).
+            if (line.Length > EffectiveMaxFullFilePreviewRenderChars)
+            {
+                line = line[..(int)EffectiveMaxFullFilePreviewRenderChars];
+                truncatedForSize = true;
+            }
+
             var isMatchLine = matchByLine.TryGetValue(lineNumber, out var matchResult);
             int beforeCount = matchParagraphs.Count;
             AddPreviewLineParagraphs(section, line, lineNumber, isMatchLine, matchResult ?? target.Matches[0], rx, truncate: false, matchParagraphs, sectionNav, out _);
@@ -2862,11 +2978,17 @@ public sealed partial class MainWindow
                 }
             }
             wroteLine = true;
+            renderedChars += (long)line.Length + 1;
             lineNumber++;
+            if (truncatedForSize)
+                break; // a single over-budget line was rendered truncated — stop here
         }
 
+        if (truncatedForSize)
+            AddFullFilePreviewTruncationNotice(section, lineNumber - 1);
+
         renderSw.Stop();
-        LogService.Instance.Info("Preview", $"RenderFullFileDocument: file='{Path.GetFileName(target.FilePath)}', lines={lineNumber - 1}, matches={matchByLine.Count}, blocks={section.Blocks.Count}, elapsed={renderSw.ElapsedMilliseconds}ms");
+        YaguLog.For("Preview").LogInformation("RenderFullFileDocument: file='{File}', lines={Lines}, matches={Matches}, blocks={Blocks}, elapsed={Elapsed}ms", Path.GetFileName(target.FilePath), lineNumber - 1, matchByLine.Count, section.Blocks.Count, renderSw.ElapsedMilliseconds);
 
         if (!wroteLine)
         {
@@ -2894,16 +3016,16 @@ public sealed partial class MainWindow
     // EnterPreviewEditorAtPointAsync, ResolveLineNumberAtPointer, ShowFullFileEditorAsync,
     // and ScrollEditorToMatch moved to MainWindow.PreviewEditor.cs.
 
-    private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken, bool enforceLimit = true, long fileSizeLimit = 0)
+    private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken, bool enforceLimit = true, long fileSizeLimit = 0, bool allowBinary = false)
     {
         long effectiveLimit = fileSizeLimit > 0 ? fileSizeLimit : 1L * 1024 * 1024 * 1024;
         var loadSw = Stopwatch.StartNew();
-        LogService.Instance.Verbose("Preview", $"LoadPreviewDocumentAsync: start file='{Path.GetFileName(filePath)}'");
+YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'", Path.GetFileName(filePath));
 
         // Handle archive entry paths: extract the entry to a memory stream
         if (ZipArchiveSearcher.IsArchivePath(filePath))
         {
-            LogService.Instance.Verbose("Preview", $"LoadPreviewDocumentAsync: archive path, delegating to LoadArchiveEntryPreviewAsync");
+            YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: archive path, delegating to LoadArchiveEntryPreviewAsync");
             return await LoadArchiveEntryPreviewAsync(filePath, cancellationToken, enforceLimit, effectiveLimit).ConfigureAwait(false);
         }
 
@@ -2927,12 +3049,18 @@ public sealed partial class MainWindow
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
 
             int probeSize = (int)Math.Min(BinaryDetector.SampleBytes, Math.Max(0, info.Length));
+            bool isBinary = false;
             if (probeSize > 0)
             {
                 var probe = new byte[probeSize];
                 int read = await stream.ReadAsync(probe.AsMemory(0, probe.Length), cancellationToken).ConfigureAwait(false);
                 if (BinaryDetector.IsBinary(probe.AsSpan(0, read)))
-                    throw new PreviewLoadException("Full-file editing is only available for non-binary text files.");
+                {
+                    if (!allowBinary)
+                        throw new PreviewLoadException("Full-file editing is only available for non-binary text files.");
+                    // Open best-effort as read-only text; binary bytes render as the replacement char '\uFFFD'.
+                    isBinary = true;
+                }
             }
 
             stream.Position = 0;
@@ -2944,8 +3072,8 @@ public sealed partial class MainWindow
             var text = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             int maxLineLength = GetMaxLineLength(text);
             loadSw.Stop();
-            LogService.Instance.Info("Preview", $"LoadPreviewDocumentAsync: done file='{Path.GetFileName(filePath)}', bytes={info.Length:N0}, textLen={text.Length:N0}, maxLineLen={maxLineLength:N0}, elapsed={loadSw.ElapsedMilliseconds}ms");
-            return new PreviewTextDocument(text, reader.CurrentEncoding, info.Length, maxLineLength);
+            YaguLog.For("Preview").LogInformation("LoadPreviewDocumentAsync: done file='{File}', bytes={Bytes:N0}, textLen={TextLen:N0}, maxLineLen={MaxLineLen:N0}, isBinary={IsBinary}, elapsed={Elapsed}ms", Path.GetFileName(filePath), info.Length, text.Length, maxLineLength, isBinary, loadSw.ElapsedMilliseconds);
+            return new PreviewTextDocument(text, reader.CurrentEncoding, info.Length, maxLineLength, isBinary);
         }
         catch (PreviewLoadException) { throw; }
         catch (UnauthorizedAccessException ex) { throw new PreviewLoadException($"Could not load full file: access denied. {ex.Message}"); }
@@ -3052,9 +3180,9 @@ public sealed partial class MainWindow
         return current > max ? current : max;
     }
 
-    private sealed record PreviewTextDocument(string Text, Encoding Encoding, long ByteLength, int MaxLineLength);
+    private sealed record PreviewTextDocument(string Text, Encoding Encoding, long ByteLength, int MaxLineLength, bool IsBinary = false);
 
-    private sealed record PreviewEditorChunk(string Text, Encoding Encoding, long TotalByteLength, long NextByteOffset, int MaxLineLength);
+    private sealed record PreviewEditorChunk(string Text, Encoding Encoding, long TotalByteLength, long NextByteOffset, int MaxLineLength, bool IsBinary = false);
 
     private sealed record FullFilePreviewTarget(string FilePath, List<SearchResult> Matches);
 
@@ -3102,7 +3230,7 @@ public sealed partial class MainWindow
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview", "Invalid highlight regex", ex);
+            YaguLog.For("Preview").LogWarning(ex, "Invalid highlight regex");
             return null;
         }
     }
@@ -3227,9 +3355,9 @@ public sealed partial class MainWindow
         if (!LogService.Instance.IsVerboseEnabled && _previewShowMoreMarkerCount == 0)
             return;
 
-        LogService.Instance.Info(
-            "PreviewShowMore",
-            $"{scope}: windows={_previewShowMoreWindowCount}, markers={_previewShowMoreMarkerCount}, prefix={_previewShowMorePrefixMarkerCount}, suffix={_previewShowMoreSuffixMarkerCount}, capped={_previewShowMoreCappedWindowCount}, configuredTrunc={LineTruncator.TruncatedLength}, effectiveTrunc={GetPreviewTruncatedLength()}, segment={GetEffectiveSegmentSize()}, wrapMode={ViewModel.PreviewWrapModeIndex}, sample={_previewShowMoreSample ?? "none"}");
+        YaguLog.For("PreviewShowMore").LogInformation(
+            "{Scope}: windows={Windows}, markers={Markers}, prefix={Prefix}, suffix={Suffix}, capped={Capped}, configuredTrunc={ConfiguredTrunc}, effectiveTrunc={EffectiveTrunc}, segment={Segment}, wrapMode={WrapMode}, sample={Sample}",
+            scope, _previewShowMoreWindowCount, _previewShowMoreMarkerCount, _previewShowMorePrefixMarkerCount, _previewShowMoreSuffixMarkerCount, _previewShowMoreCappedWindowCount, LineTruncator.TruncatedLength, GetPreviewTruncatedLength(), GetEffectiveSegmentSize(), ViewModel.PreviewWrapModeIndex, _previewShowMoreSample ?? "none");
     }
 
     private void ApplyPreviewColors()
@@ -4675,7 +4803,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             if (LogService.Instance.IsVerboseEnabled)
-                LogService.Instance.Verbose("PreviewShowMore", "Show-more hover hit-test failed", ex);
+                YaguLog.For("PreviewShowMore").LogDebug(ex, "Show-more hover hit-test failed");
         }
 
         action = default!;
@@ -4799,18 +4927,18 @@ public sealed partial class MainWindow
     private void QueuePreviewTruncatedLineExpansion(PreviewShowMoreAction action, PreviewShowMoreExpandMode mode)
     {
         var state = action.State;
-        LogService.Instance.Info(
-            "PreviewShowMore",
-            $"action mode={mode}, edge={action.Edge}, line={state.LineNumber}, window=({state.SourceStart},{state.SourceEnd}), lineLen={state.SourceLine.Length}, queued=True");
+        YaguLog.For("PreviewShowMore").LogInformation(
+            "action mode={Mode}, edge={Edge}, line={Line}, window=({SourceStart},{SourceEnd}), lineLen={LineLen}, queued=True",
+            mode, action.Edge, state.LineNumber, state.SourceStart, state.SourceEnd, state.SourceLine.Length);
 
         bool queued = DispatcherQueue.TryEnqueue(
             Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal,
             () => ExpandPreviewTruncatedLineSafely(action, mode));
         if (!queued)
         {
-            LogService.Instance.Warning(
-                "PreviewShowMore",
-                $"dispatcher enqueue failed; expanding inline for line={state.LineNumber}, edge={action.Edge}");
+            YaguLog.For("PreviewShowMore").LogWarning(
+                "dispatcher enqueue failed; expanding inline for line={Line}, edge={Edge}",
+                state.LineNumber, action.Edge);
             ExpandPreviewTruncatedLineSafely(action, mode);
         }
     }
@@ -4822,17 +4950,16 @@ public sealed partial class MainWindow
         {
             ExpandPreviewTruncatedLine(action, mode);
             sw.Stop();
-            LogService.Instance.Info(
-                "PreviewShowMore",
-                $"expand complete mode={mode}, line={action.State.LineNumber}, edge={action.Edge}, elapsedMs={sw.ElapsedMilliseconds}");
+            YaguLog.For("PreviewShowMore").LogInformation(
+                "expand complete mode={Mode}, line={Line}, edge={Edge}, elapsedMs={ElapsedMs}",
+                mode, action.State.LineNumber, action.Edge, sw.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
             sw.Stop();
-            LogService.Instance.Critical(
-                "PreviewShowMore",
-                $"expand failed mode={mode}, line={action.State.LineNumber}, edge={action.Edge}, window=({action.State.SourceStart},{action.State.SourceEnd}), elapsedMs={sw.ElapsedMilliseconds}",
-                ex);
+            YaguLog.For("PreviewShowMore").LogCritical(ex,
+                "expand failed mode={Mode}, line={Line}, edge={Edge}, window=({SourceStart},{SourceEnd}), elapsedMs={ElapsedMs}",
+                mode, action.State.LineNumber, action.Edge, action.State.SourceStart, action.State.SourceEnd, sw.ElapsedMilliseconds);
         }
     }
 
@@ -4894,9 +5021,9 @@ public sealed partial class MainWindow
         if (newStart == state.SourceStart && newEnd == state.SourceEnd)
             return;
 
-        LogService.Instance.Info(
-            "PreviewShowMore",
-            $"expand edge={action.Edge}, line={state.LineNumber}, old=({oldStart},{oldEnd}), new=({newStart},{newEnd}), lineLen={lineLength}, maxWindow={maxWindowLength}");
+        YaguLog.For("PreviewShowMore").LogInformation(
+            "expand edge={Edge}, line={Line}, old=({OldStart},{OldEnd}), new=({NewStart},{NewEnd}), lineLen={LineLen}, maxWindow={MaxWindow}",
+            action.Edge, state.LineNumber, oldStart, oldEnd, newStart, newEnd, lineLength, maxWindowLength);
         var scrollSnapshot = CapturePreviewShowMoreScrollPosition(action);
         try
         {
@@ -4982,7 +5109,7 @@ public sealed partial class MainWindow
                     ApplyPreviewShowMoreScrollPosition(snapshot);
                 }))
         {
-            LogService.Instance.Warning("PreviewShowMore", "failed to queue deferred scroll restore after expansion");
+            YaguLog.For("PreviewShowMore").LogWarning("failed to queue deferred scroll restore after expansion");
         }
     }
 

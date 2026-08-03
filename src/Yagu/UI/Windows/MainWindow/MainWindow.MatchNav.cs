@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
@@ -6,6 +7,7 @@ using Microsoft.UI.Xaml.Media;
 using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Logging;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -62,8 +64,8 @@ public sealed partial class MainWindow
                         sb.Append(System.FormattableString.Invariant($"[{inline.GetType().Name}] "));
                     }
                 }
-                LogService.Instance.Warning("MatchNav",
-                    $"BoxMatchRun: NO BOXABLE RUN line={boxLine}, matchInPara={matchInPara}, matchRuns={matches.Count}, inlines={para.Inlines.Count}, runs={sb}");
+                YaguLog.For("MatchNav").LogWarning(
+                    "BoxMatchRun: NO BOXABLE RUN line={BoxLine}, matchInPara={MatchInPara}, matchRuns={MatchRuns}, inlines={Inlines}, runs={Runs}", boxLine, matchInPara, matches.Count, para.Inlines.Count, sb);
                 return;
             }
         }
@@ -80,7 +82,7 @@ public sealed partial class MainWindow
             int paragraphIndex = _matchParagraphs.Count > 0
                 ? GetParagraphIndex(_matchParagraphs[Math.Clamp(_currentMatchIndex, 0, _matchParagraphs.Count - 1)].block, para)
                 : -1;
-            LogService.Instance.Verbose("MatchNav", $"BoxMatchRun: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}/{matches.Count}, col={column}, runText='{run.Text}', boundaryFlash={boundaryFlash}");
+            YaguLog.For("MatchNav").LogDebug("BoxMatchRun: idx={Idx}, paraIdx={ParaIdx}, matchInPara={MatchInPara}/{MatchCount}, col={Col}, runText='{RunText}', boundaryFlash={BoundaryFlash}", _currentMatchIndex, paragraphIndex, matchInPara, matches.Count, column, run.Text, boundaryFlash);
         }
     }
 
@@ -246,7 +248,7 @@ public sealed partial class MainWindow
     {
         if (_activeMatchHighlight is null) return;
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("MatchNav", $"UnboxCurrentMatch: idx={_currentMatchIndex}, caller={caller}");
+            YaguLog.For("MatchNav").LogDebug("UnboxCurrentMatch: idx={Idx}, caller={Caller}", _currentMatchIndex, caller);
         _activeMatchHighlight = null;
     }
 
@@ -261,8 +263,8 @@ public sealed partial class MainWindow
     {
         int requestId = ++_matchScrollRequestId;
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("MatchNav",
-                $"ScrollPreviewToLine: entry idx={_currentMatchIndex}, requestId={requestId}, mode=estimated, forceCenter={forceCenter}");
+            YaguLog.For("MatchNav").LogDebug(
+                "ScrollPreviewToLine: entry idx={Idx}, requestId={RequestId}, mode=estimated, forceCenter={ForceCenter}", _currentMatchIndex, requestId, forceCenter);
 
         if (TryScrollPreviewToLine(block, targetPara, verifyAfterScroll: false, forceCenter, out _))
             return;
@@ -309,8 +311,8 @@ public sealed partial class MainWindow
         int rescrolls = 0;
         int consecutiveOnScreen = 0;
         int layoutPasses = 0;
-        LogService.Instance.Info("MatchNav",
-            $"ScrollAfterMaterialization: attach idx={idxAtAttach}, requestId={requestId}");
+        YaguLog.For("MatchNav").LogInformation(
+            "ScrollAfterMaterialization: attach idx={Idx}, requestId={RequestId}", idxAtAttach, requestId);
         handler = (_, __) =>
         {
             if (handler is null) return;
@@ -380,14 +382,14 @@ public sealed partial class MainWindow
                         idleStopwatch.Restart();
                         consecutiveOnScreen = 0;
                         bool accepted2 = ChangePreviewViewForMatchNavigation(null, target);
-                        LogService.Instance.Info("MatchNav",
-                            $"ScrollAfterMaterialization: detach-rescue idx={idxAtAttach}, snapshot={snapshot}, fromY={vpTop2:N1}, toY={target:N1}, accepted={accepted2}, rescrolls={rescrolls}, total={hardCapStopwatch.ElapsedMilliseconds}ms (staying attached)");
+                        YaguLog.For("MatchNav").LogInformation(
+                            "ScrollAfterMaterialization: detach-rescue idx={Idx}, snapshot={Snapshot}, fromY={FromY:N1}, toY={ToY:N1}, accepted={Accepted}, rescrolls={Rescrolls}, total={Total}ms (staying attached)", idxAtAttach, snapshot, vpTop2, target, accepted2, rescrolls, hardCapStopwatch.ElapsedMilliseconds);
                         return; // do NOT detach \u2014 keep watching
                     }
                 }
 
-                LogService.Instance.Info("MatchNav",
-                    $"ScrollAfterMaterialization: detach idx={idxAtAttach}, reason={reason}, layoutPasses={layoutPasses}, rescrolls={rescrolls}, idle={idleStopwatch.ElapsedMilliseconds}ms, total={hardCapStopwatch.ElapsedMilliseconds}ms, finalVpTop={PreviewScrollViewer.VerticalOffset:N1}, snapshot={snapshot}");
+                YaguLog.For("MatchNav").LogInformation(
+                    "ScrollAfterMaterialization: detach idx={Idx}, reason={Reason}, layoutPasses={LayoutPasses}, rescrolls={Rescrolls}, idle={Idle}ms, total={Total}ms, finalVpTop={FinalVpTop:N1}, snapshot={Snapshot}", idxAtAttach, reason, layoutPasses, rescrolls, idleStopwatch.ElapsedMilliseconds, hardCapStopwatch.ElapsedMilliseconds, PreviewScrollViewer.VerticalOffset, snapshot);
                 PreviewScrollViewer.LayoutUpdated -= handler;
                 handler = null;
                 return;
@@ -416,8 +418,8 @@ public sealed partial class MainWindow
                                 rescrolls++;
                                 idleStopwatch.Restart();
                                 bool accepted = ChangePreviewViewForMatchNavigation(null, target);
-                                LogService.Instance.Info("MatchNav",
-                                    $"ScrollAfterMaterialization: post-layout re-center #{rescrolls} idx={_currentMatchIndex}, runY={runY:N1}, vpTop={vpTop:N1}, vpH={vpH:N1}, toY={target:N1}, accepted={accepted}, total={hardCapStopwatch.ElapsedMilliseconds}ms");
+                                YaguLog.For("MatchNav").LogInformation(
+                                    "ScrollAfterMaterialization: post-layout re-center #{Rescrolls} idx={Idx}, runY={RunY:N1}, vpTop={VpTop:N1}, vpH={VpH:N1}, toY={ToY:N1}, accepted={Accepted}, total={Total}ms", rescrolls, _currentMatchIndex, runY, vpTop, vpH, target, accepted, hardCapStopwatch.ElapsedMilliseconds);
                             }
                         }
                         else
@@ -431,8 +433,8 @@ public sealed partial class MainWindow
                             const int kMinElapsedForEarlyDetachMs = 600;
                             if (consecutiveOnScreen >= 2 && hardCapStopwatch.ElapsedMilliseconds >= kMinElapsedForEarlyDetachMs)
                             {
-                                LogService.Instance.Info("MatchNav",
-                                    $"ScrollAfterMaterialization: detach idx={idxAtAttach}, reason=stable-on-screen, layoutPasses={layoutPasses}, rescrolls={rescrolls}, idle={idleStopwatch.ElapsedMilliseconds}ms, total={hardCapStopwatch.ElapsedMilliseconds}ms, finalVpTop={PreviewScrollViewer.VerticalOffset:N1}, runY={runY:N1}");
+                                YaguLog.For("MatchNav").LogInformation(
+                                    "ScrollAfterMaterialization: detach idx={Idx}, reason=stable-on-screen, layoutPasses={LayoutPasses}, rescrolls={Rescrolls}, idle={Idle}ms, total={Total}ms, finalVpTop={FinalVpTop:N1}, runY={RunY:N1}", idxAtAttach, layoutPasses, rescrolls, idleStopwatch.ElapsedMilliseconds, hardCapStopwatch.ElapsedMilliseconds, PreviewScrollViewer.VerticalOffset, runY);
                                 PreviewScrollViewer.LayoutUpdated -= handler;
                                 handler = null;
                             }
@@ -494,8 +496,8 @@ public sealed partial class MainWindow
                                 idleStopwatch.Restart();
                                 consecutiveOnScreen = 0;
                                 bool accepted = ChangePreviewViewForMatchNavigation(null, target);
-                                LogService.Instance.Info("MatchNav",
-                                    $"ScrollAfterMaterialization: poll re-center #{rescrolls} idx={_currentMatchIndex}, runY={runY:N1}, vpTop={vpTop:N1}, vpH={vpH:N1}, toY={target:N1}, accepted={accepted}, total={hardCapStopwatch.ElapsedMilliseconds}ms");
+                                YaguLog.For("MatchNav").LogInformation(
+                                    "ScrollAfterMaterialization: poll re-center #{Rescrolls} idx={Idx}, runY={RunY:N1}, vpTop={VpTop:N1}, vpH={VpH:N1}, toY={ToY:N1}, accepted={Accepted}, total={Total}ms", rescrolls, _currentMatchIndex, runY, vpTop, vpH, target, accepted, hardCapStopwatch.ElapsedMilliseconds);
                             }
                         }
                     }
@@ -523,7 +525,7 @@ public sealed partial class MainWindow
                 return;
             }
 
-            LogService.Instance.Verbose("Preview", $"ScrollPreviewToLine: skipped after layout retries ({reason})");
+            YaguLog.For("Preview").LogDebug("ScrollPreviewToLine: skipped after layout retries ({Reason})", reason);
         });
     }
 
@@ -707,7 +709,7 @@ public sealed partial class MainWindow
                     bool accepted = requested && ChangePreviewViewForMatchNavigation(null, actualOffset);
 
                     if (LogService.Instance.IsVerboseEnabled)
-                        LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=actual-run, source={actualSource}, forceCenter=True, requested={requested}, accepted={accepted}, fromY={beforeActualVerticalOffset:N1}, targetY={actualOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
+                        YaguLog.For("MatchNav").LogDebug("ScrollPreviewToLine: idx={Idx}, mode=actual-run, source={Source}, forceCenter=True, requested={Requested}, accepted={Accepted}, fromY={FromY:N1}, targetY={TargetY:N1}, viewportH={ViewportH:N1}", _currentMatchIndex, actualSource, requested, accepted, beforeActualVerticalOffset, actualOffset, PreviewScrollViewer.ViewportHeight);
 
                     ScrollMatchHorizontallyIntoView(block, targetPara);
                     QueueActiveMatchOverlayUpdate(block, targetPara, actualOffset);
@@ -731,7 +733,7 @@ public sealed partial class MainWindow
                 bool acceptedEstimated = requestedEstimated && ChangePreviewViewForMatchNavigation(null, estimatedOffset);
 
                 if (LogService.Instance.IsVerboseEnabled)
-                    LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=estimated-active, forceCenter=True, requested={requestedEstimated}, accepted={acceptedEstimated}, fromY={beforeEstimatedVerticalOffset:N1}, targetY={estimatedOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
+                    YaguLog.For("MatchNav").LogDebug("ScrollPreviewToLine: idx={Idx}, mode=estimated-active, forceCenter=True, requested={Requested}, accepted={Accepted}, fromY={FromY:N1}, targetY={TargetY:N1}, viewportH={ViewportH:N1}", _currentMatchIndex, requestedEstimated, acceptedEstimated, beforeEstimatedVerticalOffset, estimatedOffset, PreviewScrollViewer.ViewportHeight);
 
                 ScrollMatchHorizontallyIntoView(block, targetPara);
                 QueueActiveMatchOverlayUpdate(block, targetPara, estimatedOffset);
@@ -746,7 +748,7 @@ public sealed partial class MainWindow
                 bool acceptedParagraph = requestedParagraph && ChangePreviewViewForMatchNavigation(null, paragraphOffset);
 
                 if (LogService.Instance.IsVerboseEnabled)
-                    LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=actual-paragraph, source={paragraphOffsetSource}, forceCenter=True, requested={requestedParagraph}, accepted={acceptedParagraph}, fromY={beforeParagraphVerticalOffset:N1}, targetY={paragraphOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
+                    YaguLog.For("MatchNav").LogDebug("ScrollPreviewToLine: idx={Idx}, mode=actual-paragraph, source={Source}, forceCenter=True, requested={Requested}, accepted={Accepted}, fromY={FromY:N1}, targetY={TargetY:N1}, viewportH={ViewportH:N1}", _currentMatchIndex, paragraphOffsetSource, requestedParagraph, acceptedParagraph, beforeParagraphVerticalOffset, paragraphOffset, PreviewScrollViewer.ViewportHeight);
 
                 ScrollMatchHorizontallyIntoView(block, targetPara);
                 QueueActiveMatchOverlayUpdate(block, targetPara, paragraphOffset);
@@ -768,7 +770,7 @@ public sealed partial class MainWindow
             double targetVerticalOffset = targetLineCenter - PreviewScrollViewer.ViewportHeight / 2;
 
             if (LogService.Instance.IsVerboseEnabled)
-                LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine(estimated): idx={_currentMatchIndex}, para={paragraphIndex}/{block.Blocks.Count}, wrapOffset={wrappedLineOffset:N1}, blockTop={blockTop:N1}, lineH={lineHeight:N1}, cumulH={cumulativeHeight:N1}");
+                YaguLog.For("MatchNav").LogDebug("ScrollPreviewToLine(estimated): idx={Idx}, para={Para}/{BlockCount}, wrapOffset={WrapOffset:N1}, blockTop={BlockTop:N1}, lineH={LineH:N1}, cumulH={CumulH:N1}", _currentMatchIndex, paragraphIndex, block.Blocks.Count, wrappedLineOffset, blockTop, lineHeight, cumulativeHeight);
 
             targetVerticalOffset = Math.Clamp(targetVerticalOffset, 0, PreviewScrollViewer.ScrollableHeight);
             double beforeVerticalOffset = PreviewScrollViewer.VerticalOffset;
@@ -792,7 +794,7 @@ public sealed partial class MainWindow
             }
 
             if (LogService.Instance.IsVerboseEnabled)
-                LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=estimated, forceCenter={forceCenter}, verticalScroll={verticalScrollNeeded}, requested={verticalScrollRequested}, accepted={verticalScrollAccepted}, fromY={beforeVerticalOffset:N1}, targetY={targetVerticalOffset:N1}, overlayY={overlayVerticalOffset:N1}, lineCenter={targetLineCenter:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
+                YaguLog.For("MatchNav").LogDebug("ScrollPreviewToLine: idx={Idx}, mode=estimated, forceCenter={ForceCenter}, verticalScroll={VerticalScroll}, requested={Requested}, accepted={Accepted}, fromY={FromY:N1}, targetY={TargetY:N1}, overlayY={OverlayY:N1}, lineCenter={LineCenter:N1}, viewportH={ViewportH:N1}", _currentMatchIndex, forceCenter, verticalScrollNeeded, verticalScrollRequested, verticalScrollAccepted, beforeVerticalOffset, targetVerticalOffset, overlayVerticalOffset, targetLineCenter, PreviewScrollViewer.ViewportHeight);
 
             ScrollMatchHorizontallyIntoView(block, targetPara);
             QueueActiveMatchOverlayUpdate(block, targetPara, overlayVerticalOffset);
@@ -1081,7 +1083,7 @@ public sealed partial class MainWindow
                 if (LogService.Instance.IsVerboseEnabled)
                 {
                     int paragraphIndex = GetParagraphIndex(block, targetPara);
-                    LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: retry unsettled section layout idx={_currentMatchIndex}, paraIdx={paragraphIndex}, reason={layoutReason}");
+                    YaguLog.For("MatchNav").LogDebug("ActiveOverlay: retry unsettled section layout idx={Idx}, paraIdx={ParaIdx}, reason={Reason}", _currentMatchIndex, paragraphIndex, layoutReason);
                 }
                 return false;
             }
@@ -1094,6 +1096,8 @@ public sealed partial class MainWindow
                 ActiveMatchOverlay.Visibility = Visibility.Visible;
                 return false;
             }
+
+            GetPreviewTextOverlayBounds(block, viewportWidth, out double textLeft, out double textRight);
 
             var rect = targetRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
             if (!IsUsableTextRect(rect))
@@ -1253,7 +1257,7 @@ public sealed partial class MainWindow
                     if (LogService.Instance.IsVerboseEnabled)
                     {
                         int paragraphIndex = GetParagraphIndex(block, targetPara);
-                        LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: centering requested idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, fromY={currentVerticalOffset:N1}, toY={actualTargetVerticalOffset:N1}; waiting for settled layout");
+                        YaguLog.For("MatchNav").LogDebug("ActiveOverlay: centering requested idx={Idx}, paraIdx={ParaIdx}, matchInPara={MatchInPara}, fromY={FromY:N1}, toY={ToY:N1}; waiting for settled layout", _currentMatchIndex, paragraphIndex, matchInPara, currentVerticalOffset, actualTargetVerticalOffset);
                     }
                     return false;
                 }
@@ -1265,7 +1269,7 @@ public sealed partial class MainWindow
                     if (LogService.Instance.IsVerboseEnabled)
                     {
                         int paragraphIndex = GetParagraphIndex(block, targetPara);
-                        LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: retry centering idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedVerticalOffset.Value:N1}, actualTargetY={actualTargetVerticalOffset:N1}");
+                        YaguLog.For("MatchNav").LogDebug("ActiveOverlay: retry centering idx={Idx}, paraIdx={ParaIdx}, matchInPara={MatchInPara}, scrollY={ScrollY:N1}, expectedScrollY={ExpectedScrollY:N1}, actualTargetY={ActualTargetY:N1}", _currentMatchIndex, paragraphIndex, matchInPara, currentVerticalOffset, expectedVerticalOffset.Value, actualTargetVerticalOffset);
                     }
                     return false;
                 }
@@ -1292,11 +1296,31 @@ public sealed partial class MainWindow
                 }
             }
 
+            if (effectiveWrappedMarkerRects is { Count: > 0 })
+            {
+                var clippedMarkerRects = new List<Windows.Foundation.Rect>(effectiveWrappedMarkerRects.Count);
+                foreach (var markerRect in effectiveWrappedMarkerRects)
+                {
+                    double clippedLeft = Math.Max(markerRect.X, textLeft);
+                    double clippedRight = Math.Min(markerRect.X + markerRect.Width, textRight);
+                    if (clippedRight > clippedLeft)
+                    {
+                        clippedMarkerRects.Add(new Windows.Foundation.Rect(
+                            clippedLeft,
+                            markerRect.Y,
+                            clippedRight - clippedLeft,
+                            markerRect.Height));
+                    }
+                }
+
+                effectiveWrappedMarkerRects = clippedMarkerRects.Count > 0 ? clippedMarkerRects : null;
+            }
+
             double viewportGuard = Math.Min(40, Math.Max(8, markerHeight * 0.75));
-            bool markerOutsideViewport = effectiveWrappedMarkerRects is { Count: > 1 }
+            bool markerOutsideViewport = effectiveWrappedMarkerRects is { Count: > 0 }
                 ? effectiveWrappedMarkerRects.Any(markerRect => markerRect.Y < viewportTop || markerRect.Y + markerRect.Height > viewportBottom)
                 : overlayTop < viewportTop || overlayTop + markerHeight > viewportBottom;
-            bool markerTooCloseToEdge = effectiveWrappedMarkerRects is { Count: > 1 }
+            bool markerTooCloseToEdge = effectiveWrappedMarkerRects is { Count: > 0 }
                 ? effectiveWrappedMarkerRects.Any(markerRect => markerRect.Y < viewportTop + viewportGuard || markerRect.Y + markerRect.Height > viewportBottom - viewportGuard)
                 : overlayTop < viewportTop + viewportGuard || overlayTop + markerHeight > viewportBottom - viewportGuard;
             if ((markerOutsideViewport || (expectedVerticalOffset.HasValue && markerTooCloseToEdge)) && retryIfCenterRejected)
@@ -1345,7 +1369,7 @@ public sealed partial class MainWindow
                     if (LogService.Instance.IsVerboseEnabled)
                     {
                         int paragraphIndex = GetParagraphIndex(block, targetPara);
-                        LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: edge correction idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, markerTop={overlayTop:N1}, markerH={markerHeight:N1}, viewportTop={viewportTop:N1}, viewportBottom={viewportBottom:N1}, viewportH={viewportHeight:N1}, fromY={currentVerticalOffset:N1}, toY={correctiveTarget:N1}, accepted={accepted}");
+                        YaguLog.For("MatchNav").LogDebug("ActiveOverlay: edge correction idx={Idx}, paraIdx={ParaIdx}, matchInPara={MatchInPara}, markerTop={MarkerTop:N1}, markerH={MarkerH:N1}, viewportTop={ViewportTop:N1}, viewportBottom={ViewportBottom:N1}, viewportH={ViewportH:N1}, fromY={FromY:N1}, toY={ToY:N1}, accepted={Accepted}", _currentMatchIndex, paragraphIndex, matchInPara, overlayTop, markerHeight, viewportTop, viewportBottom, viewportHeight, currentVerticalOffset, correctiveTarget, accepted);
                     }
                     return false;
                 }
@@ -1392,30 +1416,41 @@ public sealed partial class MainWindow
                 if (LogService.Instance.IsVerboseEnabled)
                 {
                     int paragraphIndex = GetParagraphIndex(block, targetPara);
-                    LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: rejecting offscreen marker idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, markerTop={overlayTop:N1}, markerH={markerHeight:N1}, viewportTop={viewportTop:N1}, viewportBottom={viewportBottom:N1}, viewportH={viewportHeight:N1}, scrollY={currentVerticalOffset:N1}");
+                    YaguLog.For("MatchNav").LogDebug("ActiveOverlay: rejecting offscreen marker idx={Idx}, paraIdx={ParaIdx}, matchInPara={MatchInPara}, markerTop={MarkerTop:N1}, markerH={MarkerH:N1}, viewportTop={ViewportTop:N1}, viewportBottom={ViewportBottom:N1}, viewportH={ViewportH:N1}, scrollY={ScrollY:N1}", _currentMatchIndex, paragraphIndex, matchInPara, overlayTop, markerHeight, viewportTop, viewportBottom, viewportHeight, currentVerticalOffset);
                 }
                 return false;
             }
 
-            bool markerFullyOutside = point.X + markerWidth <= 0 || point.X >= viewportWidth;
+            bool markerFullyOutside = point.X + markerWidth <= textLeft || point.X >= textRight;
+            // In NoWrap, keep the active match comfortably inside the viewport (centered) rather than
+            // clipped hard against the left/right edge. When the marker is partially off-screen at an
+            // edge, the band would be clamped to the viewport border and visually spill over it, so
+            // horizontally center the match. ScrollMatchHorizontallyIntoView self-guards (no-op when the
+            // match is already comfortably visible); if it scrolls, this overlay geometry is now stale,
+            // so bail and let the queued retry redraw the band at the new, centered offset.
+            bool markerClippedAtEdge = point.X < textLeft || point.X + markerWidth > textRight;
+            if (!ViewModel.PreviewWordWrap && markerClippedAtEdge && retryIfCenterRejected
+                && ScrollMatchHorizontallyIntoView(block, targetPara))
+            {
+                return false;
+            }
+
             if (!ViewModel.PreviewWordWrap && markerFullyOutside)
             {
-                if (retryIfCenterRejected)
-                    ScrollMatchHorizontallyIntoView(block, targetPara);
-
                 if (LogService.Instance.IsVerboseEnabled)
                 {
                     int paragraphIndex = GetParagraphIndex(block, targetPara);
-                    LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: rejecting horizontally offscreen marker idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, pointX={point.X:N1}, markerW={markerWidth:N1}, viewportW={viewportWidth:N1}, retry={retryIfCenterRejected}");
+                    YaguLog.For("MatchNav").LogDebug("ActiveOverlay: rejecting horizontally offscreen marker idx={Idx}, paraIdx={ParaIdx}, matchInPara={MatchInPara}, pointX={PointX:N1}, markerW={MarkerW:N1}, viewportW={ViewportW:N1}, retry={Retry}", _currentMatchIndex, paragraphIndex, matchInPara, point.X, markerWidth, viewportWidth, retryIfCenterRejected);
                 }
                 return false;
             }
 
             ClearActiveMatchExtraWordMarkers();
 
-            // Clip the word marker to the visible overlay area.
-            double clippedMarkerLeft = Math.Max(point.X, 0);
-            double clippedMarkerRight = Math.Min(point.X + markerWidth, viewportWidth);
+            // Clip Canvas children to the active section's actual text viewport. The outer preview
+            // is wider than each section scroller, and Canvas does not clip its children itself.
+            double clippedMarkerLeft = Math.Max(point.X, textLeft);
+            double clippedMarkerRight = Math.Min(point.X + markerWidth, textRight);
             double visibleMarkerWidth = Math.Max(0, clippedMarkerRight - clippedMarkerLeft);
             double markerLeft = clippedMarkerLeft;
 
@@ -1424,16 +1459,16 @@ public sealed partial class MainWindow
             // Inflate the band a couple of pixels on each side so its border sits in the gap beside
             // the glyphs instead of overlapping (and visually clipping) the first/last letter.
             const double bandHorizontalInset = 2.0;
-            double bandLeft = Math.Max(0, markerLeft - bandHorizontalInset);
-            double bandRight = Math.Min(viewportWidth, markerLeft + visibleMarkerWidth + bandHorizontalInset);
-            double bandWidth = Math.Max(visibleMarkerWidth, bandRight - bandLeft);
+            double bandLeft = Math.Max(textLeft, markerLeft - bandHorizontalInset);
+            double bandRight = Math.Min(textRight, markerLeft + visibleMarkerWidth + bandHorizontalInset);
+            double bandWidth = Math.Max(0, bandRight - bandLeft);
 
             ActiveMatchBand.Height = markerHeight;
             ActiveMatchBand.Width = bandWidth;
             Canvas.SetTop(ActiveMatchBand, overlayTop);
             Canvas.SetLeft(ActiveMatchBand, bandLeft);
 
-            if (effectiveWrappedMarkerRects is { Count: > 1 })
+            if (effectiveWrappedMarkerRects is { Count: > 0 })
             {
                 ApplyActiveMatchMarkerRect(ActiveMatchWordMarker, effectiveWrappedMarkerRects[0]);
                 for (int i = 1; i < effectiveWrappedMarkerRects.Count; i++)
@@ -1449,6 +1484,7 @@ public sealed partial class MainWindow
                 if (visibleMarkerWidth > 0)
                 {
                     ActiveMatchWordMarker.Height = markerHeight;
+                    ActiveMatchWordMarker.MinWidth = Math.Min(12, visibleMarkerWidth);
                     ActiveMatchWordMarker.Width = visibleMarkerWidth;
                     Canvas.SetTop(ActiveMatchWordMarker, overlayTop);
                     Canvas.SetLeft(ActiveMatchWordMarker, markerLeft);
@@ -1507,7 +1543,7 @@ public sealed partial class MainWindow
             {
                 int paragraphIndex = GetParagraphIndex(block, targetPara);
                 string expectedScroll = expectedVerticalOffset.HasValue ? expectedVerticalOffset.Value.ToString("N1", CultureInfo.InvariantCulture) : "actual";
-                LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, rect=({rect.X:N1},{rect.Y:N1},{rect.Width:N1},{rect.Height:N1}), endRect=({endRect.X:N1},{endRect.Y:N1},{endRect.Width:N1},{endRect.Height:N1}), point=({point.X:N1},{point.Y:N1}), scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedScroll}, effectiveScrollY={effectiveVerticalOffset:N1}, centeredActual={centeredFromActualRun}, centerAccepted={actualCenterAccepted}, endRectUsed={usedEndRect}, wrapPointEstimateUsed={usedWrappedPointEstimate}, wrapEstimateUsed={usedWrappedEstimate}, wrapSegments={effectiveWrappedMarkerRects?.Count ?? 0} {wrappedMarkerDetails}, marker=({markerLeft:N1},{overlayTop:N1},{visibleMarkerWidth:N1},{markerHeight:N1}), unclampedMarkerW={markerWidth:N1}, text='{targetRun.Text}'");
+                YaguLog.For("MatchNav").LogDebug("ActiveOverlay: idx={Idx}, paraIdx={ParaIdx}, matchInPara={MatchInPara}, rect=({RectX:N1},{RectY:N1},{RectW:N1},{RectH:N1}), endRect=({EndRectX:N1},{EndRectY:N1},{EndRectW:N1},{EndRectH:N1}), point=({PointX:N1},{PointY:N1}), scrollY={ScrollY:N1}, expectedScrollY={ExpectedScrollY}, effectiveScrollY={EffectiveScrollY:N1}, centeredActual={CenteredActual}, centerAccepted={CenterAccepted}, endRectUsed={EndRectUsed}, wrapPointEstimateUsed={WrapPointEstimateUsed}, wrapEstimateUsed={WrapEstimateUsed}, wrapSegments={WrapSegments} {WrapDetails}, marker=({MarkerLeft:N1},{OverlayTop:N1},{VisibleMarkerW:N1},{MarkerH:N1}), unclampedMarkerW={MarkerW:N1}, text='{Text}'", _currentMatchIndex, paragraphIndex, matchInPara, rect.X, rect.Y, rect.Width, rect.Height, endRect.X, endRect.Y, endRect.Width, endRect.Height, point.X, point.Y, currentVerticalOffset, expectedScroll, effectiveVerticalOffset, centeredFromActualRun, actualCenterAccepted, usedEndRect, usedWrappedPointEstimate, usedWrappedEstimate, effectiveWrappedMarkerRects?.Count ?? 0, wrappedMarkerDetails, markerLeft, overlayTop, visibleMarkerWidth, markerHeight, markerWidth, targetRun.Text);
             }
             return true;
         }
@@ -1547,6 +1583,7 @@ public sealed partial class MainWindow
         if (endLine <= startLine)
             return;
 
+        GetPreviewTextOverlayBounds(block, viewportWidth, out double textLeft, out double textRight);
         int added = 0;
         foreach (var childBlock in block.Blocks)
         {
@@ -1600,8 +1637,8 @@ public sealed partial class MainWindow
                 width = Math.Max(2, spanEndColumn * charWidth);
             }
 
-            double left = Math.Max(0, startPoint.X);
-            double right = Math.Min(viewportWidth, startPoint.X + width);
+            double left = Math.Max(textLeft, startPoint.X);
+            double right = Math.Min(textRight, startPoint.X + width);
             double visibleWidth = right - left;
             if (visibleWidth <= 0)
                 continue;
@@ -1614,7 +1651,7 @@ public sealed partial class MainWindow
         }
 
         if (added > 0 && LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: multiline span markers added={added}, span=[{startLine}..{endLine}]");
+            YaguLog.For("MatchNav").LogDebug("ActiveOverlay: multiline span markers added={Added}, span=[{StartLine}..{EndLine}]", added, startLine, endLine);
     }
 
     private static bool IsUsableTextRect(Windows.Foundation.Rect rect)
@@ -1764,6 +1801,7 @@ public sealed partial class MainWindow
     private static void ApplyActiveMatchMarkerRect(Border marker, Windows.Foundation.Rect rect)
     {
         marker.Height = rect.Height;
+        marker.MinWidth = Math.Min(12, rect.Width);
         marker.Width = rect.Width;
         Canvas.SetTop(marker, rect.Y);
         Canvas.SetLeft(marker, rect.X);
@@ -2101,21 +2139,21 @@ public sealed partial class MainWindow
             string estimatedText = estimatedPoint.HasValue ? FormatPoint(estimatedPoint.Value) : "none";
             string markerRectsText = FormatMarkerRects(markerRects);
 
-            LogService.Instance.Warning("MatchNav",
-                $"WrapOverlayDiag stage={stage}, idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, " +
-                $"column={activeColumn}, text='{text}', file='{file}', " +
-                $"viewport=(w={viewportWidth:N1}, h={viewportHeight:N1}, top={viewportTop:N1}, bottom={viewportBottom:N1}, scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedScroll}, effectiveScrollY={effectiveVerticalOffset:N1}), " +
-                $"overlaySize=({ActiveMatchOverlay.ActualWidth:N1},{ActiveMatchOverlay.ActualHeight:N1}), previewActual=({PreviewScrollViewer.ActualWidth:N1},{PreviewScrollViewer.ActualHeight:N1}), previewViewport=({PreviewScrollViewer.ViewportWidth:N1},{PreviewScrollViewer.ViewportHeight:N1}), " +
-                $"blockActual=({block.ActualWidth:N1},{block.ActualHeight:N1}), blockDesired=({block.DesiredSize.Width:N1},{block.DesiredSize.Height:N1}), blockOriginOverlay={FormatPoint(blockOverlayOrigin)}, blockOriginPreview={FormatPoint(blockPreviewOrigin)}, " +
-                $"wrap=(width={wrapWidth:N1}, charW={charWidth:N1}, charsPerLine={charsPerLine}), textBounds=({textLeft:N1},{textRight:N1}), {sectionDetails}, " +
-                $"rect={FormatRect(startRect)}, endRect={FormatRect(endRect)}, rawPoint={FormatPoint(rawPoint)}, estimatedPoint={estimatedText}, finalPoint={FormatPoint(finalPoint)}, " +
-                $"actualRunTop={actualRunTop:N1}, overlayTop={overlayTop:N1}, marker=(left={markerLeft:N1}, visibleW={visibleMarkerWidth:N1}, markerW={markerWidth:N1}, markerH={markerHeight:N1}), band=(left={bandLeft:N1}, width={bandWidth:N1}), " +
-                $"flags=(usedEndRect={usedEndRect}, usedWrappedPointEstimate={usedWrappedPointEstimate}, usedWrappedEstimate={usedWrappedEstimate}, centeredActual={centeredFromActualRun}, centerAccepted={actualCenterAccepted}), " +
-                $"estimateReason='{estimateReason}', wrapDetails='{wrappedMarkerDetails}', markerRects={markerRectsText}");
+            YaguLog.For("MatchNav").LogWarning(
+                "WrapOverlayDiag stage={Stage}, idx={Idx}, paraIdx={ParaIdx}, matchInPara={MatchInPara}, " +
+                "column={Column}, text='{Text}', file='{File}', " +
+                "viewport=(w={ViewportW:N1}, h={ViewportH:N1}, top={ViewportTop:N1}, bottom={ViewportBottom:N1}, scrollY={ScrollY:N1}, expectedScrollY={ExpectedScrollY}, effectiveScrollY={EffectiveScrollY:N1}), " +
+                "overlaySize=({OverlayW:N1},{OverlayH:N1}), previewActual=({PreviewActualW:N1},{PreviewActualH:N1}), previewViewport=({PreviewViewportW:N1},{PreviewViewportH:N1}), " +
+                "blockActual=({BlockActualW:N1},{BlockActualH:N1}), blockDesired=({BlockDesiredW:N1},{BlockDesiredH:N1}), blockOriginOverlay={BlockOriginOverlay}, blockOriginPreview={BlockOriginPreview}, " +
+                "wrap=(width={WrapWidth:N1}, charW={CharW:N1}, charsPerLine={CharsPerLine}), textBounds=({TextLeft:N1},{TextRight:N1}), {SectionDetails}, " +
+                "rect={Rect}, endRect={EndRect}, rawPoint={RawPoint}, estimatedPoint={EstimatedPoint}, finalPoint={FinalPoint}, " +
+                "actualRunTop={ActualRunTop:N1}, overlayTop={OverlayTop:N1}, marker=(left={MarkerLeft:N1}, visibleW={VisibleMarkerW:N1}, markerW={MarkerW:N1}, markerH={MarkerH:N1}), band=(left={BandLeft:N1}, width={BandWidth:N1}), " +
+                "flags=(usedEndRect={UsedEndRect}, usedWrappedPointEstimate={UsedWrappedPointEstimate}, usedWrappedEstimate={UsedWrappedEstimate}, centeredActual={CenteredActual}, centerAccepted={CenterAccepted}), " +
+                "estimateReason='{EstimateReason}', wrapDetails='{WrapDetails}', markerRects={MarkerRects}", stage, _currentMatchIndex, paragraphIndex, matchInPara, activeColumn, text, file, viewportWidth, viewportHeight, viewportTop, viewportBottom, currentVerticalOffset, expectedScroll, effectiveVerticalOffset, ActiveMatchOverlay.ActualWidth, ActiveMatchOverlay.ActualHeight, PreviewScrollViewer.ActualWidth, PreviewScrollViewer.ActualHeight, PreviewScrollViewer.ViewportWidth, PreviewScrollViewer.ViewportHeight, block.ActualWidth, block.ActualHeight, block.DesiredSize.Width, block.DesiredSize.Height, FormatPoint(blockOverlayOrigin), FormatPoint(blockPreviewOrigin), wrapWidth, charWidth, charsPerLine, textLeft, textRight, sectionDetails, FormatRect(startRect), FormatRect(endRect), FormatPoint(rawPoint), estimatedText, FormatPoint(finalPoint), actualRunTop, overlayTop, markerLeft, visibleMarkerWidth, markerWidth, markerHeight, bandLeft, bandWidth, usedEndRect, usedWrappedPointEstimate, usedWrappedEstimate, centeredFromActualRun, actualCenterAccepted, estimateReason, wrappedMarkerDetails, markerRectsText);
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MatchNav", $"WrapOverlayDiag failed stage={stage}: {ex.GetType().Name}: {ex.Message}");
+            YaguLog.For("MatchNav").LogWarning("WrapOverlayDiag failed stage={Stage}: {ExType}: {Error}", stage, ex.GetType().Name, ex.Message);
         }
     }
 
@@ -2180,7 +2218,7 @@ public sealed partial class MainWindow
             {
                 if (_activeMatchHighlight is not { para: var activePara, run: var activeRun, column: var column })
                 {
-                    LogService.Instance.Info("MatchNav", $"VerifyActiveMatch: idx={navIdx} -- NO active highlight set");
+                    YaguLog.For("MatchNav").LogInformation("VerifyActiveMatch: idx={Idx} -- NO active highlight set", navIdx);
                     return;
                 }
 
@@ -2189,7 +2227,7 @@ public sealed partial class MainWindow
                 // stale requests (especially the UpdateLayout fallback).
                 if (_currentMatchIndex != navIdx)
                 {
-                    LogService.Instance.Verbose("MatchNav", $"VerifyActiveMatch: stale (current={_currentMatchIndex}, enqueued={navIdx}), skipping");
+                    YaguLog.For("MatchNav").LogDebug("VerifyActiveMatch: stale (current={Current}, enqueued={Enqueued}), skipping", _currentMatchIndex, navIdx);
                     return;
                 }
 
@@ -2226,10 +2264,10 @@ public sealed partial class MainWindow
                 string runText = activeRun.Text ?? "";
                 if (runText.Length > 30) runText = string.Concat(runText.AsSpan(0, 30), "…");
 
-                LogService.Instance.Info("MatchNav",
-                    $"VerifyActiveMatch: idx={navIdx}, activeIdx={activeIdx}, paraMatches={paraMatches}, paraIdx={paragraphIndex}, " +
-                    $"col={column}, runText='{runText}', runFG={(activeRun.Foreground is SolidColorBrush sb ? sb.Color.ToString(CultureInfo.InvariantCulture) : "?")}, " +
-                    $"vpTop={vpTop:N1}, vpBottom={vpBottom:N1}, vpH={vpH:N1}, paraAbsY={paraY:N1}, runAbsY={runY:N1}, runH={runH:N1}, runOnScreen={runOnScreen}");
+                YaguLog.For("MatchNav").LogInformation(
+                    "VerifyActiveMatch: idx={Idx}, activeIdx={ActiveIdx}, paraMatches={ParaMatches}, paraIdx={ParaIdx}, " +
+                    "col={Col}, runText='{RunText}', runFG={RunFG}, " +
+                    "vpTop={VpTop:N1}, vpBottom={VpBottom:N1}, vpH={VpH:N1}, paraAbsY={ParaAbsY:N1}, runAbsY={RunAbsY:N1}, runH={RunH:N1}, runOnScreen={RunOnScreen}", navIdx, activeIdx, paraMatches, paragraphIndex, column, runText, activeRun.Foreground is SolidColorBrush sb ? sb.Color.ToString(CultureInfo.InvariantCulture) : "?", vpTop, vpBottom, vpH, paraY, runY, runH, runOnScreen);
 
                 // Self-correcting: if the run isn't centered/visible but we now have an
                 // accurate rect, perform a corrective scroll. Allow extra attempts when
@@ -2245,8 +2283,8 @@ public sealed partial class MainWindow
                 // through UpdateLayout on the UI thread.
                 if ((double.IsNaN(runH) || runH <= 0) && nextAttempt <= kHardCap)
                 {
-                    LogService.Instance.Info("MatchNav",
-                        $"VerifyActiveMatch: run not yet measured (runH={runH:N1}), waiting for layout, re-enqueue verify idx={navIdx}, attempt={nextAttempt}/{kHardCap}");
+                    YaguLog.For("MatchNav").LogInformation(
+                        "VerifyActiveMatch: run not yet measured (runH={RunH:N1}), waiting for layout, re-enqueue verify idx={Idx}, attempt={Attempt}/{HardCap}", runH, navIdx, nextAttempt, kHardCap);
                     VerifyActiveMatchVisibleAfterScroll(block, targetPara, paragraphIndex, nextAttempt, paraY);
                     return;
                 }
@@ -2269,8 +2307,8 @@ public sealed partial class MainWindow
                         };
                         PreviewScrollViewer.ViewChanged += handler;
                         bool accepted = ChangePreviewViewForMatchNavigation(null, correctedTarget);
-                        LogService.Instance.Info("MatchNav",
-                            $"VerifyActiveMatch: corrective scroll idx={navIdx}, attempt={nextAttempt}/{kHardCap}, layoutMoved={layoutMoved}, fromY={vpTop:N1}, toY={correctedTarget:N1}, accepted={accepted}");
+                        YaguLog.For("MatchNav").LogInformation(
+                            "VerifyActiveMatch: corrective scroll idx={Idx}, attempt={Attempt}/{HardCap}, layoutMoved={LayoutMoved}, fromY={FromY:N1}, toY={ToY:N1}, accepted={Accepted}", navIdx, nextAttempt, kHardCap, layoutMoved, vpTop, correctedTarget, accepted);
                         if (!accepted)
                         {
                             // ChangeView rejected the request — no ViewChanged will fire,
@@ -2282,7 +2320,7 @@ public sealed partial class MainWindow
             }
             catch (Exception ex)
             {
-                LogService.Instance.Info("MatchNav", $"VerifyActiveMatch: exception {ex.GetType().Name}: {ex.Message}");
+                YaguLog.For("MatchNav").LogInformation("VerifyActiveMatch: exception {ExType}: {Error}", ex.GetType().Name, ex.Message);
             }
         });
     }
@@ -2352,7 +2390,7 @@ public sealed partial class MainWindow
         double availableWidth = GetPreviewWrapTextWidth(block);
         int charsPerWrappedLine = GetPreviewWrappedCharsPerLine(block, targetPara, charWidth);
         double wrappedOffset = column / (double)charsPerWrappedLine;
-        LogService.Instance.Verbose("Preview", $"EstimateWrappedLineOffset: idx={_currentMatchIndex}, column={column}, availableW={availableWidth:N1}, charW={charWidth:N1}, charsPerLine={charsPerWrappedLine}, wrappedOffset={wrappedOffset:N1}");
+        YaguLog.For("Preview").LogDebug("EstimateWrappedLineOffset: idx={Idx}, column={Column}, availableW={AvailableW:N1}, charW={CharW:N1}, charsPerLine={CharsPerLine}, wrappedOffset={WrappedOffset:N1}", _currentMatchIndex, column, availableWidth, charWidth, charsPerWrappedLine, wrappedOffset);
         return wrappedOffset;
     }
 
@@ -2476,18 +2514,18 @@ public sealed partial class MainWindow
         return false;
     }
 
-    private void ScrollMatchHorizontallyIntoView(RichTextBlock block, Paragraph targetPara)
+    private bool ScrollMatchHorizontallyIntoView(RichTextBlock block, Paragraph targetPara)
     {
         if (ViewModel.PreviewWordWrap)
         {
-            return;
+            return false;
         }
 
         if (_activeMatchHighlight is not { para: var activePara, run: var activeRun, column: var column }
             || !ReferenceEquals(activePara, targetPara))
         {
-            LogService.Instance.Verbose("Preview", "ScrollMatchHorizontallyIntoView: skipped because active match does not match target paragraph");
-            return;
+            YaguLog.For("Preview").LogDebug("ScrollMatchHorizontallyIntoView: skipped because active match does not match target paragraph");
+            return false;
         }
 
         var scroller = _sectionMatchNavs.TryGetValue(block, out var sectionNav)
@@ -2496,8 +2534,8 @@ public sealed partial class MainWindow
 
         if (scroller.ViewportWidth <= 0 || scroller.ScrollableWidth <= 0)
         {
-            LogService.Instance.Verbose("Preview", $"ScrollMatchHorizontallyIntoView: skipped, viewportW={scroller.ViewportWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}");
-            return;
+            YaguLog.For("Preview").LogDebug("ScrollMatchHorizontallyIntoView: skipped, viewportW={ViewportW:N1}, scrollableW={ScrollableW:N1}", scroller.ViewportWidth, scroller.ScrollableWidth);
+            return false;
         }
 
         double charWidth = EstimatePreviewCharWidth(block);
@@ -2527,8 +2565,8 @@ public sealed partial class MainWindow
         if (matchStart >= viewportLeft + guard && matchEnd <= viewportRight - guard)
         {
             if (LogService.Instance.IsVerboseEnabled)
-                LogService.Instance.Verbose("Preview", $"ScrollMatchHorizontallyIntoView: skipped visible idx={_currentMatchIndex}, column={column}, viewport=({viewportLeft:N1},{viewportRight:N1})");
-            return;
+                YaguLog.For("Preview").LogDebug("ScrollMatchHorizontallyIntoView: skipped visible idx={Idx}, column={Column}, viewport=({ViewportLeft:N1},{ViewportRight:N1})", _currentMatchIndex, column, viewportLeft, viewportRight);
+            return false;
         }
 
         double matchCenter = matchStart + matchWidth / 2;
@@ -2536,11 +2574,12 @@ public sealed partial class MainWindow
         targetHorizontalOffset = Math.Clamp(targetHorizontalOffset, 0, scroller.ScrollableWidth);
         double beforeHorizontalOffset = scroller.HorizontalOffset;
         if (Math.Abs(targetHorizontalOffset - beforeHorizontalOffset) <= 1)
-            return;
+            return false;
 
         bool horizontalAccepted = scroller.ChangeView(targetHorizontalOffset, null, null, disableAnimation: true);
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("Preview", $"ScrollMatchHorizontallyIntoView: idx={_currentMatchIndex}, column={column}, runLen={activeRun.Text?.Length ?? 0}, source={source}, matchStart={matchStart:N1}, estimateStart={estimatedMatchStart:N1}, charW={charWidth:N1}, beforeX={beforeHorizontalOffset:N1}, targetX={targetHorizontalOffset:N1}, viewportW={scroller.ViewportWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}, accepted={horizontalAccepted}, sectionScroller={_sectionMatchNavs.ContainsKey(block)}");
+            YaguLog.For("Preview").LogDebug("ScrollMatchHorizontallyIntoView: idx={Idx}, column={Column}, runLen={RunLen}, source={Source}, matchStart={MatchStart:N1}, estimateStart={EstimateStart:N1}, charW={CharW:N1}, beforeX={BeforeX:N1}, targetX={TargetX:N1}, viewportW={ViewportW:N1}, scrollableW={ScrollableW:N1}, accepted={Accepted}, sectionScroller={SectionScroller}", _currentMatchIndex, column, activeRun.Text?.Length ?? 0, source, matchStart, estimatedMatchStart, charWidth, beforeHorizontalOffset, targetHorizontalOffset, scroller.ViewportWidth, scroller.ScrollableWidth, horizontalAccepted, _sectionMatchNavs.ContainsKey(block));
+        return horizontalAccepted;
     }
 
     private int MatchNavFileCount => _sectionMatchNavs.Count > 0
@@ -2673,8 +2712,14 @@ public sealed partial class MainWindow
         bool isHighlight = ViewModel.PreviewModeIndex == 1;
         int previewLines = ViewModel.PreviewContextLines;
         var rx = BuildSearchHighlightRegex();
+        bool useFastPlanCounts = files > EffectivePreviewSectionPageSize * 2;
         for (int i = _deferredCursor; i < list.Count; i++)
-            matches += ComputeMatchCount(list[i].Value, null, isHighlight, previewLines, rx);
+        {
+            int count = useFastPlanCounts
+                ? list[i].Value.Count(result => result.LineNumber > 0)
+                : ComputeMatchCount(list[i].Value, null, isHighlight, previewLines, rx);
+            matches = matches > int.MaxValue - count ? int.MaxValue : matches + count;
+        }
         _cachedDeferredCountsList = list;
         _cachedDeferredCountsCursor = _deferredCursor;
         _cachedDeferredCounts = (files, matches);
@@ -2858,8 +2903,8 @@ public sealed partial class MainWindow
         }
 
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("MatchNav",
-                $"EnsureNavEntryForParagraphMatch: registered on-demand entry matchInPara={matchInPara} at idx={insertAt}, visualRuns={visualRuns}");
+            YaguLog.For("MatchNav").LogDebug(
+                "EnsureNavEntryForParagraphMatch: registered on-demand entry matchInPara={MatchInPara} at idx={InsertAt}, visualRuns={VisualRuns}", matchInPara, insertAt, visualRuns);
     }
 
 
@@ -3347,7 +3392,7 @@ public sealed partial class MainWindow
         BoxMatchRun(para, matchInPara);
         ScrollAfterMatchNavigation(block, para, justMaterialized: materializedDuringBulk, sameParagraph: false);
         navSw.Stop();
-        LogService.Instance.Info("MatchNav", $"BulkNextMatch: step={step}, from={startIndex}, landed={_currentMatchIndex}, renderedBefore={renderedBefore}, renderedAfter={_matchParagraphs.Count}, expandedChunks={expandedChunks}, materializedSections={materializedSections}, elapsed={navSw.ElapsedMilliseconds}ms");
+        YaguLog.For("MatchNav").LogInformation("BulkNextMatch: step={Step}, from={From}, landed={Landed}, renderedBefore={RenderedBefore}, renderedAfter={RenderedAfter}, expandedChunks={ExpandedChunks}, materializedSections={MaterializedSections}, elapsed={Elapsed}ms", step, startIndex, _currentMatchIndex, renderedBefore, _matchParagraphs.Count, expandedChunks, materializedSections, navSw.ElapsedMilliseconds);
     }
 
     /// <summary>
@@ -3381,7 +3426,7 @@ public sealed partial class MainWindow
         SuppressOverflowAutoLoadForMatchNavigation();
         ScrollPreviewToLine(block, para, forceCenter: true);
         navSw.Stop();
-        LogService.Instance.Info("MatchNav", $"BulkPrevMatch: step={step}, from={startIndex}, landed={_currentMatchIndex}, hitBoundary={hitBoundary}, rendered={_matchParagraphs.Count}, elapsed={navSw.ElapsedMilliseconds}ms");
+        YaguLog.For("MatchNav").LogInformation("BulkPrevMatch: step={Step}, from={From}, landed={Landed}, hitBoundary={HitBoundary}, rendered={Rendered}, elapsed={Elapsed}ms", step, startIndex, _currentMatchIndex, hitBoundary, _matchParagraphs.Count, navSw.ElapsedMilliseconds);
     }
 
     private async void OnNextMatch(object sender, RoutedEventArgs e)
@@ -3459,11 +3504,11 @@ public sealed partial class MainWindow
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("MatchNav", $"OnNextMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
+            YaguLog.For("MatchNav").LogDebug("OnNextMatch: idx={Idx}, path={Path}", _currentMatchIndex, justMaterialized ? "materialize" : "normal");
         ScrollAfterMatchNavigation(block, para, justMaterialized || expandedOverflow, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
         navSw.Stop();
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("Preview", $"GoToNextMatchAsync: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
+            YaguLog.For("Preview").LogDebug("GoToNextMatchAsync: index={Index}, elapsed={Elapsed}ms", _currentMatchIndex, navSw.ElapsedMilliseconds);
     }
 
     private async void OnPrevMatch(object sender, RoutedEventArgs e)
@@ -3520,11 +3565,11 @@ public sealed partial class MainWindow
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("MatchNav", $"OnPrevMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
+            YaguLog.For("MatchNav").LogDebug("OnPrevMatch: idx={Idx}, path={Path}", _currentMatchIndex, justMaterialized ? "materialize" : "normal");
         ScrollAfterMatchNavigation(block, para, justMaterialized, sameParagraph: !wrappedToEnd && ReferenceEquals(previousPara, para));
         navSw.Stop();
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("Preview", $"OnPrevMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
+            YaguLog.For("Preview").LogDebug("OnPrevMatch: index={Index}, elapsed={Elapsed}ms", _currentMatchIndex, navSw.ElapsedMilliseconds);
     }
 
     // Tracks how many match entries the last MaterializeNextLazySection call added.
@@ -3559,7 +3604,7 @@ public sealed partial class MainWindow
                 if (added > 0)
                 {
                     _lazySectionJustAdded = added;
-                    LogService.Instance.Info("MatchNav", $"MaterializeNextLazySection: forward={forward}, added={added}, expanderIdx={i}, isExpanded={exp.IsExpanded}");
+                    YaguLog.For("MatchNav").LogInformation("MaterializeNextLazySection: forward={Forward}, added={Added}, expanderIdx={ExpanderIdx}, isExpanded={IsExpanded}", forward, added, i, exp.IsExpanded);
                     return true;
                 }
                 // Otherwise keep walking — try the next lazy section.
@@ -3579,9 +3624,9 @@ public sealed partial class MainWindow
         var sw = Stopwatch.StartNew();
         if (!_sectionOverflow.TryGetValue(section, out var ov)) return false;
 
-        // Respect the global render ceiling (see MaxOverflowRenderedPerSection):
+        // Respect the global render ceiling (see EffectiveMaxOverflowRenderedPerSection):
         // growing a single RichTextBlock past it fail-fasts WinUI text layout.
-        if (ov.CeilingReached || ov.RenderedSoFar >= MaxOverflowRenderedPerSection)
+        if (ov.CeilingReached || ov.RenderedSoFar >= EffectiveMaxOverflowRenderedPerSection)
         {
             MarkOverflowCeilingReached(section, ov);
             return false;
@@ -3767,7 +3812,7 @@ public sealed partial class MainWindow
         }
 
         sw.Stop();
-        LogService.Instance.Info("MatchNav", $"ExpandSectionNextChunk: results={consumed}, addedEntries={addedCount}, renderedSoFar={ov.RenderedSoFar}, remaining={ov.RemainingResults.Count}, elapsed={sw.ElapsedMilliseconds}ms");
+        YaguLog.For("MatchNav").LogInformation("ExpandSectionNextChunk: results={Results}, addedEntries={AddedEntries}, renderedSoFar={RenderedSoFar}, remaining={Remaining}, elapsed={Elapsed}ms", consumed, addedCount, ov.RenderedSoFar, ov.RemainingResults.Count, sw.ElapsedMilliseconds);
         return addedCount > 0;
     }
 }

@@ -160,7 +160,7 @@ public sealed class MatchNavSyncTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+            if (File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
                 return dir.FullName;
             dir = dir.Parent;
         }

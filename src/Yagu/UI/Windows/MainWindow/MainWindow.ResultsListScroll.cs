@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -6,6 +7,7 @@ using Microsoft.UI.Xaml.Media;
 using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Logging;
 
 namespace Yagu;
 
@@ -140,8 +142,8 @@ public sealed partial class MainWindow
         bool accepted = scroller.ChangeView(null, clampedOffset, null, disableAnimation: true);
         if (log && LogService.Instance.IsVerboseEnabled)
         {
-            LogService.Instance.Verbose("ResultsList",
-                $"RestoreResultsListVerticalOffsetAfterShowMore: file='{Path.GetFileName(filePath)}', requested={targetOffset:N1}, clamped={clampedOffset:N1}, accepted={accepted}, current={scroller.VerticalOffset:N1}");
+            YaguLog.For("ResultsList").LogDebug(
+                "RestoreResultsListVerticalOffsetAfterShowMore: file='{File}', requested={TargetOffset:N1}, clamped={ClampedOffset:N1}, accepted={Accepted}, current={Current:N1}", Path.GetFileName(filePath), targetOffset, clampedOffset, accepted, scroller.VerticalOffset);
         }
 
         CaptureResultsListScrollPosition();
@@ -173,8 +175,8 @@ public sealed partial class MainWindow
         ResultsListSmartScrollIntent intent = ResolveResultsListSmartScrollIntent();
         if (!ViewModel.IsSearching && LogService.Instance.IsVerboseEnabled && intent != ResultsListSmartScrollIntent.None)
         {
-            LogService.Instance.Verbose("ResultsList",
-                $"ResultRowsChanging: intent={intent}, atTop={_resultsListWasAtTop}, atBottom={_resultsListWasAtBottom}, rows={ViewModel.ResultRows.Count}, groups={ViewModel.ResultGroups.Count}, autoScroll={_autoScrollEnabled}");
+            YaguLog.For("ResultsList").LogDebug(
+                "ResultRowsChanging: intent={Intent}, atTop={AtTop}, atBottom={AtBottom}, rows={Rows}, groups={Groups}, autoScroll={AutoScroll}", intent, _resultsListWasAtTop, _resultsListWasAtBottom, ViewModel.ResultRows.Count, ViewModel.ResultGroups.Count, _autoScrollEnabled);
         }
         if (intent != ResultsListSmartScrollIntent.None)
             QueueResultsListSmartScrollRestore(intent);
@@ -506,7 +508,7 @@ public sealed partial class MainWindow
         ResultsList.ScrollIntoView(ViewModel.ResultRows[0], ScrollIntoViewAlignment.Leading);
         _resultsListScrollViewer?.ChangeView(null, 0, null, disableAnimation: true);
         if (!ViewModel.IsSearching && LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("ResultsList", $"ScrollResultsListToTop: rows={ViewModel.ResultRows.Count}, groups={ViewModel.ResultGroups.Count}");
+            YaguLog.For("ResultsList").LogDebug("ScrollResultsListToTop: rows={Rows}, groups={Groups}", ViewModel.ResultRows.Count, ViewModel.ResultGroups.Count);
         CaptureResultsListScrollPosition();
     }
 

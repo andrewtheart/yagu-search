@@ -258,15 +258,15 @@ public sealed class MatchNavRegressionTests
     private static string FindSolutionRoot()
     {
         var assemblyDir = Path.GetDirectoryName(typeof(MatchNavRegressionTests).Assembly.Location)!;
-        // bin/Debug/<tfm>/  →  walk up to the solution root that contains Yagu.sln
+        // bin/Debug/<tfm>/  →  walk up to the solution root that contains Yagu.slnx
         var dir = new DirectoryInfo(assemblyDir);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+            if (File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
                 return dir.FullName;
             dir = dir.Parent;
         }
         throw new InvalidOperationException(
-            $"Could not locate Yagu.sln walking up from {assemblyDir}.");
+            $"Could not locate Yagu.slnx walking up from {assemblyDir}.");
     }
 }

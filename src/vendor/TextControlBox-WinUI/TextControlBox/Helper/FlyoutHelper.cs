@@ -19,8 +19,9 @@ namespace TextControlBoxNS.Helper
         public void CreateFlyout(CoreTextControlBox sender)
         {
             menuFlyout = new MenuFlyout();
+            menuFlyout.Items.Add(CreateItem(() => { sender.Copy(); }, "Copy", Symbol.Copy, ""));
             menuFlyout.Items.Add(CreateItem(() => { CopyWithLineNumbers(sender); }, "Copy (with line numbers)", Symbol.Copy, ""));
-            menuFlyout.Items.Add(CreateItem(() => { sender.Copy(); }, "Copy (without line numbers)", Symbol.Copy, ""));
+            menuFlyout.Items.Add(new MenuFlyoutSeparator());
             menuFlyout.Items.Add(CreateItem(() => { sender.Paste(); }, "Paste", Symbol.Paste, ""));
             menuFlyout.Items.Add(CreateItem(() => { sender.Cut(); }, "Cut", Symbol.Cut, ""));
             menuFlyout.Items.Add(new MenuFlyoutSeparator());
