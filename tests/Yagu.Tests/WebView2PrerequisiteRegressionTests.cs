@@ -75,7 +75,7 @@ public sealed class WebView2PrerequisiteRegressionTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
         return dir?.FullName ?? Directory.GetCurrentDirectory();
     }

@@ -51,3 +51,10 @@ The publish step uploads the on-disk `YaguSetup-<version>-*.exe` files here as t
 and rewrites the README download table to point at that release. Unless `-ReleaseMode Draft` or
 `-ReleaseMode Published` is supplied, the scripts ask whether the release should remain a draft for
 review or be published officially as the latest release.
+
+## License information
+
+The installer follows the same Inno Setup flow as MultiTerm: interactive setup displays Yagu's
+complete GPLv3 license on the standard agreement page during setup, and displays the consolidated
+third-party notices on the post-install information page. Both files are also installed beside
+Yagu so they remain available after setup finishes.

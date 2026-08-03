@@ -25,9 +25,13 @@ This does, in order:
 1. **Bumps the release version ONCE** so every variant shares the same version.
 2. Builds **x64, x86, arm64, and x64-offline** installers (self-contained Native AOT published, then
    Inno Setup compiled), each written as `installer/YaguSetup-<version>-<suffix>.exe` (Git LFS-tracked).
-3. `git add -A`, commit, and push.
-4. After a successful push, creates a **DRAFT** GitHub release via `gh` — tag `v<version>`, the built
-   installers attached, auto-generated notes.
+3. If the working tree is dirty, interactively review `git add --patch` selections one functional
+  group at a time and commit each group with an explicit message. The script does not infer semantic
+  ownership or split source hunks automatically.
+4. After the build, commit only the known release-generated version/README paths, then push.
+5. After a successful push, creates a **DRAFT** GitHub release via `gh` — tag `v<version>`, the built
+  installers attached, auto-generated notes, and an explicit **Full changelog** comparison link from
+  the previous published release tag to the new tag.
 
 Useful flags:
 
@@ -37,11 +41,28 @@ Useful flags:
 - `-Commit` — commit but do not push (and no release).
 - `-WhatIf` — print the plan only; download and change nothing.
 
+## Pending-change safety
+
+The publish scripts organize pending work **before** building, so release artifacts are never built
+from source that was silently swept into a catch-all commit. On a dirty interactive working tree,
+select the hunks for one functional change in `git add --patch`, quit patch mode, review the staged
+stat, and provide its focused commit message. Repeat until clean.
+
+This workflow deliberately favors stopping over guessing:
+
+- Existing staged changes require explicit confirmation and a commit message.
+- Conflicts and detected renames/copies must be handled manually.
+- A dirty non-interactive/CI invocation stops instead of creating commits.
+- Untracked files enter patch mode via intent-to-add; their content is not staged automatically.
+- Post-build commits are path-scoped to `build-version.txt`, `AppInfo.g.cs`, and (for the all-variant
+  script) `README.md`. Any other post-build change stops the push.
+
 ## Publish the release
 
 The release is created as a **draft on purpose** — review its notes and attached assets on the GitHub
 Releases page, then publish it manually. Re-running the same version refreshes the existing release's
-assets (`gh release upload --clobber`) instead of failing. If `gh` is missing or unauthenticated, the
+assets (`gh release upload --clobber`) and idempotently adds the Full changelog link if it is missing.
+If `gh` is missing or unauthenticated, the
 release step only **warns** (the build + push already succeeded) and prints the manual
 `gh release create ...` command.
 

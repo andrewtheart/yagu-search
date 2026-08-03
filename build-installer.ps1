@@ -35,10 +35,11 @@
   staged worker.
 
 .PARAMETER Push
-  After one installer builds successfully, stage and commit pending changes, push
-  the current branch, then prompt whether its GitHub release should remain a draft
-  or be published officially. Requires an authenticated gh CLI. Push is restricted
-  to one architecture per invocation; use build-all-installers.ps1 for a full release.
+  Before building, interactively organize pending changes into reviewed, focused commits.
+  After one installer builds successfully, commit only the known release-generated
+  version files, push the current branch, then prompt whether its GitHub release should
+  remain a draft or be published officially. Ambiguous or unexpected changes stop the
+  workflow. Push is restricted to one architecture per invocation.
 
 .PARAMETER ReleaseMode
   GitHub release publication mode used with Push: Prompt (the default), Draft, or
@@ -66,6 +67,13 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = $PSScriptRoot
+$gitCommitHelper = Join-Path $repoRoot 'scripts\installer-git-commits.ps1'
+if ($Push) {
+  if (-not (Test-Path -LiteralPath $gitCommitHelper)) {
+    throw "Installer Git commit helper not found: $gitCommitHelper"
+  }
+  . $gitCommitHelper
+}
 $projectPath = Join-Path $repoRoot 'src\Yagu\Yagu.csproj'
 $projectDir = Join-Path $repoRoot 'src\Yagu'
 $installerDir = Join-Path $repoRoot 'installer'
@@ -161,6 +169,10 @@ if ($IncludeOcr) {
 
 if ($Push -and $architectures.Count -ne 1) {
   throw '-Push on build-installer.ps1 requires exactly one architecture. Use build-all-installers.ps1 to publish a multi-installer release.'
+}
+
+if ($Push) {
+  Invoke-YaguFocusedPendingCommits -RepoRoot $repoRoot
 }
 
 Write-Host "Architectures: $($architectures -join ', ')"
@@ -298,19 +310,12 @@ if ($Push) {
       throw 'Cannot push from a detached HEAD or resolve the current branch.'
     }
 
-    & git -C $repoRoot add -A
-    if ($LASTEXITCODE -ne 0) { throw "git add -A failed (exit $LASTEXITCODE)." }
-    & git -C $repoRoot diff --cached --quiet
-    $stagedExit = $LASTEXITCODE
-    if ($stagedExit -gt 1) { throw "git diff --cached failed (exit $stagedExit)." }
-    if ($stagedExit -eq 1) {
-      $variantName = if ($IncludeOcr) { 'x64-offline' } else { $architectures[0] }
-      $commitMessage = "Build installer v$version ($variantName)"
-      Write-Host "Committing: $commitMessage" -ForegroundColor Cyan
-      & git -C $repoRoot commit -m $commitMessage
-      if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
-    }
-    else { Write-Host 'Nothing to commit - working tree already clean.' -ForegroundColor DarkGray }
+    $variantName = if ($IncludeOcr) { 'x64-offline' } else { $architectures[0] }
+    $commitMessage = "Build installer v$version ($variantName)"
+    Invoke-YaguInstallerReleaseCommit -RepoRoot $repoRoot -Message $commitMessage -AllowedPaths @(
+      'src/Yagu/Properties/build-version.txt',
+      'src/Yagu/Properties/AppInfo.g.cs'
+    )
 
     Write-Host "Pushing '$branch' to origin..." -ForegroundColor Cyan
     & git -C $repoRoot push origin $branch

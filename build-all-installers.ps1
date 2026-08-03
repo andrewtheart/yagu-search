@@ -38,16 +38,17 @@
   URL, and (~N MB) size match the newest installer of each suffix on disk.
 
 .PARAMETER Commit
-  After a fully successful build, stage every change (git add -A, which includes any
-  untracked files) and commit them with the message
-  "Build installers v<version> (<variants>)". A no-op when the working tree is clean.
+  Before building, interactively organize pending changes into reviewed, focused commits.
+  After a fully successful build, commit only the known release-generated version and
+  README files. Ambiguous, conflicted, renamed, or unexpected changes stop the workflow.
 
 .PARAMETER Push
-  After a successful build, stage + commit (exactly as -Commit) and then run git push.
-  Implies the commit step, since there must be a commit to push. After a successful push,
+  Run the same conservative focused-commit workflow as -Commit, then run git push.
+  Existing source hunks are never assigned to commits automatically. After a successful push,
   prompts whether the GitHub release (tag v<version>) should remain a draft or be published
-  officially, then attaches the freshly built installers and auto-generated release notes --
-  unless -SkipRelease is set. Re-running the same version refreshes the existing release's assets.
+  officially, then attaches the freshly built installers and auto-generated release notes with an
+  explicit Full changelog link to the previous published tag -- unless -SkipRelease is set.
+  Re-running the same version refreshes the existing release's assets and preserves that link.
   If 'gh' is missing or unauthenticated, the release step warns (the build + push still succeed).
 
 .PARAMETER ReleaseMode
@@ -77,7 +78,8 @@
 
 .EXAMPLE
   .\build-all-installers.ps1 -Commit
-  Builds all variants, then stages (git add -A) and commits the result.
+  Interactively commits pending work in focused groups, builds all variants, then commits
+  only the known release-generated files.
 
 .EXAMPLE
   .\build-all-installers.ps1 -Variant x64 -Push
@@ -102,6 +104,13 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = $PSScriptRoot
+$gitCommitHelper = Join-Path $repoRoot 'scripts\installer-git-commits.ps1'
+if ($Commit -or $Push) {
+  if (-not (Test-Path -LiteralPath $gitCommitHelper)) {
+    throw "Installer Git commit helper not found: $gitCommitHelper"
+  }
+  . $gitCommitHelper
+}
 $buildInstaller = Join-Path $repoRoot 'build-installer.ps1'
 if (-not (Test-Path -LiteralPath $buildInstaller)) {
   throw "build-installer.ps1 not found next to this script at: $buildInstaller"
@@ -123,6 +132,84 @@ function Resolve-ReleaseMode {
       default { Write-Warning "Invalid choice '$choice'. Enter D for Draft or P for Publish." }
     }
   }
+}
+
+function Get-PreviousGitHubReleaseTag {
+  param(
+    [Parameter(Mandatory)][string]$GitHubCli,
+    [Parameter(Mandatory)][string[]]$RepoArgs,
+    [Parameter(Mandatory)][string]$CurrentTag
+  )
+
+  $releaseJson = & $GitHubCli release list --limit 100 --json tagName,isDraft @RepoArgs
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not determine the previous published GitHub release."
+  }
+
+  $releases = @((@($releaseJson) -join [Environment]::NewLine) | ConvertFrom-Json)
+  $previous = $releases |
+    Where-Object { -not $_.isDraft -and $_.tagName -ne $CurrentTag } |
+    Select-Object -First 1
+  if ($previous) { return [string]$previous.tagName }
+  return $null
+}
+
+function Add-ReleaseCompareLink {
+  param(
+    [AllowEmptyString()][string]$Notes,
+    [Parameter(Mandatory)][string]$RepositorySlug,
+    [string]$PreviousReleaseTag,
+    [Parameter(Mandatory)][string]$ReleaseTag
+  )
+
+  $notesWithLink = if ($null -eq $Notes) { '' } else { $Notes.Trim() }
+  if ([string]::IsNullOrWhiteSpace($PreviousReleaseTag)) { return $notesWithLink }
+
+  $range = "$PreviousReleaseTag...$ReleaseTag"
+  $compareUrl = "https://github.com/$RepositorySlug/compare/$range"
+  if ($notesWithLink.Contains($compareUrl)) { return $notesWithLink }
+
+  $fullChangelog = "## Full changelog`r`n[Compare $range]($compareUrl)"
+  if ([string]::IsNullOrWhiteSpace($notesWithLink)) { return $fullChangelog }
+  return "$notesWithLink`r`n`r`n$fullChangelog"
+}
+
+function Get-GitHubGeneratedReleaseNotes {
+  param(
+    [Parameter(Mandatory)][string]$GitHubCli,
+    [Parameter(Mandatory)][string]$RepositorySlug,
+    [Parameter(Mandatory)][string]$ReleaseTag,
+    [Parameter(Mandatory)][string]$TargetCommit,
+    [string]$PreviousReleaseTag
+  )
+
+  $apiArgs = @(
+    'api', '--method', 'POST', "repos/$RepositorySlug/releases/generate-notes",
+    '-f', "tag_name=$ReleaseTag",
+    '-f', "target_commitish=$TargetCommit"
+  )
+  if (-not [string]::IsNullOrWhiteSpace($PreviousReleaseTag)) {
+    $apiArgs += @('-f', "previous_tag_name=$PreviousReleaseTag")
+  }
+
+  $responseJson = & $GitHubCli @apiArgs
+  if ($LASTEXITCODE -ne 0) {
+    throw "GitHub could not generate release notes for $ReleaseTag."
+  }
+  $response = (@($responseJson) -join [Environment]::NewLine) | ConvertFrom-Json
+  return Add-ReleaseCompareLink `
+    -Notes ([string]$response.body) `
+    -RepositorySlug $RepositorySlug `
+    -PreviousReleaseTag $PreviousReleaseTag `
+    -ReleaseTag $ReleaseTag
+}
+
+function Write-ReleaseNotesFile {
+  param([Parameter(Mandatory)][string]$Notes)
+
+  $path = Join-Path ([System.IO.Path]::GetTempPath()) ("yagu-release-notes-{0}.md" -f [guid]::NewGuid().ToString('N'))
+  [System.IO.File]::WriteAllText($path, $Notes, [System.Text.UTF8Encoding]::new($false))
+  return $path
 }
 
 # Rewrites the four rows of the README "Download Installer" table so each row's
@@ -239,13 +326,18 @@ if ($WhatIfPreference) {
     Write-Host ("  {0,-8} -> {1}" -f $name, $cmd)
   }
   if ($Commit -or $Push) {
-    Write-Host ("  post-build: git add -A + commit{0}" -f $(if ($Push) { ' + push' } else { '' })) -ForegroundColor Yellow
+    Write-Host '  pre-build: interactively commit pending changes in focused hunk groups' -ForegroundColor Yellow
+    Write-Host ("  post-build: commit only known release-generated files{0}" -f $(if ($Push) { ' + push' } else { '' })) -ForegroundColor Yellow
     if ($Push -and -not $SkipRelease) {
       $plannedMode = if ($ReleaseMode -eq 'Prompt') { 'prompt for Draft or Published' } else { $ReleaseMode }
       Write-Host "  post-push: create or refresh GitHub release v<version> ($plannedMode; built installers attached)" -ForegroundColor Yellow
     }
   }
   return
+}
+
+if ($Commit -or $Push) {
+  Invoke-YaguFocusedPendingCommits -RepoRoot $repoRoot
 }
 
 # A release is ONE version across EVERY variant. build-installer.ps1's `dotnet publish` step
@@ -333,10 +425,9 @@ if ($failed.Count -gt 0) {
 
 Write-Host "All $($results.Count) variant(s) built successfully." -ForegroundColor Green
 
-# Optionally stage + commit (and push) everything the build produced or changed (the version bump,
-# generated AppInfo, the installers, the README table, etc.). -Push implies the commit step, since
-# there must be a commit to push. This is only reached after a fully successful build (a failed
-# build throws above), so we never commit a half-built release.
+# Optionally commit (and push) only the known release-generated files. Pre-existing work was
+# organized before the build, so any other post-build change is unexpected and stops the push.
+# This is reached only after every requested installer built successfully.
 if ($Commit -or $Push) {
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     throw "-Commit/-Push was requested but 'git' is not available on PATH."
@@ -360,24 +451,12 @@ if ($Commit -or $Push) {
     }
 
     Write-Host ""
-    Write-Host "Staging all changes (git add -A)..." -ForegroundColor Cyan
-    & git -C $repoRoot add -A
-    if ($LASTEXITCODE -ne 0) { throw "git add -A failed (exit $LASTEXITCODE)." }
-
-    & git -C $repoRoot diff --cached --quiet
-    $stagedExit = $LASTEXITCODE
-    if ($stagedExit -gt 1) { throw "git diff --cached failed (exit $stagedExit)." }
-
-    if ($stagedExit -eq 1) {
-      $commitMessage = "Build installers v$pinnedVersion ($($requested -join ', '))"
-      Write-Host "Committing: $commitMessage" -ForegroundColor Cyan
-      & git -C $repoRoot commit -m $commitMessage
-      if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
-      Write-Host "Committed." -ForegroundColor Green
-    }
-    else {
-      Write-Host "Nothing to commit - working tree already clean." -ForegroundColor DarkGray
-    }
+    $commitMessage = "Build installers v$pinnedVersion ($($requested -join ', '))"
+    Invoke-YaguInstallerReleaseCommit -RepoRoot $repoRoot -Message $commitMessage -AllowedPaths @(
+      'src/Yagu/Properties/build-version.txt',
+      'src/Yagu/Properties/AppInfo.g.cs',
+      'README.md'
+    )
 
     if ($Push) {
       Write-Host "Pushing (git push)..." -ForegroundColor Cyan
@@ -413,7 +492,28 @@ if ($Commit -or $Push) {
               $repoSlug = "$($Matches.owner)/$($Matches.repo)"
               $repoArgs = @('--repo', $repoSlug)
             }
+            if (-not $repoSlug) {
+              $repoSlug = ("$(& $gh.Source repo view --json nameWithOwner --jq .nameWithOwner 2>$null)").Trim()
+              if ($LASTEXITCODE -eq 0 -and $repoSlug) {
+                $repoArgs = @('--repo', $repoSlug)
+              }
+              else {
+                Write-Warning "GitHub release skipped: could not resolve the owner/repository needed for the Full changelog URL."
+                return
+              }
+            }
             $headSha = ("$(& git -C $repoRoot rev-parse HEAD 2>$null)").Trim()
+            $previousReleaseTag = $null
+            try {
+              $previousReleaseTag = Get-PreviousGitHubReleaseTag `
+                -GitHubCli $gh.Source `
+                -RepoArgs $repoArgs `
+                -CurrentTag $tag
+            }
+            catch {
+              Write-Warning "GitHub release skipped: $($_.Exception.Message) Full changelog generation is required."
+              return
+            }
 
             # Idempotent: if the release/tag already exists (re-run of the same version), refresh its
             # assets with --clobber instead of failing on 'release create'.
@@ -426,41 +526,76 @@ if ($Commit -or $Push) {
               }
               else { Write-Host "Refreshed assets on release $tag." -ForegroundColor Green }
               if ($LASTEXITCODE -eq 0) {
-                if ($resolvedReleaseMode -eq 'Draft') {
-                  & $gh.Source release edit $tag --draft @repoArgs
+                $existingNotes = & $gh.Source release view $tag --json body --jq .body @repoArgs
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Warning "Assets were refreshed, but reading the existing release notes for $tag failed. The full changelog could not be verified."
                 }
                 else {
-                  & $gh.Source release edit $tag --draft=false --latest @repoArgs
+                  $releaseNotes = Add-ReleaseCompareLink `
+                    -Notes (@($existingNotes) -join [Environment]::NewLine) `
+                    -RepositorySlug $repoSlug `
+                    -PreviousReleaseTag $previousReleaseTag `
+                    -ReleaseTag $tag
+                  $notesPath = Write-ReleaseNotesFile -Notes $releaseNotes
+                  try {
+                    if ($resolvedReleaseMode -eq 'Draft') {
+                      & $gh.Source release edit $tag --notes-file $notesPath --draft @repoArgs
+                    }
+                    else {
+                      & $gh.Source release edit $tag --notes-file $notesPath --draft=false --latest @repoArgs
+                    }
+                    if ($LASTEXITCODE -ne 0) {
+                      Write-Warning "Assets were refreshed, but updating the notes or applying $resolvedReleaseMode mode to release $tag failed (exit $LASTEXITCODE). Update it manually."
+                    }
+                    elseif ($resolvedReleaseMode -eq 'Draft') { Write-Host "Release $tag is saved as a draft for review." -ForegroundColor Green }
+                    else { Write-Host "Release $tag is published officially as latest." -ForegroundColor Green }
+                  }
+                  finally {
+                    Remove-Item -LiteralPath $notesPath -Force -ErrorAction SilentlyContinue
+                  }
                 }
-                if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Assets were refreshed, but applying $resolvedReleaseMode mode to release $tag failed (exit $LASTEXITCODE). Update it manually."
-                }
-                elseif ($resolvedReleaseMode -eq 'Draft') { Write-Host "Release $tag is saved as a draft for review." -ForegroundColor Green }
-                else { Write-Host "Release $tag is published officially as latest." -ForegroundColor Green }
               }
             }
             else {
               Write-Host "Creating $($resolvedReleaseMode.ToLowerInvariant()) GitHub release $tag with $($releaseAssets.Count) installer(s) attached..." -ForegroundColor Cyan
-              $createArgs = @('release', 'create', $tag,
-                '--title', "Yagu $pinnedVersion",
-                '--generate-notes',
-                '--target', $headSha)
-              if ($resolvedReleaseMode -eq 'Draft') { $createArgs += '--draft' }
-              else { $createArgs += '--latest' }
-              $createArgs += @($releaseAssets.FullName) + $repoArgs
-              & $gh.Source @createArgs
-              if ($LASTEXITCODE -ne 0) {
-                Write-Warning ("GitHub release creation failed (exit $LASTEXITCODE). Build + push still succeeded. Ensure 'gh auth login' is done, then run: " +
-                  "gh release create $tag installer\YaguSetup-$pinnedVersion-*.exe --draft --generate-notes")
+              try {
+                $releaseNotes = Get-GitHubGeneratedReleaseNotes `
+                  -GitHubCli $gh.Source `
+                  -RepositorySlug $repoSlug `
+                  -ReleaseTag $tag `
+                  -TargetCommit $headSha `
+                  -PreviousReleaseTag $previousReleaseTag
               }
-              else {
-                $releasesUrl = if ($repoSlug) { "https://github.com/$repoSlug/releases" } else { "the GitHub Releases page" }
-                if ($resolvedReleaseMode -eq 'Draft') {
-                  Write-Host "Draft release $tag created. Review the notes/assets and publish it at: $releasesUrl" -ForegroundColor Green
+              catch {
+                Write-Warning "GitHub release creation skipped: $($_.Exception.Message) Build + push still succeeded."
+                return
+              }
+
+              $notesPath = Write-ReleaseNotesFile -Notes $releaseNotes
+              try {
+                $createArgs = @('release', 'create', $tag,
+                  '--title', "Yagu $pinnedVersion",
+                  '--notes-file', $notesPath,
+                  '--target', $headSha)
+                if ($resolvedReleaseMode -eq 'Draft') { $createArgs += '--draft' }
+                else { $createArgs += '--latest' }
+                $createArgs += @($releaseAssets.FullName) + $repoArgs
+                & $gh.Source @createArgs
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Warning ("GitHub release creation failed (exit $LASTEXITCODE). Build + push still succeeded. Ensure 'gh auth login' is done, then retry after verifying the release notes.")
                 }
                 else {
-                  Write-Host "Release $tag published officially as latest: $releasesUrl" -ForegroundColor Green
+                  $releasesUrl = if ($repoSlug) { "https://github.com/$repoSlug/releases" } else { "the GitHub Releases page" }
+                  if ($resolvedReleaseMode -eq 'Draft') {
+                    Write-Host "Draft release $tag created. Review the notes/assets and publish it at: $releasesUrl" -ForegroundColor Green
+                  }
+                  else {
+                    Write-Host "Release $tag published officially as latest: $releasesUrl" -ForegroundColor Green
+                  }
                 }
+              }
+              finally {
+                Remove-Item -LiteralPath $notesPath -Force -ErrorAction SilentlyContinue
               }
             }
           }

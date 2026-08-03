@@ -48,6 +48,16 @@ Runtime, which the installer bundles and installs. Building from source needs th
 - `build-installer.ps1` deletes the same-arch previous root installer, so a tracked LFS installer can
   vanish from the working tree after a build — restore with `git lfs checkout`.
 
+## Commit/push safety
+
+- `-Push` (and `build-all-installers.ps1 -Commit`) organizes a dirty tree **before** building through
+  reviewed `git add --patch` groups. The user selects one functional group and supplies its commit
+  message; the scripts never assign source hunks automatically.
+- Conflicts, renames/copies, dirty non-interactive runs, and unexpected post-build files stop the
+  workflow before push.
+- After a successful build, only the explicit release-generated version/README paths may be staged.
+  Never restore catch-all `git add -A` behavior to either publish path.
+
 ## Version churn
 
 Release/publish auto-increment `src/Yagu/Properties/build-version.txt` + `AppInfo.g.cs`. Revert that churn

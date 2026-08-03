@@ -3,6 +3,35 @@ namespace Yagu.Tests;
 public sealed class InstallerPackagingRegressionTests
 {
     [Fact]
+    public void WindowsPlatformDependencies_AreCurrentAndAlignedAcrossProjects()
+    {
+        string root = FindRepoRoot();
+        string app = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Yagu.csproj"));
+        string semanticWorker = File.ReadAllText(Path.Combine(root, "src", "Yagu.SemanticWorker", "Yagu.SemanticWorker.csproj"));
+        string textControl = File.ReadAllText(Path.Combine(root, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "TextControlBox.csproj"));
+        string installer = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+        string globalJson = File.ReadAllText(Path.Combine(root, "global.json"));
+
+        Assert.Contains("<PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"2.3.1\" />", app);
+        Assert.Contains("<PackageReference Include=\"Microsoft.Windows.SDK.BuildTools\" Version=\"10.0.28000.2526\" />", app);
+        Assert.Contains("<PackageReference Include=\"Microsoft.Web.WebView2\" Version=\"1.0.4078.44\"", app);
+        Assert.Contains("<PackageReference Include=\"Microsoft.Graphics.Win2D\" Version=\"1.4.0\" />", app);
+        Assert.Contains("<PackageReference Include=\"Microsoft.WindowsAppSDK.ML\" Version=\"2.1.74\" />", app);
+        Assert.Contains("<PackageReference Include=\"System.Diagnostics.PerformanceCounter\" Version=\"10.0.10\" />", app);
+        Assert.Contains("<WindowsSdkPackageVersion>10.0.26100.87</WindowsSdkPackageVersion>", app);
+
+        Assert.Contains("<PackageReference Include=\"Microsoft.WindowsAppSDK.ML\" Version=\"2.1.74\" />", semanticWorker);
+        Assert.Contains("<WindowsSdkPackageVersion>10.0.26100.87</WindowsSdkPackageVersion>", semanticWorker);
+        Assert.Contains("<PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"2.3.1\" />", textControl);
+        Assert.Contains("<PackageReference Include=\"Microsoft.Windows.SDK.BuildTools\" Version=\"10.0.28000.2526\" />", textControl);
+        Assert.Contains("<PackageReference Include=\"Microsoft.Graphics.Win2D\" Version=\"1.4.0\" />", textControl);
+        Assert.Contains("<WindowsSdkPackageVersion>10.0.26100.87</WindowsSdkPackageVersion>", textControl);
+        Assert.Contains("Installing Windows App Runtime...", installer);
+        Assert.DoesNotContain("Windows App Runtime 1.8", installer);
+        Assert.Contains("\"version\": \"10.0.302\"", globalJson);
+    }
+
+    [Fact]
     public void InstallerBuild_StagesWindowsAppRuntimePrerequisite()
     {
         string root = FindRepoRoot();
@@ -29,6 +58,9 @@ public sealed class InstallerPackagingRegressionTests
         // the MIT/BSD/Apache/LGPL and 7-Zip/unRAR notice requirements).
         Assert.Contains("<Content Include=\"..\\..\\LICENSE\" Link=\"LICENSE\">", csproj);
         Assert.Contains("<Content Include=\"..\\..\\THIRD-PARTY-NOTICES.txt\" Link=\"THIRD-PARTY-NOTICES.txt\">", csproj);
+        // The privacy policy ships beside the app too, so the installer's InfoBefore page and the
+        // in-app Help can point at <app>\PRIVACY.md.
+        Assert.Contains("<Content Include=\"..\\..\\PRIVACY.md\" Link=\"PRIVACY.md\">", csproj);
 
         // The installer stages the whole publish output, so those files ship as <app>\LICENSE and
         // <app>\THIRD-PARTY-NOTICES.txt.
@@ -38,6 +70,82 @@ public sealed class InstallerPackagingRegressionTests
         // the bundled 7-Zip 7z.dll.
         string notices = File.ReadAllText(Path.Combine(root, "THIRD-PARTY-NOTICES.txt"));
         Assert.Contains("develop a RAR (WinRAR) compatible archiver", notices);
+    }
+
+    [Fact]
+    public void Installer_MatchesMultiTermLicenseAndPostInstallNoticesFlow()
+    {
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+        string help = File.ReadAllText(Path.Combine(root, "HELP.md"));
+
+        // This is the same standard Inno flow used by D:\multiTerm\installer\MultiTerm.iss:
+        // GPL agreement during setup, then consolidated notices on the post-install information page.
+        // Yagu adds a privacy-policy information page DURING setup (InfoBeforeFile), shown after the
+        // license and before component/task selection, so the user learns how their data is handled
+        // before installing.
+        Assert.Contains("#define RepoRoot \"..\"", inno);
+        Assert.Contains(@"LicenseFile={#RepoRoot}\LICENSE", inno);
+        Assert.Contains(@"InfoBeforeFile={#RepoRoot}\PRIVACY.md", inno);
+        Assert.Contains(@"InfoAfterFile={#RepoRoot}\THIRD-PARTY-NOTICES.txt", inno);
+        Assert.True(
+            inno.IndexOf("LicenseFile=", StringComparison.Ordinal) < inno.IndexOf("InfoAfterFile=", StringComparison.Ordinal),
+            "The license agreement must precede the post-install notices, matching MultiTerm.");
+        // The privacy page is shown during setup: after the license, before the post-install notices.
+        Assert.True(
+            inno.IndexOf("LicenseFile=", StringComparison.Ordinal) < inno.IndexOf("InfoBeforeFile=", StringComparison.Ordinal)
+                && inno.IndexOf("InfoBeforeFile=", StringComparison.Ordinal) < inno.IndexOf("InfoAfterFile=", StringComparison.Ordinal),
+            "The privacy policy (InfoBeforeFile) must appear during setup, after the license and before the post-install notices.");
+        Assert.DoesNotContain("ACCEPTLICENSE", inno);
+        Assert.DoesNotContain("ACCEPTLICENSE", help);
+        Assert.Contains("/VERYSILENT /VERBOSELOG", inno);
+        Assert.Contains("/VERYSILENT /VERBOSELOG", help);
+    }
+
+    [Fact]
+    public void PrivacyPolicy_ExistsAndIsSurfacedDuringSetupAndInAppHelp()
+    {
+        string root = FindRepoRoot();
+        string privacy = File.ReadAllText(Path.Combine(root, "PRIVACY.md"));
+        string help = File.ReadAllText(Path.Combine(root, "HELP.md"));
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        // The canonical policy exists at the repo root and states the core on-device guarantee.
+        Assert.Contains("# Yagu — Privacy Policy", privacy);
+        Assert.Contains("never leave your PC", privacy);
+
+        // It is shown during installation (InfoBeforeFile) ...
+        Assert.Contains(@"InfoBeforeFile={#RepoRoot}\PRIVACY.md", inno);
+
+        // ... and the in-app Help (rendered from HELP.md) carries a Privacy Policy section that points
+        // at the shipped PRIVACY.md so the user can read it from Help inside the app.
+        Assert.Contains("## Privacy Policy", help);
+        Assert.Contains("PRIVACY.md", help);
+    }
+
+    [Fact]
+    public void IndexWorker_IsPublishedArchMatched_AndShipsInEveryInstallerVariant()
+    {
+        string root = FindRepoRoot();
+        string csproj = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Yagu.csproj"));
+        string buildInstaller = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        // The content-index worker is PUBLISHED self-contained (carries its own .NET runtime — Yagu.exe is
+        // self-contained Native AOT and provides no shared runtime). UNLIKE the OCR / semantic workers it is
+        // arch-matched (its native yagu_core.dll is arch-specific), so its RID tracks the app's RuntimeIdentifier.
+        Assert.Contains("dotnet publish &quot;$(IndexWorkerProject)&quot; -c $(Configuration) -r $(IndexWorkerRid) --self-contained true", csproj);
+        Assert.Contains("<IndexWorkerRid Condition=\"'$(IndexWorkerRid)' == '' And '$(RuntimeIdentifier)' != ''\">$(RuntimeIdentifier)</IndexWorkerRid>", csproj);
+
+        // Copied into the self-contained publish dir (AfterTargets=Publish) so build-installer.ps1's recursive
+        // stage carries it into <staging>\index-worker for EVERY architecture / edition.
+        Assert.Contains("$(PublishDir)index-worker\\", csproj);
+        Assert.Contains("AfterTargets=\"Publish\"", csproj);
+        Assert.Contains("Copy-Item -Path \"$publishDir\\*\" -Destination $stagingDir -Recurse -Force", buildInstaller);
+
+        // The recursesubdirs [Files] entry ships every staged subfolder (incl. index-worker) as <app>\...,
+        // so all four installer variants (x64/x86/arm64/offline) contain a runnable worker with no ISS change.
+        Assert.Contains("Source: \"{#StagingDir}\\*\"; DestDir: \"{app}\"; Flags: ignoreversion recursesubdirs createallsubdirs", inno);
     }
 
     [Fact]
@@ -88,6 +196,68 @@ public sealed class InstallerPackagingRegressionTests
 
         // The prompt is wired into the post-uninstall step alongside the registry cleanup.
         Assert.Contains("MaybeRemoveUserSettings();", inno);
+    }
+
+    [Fact]
+    public void InstallerAndUninstaller_PromptToKeepOrDeleteContentIndexesSafely()
+    {
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        // Setup visibly detects both 32-bit and 64-bit registrations plus saved settings/index data,
+        // then presents independent, default-on preservation choices before installation starts.
+        Assert.Contains("procedure DetectExistingYaguState();", inno);
+        Assert.Contains("DetectRegisteredInstall(HKCU32);", inno);
+        Assert.Contains("DetectRegisteredInstall(HKCU64);", inno);
+        Assert.Contains("DetectRegisteredInstall(HKLM32);", inno);
+        Assert.Contains("DetectRegisteredInstall(HKLM64);", inno);
+        Assert.Contains("procedure InitializeWizard();", inno);
+        Assert.Contains("Existing Yagu installation or data found", inno);
+        Assert.Contains("function CountRecognizedIndexScopes(const IndexRoot: String): Integer;", inno);
+        Assert.Contains("\\b Recognized content indexes: ", inno);
+        Assert.Contains("IntToStr(ExistingIndexScopeCount)", inno);
+        Assert.Contains("Warning: clearing a Keep option permanently deletes that data.", inno);
+
+        // The summary uses native rich text for meaningful emphasis. Preservation choices are fixed
+        // below it rather than placed in TInputOptionWizardPage's scrollable options strip.
+        Assert.Contains("ExistingDataPage := CreateCustomPage(", inno);
+        Assert.Contains("ExistingSummaryViewer := TRichEditViewer.Create(ExistingDataPage);", inno);
+        Assert.Contains("ExistingSummaryViewer.UseRichEdit := True;", inno);
+        Assert.Contains("ExistingSummaryViewer.RTFText := Rtf;", inno);
+        Assert.Contains("\\b\\cf3 Keep is the recommended default.", inno);
+        Assert.Contains("\\b\\cf2 Warning: clearing a Keep option permanently deletes that data.", inno);
+        Assert.Contains("OptionTop := ExistingDataPage.SurfaceHeight - (OptionCount * ScaleY(22));", inno);
+        Assert.Contains("Keep settings and apply supported migrations (recommended)", inno);
+        Assert.Contains("Keep content indexes; avoids rebuilding (recommended)", inno);
+        Assert.Contains("Result := TNewCheckBox.Create(ExistingDataPage);", inno);
+        Assert.Contains("Result.Checked := True;", inno);
+        Assert.DoesNotContain("CreateInputOptionPage(", inno);
+
+        Assert.Contains("procedure MaybeRemoveContentIndexes(DuringUninstall: Boolean);", inno);
+        Assert.Contains("Do you want to keep your existing Yagu content indexes?", inno);
+        Assert.Contains("Building it again can take a long time.", inno);
+        Assert.Contains("mbConfirmation, MB_YESNO) = IDNO then", inno);
+        Assert.Contains("(DuringUninstall and UninstallSilent())", inno);
+        Assert.Contains("((not DuringUninstall) and WizardSilent())", inno);
+
+        // The default per-user location is dedicated to Yagu. A custom root may contain unrelated files,
+        // so setup identifies scope directories and never recursively deletes that custom root itself.
+        Assert.Contains(@"ExpandConstant('{localappdata}\Yagu\content-index')", inno);
+        Assert.Contains("TryReadJsonStringProperty(String(SettingsJson), 'IndexStorageDirectory', ParsedRoot)", inno);
+        Assert.Contains("'PreservedIndexStorageDirectory'", inno);
+        Assert.Contains("IsRecognizedIndexScope(Candidate)", inno);
+        Assert.Contains("DeleteRecognizedIndexData(DefaultRoot, True);", inno);
+        Assert.Contains("DeleteRecognizedIndexData(CustomRoot, False);", inno);
+        Assert.Contains("if DeleteDedicatedRoot then", inno);
+        Assert.Contains("RegWriteStringValue(HKCU, 'Software\\Yagu', 'PreservedIndexStorageDirectory', PreservedCustomIndexRoot);", inno);
+
+        // Interactive uninstall asks before removing files. Install applies the visible page choices only
+        // after Install is clicked; silent setup preserves settings and indexes without prompting.
+        Assert.Contains("MaybeRemoveContentIndexes(True);", inno);
+        Assert.Contains("MaybeRemoveContentIndexes(False);", inno);
+        Assert.Contains("procedure MaybeRemoveUserSettingsDuringInstall();", inno);
+        Assert.Contains("MaybeRemoveUserSettingsDuringInstall();", inno);
+        Assert.DoesNotContain("if not FileExists(ExpandConstant('{app}\\{#MyAppExeName}')) then", inno);
     }
 
     [Fact]
@@ -310,10 +480,90 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("& $buildInstaller @params", buildAll);
     }
 
+    [Fact]
+    public void InstallerPush_ReviewsPendingHunksAndScopesReleaseCommitPaths()
+    {
+        string root = FindRepoRoot();
+        string buildAll = File.ReadAllText(Path.Combine(root, "build-all-installers.ps1"));
+        string buildInstaller = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
+        string gitHelper = File.ReadAllText(Path.Combine(root, "scripts", "installer-git-commits.ps1"));
+
+        foreach (string script in new[] { buildAll, buildInstaller })
+        {
+            Assert.Contains("Invoke-YaguFocusedPendingCommits -RepoRoot $repoRoot", script);
+            Assert.Contains("Invoke-YaguInstallerReleaseCommit -RepoRoot $repoRoot", script);
+            Assert.DoesNotContain("& git -C $repoRoot add -A", script);
+        }
+
+        Assert.True(
+            buildAll.IndexOf("Invoke-YaguFocusedPendingCommits", StringComparison.Ordinal)
+                < buildAll.IndexOf("$versionFile =", StringComparison.Ordinal),
+            "Pending changes must be organized before the release version is incremented.");
+        Assert.True(
+            buildInstaller.IndexOf("Invoke-YaguFocusedPendingCommits", StringComparison.Ordinal)
+                < buildInstaller.IndexOf("foreach ($arch in $architectures)", StringComparison.Ordinal),
+            "Pending changes must be organized before the single-installer build starts.");
+
+        Assert.Contains("& git -C $RepoRoot add --patch", gitHelper);
+        Assert.Contains("add --intent-to-add -- @batch", gitHelper);
+        Assert.Contains("diff --name-only --diff-filter=U", gitHelper);
+        Assert.Contains("diff --name-status --find-renames", gitHelper);
+        Assert.Contains("Focused commits are not allowed from a detached HEAD", gitHelper);
+        Assert.Contains("'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply'", gitHelper);
+        Assert.Contains("[Console]::IsInputRedirected", gitHelper);
+        Assert.Contains("Unexpected post-build change(s) will not be committed or pushed", gitHelper);
+        Assert.Contains("& git -C $RepoRoot add -A -- @releaseChanges", gitHelper);
+        Assert.Contains("commit --only -m $Message -- @releaseChanges", gitHelper);
+        Assert.Contains("'README.md'", buildAll);
+    }
+
+    [Fact]
+    public void InstallerRelease_AlwaysAddsFullChangelogCompareLink()
+    {
+        string root = FindRepoRoot();
+        string buildAll = File.ReadAllText(Path.Combine(root, "build-all-installers.ps1"));
+
+        Assert.Contains("function Add-ReleaseCompareLink", buildAll);
+        Assert.Contains("## Full changelog", buildAll);
+        Assert.Contains("[Compare $range]($compareUrl)", buildAll);
+        Assert.Contains("https://github.com/$RepositorySlug/compare/$range", buildAll);
+        Assert.Contains("function Get-PreviousGitHubReleaseTag", buildAll);
+        Assert.Contains("Where-Object { -not $_.isDraft -and $_.tagName -ne $CurrentTag }", buildAll);
+        Assert.Contains("repos/$RepositorySlug/releases/generate-notes", buildAll);
+        Assert.Contains("previous_tag_name=$PreviousReleaseTag", buildAll);
+        Assert.Contains("--notes-file", buildAll);
+        Assert.Contains("Get-GitHubGeneratedReleaseNotes", buildAll);
+        Assert.Contains("-Notes (@($existingNotes) -join [Environment]::NewLine)", buildAll);
+    }
+
+    [Fact]
+    public void Installer_OffersOptionalAddToSystemPathTask()
+    {
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        // An opt-in (unchecked) task on the "Select Additional Tasks" page asks the user whether to add
+        // the install folder to the system PATH.
+        Assert.Contains(@"Name: ""addtopath""; Description: ""Add Yagu to the system PATH (run 'yagu' from any terminal)""; GroupDescription: ""Command-line access:""; Flags: unchecked", inno);
+
+        // Editing the system Path env var requires broadcasting WM_SETTINGCHANGE so open apps see it.
+        Assert.Contains("ChangesEnvironment=yes", inno);
+
+        // The append is gated on the task AND a duplicate guard (NeedsAddPath), writing the system
+        // (HKLM) Path as REG_EXPAND_SZ.
+        Assert.Contains(@"Root: HKLM; Subkey: ""{#EnvironmentKey}""; ValueType: expandsz; ValueName: ""Path""; ValueData: ""{olddata};{app}""; Tasks: addtopath; Check: NeedsAddPath('{app}')", inno);
+        Assert.Contains("function NeedsAddPath(Param: String): Boolean;", inno);
+
+        // Uninstall removes the entry it added (an appended registry value cannot be reversed declaratively).
+        Assert.Contains("procedure RemoveAppFromSystemPath();", inno);
+        Assert.Contains("RegWriteExpandStringValue(HKLM, '{#EnvironmentKey}', 'Path', NewPath);", inno);
+        Assert.Contains("RemoveAppFromSystemPath();", inno);
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
         return dir?.FullName ?? Directory.GetCurrentDirectory();
     }
