@@ -117,9 +117,9 @@ public sealed class SemanticEvalGoldenTests
     private static string RepoRoot()
     {
         string dir = System.AppContext.BaseDirectory;
-        while (dir is not null && !File.Exists(Path.Combine(dir, "Yagu.sln")))
+        while (dir is not null && !File.Exists(Path.Combine(dir, "Yagu.slnx")))
             dir = Directory.GetParent(dir)?.FullName!;
-        return dir ?? throw new DirectoryNotFoundException("Yagu.sln not found above the test output directory.");
+        return dir ?? throw new DirectoryNotFoundException("Yagu.slnx not found above the test output directory.");
     }
 
     private static string? FindYaguExe(string root)

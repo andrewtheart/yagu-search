@@ -122,6 +122,14 @@ public sealed class SemanticPlanJsonExtractorTests
     }
 
     [Fact]
+    public void TryParsePlan_NullOutput_FailsWithoutThrowing()
+    {
+        Assert.False(SemanticPlanJsonExtractor.TryParsePlan(null, out SemanticSearchPlan? plan, out string? error));
+        Assert.Null(plan);
+        Assert.False(string.IsNullOrEmpty(error));
+    }
+
+    [Fact]
     public void TryParsePlan_BalancedButInvalidJson_FailsWithError()
     {
         // The braces balance, so extraction returns the object, but the missing value makes

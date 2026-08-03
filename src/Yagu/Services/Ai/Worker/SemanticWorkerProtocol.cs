@@ -28,6 +28,7 @@ internal static class SemanticWorkerProtocol
         public const string SetEnabled = "setEnabled";
         public const string SetDeviceOrder = "setDeviceOrder";
         public const string SetModelOverride = "setModelOverride";
+        public const string SetModelGenerationOverrides = "setModelGenerationOverrides";
         public const string SetAccelerators = "setAccelerators";
         public const string SetGpuMemory = "setGpuMemory";
         public const string SetUnloadAfterUse = "setUnloadAfterUse";
@@ -127,6 +128,7 @@ internal sealed class WorkerMessage
 [JsonSerializable(typeof(WorkerRequest))]
 [JsonSerializable(typeof(WorkerMessage))]
 [JsonSerializable(typeof(List<SemanticModelOption>))]
+[JsonSerializable(typeof(Dictionary<string, SemanticModelGenerationOverride>))]
 internal sealed partial class SemanticWorkerJsonContext : JsonSerializerContext
 {
 }

@@ -399,10 +399,10 @@ public sealed class SemanticCapabilityDetectorTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "Yagu.sln")))
+            if (File.Exists(Path.Combine(directory.FullName, "Yagu.slnx")))
                 return directory.FullName;
             directory = directory.Parent;
         }
-        throw new DirectoryNotFoundException("Could not locate Yagu.sln from the test output directory.");
+        throw new DirectoryNotFoundException("Could not locate Yagu.slnx from the test output directory.");
     }
 }

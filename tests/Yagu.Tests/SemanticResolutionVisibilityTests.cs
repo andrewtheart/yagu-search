@@ -41,7 +41,7 @@ public sealed class SemanticResolutionVisibilityTests
         // The reset runs ONLY inside the Semantic branch, so a Traditional search never alters Advanced
         // Options (the include-glob-wiped-in-traditional-mode bug). The mode gate must appear BEFORE the
         // reset call within SubmitSearchAsync.
-        string submit = Method("SubmitSearchAsync", 3700);
+        string submit = Method("SubmitSearchAsync", 4100);
         int semanticGate = submit.IndexOf("if (IsSemanticQueryMode && SemanticSearchAvailable)", StringComparison.Ordinal);
         int resetCall = submit.IndexOf("ResetVisibleSemanticResolution();", StringComparison.Ordinal);
         Assert.True(semanticGate >= 0, "SubmitSearchAsync must gate on the Semantic mode.");
@@ -51,7 +51,11 @@ public sealed class SemanticResolutionVisibilityTests
         Assert.Contains("_semanticDefaultsSnapshot is { } leftover && !_semanticResolutionVisible", submit);
 
         // StartSearchAsync no longer reverts the plan; it marks the resolution visible and persists.
-        string start = Method("StartSearchAsync", 16000);
+        // Window widened 22000 -> 30000: the method grew (pre-search readiness + snapshot capture) and
+        // pushed "_semanticResolutionVisible = true;" ~243 chars past the old 22000 window (behavior is
+        // unchanged — the flag is still set inside StartSearchAsync). 30000 stays inside the ~40k-char
+        // method (the next method begins later), so DoesNotContain stays scoped to StartSearchAsync.
+        string start = Method("StartSearchAsync", 30000);
         Assert.Contains("_semanticResolutionVisible = true;", start);
         Assert.DoesNotContain("RestoreSearchDefaults(restoreDefaults)", start);
 
@@ -121,8 +125,8 @@ public sealed class SemanticResolutionVisibilityTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
-        return dir?.FullName ?? throw new DirectoryNotFoundException("Could not locate repo root (Yagu.sln).");
+        return dir?.FullName ?? throw new DirectoryNotFoundException("Could not locate repo root (Yagu.slnx).");
     }
 }

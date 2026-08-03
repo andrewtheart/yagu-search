@@ -1,4 +1,6 @@
 using Microsoft.AI.Foundry.Local;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Ai;
 
@@ -126,7 +128,7 @@ public sealed class FoundryModelSelector
         if (!string.IsNullOrWhiteSpace(overrideAlias))
         {
             string wanted = overrideAlias.Trim();
-            LogService.Instance.Verbose(LogSource, $"Resolving requested model override '{wanted}'.");
+            YaguLog.For(LogSource).LogDebug("Resolving requested model override '{Wanted}'.", wanted);
 
             // First let Foundry resolve the value as an ALIAS (e.g. "phi-4-mini"), which yields the
             // family model carrying every hardware-available variant. When it resolves as an alias we
@@ -135,7 +137,7 @@ public sealed class FoundryModelSelector
             var direct = await catalog.GetModelAsync(wanted, cancellationToken).ConfigureAwait(false);
             if (direct is not null)
             {
-                LogService.Instance.Verbose(LogSource, $"Override '{wanted}' resolved as a family alias.");
+                YaguLog.For(LogSource).LogDebug("Override '{Wanted}' resolved as a family alias.", wanted);
                 return await PreferAccurateVariantAsync(catalog, direct, deviceOrder, availableDevices, cancellationToken).ConfigureAwait(false);
             }
 
@@ -146,7 +148,7 @@ public sealed class FoundryModelSelector
             var variant = await catalog.GetModelVariantAsync(wanted, cancellationToken).ConfigureAwait(false);
             if (variant is not null)
             {
-                LogService.Instance.Verbose(LogSource, $"Override '{wanted}' resolved as a pinned variant id.");
+                YaguLog.For(LogSource).LogDebug("Override '{Wanted}' resolved as a pinned variant id.", wanted);
                 return variant;
             }
 
@@ -165,21 +167,21 @@ public sealed class FoundryModelSelector
                 {
                     // Re-resolve as a dedicated single-variant handle (see PreferAccurateVariantAsync):
                     // a wrapper from Variants routes load/inference back through the family alias.
-                    LogService.Instance.Verbose(LogSource,
-                        $"Override '{wanted}' matched variant '{match.Id}' under family alias '{familyAlias}'.");
+                    YaguLog.For(LogSource).LogDebug(
+                        "Override '{Wanted}' matched variant '{VariantId}' under family alias '{FamilyAlias}'.", wanted, match.Id, familyAlias);
                     var dedicated = await catalog.GetModelVariantAsync(match.Id, cancellationToken).ConfigureAwait(false);
                     return dedicated ?? match;
                 }
             }
-            LogService.Instance.Warning(LogSource,
-                $"Requested model override '{wanted}' was not found in the catalog; no model selected.");
+            YaguLog.For(LogSource).LogWarning(
+                "Requested model override '{Wanted}' was not found in the catalog; no model selected.", wanted);
             return null;
         }
 
         var models = await catalog.ListModelsAsync(cancellationToken).ConfigureAwait(false);
         if (models is null || models.Count == 0)
         {
-            LogService.Instance.Warning(LogSource, "Model catalog returned no models for this hardware.");
+            YaguLog.For(LogSource).LogWarning("Model catalog returned no models for this hardware.");
             return null;
         }
 
@@ -211,18 +213,18 @@ public sealed class FoundryModelSelector
         }
         if (candidates.Count == 0)
         {
-            LogService.Instance.Warning(LogSource, "No catalog model has a variant this machine can run.");
+            YaguLog.For(LogSource).LogWarning("No catalog model has a variant this machine can run.");
             return null;
         }
-        LogService.Instance.Verbose(LogSource, $"Ranking {candidates.Count} runnable catalog model(s).");
+        YaguLog.For(LogSource).LogDebug("Ranking {Count} runnable catalog model(s).", candidates.Count);
 
         string? chosenAlias = SelectAlias(candidates, availableMemoryMb);
         if (chosenAlias is null)
         {
-            LogService.Instance.Warning(LogSource, "No eligible text-chat model found among catalog candidates.");
+            YaguLog.For(LogSource).LogWarning("No eligible text-chat model found among catalog candidates.");
             return null;
         }
-        LogService.Instance.Info(LogSource, $"Auto-selected model alias '{chosenAlias}'.");
+        YaguLog.For(LogSource).LogInformation("Auto-selected model alias '{Alias}'.", chosenAlias);
 
         // Re-fetch the chosen family by alias so the returned IModel carries the full set of
         // hardware-available variants, then upgrade to the most accurate one this machine can run.
@@ -281,8 +283,8 @@ public sealed class FoundryModelSelector
             return family; // already on the best variant
 
         // Re-resolve as a dedicated single-variant handle so load/inference actually target it.
-        LogService.Instance.Verbose(LogSource,
-            $"Preferring more-accurate variant '{best.Id}' (score {bestScore}) over family default '{family.Id}'.");
+        YaguLog.For(LogSource).LogDebug(
+            "Preferring more-accurate variant '{VariantId}' (score {Score}) over family default '{FamilyId}'.", best.Id, bestScore, family.Id);
         var dedicated = await catalog.GetModelVariantAsync(best.Id, cancellationToken).ConfigureAwait(false);
         return dedicated ?? family;
     }
@@ -382,7 +384,7 @@ public sealed class FoundryModelSelector
             // (embedding / audio / whisper / vision): it cannot perform JSON translation and would fail
             // every request (e.g. whisper-tiny's 448-token context). Returning null makes the caller
             // report that no compatible model is available instead of silently selecting an unusable one.
-            LogService.Instance.Warning(LogSource,
+            YaguLog.For(LogSource).LogWarning(
                 "No text-chat-capable model in catalog; refusing to fall back to a non-chat model.");
             return null;
         }

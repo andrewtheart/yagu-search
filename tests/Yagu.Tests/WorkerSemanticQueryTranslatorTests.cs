@@ -15,7 +15,7 @@ public sealed class WorkerSemanticQueryTranslatorTests
     private static string RepoRoot()
     {
         var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
         Assert.NotNull(dir);
         return dir!.FullName;
@@ -67,6 +67,45 @@ public sealed class WorkerSemanticQueryTranslatorTests
         Assert.Contains("return SemanticTranslationResult.Fail($\"The local AI worker could not translate the query: {ex.Message}\");", src);
         // Cancellation still propagates (the caller cancelled deliberately).
         Assert.Contains("catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)", src);
+    }
+
+    [Fact]
+    public void Proxy_CancellationHardResetsWorkerWithFreshToken()
+    {
+        string src = Proxy();
+        // A protocol cancel can complete before native Foundry load/inference stops. Translation and explicit
+        // preparation cancellation therefore hard-reset the exact worker using a fresh bounded cleanup token.
+        Assert.Contains("private async Task ResetHostAfterCanceledRequestAsync()", src);
+        Assert.Contains("new CancellationTokenSource(TimeSpan.FromSeconds(10))", src);
+        Assert.Contains("await ResetHostAsync(cleanupCts.Token).ConfigureAwait(false);", src);
+        Assert.True(System.Text.RegularExpressions.Regex.Matches(
+            src, @"await ResetHostAfterCanceledRequestAsync\(\)\.ConfigureAwait\(false\);").Count >= 3);
+    }
+
+    [Fact]
+    public void Proxy_UnloadAfterUseHardResetsWorkerAfterCompletedTranslation()
+    {
+        string src = Proxy();
+        // Foundry can acknowledge UnloadAsync while CUDA/ONNX allocations remain resident. Both completed
+        // translation paths therefore preserve the terminal result first, then tear down the isolated process.
+        Assert.Contains("private async Task ResetHostAfterCompletedRequestAsync()", src);
+        Assert.Contains("SemanticTranslationResult result = ToResult(msg);", src);
+        Assert.True(System.Text.RegularExpressions.Regex.Matches(
+            src, @"if \(_unloadAfterUse\)\s+await ResetHostAfterCompletedRequestAsync\(\)\.ConfigureAwait\(false\);\s+return result;").Count >= 2);
+        Assert.Contains("semantic worker reset after completed translation did not complete", src);
+    }
+
+    [Fact]
+    public void Proxy_ExplicitUnloadUsesProcessTeardownInsteadOfNominalSdkUnload()
+    {
+        string src = Proxy();
+        int start = src.IndexOf("public async Task UnloadCurrentModelAsync", StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        int end = src.IndexOf("// ── ISemanticQueryTranslator: config", start, StringComparison.Ordinal);
+        Assert.True(end > start);
+        string method = src[start..end];
+        Assert.Contains("await ResetHostAsync(cancellationToken).ConfigureAwait(false);", method);
+        Assert.DoesNotContain("SemanticWorkerProtocol.Ops.UnloadModel", method);
     }
 
     [Fact]

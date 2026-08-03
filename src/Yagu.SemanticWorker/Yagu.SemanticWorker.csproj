@@ -25,6 +25,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <WindowsSdkPackageVersion>10.0.26100.87</WindowsSdkPackageVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Yagu.SemanticWorker</RootNamespace>
@@ -48,8 +49,11 @@
   <ItemGroup>
     <!-- The Foundry Local SDK + its WinML runtime (same versions the main app uses). Betalgo.Ranul.OpenAI
          comes transitively. -->
-    <PackageReference Include="Microsoft.AI.Foundry.Local.WinML" Version="1.2.3" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.ML" Version="2.1.1" />
+    <PackageReference Include="Microsoft.AI.Foundry.Local.WinML" Version="1.2.4" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.ML" Version="2.1.74" />
+    <!-- Structured-logging facade used by the source-linked translator (the bridge sources below route
+         it to the same LogService sink). Abstractions-only, AOT/trim-safe. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.*" />
   </ItemGroup>
 
   <!--
@@ -59,7 +63,12 @@
   -->
   <ItemGroup>
     <Compile Include="..\Yagu\Services\LogService.cs" Link="Linked\LogService.cs" />
+    <!-- The Microsoft.Extensions.Logging bridge (YaguLog facade + ILogger→LogService adapter) that the
+         source-linked Ai files now log through. Depends only on LogService.cs (above). -->
+    <Compile Include="..\Yagu\Services\Logging\LogServiceLogger.cs" Link="Linked\LogServiceLogger.cs" />
+    <Compile Include="..\Yagu\Services\Logging\YaguLog.cs" Link="Linked\YaguLog.cs" />
     <Compile Include="..\Yagu\Services\Ai\ISemanticQueryTranslator.cs" Link="Linked\ISemanticQueryTranslator.cs" />
+    <Compile Include="..\Yagu\Services\Ai\SemanticModelGenerationOverride.cs" Link="Linked\SemanticModelGenerationOverride.cs" />
     <Compile Include="..\Yagu\Models\SemanticSearchPlan.cs" Link="Linked\SemanticSearchPlan.cs" />
     <Compile Include="..\Yagu\Services\Ai\FoundryLoggerAdapter.cs" Link="Linked\FoundryLoggerAdapter.cs" />
     <Compile Include="..\Yagu\Services\Ai\ModelContextBudget.cs" Link="Linked\ModelContextBudget.cs" />

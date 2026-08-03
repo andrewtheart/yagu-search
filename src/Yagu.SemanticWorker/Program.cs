@@ -105,11 +105,28 @@ internal static class Program
             case SemanticWorkerProtocol.Ops.SetEnabled: _translator.SetEnabled(req.BoolValue); return true;
             case SemanticWorkerProtocol.Ops.SetDeviceOrder: _translator.SetDevicePreferenceOrder(req.StringValue); return true;
             case SemanticWorkerProtocol.Ops.SetModelOverride: _translator.SetModelOverride(req.StringValue); return true;
+            case SemanticWorkerProtocol.Ops.SetModelGenerationOverrides: _translator.SetModelGenerationOverrides(DeserializeGenerationOverrides(req.StringValue)); return true;
             case SemanticWorkerProtocol.Ops.SetAccelerators: _translator.SetAvailableAccelerators(req.BoolValue, req.BoolValue2); return true;
             case SemanticWorkerProtocol.Ops.SetGpuMemory: _translator.SetGpuMemoryBytes(req.LongValue); return true;
             case SemanticWorkerProtocol.Ops.SetUnloadAfterUse: _translator.SetUnloadAfterUse(req.BoolValue); return true;
             case SemanticWorkerProtocol.Ops.RefreshCatalog: _translator.RefreshCatalog(); return true;
             default: return false;
+        }
+    }
+
+    /// <summary>Deserializes the per-model generation override map sent as a JSON string on
+    /// <see cref="SemanticWorkerProtocol.Ops.SetModelGenerationOverrides"/>. A null/blank/invalid payload
+    /// clears the overrides (restores the translator's built-in defaults).</summary>
+    private static Dictionary<string, SemanticModelGenerationOverride>? DeserializeGenerationOverrides(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize(json, SemanticWorkerJsonContext.Default.DictionaryStringSemanticModelGenerationOverride);
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

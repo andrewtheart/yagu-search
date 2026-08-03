@@ -74,6 +74,13 @@ public interface ISemanticQueryTranslator
     /// next selection; drops the loaded model so the change takes effect without an app restart.</summary>
     void SetModelOverride(string? modelAlias);
 
+    /// <summary>Sets the per-model text-generation (sampling) parameter overrides — a map keyed by model
+    /// alias or catalog variant id whose entries replace the built-in Temperature/TopP/MaxTokens/
+    /// RandomSeed/FrequencyPenalty/PresencePenalty defaults for the matching model. Null/empty restores
+    /// the built-in defaults for every model. Applied when the model's chat client is (re)configured;
+    /// drops the loaded model so a change takes effect on the next translation without an app restart.</summary>
+    void SetModelGenerationOverrides(IReadOnlyDictionary<string, SemanticModelGenerationOverride>? modelOverrides);
+
     /// <summary>Tells the translator which hardware accelerators this machine actually has (per Yagu's
     /// capability detection). Builds for an absent accelerator are never selected, preventing a GPU/NPU
     /// model from loading (via DirectML) and then crashing during inference on a CPU-only machine.

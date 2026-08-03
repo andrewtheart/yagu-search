@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Ai;
 
@@ -326,17 +328,19 @@ public sealed class SemanticModelQualificationRunner
             bool slowWarning = passed && queryLimitMs > 0 && outcome.LatencyMs > queryLimitMs;
             SemanticProbeFailureReason reason = ClassifyFailure(outcome, passed, queryLimitMs);
             int probeNumber = IndexOf(probes, probe) + 1;
-            Yagu.Services.LogService.Instance.Info(
-                "Semantic.Probe",
-                $"[{alias}] probe {probeNumber}/{probeCount} '{probe.Query}' -> " +
-                $"{(passed ? (slowWarning ? "PASS(slow)" : "PASS") : "FAIL:" + reason)} ({outcome.LatencyMs} ms, limit {queryLimitMs} ms).");
+            YaguLog.For("Semantic.Probe").LogInformation(
+                "[{Alias}] probe {ProbeNumber}/{ProbeCount} '{ProbeQuery}' -> " +
+                "{Verdict} ({LatencyMs} ms, limit {QueryLimitMs} ms).",
+                alias, probeNumber, probeCount, probe.Query,
+                passed ? (slowWarning ? "PASS(slow)" : "PASS") : "FAIL:" + reason,
+                outcome.LatencyMs, queryLimitMs);
             // On failure, also log the RAW model output (not just the resolved plan, which SemanticPlanApplier
             // already logs at VRB) so a genuine model error can be told apart from a plan-applier mapping gap.
             // "(none)" when the model produced no answer (wedge / timeout / crash).
             if (!passed)
-                Yagu.Services.LogService.Instance.Info(
-                    "Semantic.Probe",
-                    $"[{alias}] probe {probeNumber} raw model output: {TruncateForLog(rawModelOutput)}");
+                YaguLog.For("Semantic.Probe").LogInformation(
+                    "[{Alias}] probe {ProbeNumber} raw model output: {RawModelOutput}",
+                    alias, probeNumber, TruncateForLog(rawModelOutput));
             progress?.Report(new SemanticQualificationProgress
             {
                 Stage = SemanticQualificationStage.ProbeCompleted,
@@ -359,7 +363,7 @@ public sealed class SemanticModelQualificationRunner
         // A candidate that never loaded is shown as a failed step (no query) and held the same way.
         async Task<ProbeOutcome> CompleteLoadFailureAsync(string alias, int candidateIndex, CancellationToken token)
         {
-            Yagu.Services.LogService.Instance.Info("Semantic.Probe", $"[{alias}] failed to load — skipping candidate.");
+            YaguLog.For("Semantic.Probe").LogInformation("[{Alias}] failed to load — skipping candidate.", alias);
             progress?.Report(new SemanticQualificationProgress
             {
                 Stage = SemanticQualificationStage.ProbeCompleted,
@@ -682,16 +686,19 @@ public sealed class SemanticModelQualificationRunner
 
         foreach (var r in qualification.Reports)
         {
-            Yagu.Services.LogService.Instance.Info(
-                "Semantic.Probe",
-                $"Candidate '{r.ModelAlias}': verdict={(r.Verdict.Passed ? "QUALIFIED" : "REJECTED")} ({r.Verdict.Reason}), " +
-                $"accuracy={r.EffectiveAccuracy * 100:0}% ({r.Probes.Count(p => p.Passed)}/{r.ScoredProbeCount} answered, {r.Probes.Count} of {probes.Count} run), " +
-                $"median={r.MedianLatencyMs} ms, max={r.MaxLatencyMs} ms, crashed={r.Crashed}.");
+            YaguLog.For("Semantic.Probe").LogInformation(
+                "Candidate '{ModelAlias}': verdict={Verdict} ({Reason}), " +
+                "accuracy={Accuracy:0}% ({PassedCount}/{ScoredProbeCount} answered, {ProbeCount} of {TotalProbes} run), " +
+                "median={MedianLatencyMs} ms, max={MaxLatencyMs} ms, crashed={Crashed}.",
+                r.ModelAlias, r.Verdict.Passed ? "QUALIFIED" : "REJECTED", r.Verdict.Reason,
+                r.EffectiveAccuracy * 100, r.Probes.Count(p => p.Passed), r.ScoredProbeCount,
+                r.Probes.Count, probes.Count, r.MedianLatencyMs, r.MaxLatencyMs, r.Crashed);
         }
-        Yagu.Services.LogService.Instance.Info(
-            "Semantic.Probe",
-            $"Sweep complete: qualified='{qualification.QualifiedModelAlias ?? "<none>"}', " +
-            $"bestEffort='{qualification.BestEffortModelAlias ?? "<none>"}'.");
+        YaguLog.For("Semantic.Probe").LogInformation(
+            "Sweep complete: qualified='{Qualified}', " +
+            "bestEffort='{BestEffort}'.",
+            qualification.QualifiedModelAlias ?? "<none>",
+            qualification.BestEffortModelAlias ?? "<none>");
 
         progress?.Report(new SemanticQualificationProgress { Stage = SemanticQualificationStage.Done });
         return qualification;

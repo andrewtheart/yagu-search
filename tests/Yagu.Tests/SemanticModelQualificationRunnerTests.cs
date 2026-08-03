@@ -628,14 +628,11 @@ public sealed class SemanticModelQualificationRunnerTests
             TranslateBehavior = (_, _) => EmptyPlan(),
         };
         var runner = new SemanticModelQualificationRunner(translator);
-        var stages = new List<SemanticQualificationStage>();
-        var progress = new Progress<SemanticQualificationProgress>(p => stages.Add(p.Stage));
+        var progress = new SyncProgress<SemanticQualificationProgress>();
 
         await runner.RunAsync(new[] { PassAnything() }, Thresholds, progress, CancellationToken.None);
 
-        // Progress is dispatched via the synchronization context; give posted callbacks a chance to run.
-        await Task.Yield();
-        Assert.Contains(SemanticQualificationStage.Done, stages);
+        Assert.Contains(progress.Items, p => p.Stage == SemanticQualificationStage.Done);
     }
 
     [Fact]
@@ -987,6 +984,7 @@ public sealed class SemanticModelQualificationRunnerTests
             SemanticTranslationResult.Ok(new SemanticSearchPlan());
 
         public void SetModelOverride(string? modelAlias) => _currentOverride = modelAlias;
+        public void SetModelGenerationOverrides(IReadOnlyDictionary<string, SemanticModelGenerationOverride>? overrides) { }
         public void SetEnabled(bool enabled) { }
         public void SetDevicePreferenceOrder(string? order) { }
         public void SetAvailableAccelerators(bool hasGpu, bool hasNpu) { }

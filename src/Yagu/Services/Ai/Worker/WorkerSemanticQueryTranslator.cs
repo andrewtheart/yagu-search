@@ -6,7 +6,9 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Yagu.Models;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Ai.Worker;
 
@@ -57,6 +59,9 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
     private bool _hasNpu = true;
     private long _gpuMemoryBytes;
     private bool _unloadAfterUse;
+    /// <summary>Per-model generation overrides serialized to JSON (via <see cref="SemanticWorkerJsonContext"/>),
+    /// mirrored locally so it can be REPLAYED to a freshly (re)spawned worker. Null = none set.</summary>
+    private string? _generationOverridesJson;
     private volatile string? _currentModelKey;
 
     public WorkerSemanticQueryTranslator(bool enabled, string? modelOverrideAlias = null, string? devicePreferenceOrder = null)
@@ -83,10 +88,14 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
             WorkerMessage msg = await SendRequestAsync(
                 BuildTranslateRequest(naturalLanguageQuery, context, streaming: false),
                 progress, onToken: null, cancellationToken).ConfigureAwait(false);
-            return ToResult(msg);
+            SemanticTranslationResult result = ToResult(msg);
+            if (_unloadAfterUse)
+                await ResetHostAfterCompletedRequestAsync().ConfigureAwait(false);
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            await ResetHostAfterCanceledRequestAsync().ConfigureAwait(false);
             throw;
         }
         catch (Exception ex)
@@ -104,10 +113,14 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
             WorkerMessage msg = await SendRequestAsync(
                 BuildTranslateRequest(naturalLanguageQuery, context, streaming: onToken is not null),
                 progress: null, onToken, cancellationToken).ConfigureAwait(false);
-            return ToResult(msg);
+            SemanticTranslationResult result = ToResult(msg);
+            if (_unloadAfterUse)
+                await ResetHostAfterCompletedRequestAsync().ConfigureAwait(false);
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            await ResetHostAfterCanceledRequestAsync().ConfigureAwait(false);
             throw;
         }
         catch (Exception ex)
@@ -135,7 +148,7 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning(LogSource, $"listing model options failed: {ex.Message}");
+            YaguLog.For(LogSource).LogWarning("listing model options failed: {Error}", ex.Message);
             return Array.Empty<SemanticModelOption>();
         }
     }
@@ -143,20 +156,28 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
     public async Task PrepareModelAsync(
         string? modelAlias, IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
     {
-        await SendRequestAsync(
-            new WorkerRequest { Op = SemanticWorkerProtocol.Ops.PrepareModel, Alias = modelAlias },
-            progress, onToken: null, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await SendRequestAsync(
+                new WorkerRequest { Op = SemanticWorkerProtocol.Ops.PrepareModel, Alias = modelAlias },
+                progress, onToken: null, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await ResetHostAfterCanceledRequestAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     public async Task UnloadCurrentModelAsync(CancellationToken cancellationToken)
     {
         // Best-effort and never throws (interface contract). No point spawning a worker just to unload.
+        // Foundry's nominal model unload can leave CUDA/ONNX provider allocations resident in this process;
+        // process teardown is the only reliable reclamation boundary for the isolated worker.
         if (_stdin is null || _proc is null || _proc.HasExited) return;
         try
         {
-            await SendRequestAsync(
-                new WorkerRequest { Op = SemanticWorkerProtocol.Ops.UnloadModel },
-                progress: null, onToken: null, cancellationToken).ConfigureAwait(false);
+            await ResetHostAsync(cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -183,6 +204,27 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
         _modelOverride = string.IsNullOrWhiteSpace(modelAlias) ? null : modelAlias.Trim();
         _currentModelKey = _modelOverride ?? _currentModelKey;
         SendConfig(SemanticWorkerProtocol.Ops.SetModelOverride, stringValue: _modelOverride);
+    }
+
+    public void SetModelGenerationOverrides(IReadOnlyDictionary<string, SemanticModelGenerationOverride>? modelOverrides)
+    {
+        // Serialize the whole map once and ride it across the wire as a JSON string on the flat protocol.
+        // Drop blank keys and all-null entries so the worker never applies a no-op override.
+        Dictionary<string, SemanticModelGenerationOverride>? normalized = null;
+        if (modelOverrides is { Count: > 0 })
+        {
+            normalized = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in modelOverrides)
+            {
+                if (string.IsNullOrWhiteSpace(kv.Key) || kv.Value is null || !kv.Value.HasAny) continue;
+                normalized[kv.Key.Trim()] = kv.Value;
+            }
+            if (normalized.Count == 0) normalized = null;
+        }
+        _generationOverridesJson = normalized is null
+            ? null
+            : JsonSerializer.Serialize(normalized, SemanticWorkerJsonContext.Default.DictionaryStringSemanticModelGenerationOverride);
+        SendConfig(SemanticWorkerProtocol.Ops.SetModelGenerationOverrides, stringValue: _generationOverridesJson);
     }
 
     public void SetAvailableAccelerators(bool hasGpu, bool hasNpu)
@@ -236,8 +278,8 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
 
             if (!proc.HasExited)
             {
-                LogService.Instance.Info(LogSource,
-                    $"resetting semantic worker (pid {SafeId(proc)}) — killing it so the next model loads into a clean host.");
+                YaguLog.For(LogSource).LogInformation(
+                    "resetting semantic worker (pid {Pid}) — killing it so the next model loads into a clean host.", SafeId(proc));
                 TryKill(proc);
             }
 
@@ -251,6 +293,40 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
         finally
         {
             _spawnLock.Release();
+        }
+    }
+
+    /// <summary>Cancellation can return before Foundry's native load/inference has stopped. Terminate the
+    /// exact semantic worker with a fresh bounded token so its model and GPU context are reclaimed even when
+    /// in-process unload cannot safely drain the native operation.</summary>
+    private async Task ResetHostAfterCanceledRequestAsync()
+    {
+        using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await ResetHostAsync(cleanupCts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For(LogSource).LogWarning(
+                "semantic worker reset after cancellation did not complete: {Error}", ex.Message);
+        }
+    }
+
+    /// <summary>The worker has already returned a complete translation, so preserve that result even if
+    /// cleanup fails. Foundry's successful <c>UnloadAsync</c> acknowledgement does not prove that CUDA /
+    /// ONNX provider allocations were released; terminating the isolated process does.</summary>
+    private async Task ResetHostAfterCompletedRequestAsync()
+    {
+        using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await ResetHostAsync(cleanupCts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For(LogSource).LogWarning(
+                "semantic worker reset after completed translation did not complete: {Error}", ex.Message);
         }
     }
 
@@ -292,7 +368,7 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
         // app's process tree. In unsigned local/dev builds the host is unsigned, so this is a no-op.
         if (!AuthenticodeVerifier.IsWorkerTrustedForHost(exe, out string trustFailure))
         {
-            LogService.Instance.Warning(LogSource, $"refusing to launch semantic worker \"{exe}\": {trustFailure}.");
+            YaguLog.For(LogSource).LogWarning("refusing to launch semantic worker \"{Exe}\": {TrustFailure}.", exe, trustFailure);
             return false;
         }
 
@@ -317,13 +393,13 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
         {
             if (!proc.Start())
             {
-                LogService.Instance.Warning(LogSource, "semantic worker failed to start.");
+                YaguLog.For(LogSource).LogWarning("semantic worker failed to start.");
                 return false;
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning(LogSource, $"semantic worker failed to start: {ex.Message}");
+            YaguLog.For(LogSource).LogWarning("semantic worker failed to start: {Error}", ex.Message);
             return false;
         }
 
@@ -340,13 +416,13 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
         }
         catch
         {
-            LogService.Instance.Warning(LogSource, "semantic worker did not signal ready in time.");
+            YaguLog.For(LogSource).LogWarning("semantic worker did not signal ready in time.");
             TryKill(proc);
             return false;
         }
 
         await ReplayConfigAsync().ConfigureAwait(false);
-        LogService.Instance.Info(LogSource, $"semantic worker ready (pid {SafeId(proc)}).");
+        YaguLog.For(LogSource).LogInformation("semantic worker ready (pid {Pid}).", SafeId(proc));
         return true;
     }
 
@@ -379,7 +455,7 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
             {
                 if (line.Length == 0) continue;
                 // Forward worker diagnostics into the main app's log (the worker never writes the file itself).
-                LogService.Instance.Verbose("Semantic.Worker", line);
+                YaguLog.For("Semantic.Worker").LogDebug("{Line}", line);
             }
         }
         catch
@@ -410,14 +486,15 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
 
     private void OnWorkerExited(Process proc)
     {
-        if (ReferenceEquals(_proc, proc))
-        {
-            _stdin = null;
-        }
+        bool wasCurrentWorker = ReferenceEquals(_proc, proc);
+        if (!wasCurrentWorker)
+            return; // expected exit after ResetHostAsync already detached and faulted this worker
+
+        _stdin = null;
         if (!_disposed)
         {
-            LogService.Instance.Warning(LogSource,
-                $"semantic worker exited (code {SafeExitCode(proc)}); in-flight requests fail and it respawns on next use.");
+            YaguLog.For(LogSource).LogWarning(
+                "semantic worker exited (code {ExitCode}); in-flight requests fail and it respawns on next use.", SafeExitCode(proc));
         }
         FaultAllPending(new SemanticWorkerException("the semantic worker process exited"));
     }
@@ -509,6 +586,8 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
         if (_deviceOrder is not null)
             await SendLineAsync(new WorkerRequest { Op = SemanticWorkerProtocol.Ops.SetDeviceOrder, StringValue = _deviceOrder }).ConfigureAwait(false);
         await SendLineAsync(new WorkerRequest { Op = SemanticWorkerProtocol.Ops.SetModelOverride, StringValue = _modelOverride }).ConfigureAwait(false);
+        if (_generationOverridesJson is not null)
+            await SendLineAsync(new WorkerRequest { Op = SemanticWorkerProtocol.Ops.SetModelGenerationOverrides, StringValue = _generationOverridesJson }).ConfigureAwait(false);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────────────────────
@@ -556,8 +635,8 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
     {
         if (Interlocked.Exchange(ref _missingWorkerLogged, 1) != 0) return;
         string local = Path.Combine(AppContext.BaseDirectory, "semantic-worker", "Yagu.SemanticWorker.exe");
-        LogService.Instance.Warning(LogSource,
-            $"Yagu.SemanticWorker.exe not found (probed {WorkerEnvVar} and '{local}'); AI (semantic) search is unavailable.");
+        YaguLog.For(LogSource).LogWarning(
+            "Yagu.SemanticWorker.exe not found (probed {WorkerEnvVar} and '{Local}'); AI (semantic) search is unavailable.", WorkerEnvVar, local);
     }
 
     private static int SafeId(Process p) { try { return p.Id; } catch { return -1; } }

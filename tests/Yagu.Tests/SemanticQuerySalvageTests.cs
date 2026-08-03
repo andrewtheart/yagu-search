@@ -101,19 +101,22 @@ public sealed class SemanticQuerySalvageTests
     [InlineData("42")]       // bare number of any length
     [InlineData("2024")]
     [InlineData("!!!")]      // pure punctuation
+    [InlineData("photos")]   // a lone word is literal, not a semantic request
+    [InlineData("readme")]
+    [InlineData("invoice2024")]
+    [InlineData("C:\\temp")]
     [InlineData("  7  ")]    // trimmed to a bare digit
-    public void IsTrivialLiteralQuery_TrivialTokens_ReturnTrue(string query)
-        => Assert.True(SemanticQuerySalvage.IsTrivialLiteralQuery(query));
+    public void IsSingleTokenQuery_SingleTokens_ReturnTrue(string query)
+        => Assert.True(SemanticQuerySalvage.IsSingleTokenQuery(query));
 
     [Theory]
-    [InlineData("photos")]                       // single meaningful word (3+ letters) → let the model map it
-    [InlineData("readme")]
-    [InlineData("invoice2024")]                  // has letters and 3+ chars
     [InlineData("large minified javascript files over 1 MB")] // a real phrase
     [InlineData("files from 2024")]              // number inside a phrase
+    [InlineData("photos modified today")]
+    [InlineData("foo\tbar")]
     [InlineData("")]                             // nothing to short-circuit
     [InlineData("   ")]
     [InlineData(null)]
-    public void IsTrivialLiteralQuery_NaturalLanguageOrEmpty_ReturnFalse(string? query)
-        => Assert.False(SemanticQuerySalvage.IsTrivialLiteralQuery(query));
+    public void IsSingleTokenQuery_MultipleTokensOrEmpty_ReturnFalse(string? query)
+        => Assert.False(SemanticQuerySalvage.IsSingleTokenQuery(query));
 }

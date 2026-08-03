@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Ai;
 
@@ -104,16 +106,16 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
         {
             bool accelerated = HasHardwareDeviceInClass(DisplayClassKey)
                 || HasHardwareDeviceInClass(ComputeAcceleratorClassKey);
-            LogService.Instance.Verbose("Semantic.Capability",
-                $"Accelerated hardware detected: {accelerated} (default query mode = {(accelerated ? "Semantic" : "Traditional")}).");
+            YaguLog.For("Semantic.Capability").LogDebug(
+                "Accelerated hardware detected: {Accelerated} (default query mode = {DefaultMode}).", accelerated, accelerated ? "Semantic" : "Traditional");
             return accelerated;
         }
         catch (Exception ex)
         {
             // Be conservative: an unreadable registry / unexpected layout means we cannot confirm
             // an accelerator, so default to Traditional rather than risk a slow CPU-only model.
-            LogService.Instance.Verbose("Semantic.Capability",
-                "Hardware accelerator detection failed; assuming no accelerator (defaulting to Traditional).", ex);
+            YaguLog.For("Semantic.Capability").LogDebug(ex,
+                "Hardware accelerator detection failed; assuming no accelerator (defaulting to Traditional).");
             return false;
         }
     }
@@ -150,7 +152,7 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
         try { return HasHardwareDeviceInClass(DisplayClassKey); }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("Semantic.Capability", "GPU detection failed; assuming none.", ex);
+            YaguLog.For("Semantic.Capability").LogDebug(ex, "GPU detection failed; assuming none.");
             return false;
         }
     }
@@ -161,7 +163,7 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
         try { return HasHardwareDeviceInClass(ComputeAcceleratorClassKey); }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("Semantic.Capability", "NPU detection failed; assuming none.", ex);
+            YaguLog.For("Semantic.Capability").LogDebug(ex, "NPU detection failed; assuming none.");
             return false;
         }
     }
@@ -184,7 +186,7 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("Semantic.Capability", "GPU memory detection failed; assuming unknown.", ex);
+            YaguLog.For("Semantic.Capability").LogDebug(ex, "GPU memory detection failed; assuming unknown.");
             return 0;
         }
     }
@@ -217,7 +219,7 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("Semantic.Capability", "Hardware description enumeration failed.", ex);
+            YaguLog.For("Semantic.Capability").LogDebug(ex, "Hardware description enumeration failed.");
             return Array.Empty<string>();
         }
     }

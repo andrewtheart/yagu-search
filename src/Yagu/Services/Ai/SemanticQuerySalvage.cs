@@ -62,32 +62,21 @@ internal static class SemanticQuerySalvage
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// Returns <c>true</c> when <paramref name="query"/> is a trivial literal token rather than a
-    /// natural-language request — a single character, a bare number, or a short symbol token (e.g.
-    /// "1", "42", "ab", "!!"). Small on-device models tend to hallucinate a plan (often echoing a
-    /// prompt example) for such input, so the caller should skip the model and search for the text
-    /// literally, which is what the user means. A multi-word phrase, or a single word of three or more
-    /// letters (e.g. "photos", "readme"), is NOT trivial and should go to the model.
+    /// Returns <c>true</c> when <paramref name="query"/> is a single token rather than a natural-language
+    /// request. A semantic request requires multiple words; a lone word, number, path, or symbol token
+    /// is the literal text the user wants to find. The caller should therefore skip model startup and
+    /// run it as a Traditional query. Empty input and any query containing internal whitespace return
+    /// <c>false</c> so normal validation or semantic translation handles them.
     /// </summary>
-    public static bool IsTrivialLiteralQuery(string? query)
+    public static bool IsSingleTokenQuery(string? query)
     {
         string text = query?.Trim() ?? string.Empty;
         if (text.Length == 0)
             return false;
 
-        // A phrase (any internal whitespace) is a real request — let the model interpret it.
+        // Any internal whitespace makes this a multi-token request that the model may interpret.
         foreach (char c in text)
             if (char.IsWhiteSpace(c))
-                return false;
-
-        // Single tokens of 1-2 characters are never meaningful natural language.
-        if (text.Length <= 2)
-            return true;
-
-        // A longer token with NO letters at all is a bare number or punctuation run
-        // (e.g. "2024", "42", "!!!") — a literal the user typed to find verbatim.
-        foreach (char c in text)
-            if (char.IsLetter(c))
                 return false;
         return true;
     }

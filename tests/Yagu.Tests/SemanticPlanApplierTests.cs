@@ -147,6 +147,107 @@ public sealed class SemanticPlanApplierTests
     }
 
     [Fact]
+    public void Resolve_JsonFilesWithPhoneNumber_ReplacesMalformedModelRegexWithCanonicalPattern()
+    {
+        // Exact 2026-07-26 failure: phi-4 emitted an opening non-capturing group without its final
+        // parenthesis. Structured intent is recovered from the original query, while the model's C:\
+        // scope and *.json type filter remain in force.
+        var plan = new SemanticSearchPlan
+        {
+            Directory = "C:",
+            Pattern = @"(?:\+?\d{1,3}[\s-]?\(?\d{1,4}?\)?:?[\s-]?\d{1,4}[\s-]?\d{1,4}[\s-]?\d{1,9}",
+            UseRegex = true,
+            SearchMode = "content",
+            IncludeGlobs = new() { "*.json" },
+        };
+        var context = new SemanticTranslationContext
+        {
+            Now = Now,
+            OriginalQuery = "Search C: for json files with a phone number",
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, context);
+
+        Assert.Equal(@"C:\", resolved.Directory);
+        Assert.Equal(SemanticPlanApplier.CanonicalPhoneNumberPattern, resolved.Pattern);
+        Assert.True(resolved.UseRegex);
+        Assert.Equal(SearchMode.Content, resolved.SearchMode);
+        Assert.Contains("*.json", resolved.IncludeGlobs!);
+        Assert.True(SemanticPlanApplier.IsValidRegexPattern(resolved.Pattern));
+    }
+
+    [Theory]
+    [InlineData("find phone numbers")]
+    [InlineData("telephone number in contacts")]
+    [InlineData("JSON containing mobile numbers")]
+    [InlineData("cell no. in logs")]
+    public void TryResolveKnownStructuredPattern_PhoneIntent_ReturnsCanonicalPattern(string query)
+    {
+        Assert.True(SemanticPlanApplier.TryResolveKnownStructuredPattern(query, out string pattern));
+        Assert.Equal(SemanticPlanApplier.CanonicalPhoneNumberPattern, pattern);
+        Assert.True(SemanticPlanApplier.IsValidRegexPattern(pattern));
+    }
+
+    [Theory]
+    [InlineData("555-123-4567")]
+    [InlineData("(212) 555-1212")]
+    [InlineData("+1 (212) 555-1212")]
+    [InlineData("44 20 7946 0958")]
+    [InlineData("212.555.1212")]
+    [InlineData("2125551212")]
+    public void CanonicalPhoneNumberPattern_MatchesRepresentativeFormats(string phoneNumber)
+        => Assert.Matches(SemanticPlanApplier.CanonicalPhoneNumberPattern, phoneNumber);
+
+    [Fact]
+    public void Resolve_UnknownMalformedRegex_FallsBackToLiteralRequestInsteadOfEngineError()
+    {
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = "(?:unclosed",
+            UseRegex = true,
+            SearchMode = "content",
+            IncludeGlobs = new() { "*.txt" },
+        };
+        var context = new SemanticTranslationContext
+        {
+            Now = Now,
+            OriginalQuery = "text files containing a structured token",
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, context);
+
+        Assert.Equal(context.OriginalQuery, resolved.Pattern);
+        Assert.False(resolved.UseRegex);
+        Assert.Contains(resolved.Warnings, warning => warning.Contains("invalid regular expression", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Resolve_UnknownMalformedRegexWithoutRequestClearsPattern()
+    {
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = "(?:unclosed",
+            UseRegex = true,
+            SearchMode = "content",
+        };
+        var context = new SemanticTranslationContext { Now = Now, OriginalQuery = "   " };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, context);
+
+        Assert.Null(resolved.Pattern);
+        Assert.False(resolved.UseRegex);
+        Assert.Contains(resolved.Warnings, warning => warning.Contains("invalid regular expression", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(@"\d{3}-\d{4}", true)]
+    [InlineData("(?:unclosed", false)]
+    [InlineData("[unterminated", false)]
+    [InlineData("", false)]
+    public void IsValidRegexPattern_ReportsSyntaxValidity(string pattern, bool expected)
+        => Assert.Equal(expected, SemanticPlanApplier.IsValidRegexPattern(pattern));
+
+    [Fact]
     public void Resolve_GlobPatternDuplicatingInclude_DroppedAndSynthesizesMatchAll()
     {
         // Model mistakenly echoes the file-type filter into pattern ("*.png" with include *.png).

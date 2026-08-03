@@ -3,7 +3,9 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using Yagu.Models;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Ai;
 
@@ -29,7 +31,7 @@ internal static class SemanticPlanJsonExtractor
     /// Extracts the first usable JSON object from <paramref name="raw"/> (tolerating code fences or
     /// surrounding prose) and deserializes it into a <see cref="SemanticSearchPlan"/>.
     /// </summary>
-    internal static bool TryParsePlan(string raw, out SemanticSearchPlan? plan, out string? error)
+    internal static bool TryParsePlan(string? raw, out SemanticSearchPlan? plan, out string? error)
     {
         plan = null;
         error = null;
@@ -38,8 +40,8 @@ internal static class SemanticPlanJsonExtractor
         if (json is null)
         {
             error = "The model did not return a JSON object.";
-            LogService.Instance.Verbose(LogSource,
-                $"No JSON object could be extracted from model output ({(raw?.Length ?? 0)} chars).");
+            YaguLog.For(LogSource).LogDebug(
+                "No JSON object could be extracted from model output ({Chars} chars).", raw?.Length ?? 0);
             return false;
         }
 
@@ -53,8 +55,8 @@ internal static class SemanticPlanJsonExtractor
         catch (JsonException ex)
         {
             error = $"The model output was not valid JSON: {ex.Message}";
-            LogService.Instance.Verbose(LogSource,
-                $"Extracted candidate did not deserialize as a plan: {ex.Message}. Candidate JSON:\n{json}");
+            YaguLog.For(LogSource).LogDebug(
+                "Extracted candidate did not deserialize as a plan: {Error}. Candidate JSON:\n{Json}", ex.Message, json);
             return false;
         }
     }
@@ -131,10 +133,11 @@ internal static class SemanticPlanJsonExtractor
             // string value that closes early (e.g. an unescaped quote inside the explanation, like
             // ...for the term 'Andrew".}), which leaves stray characters before a delimiter. Drop the
             // trailing malformed field(s) and retry so the structured fields still survive.
-            LogService.Instance.Verbose(LogSource,
+            YaguLog.For(LogSource).LogDebug(
                 "Brace-balanced object did not parse; attempting trailing-field repair.");
             string? trimmed = RepairBalancedObject(balanced);
-            LogService.Instance.Verbose(LogSource,
+            YaguLog.For(LogSource).LogDebug(
+                "{Message}",
                 trimmed is null
                     ? "Trailing-field repair failed; surfacing the original parse error."
                     : "Trailing-field repair succeeded.");
@@ -143,10 +146,11 @@ internal static class SemanticPlanJsonExtractor
 
         // No closing brace was found — the model was almost certainly truncated mid-object (e.g. it
         // hit the token limit). Attempt a best-effort repair so a usable prefix can still be parsed.
-        LogService.Instance.Verbose(LogSource,
+        YaguLog.For(LogSource).LogDebug(
             "Model output has no brace-balanced object (likely truncated); attempting repair.");
         string? repaired = RepairTruncatedObject(text, start);
-        LogService.Instance.Verbose(LogSource,
+        YaguLog.For(LogSource).LogDebug(
+            "{Message}",
             repaired is null
                 ? "Truncated-object repair failed; no parseable object recovered."
                 : "Truncated-object repair succeeded.");

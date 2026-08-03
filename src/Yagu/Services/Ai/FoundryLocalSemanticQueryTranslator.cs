@@ -5,7 +5,9 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.AI.Foundry.Local;
 using Betalgo.Ranul.OpenAI.ObjectModels.RequestModels;
+using Microsoft.Extensions.Logging;
 using Yagu.Models;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Ai;
 
@@ -64,6 +66,10 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     private long _gpuMemoryBytes;
     private bool _selectedModelIsReasoning;
     private bool _unloadAfterUse;
+    /// <summary>Per-model text-generation (sampling) parameter overrides, keyed by model alias or catalog
+    /// variant id (matched id-first, then alias, case-insensitive). Null/empty = use the built-in defaults
+    /// for every model. Applied in <see cref="ConfigureChatSettings"/> when a model's chat client is set up.</summary>
+    private IReadOnlyDictionary<string, SemanticModelGenerationOverride>? _generationOverrides;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly Lazy<string> _systemPromptTemplate = new(LoadSystemPromptTemplate);
 
@@ -112,7 +118,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     {
         Task op = _lastNativeModelOp;
         if (op.IsCompleted) return true;
-        LogService.Instance.Info(LogSource,
+        YaguLog.For(LogSource).LogInformation(
             "Waiting for an in-flight native model operation to finish before unloading (teardown serialization).");
         Task finished = await Task.WhenAny(op, Task.Delay(UnloadDrainTimeout)).ConfigureAwait(false);
         return ReferenceEquals(finished, op);
@@ -145,8 +151,8 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         _enabled = enabled;
         _preferredAlias = string.IsNullOrWhiteSpace(modelOverrideAlias) ? null : modelOverrideAlias.Trim();
         _deviceOrder = FoundryModelSelector.ParseDeviceOrder(devicePreferenceOrder);
-        LogService.Instance.Verbose(LogSource,
-            $"Created (enabled={_enabled}, preferredAlias={_preferredAlias ?? "<auto>"}, deviceOrder={string.Join(">", _deviceOrder)}).");
+        YaguLog.For(LogSource).LogDebug(
+            "Created (enabled={Enabled}, preferredAlias={PreferredAlias}, deviceOrder={DeviceOrder}).", _enabled, _preferredAlias ?? "<auto>", string.Join(">", _deviceOrder));
     }
 
     public bool IsAvailable => _enabled;
@@ -155,7 +161,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     {
         if (_enabled == enabled) return;
         _enabled = enabled;
-        LogService.Instance.Info(LogSource, $"Semantic translation {(enabled ? "enabled" : "disabled")} at runtime.");
+        YaguLog.For(LogSource).LogInformation("Semantic translation {State} at runtime.", enabled ? "enabled" : "disabled");
         // Drop any loaded model so a later re-enable re-selects from scratch.
         ResetLoadedModel();
     }
@@ -165,7 +171,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         var parsed = FoundryModelSelector.ParseDeviceOrder(order);
         if (parsed.SequenceEqual(_deviceOrder)) return;
         _deviceOrder = parsed;
-        LogService.Instance.Info(LogSource, $"Device preference order set to {string.Join(">", _deviceOrder)}; will re-select on next translation.");
+        YaguLog.For(LogSource).LogInformation("Device preference order set to {DeviceOrder}; will re-select on next translation.", string.Join(">", _deviceOrder));
         // Force the next translation to re-select the model variant for the new device order.
         ResetLoadedModel();
     }
@@ -175,7 +181,30 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         string? normalized = string.IsNullOrWhiteSpace(modelAlias) ? null : modelAlias.Trim();
         if (string.Equals(normalized, _preferredAlias, StringComparison.OrdinalIgnoreCase)) return;
         _preferredAlias = normalized;
-        LogService.Instance.Info(LogSource, $"Model override set to '{normalized ?? "<auto>"}'; will re-select on next translation.");
+        YaguLog.For(LogSource).LogInformation("Model override set to '{Model}'; will re-select on next translation.", normalized ?? "<auto>");
+        ResetLoadedModel();
+    }
+
+    public void SetModelGenerationOverrides(IReadOnlyDictionary<string, SemanticModelGenerationOverride>? modelOverrides)
+    {
+        // Snapshot into a case-insensitive map, dropping blank keys and all-null (meaningless) entries so
+        // the hot ConfigureChatSettings lookup is trivial and never applies a no-op override.
+        Dictionary<string, SemanticModelGenerationOverride>? normalized = null;
+        if (modelOverrides is { Count: > 0 })
+        {
+            normalized = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in modelOverrides)
+            {
+                if (string.IsNullOrWhiteSpace(kv.Key) || kv.Value is null || !kv.Value.HasAny) continue;
+                normalized[kv.Key.Trim()] = kv.Value;
+            }
+            if (normalized.Count == 0) normalized = null;
+        }
+        _generationOverrides = normalized;
+        YaguLog.For(LogSource).LogInformation(
+            "Per-model generation overrides set ({Count} model(s)); will apply on next model load.", normalized?.Count ?? 0);
+        // Sampling settings are applied to the chat client once, at model load. Drop any loaded model so the
+        // change takes effect on the next translation (a no-op before the first load, i.e. at startup).
         ResetLoadedModel();
     }
 
@@ -184,7 +213,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         if (_hasGpu == hasGpu && _hasNpu == hasNpu) return;
         _hasGpu = hasGpu;
         _hasNpu = hasNpu;
-        LogService.Instance.Info(LogSource, $"Available accelerators set (GPU={hasGpu}, NPU={hasNpu}); will re-select on next translation.");
+        YaguLog.For(LogSource).LogInformation("Available accelerators set (GPU={HasGpu}, NPU={HasNpu}); will re-select on next translation.", hasGpu, hasNpu);
         // A model variant for an absent accelerator must not stay loaded; force re-selection.
         ResetLoadedModel();
     }
@@ -194,7 +223,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         long normalized = dedicatedVideoMemoryBytes > 0 ? dedicatedVideoMemoryBytes : 0;
         if (_gpuMemoryBytes == normalized) return;
         _gpuMemoryBytes = normalized;
-        LogService.Instance.Info(LogSource, $"GPU memory set ({normalized / (1024L * 1024L)} MB); will re-select on next translation.");
+        YaguLog.For(LogSource).LogInformation("GPU memory set ({MemoryMb} MB); will re-select on next translation.", normalized / (1024L * 1024L));
         // The larger-model auto-upgrade decision depends on this, so re-select on next use.
         ResetLoadedModel();
     }
@@ -203,8 +232,8 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     {
         if (_unloadAfterUse == unloadAfterUse) return;
         _unloadAfterUse = unloadAfterUse;
-        LogService.Instance.Info(LogSource,
-            $"Unload-after-use {(unloadAfterUse ? "enabled (model released from VRAM after each translation)" : "disabled (model stays resident)")}.");
+        YaguLog.For(LogSource).LogInformation(
+            "Unload-after-use {State}.", unloadAfterUse ? "enabled (model released from VRAM after each translation)" : "disabled (model stays resident)");
         // No reload needed: the flag only changes what happens AFTER the next translation finishes.
     }
 
@@ -363,9 +392,10 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         if (ctx is not int contextLength || ModelContextBudget.Fits(contextLength)) return;
 
         string alias = model.Alias ?? model.Id ?? "<unknown>";
-        LogService.Instance.Warning(LogSource,
-            $"Model '{alias}' has a context window of {contextLength} tokens, below the ~{ModelContextBudget.RequiredContextTokens} " +
-            "needed for the system prompt + query + plan; refusing to use it.");
+        YaguLog.For(LogSource).LogWarning(
+            "Model '{Alias}' has a context window of {ContextLength} tokens, below the ~{RequiredTokens} " +
+            "needed for the system prompt + query + plan; refusing to use it.",
+            alias, contextLength, ModelContextBudget.RequiredContextTokens);
         throw new InvalidOperationException(
             $"The selected model's context window ({contextLength} tokens) is too small to run AI search " +
             $"(it needs about {ModelContextBudget.RequiredContextTokens}). Choose a different model.");
@@ -430,9 +460,10 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         // is wedged and won't finish, SKIP the unload and leave the model resident (reclaimed on process exit).
         if (!await TryDrainNativeModelOpAsync().ConfigureAwait(false))
         {
-            LogService.Instance.Warning(LogSource,
-                $"Skipping unload of '{model.Alias ?? model.Id}': a native model operation is still in flight " +
-                "(wedged inference/load). Freeing it now would crash onnxruntime-genai; it stays resident until the app exits.");
+            YaguLog.For(LogSource).LogWarning(
+                "Skipping unload of '{Model}': a native model operation is still in flight " +
+                "(wedged inference/load). Freeing it now would crash onnxruntime-genai; it stays resident until the app exits.",
+                model.Alias ?? model.Id);
             return;
         }
 
@@ -442,13 +473,13 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             await model.UnloadAsync().ConfigureAwait(false);
             stopwatch.Stop();
             _vramSettlePending = true; // let WDDM reclaim this model's VRAM before the next load
-            LogService.Instance.Info(LogSource,
-                $"Unloaded model '{model.Alias ?? model.Id}' from memory after use in {stopwatch.ElapsedMilliseconds} ms (freed VRAM).");
+            YaguLog.For(LogSource).LogInformation(
+                "Unloaded model '{Model}' from memory after use in {ElapsedMs} ms (freed VRAM).", model.Alias ?? model.Id, stopwatch.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning(LogSource,
-                $"Failed to unload model '{model.Alias ?? model.Id}' after use; it stays resident until re-selected.", ex);
+            YaguLog.For(LogSource).LogWarning(ex,
+                "Failed to unload model '{Model}' after use; it stays resident until re-selected.", model.Alias ?? model.Id);
         }
     }
 
@@ -484,14 +515,15 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning(LogSource,
-                    $"Could not clamp context window for '{model.Alias ?? model.Id}' at {dir}; loading with its original window.", ex);
+                YaguLog.For(LogSource).LogWarning(ex,
+                    "Could not clamp context window for '{Model}' at {Dir}; loading with its original window.", model.Alias ?? model.Id, dir);
             }
         }
         if (totalPatched > 0)
-            LogService.Instance.Info(LogSource,
-                $"Clamped context window of '{model.Alias ?? model.Id}' to {applied} tokens " +
-                $"({totalPatched} config file(s) across {modelDirs.Count} cached copy/copies) to reduce reserved VRAM; translation quality is unaffected.");
+            YaguLog.For(LogSource).LogInformation(
+                "Clamped context window of '{Model}' to {Applied} tokens " +
+                "({PatchedCount} config file(s) across {DirCount} cached copy/copies) to reduce reserved VRAM; translation quality is unaffected.",
+                model.Alias ?? model.Id, applied, totalPatched, modelDirs.Count);
     }
 
     /// <summary>Resolves ALL on-disk directories of a downloaded model's variant: the SDK's
@@ -517,7 +549,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            LogService.Instance.Verbose(LogSource, $"GetPathAsync failed for '{model.Alias ?? model.Id}': {ex.Message}; using cache-root enumeration.");
+            YaguLog.For(LogSource).LogDebug("GetPathAsync failed for '{Model}': {Error}; using cache-root enumeration.", model.Alias ?? model.Id, ex.Message);
         }
 
         string? id = model.Id;
@@ -549,7 +581,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         _catalog = null;
         SelectedModelAlias = null;
         ResetLoadedModel();
-        LogService.Instance.Info(LogSource, "Foundry catalog cache cleared; will re-query Foundry Local on next use.");
+        YaguLog.For(LogSource).LogInformation("Foundry catalog cache cleared; will re-query Foundry Local on next use.");
     }
 
     public async Task<SemanticTranslationResult> TranslateAsync(
@@ -560,49 +592,48 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     {
         if (!_enabled)
         {
-            LogService.Instance.Verbose(LogSource, "Translation skipped: semantic search is disabled in settings.");
+            YaguLog.For(LogSource).LogDebug("Translation skipped: semantic search is disabled in settings.");
             return SemanticTranslationResult.Fail("Semantic search is disabled in settings.");
         }
         if (string.IsNullOrWhiteSpace(naturalLanguageQuery))
         {
-            LogService.Instance.Verbose(LogSource, "Translation skipped: empty query.");
+            YaguLog.For(LogSource).LogDebug("Translation skipped: empty query.");
             return SemanticTranslationResult.Fail("Enter a request to translate.");
         }
 
         context ??= new SemanticTranslationContext();
 
-        var log = LogService.Instance;
+        var log = YaguLog.For(LogSource);
         string trimmedQuery = naturalLanguageQuery.Trim();
-        log.Info(LogSource, $"Translation requested (queryLength={trimmedQuery.Length}).");
-        if (log.IsVerboseEnabled)
-            log.Verbose(LogSource,
-                $"Query='{trimmedQuery}', defaultDir='{context.DefaultDirectory ?? "<none>"}', now={context.Now:O}.");
+        log.LogInformation("Translation requested (queryLength={QueryLength}).", trimmedQuery.Length);
+        if (LogService.Instance.IsVerboseEnabled)
+            log.LogDebug("Query='{Query}', defaultDir='{DefaultDir}', now={Now:O}.",
+                trimmedQuery, context.DefaultDirectory ?? "<none>", context.Now);
 
         var totalStopwatch = Stopwatch.StartNew();
 
-        OpenAIChatClient chat;
         try
         {
-            chat = await EnsureChatClientAsync(progress, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            log.Info(LogSource, "Translation canceled while preparing the local model.");
-            throw;
-        }
-        catch (Exception ex)
-        {
-            log.Warning(LogSource, "Could not start the local AI model.", ex);
-            return SemanticTranslationResult.Fail($"Could not start the local AI model: {ex.Message}");
-        }
+            OpenAIChatClient chat;
+            try
+            {
+                chat = await EnsureChatClientAsync(progress, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                log.LogInformation("Translation canceled while preparing the local model.");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Could not start the local AI model.");
+                return SemanticTranslationResult.Fail($"Could not start the local AI model: {ex.Message}");
+            }
 
-        progress?.Report(new SemanticTranslationProgress { Stage = SemanticTranslationStage.Interpreting });
+            progress?.Report(new SemanticTranslationProgress { Stage = SemanticTranslationStage.Interpreting });
 
-        // Everything below runs against the loaded model. Wrap it so that, when "unload after use" is
-        // enabled, the model is released from memory (freeing VRAM) once interpretation finishes —
-        // whether it succeeded, failed, hit the watchdog, or was cancelled.
-        try
-        {
+            // Preparation and interpretation share one cleanup boundary. In particular, a cancellation after
+            // LoadAsync succeeds but before GetChatClientAsync returns must still release the resident model.
             string raw;
             var inferenceStopwatch = Stopwatch.StartNew();
 
@@ -621,17 +652,19 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                     ChatMessage.FromSystem(systemPrompt),
                     ChatMessage.FromUser(trimmedQuery),
                 };
-                log.Verbose(LogSource,
-                    $"Sending chat completion (model={SelectedModelAlias ?? "<unknown>"}, systemPromptChars={systemPrompt.Length}, " +
-                    $"userQueryChars={trimmedQuery.Length}, watchdogTimeout={inferenceTimeout.TotalSeconds:F0}s).");
+                log.LogDebug(
+                    "Sending chat completion (model={Model}, systemPromptChars={SystemPromptChars}, " +
+                    "userQueryChars={UserQueryChars}, watchdogTimeout={WatchdogTimeout:F0}s).",
+                    SelectedModelAlias ?? "<unknown>", systemPrompt.Length, trimmedQuery.Length, inferenceTimeout.TotalSeconds);
 
                 var inferenceTask = chat.CompleteChatAsync(messages, inferenceCts.Token);
                 TrackNativeModelOp(inferenceTask); // so a later unload waits for this native op to drain
                 var response = await inferenceTask.ConfigureAwait(false);
                 raw = response?.Choices?.FirstOrDefault()?.Message?.Content ?? string.Empty;
                 inferenceStopwatch.Stop();
-                log.Info(LogSource,
-                    $"Model responded in {inferenceStopwatch.ElapsedMilliseconds} ms (model={SelectedModelAlias ?? "<unknown>"}, responseChars={raw.Length}).");
+                log.LogInformation(
+                    "Model responded in {ElapsedMs} ms (model={Model}, responseChars={ResponseChars}).",
+                    inferenceStopwatch.ElapsedMilliseconds, SelectedModelAlias ?? "<unknown>", raw.Length);
             }
             catch (OperationCanceledException) when (inferenceCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
@@ -639,44 +672,46 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 // translation so the caller falls back to a literal Traditional search instead of silently
                 // aborting the whole submit (which is what a real user-cancellation does).
                 inferenceStopwatch.Stop();
-                log.Warning(LogSource,
-                    $"Inference watchdog fired: the local AI model did not respond within {inferenceTimeout.TotalSeconds:F0}s " +
-                    $"(elapsed={inferenceStopwatch.ElapsedMilliseconds} ms, model={SelectedModelAlias ?? "<unknown>"}); " +
-                    "treating as a failed translation so the search falls back to a literal one.");
+                log.LogWarning(
+                    "Inference watchdog fired: the local AI model did not respond within {WatchdogTimeout:F0}s " +
+                    "(elapsed={ElapsedMs} ms, model={Model}); " +
+                    "treating as a failed translation so the search falls back to a literal one.",
+                    inferenceTimeout.TotalSeconds, inferenceStopwatch.ElapsedMilliseconds, SelectedModelAlias ?? "<unknown>");
                 return SemanticTranslationResult.Fail(
                     $"The local AI model did not respond within {inferenceTimeout.TotalSeconds:F0} seconds.");
             }
             catch (OperationCanceledException)
             {
-                log.Info(LogSource, "Translation canceled during model inference.");
+                log.LogInformation("Translation canceled during model inference.");
                 throw;
             }
             catch (Exception ex)
             {
-                log.Warning(LogSource, $"The local AI model failed to respond (model={SelectedModelAlias ?? "<unknown>"}).", ex);
+                log.LogWarning(ex, "The local AI model failed to respond (model={Model}).", SelectedModelAlias ?? "<unknown>");
                 return SemanticTranslationResult.Fail($"The local AI model failed to respond: {ex.Message}");
             }
 
-            if (log.IsVerboseEnabled)
-                log.Verbose(LogSource, $"Raw model output:\n{raw}");
+            if (LogService.Instance.IsVerboseEnabled)
+                log.LogDebug("Raw model output:\n{Raw}", raw);
 
             if (string.IsNullOrWhiteSpace(raw))
             {
-                log.Warning(LogSource, $"The local AI model returned an empty response (model={SelectedModelAlias ?? "<unknown>"}).");
+                log.LogWarning("The local AI model returned an empty response (model={Model}).", SelectedModelAlias ?? "<unknown>");
                 return SemanticTranslationResult.Fail("The local AI model returned an empty response.", raw);
             }
 
             if (!TryParsePlan(raw, out var plan, out var parseError))
             {
-                log.Warning(LogSource, $"Could not parse a search plan from model output: {parseError}");
+                log.LogWarning("Could not parse a search plan from model output: {ParseError}", parseError);
                 return SemanticTranslationResult.Fail(parseError ?? "Could not understand the model output.", raw);
             }
 
             totalStopwatch.Stop();
-            log.Info(LogSource,
-                $"Translation succeeded in {totalStopwatch.ElapsedMilliseconds} ms (model={SelectedModelAlias ?? "<unknown>"}).");
-            if (log.IsVerboseEnabled)
-                log.Verbose(LogSource, $"Parsed plan: {DescribePlan(plan!)}");
+            log.LogInformation(
+                "Translation succeeded in {ElapsedMs} ms (model={Model}).",
+                totalStopwatch.ElapsedMilliseconds, SelectedModelAlias ?? "<unknown>");
+            if (LogService.Instance.IsVerboseEnabled)
+                log.LogDebug("Parsed plan: {ParsedPlan}", DescribePlan(plan!));
 
             return SemanticTranslationResult.Ok(plan!, raw);
         }
@@ -708,29 +743,29 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
         context ??= new SemanticTranslationContext();
 
-        var log = LogService.Instance;
+        var log = YaguLog.For(LogSource);
         string trimmedQuery = naturalLanguageQuery.Trim();
-        log.Info(LogSource, $"Streaming translation requested (queryLength={trimmedQuery.Length}).");
+        log.LogInformation("Streaming translation requested (queryLength={QueryLength}).", trimmedQuery.Length);
 
-        OpenAIChatClient chat;
         try
         {
-            chat = await EnsureChatClientAsync(null, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            log.Warning(LogSource, "Could not start the local AI model (streaming).", ex);
-            return SemanticTranslationResult.Fail($"Could not start the local AI model: {ex.Message}");
-        }
+            OpenAIChatClient chat;
+            try
+            {
+                chat = await EnsureChatClientAsync(null, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Could not start the local AI model (streaming).");
+                return SemanticTranslationResult.Fail($"Could not start the local AI model: {ex.Message}");
+            }
 
-        // As in TranslateAsync, release the model after use (freeing VRAM) when that setting is on —
-        // regardless of how the streamed inference finishes.
-        try
-        {
+            // As in TranslateAsync, preparation and inference share the cleanup boundary so cancellation
+            // anywhere after the model becomes resident cannot bypass unload-after-use.
             string raw;
             var inferenceStopwatch = Stopwatch.StartNew();
 
@@ -745,9 +780,10 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                     ChatMessage.FromSystem(systemPrompt),
                     ChatMessage.FromUser(trimmedQuery),
                 };
-                log.Verbose(LogSource,
-                    $"Sending STREAMING chat completion (model={SelectedModelAlias ?? "<unknown>"}, systemPromptChars={systemPrompt.Length}, " +
-                    $"userQueryChars={trimmedQuery.Length}, watchdogTimeout={inferenceTimeout.TotalSeconds:F0}s).");
+                log.LogDebug(
+                    "Sending STREAMING chat completion (model={Model}, systemPromptChars={SystemPromptChars}, " +
+                    "userQueryChars={UserQueryChars}, watchdogTimeout={WatchdogTimeout:F0}s).",
+                    SelectedModelAlias ?? "<unknown>", systemPrompt.Length, trimmedQuery.Length, inferenceTimeout.TotalSeconds);
 
                 var builder = new System.Text.StringBuilder();
                 // Consume the stream as a single tracked task so a later unload waits for this native op.
@@ -770,14 +806,16 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
                 raw = builder.ToString();
                 inferenceStopwatch.Stop();
-                log.Info(LogSource,
-                    $"Model streamed a response in {inferenceStopwatch.ElapsedMilliseconds} ms (model={SelectedModelAlias ?? "<unknown>"}, responseChars={raw.Length}).");
+                log.LogInformation(
+                    "Model streamed a response in {ElapsedMs} ms (model={Model}, responseChars={ResponseChars}).",
+                    inferenceStopwatch.ElapsedMilliseconds, SelectedModelAlias ?? "<unknown>", raw.Length);
             }
             catch (OperationCanceledException) when (inferenceCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 inferenceStopwatch.Stop();
-                log.Warning(LogSource,
-                    $"Streaming inference watchdog fired after {inferenceTimeout.TotalSeconds:F0}s (model={SelectedModelAlias ?? "<unknown>"}).");
+                log.LogWarning(
+                    "Streaming inference watchdog fired after {WatchdogTimeout:F0}s (model={Model}).",
+                    inferenceTimeout.TotalSeconds, SelectedModelAlias ?? "<unknown>");
                 return SemanticTranslationResult.Fail(
                     $"The local AI model did not respond within {inferenceTimeout.TotalSeconds:F0} seconds.");
             }
@@ -787,7 +825,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             }
             catch (Exception ex)
             {
-                log.Warning(LogSource, $"The local AI model failed to stream a response (model={SelectedModelAlias ?? "<unknown>"}).", ex);
+                log.LogWarning(ex, "The local AI model failed to stream a response (model={Model}).", SelectedModelAlias ?? "<unknown>");
                 return SemanticTranslationResult.Fail($"The local AI model failed to respond: {ex.Message}");
             }
 
@@ -811,7 +849,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     {
         if (_initialized && _chatClient is not null) return _chatClient;
 
-        var log = LogService.Instance;
+        var log = YaguLog.For(LogSource);
         await _initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -819,7 +857,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
             var catalog = await EnsureCatalogLockedAsync(progress, cancellationToken).ConfigureAwait(false);
 
-            log.Verbose(LogSource, $"Selecting model (preferredAlias={_preferredAlias ?? "<auto>"}, deviceOrder={string.Join(">", _deviceOrder)}).");
+            log.LogDebug("Selecting model (preferredAlias={PreferredAlias}, deviceOrder={DeviceOrder}).", _preferredAlias ?? "<auto>", string.Join(">", _deviceOrder));
             IModel? model = null;
             // Ample-GPU auto-upgrade: when the user hasn't pinned a model and this machine has plenty of
             // dedicated VRAM, prefer a larger, more-accurate family (e.g. phi-4 14B) over the small
@@ -831,26 +869,26 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             {
                 model = await FoundryModelSelector.SelectAsync(catalog, upgradeAlias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken).ConfigureAwait(false);
                 if (model is not null)
-                    log.Info(LogSource, $"Ample GPU VRAM ({AvailableVramBudgetMb()} MB): upgraded auto-selection to '{upgradeAlias}'.");
+                    log.LogInformation("Ample GPU VRAM ({VramBudgetMb} MB): upgraded auto-selection to '{UpgradeAlias}'.", AvailableVramBudgetMb(), upgradeAlias);
                 else
-                    log.Verbose(LogSource, $"VRAM upgrade '{upgradeAlias}' not available in catalog; using normal auto-selection.");
+                    log.LogDebug("VRAM upgrade '{UpgradeAlias}' not available in catalog; using normal auto-selection.", upgradeAlias);
             }
             model ??= await FoundryModelSelector.SelectAsync(catalog, _preferredAlias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken).ConfigureAwait(false);
             if (model is null)
             {
-                log.Warning(LogSource, "No compatible local model is available for this machine.");
+                log.LogWarning("No compatible local model is available for this machine.");
                 throw new InvalidOperationException("No compatible local model is available for this machine.");
             }
-            log.Info(LogSource, $"Selected model '{model.Alias}'.");
+            log.LogInformation("Selected model '{ModelAlias}'.", model.Alias);
 
             bool cached = await model.IsCachedAsync(cancellationToken).ConfigureAwait(false);
-            log.Verbose(LogSource, $"Model '{model.Alias}' cached on disk: {cached}.");
+            log.LogDebug("Model '{ModelAlias}' cached on disk: {Cached}.", model.Alias, cached);
             // Only surface the download UI when the model isn't already on disk. A cached model
             // makes DownloadAsync a fast no-op, so flashing "Downloading model — 100%" on every
             // launch wrongly implies a re-download that never actually happens.
             if (!cached)
             {
-                log.Info(LogSource, $"Downloading model '{model.Alias}' (first-time setup).");
+                log.LogInformation("Downloading model '{ModelAlias}' (first-time setup).", model.Alias);
                 progress?.Report(new SemanticTranslationProgress
                 {
                     Stage = SemanticTranslationStage.DownloadingModel,
@@ -873,7 +911,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 cancellationToken).ConfigureAwait(false);
             downloadStopwatch.Stop();
             if (!cached)
-                log.Info(LogSource, $"Model '{model.Alias}' downloaded in {downloadStopwatch.ElapsedMilliseconds} ms.");
+                log.LogInformation("Model '{ModelAlias}' downloaded in {ElapsedMs} ms.", model.Alias, downloadStopwatch.ElapsedMilliseconds);
 
             // Now that the model is on disk, verify its context window can hold the system prompt + input
             // + output before loading it — some variants (e.g. 4224-token OpenVINO-NPU builds) load fine
@@ -892,39 +930,44 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 Stage = SemanticTranslationStage.LoadingModel,
                 Detail = model.Alias,
             });
-            log.Info(LogSource, $"Loading model '{model.Alias}'.");
+            log.LogInformation("Loading model '{ModelAlias}'.", model.Alias);
             // VRAM SETTLE: if a model was just unloaded, wait for WDDM to reclaim its VRAM before loading
             // this one, so the incoming model isn't loaded onto a still-near-full card — which has been
             // observed to wedge onnxruntime-genai's first inference on a model switch.
             if (_vramSettlePending)
             {
                 _vramSettlePending = false;
-                log.Verbose(LogSource,
-                    $"Waiting {VramSettleAfterUnload.TotalMilliseconds:0} ms for VRAM to settle after the previous unload before loading '{model.Alias}'.");
+                log.LogDebug(
+                    "Waiting {SettleMs:0} ms for VRAM to settle after the previous unload before loading '{ModelAlias}'.",
+                    VramSettleAfterUnload.TotalMilliseconds, model.Alias);
                 await Task.Delay(VramSettleAfterUnload, cancellationToken).ConfigureAwait(false);
             }
             var loadStopwatch = Stopwatch.StartNew();
+            // Publish the model before starting the cancellable native load. If LoadAsync reports cancellation
+            // after allocating device resources, the enclosing translation cleanup can still find the model,
+            // drain the tracked load, and unload it safely.
+            _model = model;
             var loadTask = model.LoadAsync(cancellationToken);
             TrackNativeModelOp(loadTask); // so a later unload waits for this native load to drain
             await loadTask.ConfigureAwait(false);
             loadStopwatch.Stop();
-            log.Info(LogSource, $"Model '{model.Alias}' loaded in {loadStopwatch.ElapsedMilliseconds} ms.");
+            log.LogInformation("Model '{ModelAlias}' loaded in {ElapsedMs} ms.", model.Alias, loadStopwatch.ElapsedMilliseconds);
 
             var chat = await model.GetChatClientAsync(cancellationToken).ConfigureAwait(false);
             bool isReasoning = FoundryModelSelector.IsReasoningAlias(model.Alias);
-            ConfigureChatSettings(chat, isReasoning);
-            log.Verbose(LogSource, isReasoning
-                ? "Chat client configured for a REASONING model (temperature=0.7, topP=0.95, maxTokens=8192, no repetition penalty; <think> trace is stripped before parsing)."
-                : $"Chat client configured for deterministic JSON (temperature=0, topP=1, maxTokens={MaxOutputTokens}, frequencyPenalty=0.6, presencePenalty=0.3).");
+            ConfigureChatSettings(chat, isReasoning, model.Alias, model.Id);
+            if (isReasoning)
+                log.LogDebug("Chat client configured for a REASONING model (temperature=0.7, topP=0.95, maxTokens=8192, no repetition penalty; <think> trace is stripped before parsing).");
+            else
+                log.LogDebug("Chat client configured for deterministic JSON (temperature=0, topP=1, maxTokens={MaxTokens}, frequencyPenalty=0.6, presencePenalty=0.3).", MaxOutputTokens);
 
-            _model = model;
             _chatClient = chat;
             _initialized = true;
             _preferredAlias = model.Alias;
             SelectedModelAlias = model.Alias;
             SelectedModelId = model.Id;
             _selectedModelIsReasoning = isReasoning;
-            log.Info(LogSource, $"Local model ready: '{model.Alias}'.");
+            log.LogInformation("Local model ready: '{ModelAlias}'.", model.Alias);
             return chat;
         }
         finally
@@ -942,18 +985,18 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     {
         if (_catalog is not null) return _catalog;
 
-        var log = LogService.Instance;
+        var log = YaguLog.For(LogSource);
         progress?.Report(new SemanticTranslationProgress { Stage = SemanticTranslationStage.Initializing });
 
         if (!FoundryLocalManager.IsInitialized)
         {
-            log.Info(LogSource, $"Initializing Foundry Local manager (AppName={FoundryAppName}).");
+            log.LogInformation("Initializing Foundry Local manager (AppName={AppName}).", FoundryAppName);
             var config = new Configuration { AppName = FoundryAppName };
             await FoundryLocalManager.CreateAsync(config, FoundryLoggerAdapter.Instance, cancellationToken).ConfigureAwait(false);
         }
         else
         {
-            log.Verbose(LogSource, "Foundry Local manager already initialized; reusing it.");
+            log.LogDebug("Foundry Local manager already initialized; reusing it.");
         }
 
         var manager = FoundryLocalManager.Instance;
@@ -962,7 +1005,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         // register step still runs each process, but performs no download when already cached.
         // Surface the "Downloading AI runtime" stage only while a real download is in flight
         // (callback reports < 100%), so repeat launches don't appear to re-download every time.
-        log.Info(LogSource, "Ensuring hardware execution providers are downloaded and registered.");
+        log.LogInformation("Ensuring hardware execution providers are downloaded and registered.");
         var epStopwatch = Stopwatch.StartNew();
         await manager.DownloadAndRegisterEpsAsync(
             (epName, pct) =>
@@ -977,17 +1020,17 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             },
             cancellationToken).ConfigureAwait(false);
         epStopwatch.Stop();
-        log.Info(LogSource, $"Execution providers ready in {epStopwatch.ElapsedMilliseconds} ms.");
+        log.LogInformation("Execution providers ready in {ElapsedMs} ms.", epStopwatch.ElapsedMilliseconds);
 
-        log.Verbose(LogSource, "Resolving Foundry Local model catalog.");
+        log.LogDebug("Resolving Foundry Local model catalog.");
         _catalog = await manager.GetCatalogAsync(cancellationToken).ConfigureAwait(false);
-        log.Verbose(LogSource, "Model catalog resolved.");
+        log.LogDebug("Model catalog resolved.");
 
         // Resolve the on-disk model cache root so downloaded variants' context windows can be read from
         // their genai_config.json (the referenced SDK exposes no context length OR cache-location API).
         // Best-effort — a null root just disables the context check (models are then assumed to fit).
         _cacheLocation = ResolveFoundryCacheRoot();
-        log.Verbose(LogSource, $"Foundry model cache root: {_cacheLocation ?? "<unknown>"}.");
+        log.LogDebug("Foundry model cache root: {CacheRoot}.", _cacheLocation ?? "<unknown>");
         return _catalog;
     }
 
@@ -996,16 +1039,16 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     {
         if (!_enabled) return Array.Empty<SemanticModelOption>();
 
-        var log = LogService.Instance;
+        var log = YaguLog.For(LogSource);
         await _initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            log.Info(LogSource, "Listing locally-runnable model options.");
+            log.LogInformation("Listing locally-runnable model options.");
             var catalog = await EnsureCatalogLockedAsync(progress, cancellationToken).ConfigureAwait(false);
             var models = await catalog.ListModelsAsync(cancellationToken).ConfigureAwait(false);
             if (models is null || models.Count == 0)
             {
-                log.Warning(LogSource, "Model catalog returned no models when listing options.");
+                log.LogWarning("Model catalog returned no models when listing options.");
                 return Array.Empty<SemanticModelOption>();
             }
 
@@ -1041,15 +1084,16 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 int? ctx = VariantContextLength(variant);
                 if (!ModelContextBudget.Fits(ctx))
                 {
-                    log.Info(LogSource,
-                        $"Excluding '{AliasOf(family)}' [{variant.Id}] from options: context window {ctx} < {ModelContextBudget.RequiredContextTokens}.");
+                    log.LogInformation(
+                        "Excluding '{FamilyAlias}' [{VariantId}] from options: context window {ContextWindow} < {RequiredContextTokens}.",
+                        AliasOf(family), variant.Id, ctx, ModelContextBudget.RequiredContextTokens);
                     continue;
                 }
                 resolved.Add((family, variant));
             }
             if (resolved.Count == 0)
             {
-                log.Warning(LogSource, "No model variant matches the detected devices; listing families as a fallback.");
+                log.LogWarning("No model variant matches the detected devices; listing families as a fallback.");
                 resolved = usable.Select(m => (m, m)).ToList();
             }
 
@@ -1108,11 +1152,13 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 .ThenBy(o => o.SizeBytes ?? long.MaxValue)
                 .ThenBy(o => o.Alias, StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            log.Info(LogSource,
-                $"{ordered.Count} model option(s) available (recommended='{recommendedAlias ?? "<none>"}', cached={ordered.Count(o => o.IsCached)}).");
-            if (log.IsVerboseEnabled)
-                log.Verbose(LogSource,
-                    "Model options: " + string.Join(", ", ordered.Select(o =>
+            log.LogInformation(
+                "{OptionCount} model option(s) available (recommended='{RecommendedAlias}', cached={CachedCount}).",
+                ordered.Count, recommendedAlias ?? "<none>", ordered.Count(o => o.IsCached));
+            if (LogService.Instance.IsVerboseEnabled)
+                log.LogDebug(
+                    "Model options: {Options}",
+                    string.Join(", ", ordered.Select(o =>
                         $"{o.Alias}[{o.DeviceLabel ?? "?"}{(o.IsRecommended ? ",recommended" : "")}{(o.IsCached ? ",cached" : "")}]")));
             return ordered;
         }
@@ -1128,22 +1174,22 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         if (!_enabled)
             throw new InvalidOperationException("Semantic search is disabled in settings.");
 
-        var log = LogService.Instance;
+        var log = YaguLog.For(LogSource);
         await _initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var catalog = await EnsureCatalogLockedAsync(progress, cancellationToken).ConfigureAwait(false);
             string? alias = string.IsNullOrWhiteSpace(modelAlias) ? _preferredAlias : modelAlias.Trim();
-            log.Info(LogSource, $"Preparing model (requested='{alias ?? "<auto>"}').");
+            log.LogInformation("Preparing model (requested='{RequestedAlias}').", alias ?? "<auto>");
             var model = await FoundryModelSelector.SelectAsync(catalog, alias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken).ConfigureAwait(false);
             if (model is null)
             {
-                log.Warning(LogSource, $"No compatible local model is available for this machine (requested='{alias ?? "<auto>"}').");
+                log.LogWarning("No compatible local model is available for this machine (requested='{RequestedAlias}').", alias ?? "<auto>");
                 throw new InvalidOperationException("No compatible local model is available for this machine.");
             }
 
             bool cached = await model.IsCachedAsync(cancellationToken).ConfigureAwait(false);
-            log.Info(LogSource, $"Preparing model '{model.Alias}' (alreadyCached={cached}).");
+            log.LogInformation("Preparing model '{ModelAlias}' (alreadyCached={Cached}).", model.Alias, cached);
             progress?.Report(new SemanticTranslationProgress
             {
                 Stage = SemanticTranslationStage.DownloadingModel,
@@ -1160,8 +1206,9 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 }),
                 cancellationToken).ConfigureAwait(false);
             downloadStopwatch.Stop();
-            log.Info(LogSource,
-                $"Model '{model.Alias}' ready in {downloadStopwatch.ElapsedMilliseconds} ms ({(cached ? "cache hit" : "downloaded")}).");
+            log.LogInformation(
+                "Model '{ModelAlias}' ready in {ElapsedMs} ms ({CacheState}).",
+                model.Alias, downloadStopwatch.ElapsedMilliseconds, cached ? "cache hit" : "downloaded");
 
             // Reject a model whose context window is too small to run semantic search, so an explicit
             // pick of an unusable variant fails clearly here rather than at the next translate.
@@ -1171,18 +1218,19 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             if (_model is not null &&
                 !string.Equals(_model.Alias, model.Alias, StringComparison.OrdinalIgnoreCase))
             {
-                log.Info(LogSource, $"Switching loaded model from '{_model.Alias}' to '{model.Alias}'.");
+                log.LogInformation("Switching loaded model from '{FromAlias}' to '{ToAlias}'.", _model.Alias, model.Alias);
                 // SERIALIZE TEARDOWN: only free the previous model once any native op on it has drained,
                 // else onnxruntime-genai faults (use-after-free). A wedged op skips the unload (leak).
                 if (await TryDrainNativeModelOpAsync().ConfigureAwait(false))
                 {
                     try { await _model.UnloadAsync().ConfigureAwait(false); }
-                    catch (Exception ex) { log.Verbose(LogSource, $"Unloading previous model '{_model.Alias}' failed.", ex); }
+                    catch (Exception ex) { log.LogDebug(ex, "Unloading previous model '{ModelAlias}' failed.", _model.Alias); }
                 }
                 else
                 {
-                    log.Warning(LogSource,
-                        $"Skipping unload of previous model '{_model.Alias}': a native op is still in flight; leaving it resident to avoid a crash.");
+                    log.LogWarning(
+                        "Skipping unload of previous model '{ModelAlias}': a native op is still in flight; leaving it resident to avoid a crash.",
+                        _model.Alias);
                 }
                 _model = null;
                 _chatClient = null;
@@ -1211,7 +1259,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         _ => null,
     };
 
-    private static void ConfigureChatSettings(OpenAIChatClient chat, bool isReasoning)
+    private void ConfigureChatSettings(OpenAIChatClient chat, bool isReasoning, string? modelAlias, string? modelId)
     {
         var s = chat.Settings;
 
@@ -1235,6 +1283,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             s.RandomSeed = 0;
             s.FrequencyPenalty = 0f;
             s.PresencePenalty = 0f;
+            ApplyGenerationOverride(chat, modelAlias, modelId);
             return;
         }
 
@@ -1272,6 +1321,59 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         // and reinforces valid-JSON output that SemanticPlanJsonExtractor then parses. If a model/EP
         // ignores or rejects the format, the existing translate/parse fallback still applies.
         s.ResponseFormat = new global::Microsoft.AI.Foundry.Local.OpenAI.ResponseFormatExtended { Type = "json_object" };
+        ApplyGenerationOverride(chat, modelAlias, modelId);
+    }
+
+    /// <summary>Overlays any user-configured per-model sampling overrides on top of the built-in defaults
+    /// already written to the chat client's settings. Only non-null override fields are applied, so a
+    /// partial override (e.g. just Temperature) leaves the other five defaults untouched. The override is
+    /// matched to the selected model by catalog variant id first (most specific), then by alias,
+    /// case-insensitively.</summary>
+    private void ApplyGenerationOverride(OpenAIChatClient chat, string? modelAlias, string? modelId)
+    {
+        var ov = ResolveGenerationOverride(modelAlias, modelId);
+        if (ov is null) return;
+
+        var s = chat.Settings;
+        if (ov.Temperature is { } temperature) s.Temperature = temperature;
+        if (ov.TopP is { } topP) s.TopP = topP;
+        if (ov.MaxTokens is { } maxTokens) s.MaxTokens = maxTokens;
+        if (ov.RandomSeed is { } randomSeed) s.RandomSeed = randomSeed;
+        if (ov.FrequencyPenalty is { } frequencyPenalty) s.FrequencyPenalty = frequencyPenalty;
+        if (ov.PresencePenalty is { } presencePenalty) s.PresencePenalty = presencePenalty;
+
+        YaguLog.For(LogSource).LogInformation(
+            "Applied per-model generation override for '{Model}' (temperature={Temp}, topP={TopP}, maxTokens={MaxTokens}, randomSeed={Seed}, frequencyPenalty={Freq}, presencePenalty={Pres}).",
+            modelId ?? modelAlias ?? "<unknown>",
+            ov.Temperature, ov.TopP, ov.MaxTokens, ov.RandomSeed, ov.FrequencyPenalty, ov.PresencePenalty);
+    }
+
+    /// <summary>Finds the applicable override for the selected model: the entry whose key matches the
+    /// catalog variant id first (pins the accelerator build + quantization), then the alias. Matching is
+    /// case-insensitive and tolerant of a JSON round-trip that dropped the dictionary's comparer. Returns
+    /// null when overrides are unset or none match.</summary>
+    private SemanticModelGenerationOverride? ResolveGenerationOverride(string? modelAlias, string? modelId)
+    {
+        var map = _generationOverrides;
+        if (map is null || map.Count == 0) return null;
+        if (!string.IsNullOrWhiteSpace(modelId) && TryMatchOverride(map, modelId!, out var byId)) return byId;
+        if (!string.IsNullOrWhiteSpace(modelAlias) && TryMatchOverride(map, modelAlias!, out var byAlias)) return byAlias;
+        return null;
+    }
+
+    private static bool TryMatchOverride(
+        IReadOnlyDictionary<string, SemanticModelGenerationOverride> map, string key, out SemanticModelGenerationOverride? value)
+    {
+        foreach (var kv in map)
+        {
+            if (kv.Value is not null && string.Equals(kv.Key, key, StringComparison.OrdinalIgnoreCase))
+            {
+                value = kv.Value;
+                return true;
+            }
+        }
+        value = null;
+        return false;
     }
 
     private string BuildSystemPrompt(SemanticTranslationContext context)
@@ -1369,14 +1471,14 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         {
             if (_model is not null)
             {
-                LogService.Instance.Verbose(LogSource, $"Disposing; unloading model '{_model.Alias}'.");
+                YaguLog.For(LogSource).LogDebug("Disposing; unloading model '{Model}'.", _model.Alias);
                 await _model.UnloadAsync().ConfigureAwait(false);
             }
         }
         catch (Exception ex)
         {
             // Best-effort cleanup.
-            LogService.Instance.Verbose(LogSource, "Model unload during dispose failed (ignored).", ex);
+            YaguLog.For(LogSource).LogDebug(ex, "Model unload during dispose failed (ignored).");
         }
         _initLock.Dispose();
     }

@@ -51,6 +51,28 @@ public sealed class SemanticModelVramOptimizationTests
     }
 
     [Fact]
+    public void Translator_PreparationIsInsideGuaranteedUnloadBoundary()
+    {
+        string translator = Read("Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs");
+
+        // The outer try must begin before model preparation and its finally must unload. This prevents a
+        // cancellation after native LoadAsync allocates VRAM from bypassing cleanup.
+        int stopwatch = translator.IndexOf("var totalStopwatch = Stopwatch.StartNew();", System.StringComparison.Ordinal);
+        int outerTry = translator.IndexOf("try", stopwatch, System.StringComparison.Ordinal);
+        int ensure = translator.IndexOf("chat = await EnsureChatClientAsync(progress, cancellationToken)", System.StringComparison.Ordinal);
+        int cleanup = translator.IndexOf("if (_unloadAfterUse)", ensure, System.StringComparison.Ordinal);
+        Assert.True(outerTry >= 0 && ensure > outerTry && cleanup > ensure,
+            $"Expected preparation inside unload try/finally (try={outerTry}, ensure={ensure}, cleanup={cleanup}).");
+
+        // Publish the model before native load begins, so cancellation/failure after native allocation leaves
+        // a reference the guaranteed cleanup can drain and unload.
+        int publish = translator.IndexOf("_model = model;", System.StringComparison.Ordinal);
+        int load = translator.IndexOf("var loadTask = model.LoadAsync(cancellationToken);", System.StringComparison.Ordinal);
+        Assert.True(publish >= 0 && load > publish,
+            $"Expected model publication before LoadAsync (publish={publish}, load={load}).");
+    }
+
+    [Fact]
     public void UnloadCurrentModel_IsExposedOnInterfaceAndImplementedByTranslator()
     {
         string iface = Read("Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs");
@@ -183,7 +205,7 @@ public sealed class SemanticModelVramOptimizationTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(System.AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
         return dir?.FullName ?? Directory.GetCurrentDirectory();
     }

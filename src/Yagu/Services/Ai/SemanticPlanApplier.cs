@@ -4,6 +4,8 @@ using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using Yagu.Models;
 using System.Security;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Ai;
 
@@ -117,6 +119,17 @@ public sealed class ResolvedSearchPlan
 public static class SemanticPlanApplier
 {
     private const string LogSource = "Semantic.PlanApplier";
+
+    // Models should identify structured formats, not invent their syntax. The exact failure that
+    // prompted this guard was a phone-number regex beginning with "(?:" but missing its final ")",
+    // which reached SearchService and surfaced as a red Invalid regex error. Keep this expression
+    // deliberately compatible with both .NET Regex and the native Rust regex engine (no lookaround).
+    internal const string CanonicalPhoneNumberPattern =
+        @"(?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.-]?\d{3,4}[\s.-]?\d{4}\b";
+
+    private static readonly Regex PhoneNumberIntent = new(
+        @"\b(?:phone|telephone|mobile|cell)(?:\s+(?:number|numbers|no\.?))?\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>Bare, lower-case extensions Yagu treats as archive containers (from
     /// <see cref="AppSettings.DefaultArchiveExtensions"/>). Used to deterministically enable "Search
@@ -292,6 +305,16 @@ public static class SemanticPlanApplier
 
         string? pattern = string.IsNullOrWhiteSpace(plan.Pattern) ? null : plan.Pattern!.Trim();
         bool? useRegex = plan.UseRegex;
+
+        // A request for phone numbers has deterministic structured intent. Never trust a small model
+        // to balance or escape that regex: use the same known-valid pattern on every model and surface.
+        // File-type/directory constraints from the plan (for example C:\ + *.json) remain intact.
+        if (TryResolveKnownStructuredPattern(context.OriginalQuery, out string structuredPattern))
+        {
+            pattern = structuredPattern;
+            useRegex = true;
+            mode = Models.SearchMode.Content;
+        }
 
         // Guard against a runaway / pathological model pattern. Observed: phi-4 emitting a ~700-char
         // repeated "\b(?:\s+\w+\s+){1,}\b(?:…)" regex for "C# files with async methods…", which also
@@ -492,6 +515,23 @@ public static class SemanticPlanApplier
             }
         }
 
+        // A valid JSON plan can still contain an invalid regex string. Validate at the semantic
+        // boundary rather than starting a doomed search. Known structured intents above have already
+        // been replaced with canonical expressions; for any other malformed regex, fall back to a
+        // literal search of the user's request and explain the normalization instead of showing an
+        // engine-level Invalid regex failure.
+        if (pattern is not null && useRegex == true && !IsValidRegexPattern(pattern))
+        {
+            warnings.Add("The AI model produced an invalid regular expression; searched for the request text literally instead.");
+            pattern = string.IsNullOrWhiteSpace(context.OriginalQuery)
+                ? null
+                : context.OriginalQuery!.Trim();
+            useRegex = false;
+            exactMatch = false;
+            multiline = null;
+            multilineDotAll = null;
+        }
+
         var resolved = new ResolvedSearchPlan
         {
             Directory = directory,
@@ -525,14 +565,40 @@ public static class SemanticPlanApplier
             Warnings = warnings,
         };
 
-        var log = LogService.Instance;
+        var log = YaguLog.For(LogSource);
         if (warnings.Count > 0)
-            log.Verbose(LogSource,
-                $"Resolved plan with {warnings.Count} normalization warning(s): {string.Join(" | ", warnings)}");
-        if (log.IsVerboseEnabled)
-            log.Verbose(LogSource, $"Resolved plan: {DescribeResolved(resolved)}");
+            log.LogDebug("Resolved plan with {WarningCount} normalization warning(s): {Warnings}",
+                warnings.Count, string.Join(" | ", warnings));
+        log.LogDebug("Resolved plan: {ResolvedPlan}", DescribeResolved(resolved));
 
         return resolved;
+    }
+
+    /// <summary>Returns a deterministic regex for a structured format explicitly requested in the
+    /// original natural-language query. The model remains responsible for all surrounding filters.</summary>
+    internal static bool TryResolveKnownStructuredPattern(string? query, out string pattern)
+    {
+        pattern = string.Empty;
+        if (string.IsNullOrWhiteSpace(query) || !PhoneNumberIntent.IsMatch(query))
+            return false;
+        pattern = CanonicalPhoneNumberPattern;
+        return true;
+    }
+
+    /// <summary>Checks .NET regex syntax without running the expression against user content.</summary>
+    internal static bool IsValidRegexPattern(string? pattern)
+    {
+        if (string.IsNullOrEmpty(pattern))
+            return false;
+        try
+        {
+            _ = new Regex(pattern, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     /// <summary>Compact, allocation-light summary of a resolved plan for Verbose diagnostics. Only

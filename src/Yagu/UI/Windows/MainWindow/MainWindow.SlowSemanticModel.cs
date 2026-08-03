@@ -23,49 +23,67 @@ public sealed partial class MainWindow
     /// </summary>
     private async Task SubmitSearchWithSlowModelWatchAsync()
     {
-        // In Traditional mode, first offer to switch a natural-language query to AI (Semantic) search.
-        // If the user accepts, IsSemanticQueryMode flips to true below and this submit runs as Semantic.
-        await MaybeOfferSemanticSuggestionAsync();
-
-        // Then, if the query is still Traditional and contains a literal "\n" escape while Multiline is
-        // off, offer to switch Multiline (and Regex) on so the escape matches a real line break.
-        await MaybeOfferMultilineSuggestionAsync();
-
-        if (_slowSemanticWatchActive || !ViewModel.IsSemanticQueryMode || !ViewModel.SemanticSearchAvailable)
-        {
-            await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);
+        // Ignore a second initiation while the first is still in its pre-scan preparation phase.
+        if (ViewModel.IsPreparingSearch)
             return;
-        }
 
-        _slowSemanticWatchActive = true;
+        // Immediate feedback: morph the Search button to Cancel and show the indeterminate progress bar
+        // the instant the user starts a search, BEFORE the (possibly multi-second) pre-search gates run.
+        // Previously nothing changed until IsSearching flipped at the very end of the gate chain, so the
+        // button and progress bar appeared to lag several seconds behind the click.
+        ViewModel.BeginSearchPreparation();
         try
         {
-            while (true)
+            // In Traditional mode, first offer to switch a natural-language query to AI (Semantic) search.
+            // If the user accepts, IsSemanticQueryMode flips to true below and this submit runs as Semantic.
+            await MaybeOfferSemanticSuggestionAsync();
+
+            // Then, if the query is still Traditional and contains a literal "\n" escape while Multiline is
+            // off, offer to switch Multiline (and Regex) on so the escape matches a real line break.
+            await MaybeOfferMultilineSuggestionAsync();
+
+            if (_slowSemanticWatchActive || !ViewModel.IsSemanticQueryMode || !ViewModel.SemanticSearchAvailable)
             {
-                _slowSemanticRerunNeeded = false;
-                using var watchCts = new CancellationTokenSource();
-                var watch = MonitorSlowSemanticInterpretationAsync(watchCts.Token);
-                try
-                {
-                    await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);
-                }
-                finally
-                {
-                    // Stop the watchdog timer (no-op once the dialog is already showing).
-                    watchCts.Cancel();
-                }
+                await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);
+                return;
+            }
 
-                await watch;
+            _slowSemanticWatchActive = true;
+            try
+            {
+                while (true)
+                {
+                    _slowSemanticRerunNeeded = false;
+                    using var watchCts = new CancellationTokenSource();
+                    var watch = MonitorSlowSemanticInterpretationAsync(watchCts.Token);
+                    try
+                    {
+                        await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);
+                    }
+                    finally
+                    {
+                        // Stop the watchdog timer (no-op once the dialog is already showing).
+                        watchCts.Cancel();
+                    }
 
-                // Re-run only when the watchdog cancelled the in-flight translation to switch models;
-                // otherwise the original translation completed (or was user-cancelled) and we're done.
-                if (!_slowSemanticRerunNeeded)
-                    break;
+                    await watch;
+
+                    // Re-run only when the watchdog cancelled the in-flight translation to switch models;
+                    // otherwise the original translation completed (or was user-cancelled) and we're done.
+                    if (!_slowSemanticRerunNeeded)
+                        break;
+                }
+            }
+            finally
+            {
+                _slowSemanticWatchActive = false;
             }
         }
         finally
         {
-            _slowSemanticWatchActive = false;
+            // The scan committed (IsSearching took over and already cleared IsPreparingSearch) or a gate
+            // aborted the run — either way end the preparation phase and tear down its cancellation source.
+            ViewModel.EndSearchPreparation();
         }
     }
 
