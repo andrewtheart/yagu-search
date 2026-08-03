@@ -1,11 +1,14 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Yagu.Helpers;
 using Yagu.Services;
+using Yagu.Services.Logging;
 using System.Globalization;
+using YaguLogLevel = Yagu.Services.LogLevel;
 
 namespace Yagu;
 
@@ -55,7 +58,7 @@ public sealed partial class App : Application, IDisposable
         // Initialize logging from persisted settings
         var settings = new SettingsService().Load();
         LogService.Instance.RotateIfNeeded();
-        LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);
+        LogService.InitFromSettings((YaguLogLevel)settings.LogLevelIndex, (YaguLogLevel)settings.ConsoleLogLevelIndex);
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
         _ = ResultStore.CleanupOrphanedTempFilesAsync(settings.SearchResultTempDirectory);
 
@@ -292,13 +295,13 @@ public sealed partial class App : Application, IDisposable
         {
             var msg = $"[{DateTime.UtcNow:O}] {source}: {ex}\n";
             File.AppendAllText(CrashLogPath, msg);
-            LogService.Instance.Critical("App", $"{source}: {ex?.Message}", ex);
+            YaguLog.For("App").LogCritical(ex, "{Source}: {Error}", source, ex?.Message);
             LogService.Instance.Flush();
         }
         catch { /* last resort — nothing we can do */ }
     }
 
-    internal static string? ParseDirArg(string[] args) => ParseStringArg(args, "--dir");
+    internal static string? ParseDirArg(string[] args) => Helpers.StartupArgs.ParseDirectory(args);
 
     internal static int? ParseWindowFocusBehaviorArg(string[] args)
     {
@@ -319,17 +322,5 @@ public sealed partial class App : Application, IDisposable
     }
 
     internal static string? ParseStringArg(string[] args, string name)
-    {
-        if (args is null) return null;
-        var prefix = name + "=";
-        for (int i = 0; i < args.Length; i++)
-        {
-            var a = args[i];
-            if (string.Equals(a, name, System.StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-                return args[i + 1].Trim().Trim('"');
-            if (a.StartsWith(prefix, System.StringComparison.OrdinalIgnoreCase))
-                return a[prefix.Length..].Trim().Trim('"');
-        }
-        return null;
-    }
+        => Helpers.StartupArgs.ParseStringArg(args, name);
 }

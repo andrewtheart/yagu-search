@@ -10,6 +10,7 @@ internal sealed class TrayIcon : IDisposable
 {
     public event Action? OpenResetRequested;
     public event Action? OpenExistingRequested;
+    public event Action? QuickSearchRequested;
     public event Action? CloseRequested;
 
     private const int WM_USER = 0x0400;
@@ -30,6 +31,7 @@ internal sealed class TrayIcon : IDisposable
     private const int CMD_OPEN_RESET = 1;
     private const int CMD_OPEN_EXISTING = 2;
     private const int CMD_CLOSE = 3;
+    private const int CMD_QUICK_SEARCH = 4;
 
     private IntPtr _hwnd;
     private bool _added;
@@ -146,6 +148,7 @@ internal sealed class TrayIcon : IDisposable
             {
                 case CMD_OPEN_RESET: OpenResetRequested?.Invoke(); break;
                 case CMD_OPEN_EXISTING: OpenExistingRequested?.Invoke(); break;
+                case CMD_QUICK_SEARCH: QuickSearchRequested?.Invoke(); break;
                 case CMD_CLOSE: CloseRequested?.Invoke(); break;
             }
             return IntPtr.Zero;
@@ -171,6 +174,8 @@ internal sealed class TrayIcon : IDisposable
 
         try
         {
+            AppendMenuW(hMenu, MF_STRING, CMD_QUICK_SEARCH, "Quick search\u2026");
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, null);
             AppendMenuW(hMenu, MF_STRING, CMD_OPEN_RESET, "Open (reset search)");
             AppendMenuW(hMenu, MF_STRING, CMD_OPEN_EXISTING, "Open (existing search)");
             AppendMenuW(hMenu, MF_SEPARATOR, 0, null);

@@ -80,7 +80,21 @@ internal static class Program
         }
         if (!createdNew)
         {
-            // Another instance already owns the mutex — activate it and exit.
+            // Another instance already owns the mutex. If this launch carried a directory and/or query
+            // (e.g. Explorer's "Search with Yagu" context menu, which passes the folder as a bare
+            // argument), forward it to the running instance so it populates the directory box
+            // (overriding any pinned startup directory) instead of being silently dropped. Only when
+            // there is nothing to forward — or the running instance has no listener yet — do we fall
+            // back to plain activation.
+            string? forwardDir = App.ParseDirArg(args);
+            string? forwardQuery = App.ParseStringArg(args, "--query");
+            if ((!string.IsNullOrWhiteSpace(forwardDir) || !string.IsNullOrWhiteSpace(forwardQuery))
+                && Helpers.SearchRequestSender.TrySend(new Helpers.SearchRequest(
+                    forwardDir, forwardQuery, RunSearch: !string.IsNullOrWhiteSpace(forwardQuery))))
+            {
+                return;
+            }
+
             ActivateExistingInstance();
             return;
         }

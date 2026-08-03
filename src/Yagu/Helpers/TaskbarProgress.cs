@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using Yagu.Services;
+using Yagu.Services.Logging;
 
 namespace Yagu.Helpers;
 
@@ -51,7 +53,7 @@ internal static unsafe class TaskbarProgress
             int hr = CoCreateInstance(in CLSID_TaskbarList, IntPtr.Zero, CLSCTX_INPROC_SERVER, in IID_ITaskbarList3, out IntPtr pTaskbar);
             if (hr != 0 || pTaskbar == IntPtr.Zero)
             {
-                LogService.Instance.Warning("TaskbarProgress", $"CoCreateInstance failed: hr=0x{hr:X8}");
+                YaguLog.For("TaskbarProgress").LogWarning("CoCreateInstance failed: hr=0x{Hr:X8}", hr);
                 return IntPtr.Zero;
             }
 
@@ -62,17 +64,17 @@ internal static unsafe class TaskbarProgress
             int initHr = hrInit(pTaskbar);
             if (initHr != 0)
             {
-                LogService.Instance.Warning("TaskbarProgress", $"HrInit failed: hr=0x{initHr:X8}");
+                YaguLog.For("TaskbarProgress").LogWarning("HrInit failed: hr=0x{InitHr:X8}", initHr);
                 Marshal.Release(pTaskbar);
                 return IntPtr.Zero;
             }
 
-            LogService.Instance.Warning("TaskbarProgress", "COM initialized successfully via CoCreateInstance");
+            YaguLog.For("TaskbarProgress").LogWarning("COM initialized successfully via CoCreateInstance");
             _instance = pTaskbar;
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("TaskbarProgress", $"Init exception: {ex.Message}");
+            YaguLog.For("TaskbarProgress").LogWarning("Init exception: {Error}", ex.Message);
         }
         return _instance;
     }
