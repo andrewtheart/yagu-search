@@ -1,7 +1,9 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using Yagu.Models;
+using Yagu.Services.Logging;
 using Yagu.Services;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -35,7 +37,11 @@ internal static partial class NativeSearcher
         public byte MultiLine;
         public byte MultiLineDotAll;
         public byte MultilineEngine;
-        // ABI v7 — per-line match cap; 0 = unlimited. Bounds a match-everything
+        // ABI v8 — removable/optical roots use owned reads instead of source-file mmap.
+        public byte AvoidSourceMemoryMap;
+        // ABI v8 — cooperative per-file deadline in seconds; 0 disables.
+        public ushort FileIoTimeoutSeconds;
+        // ABI v8 — per-line match cap; 0 = unlimited. Bounds a match-everything
         // pattern (e.g. the regex ".") on a very long minified line.
         public ulong MaxMatchesPerLine;
     }
@@ -59,22 +65,10 @@ internal static partial class NativeSearcher
     internal const int StatusInvalidPath = 5;
     internal const int StatusCancelled = 6;
     internal const int StatusHiddenSkipped = 7;
+    internal const int StatusIoTimeout = 8;
 
     [LibraryImport(DllName, EntryPoint = "qg_abi_version")]
     private static partial uint QgAbiVersion();
-
-    [LibraryImport(DllName, EntryPoint = "qg_search_file")]
-    private static unsafe partial int QgSearchFile(
-        char* pathUtf16,
-        nuint pathLen,
-        byte* patternUtf8,
-        nuint patternLen,
-        QgOptions* options,
-        int* cancelFlag,
-        QgResult* outResult);
-
-    [LibraryImport(DllName, EntryPoint = "qg_free_result")]
-    private static unsafe partial void QgFreeResult(QgResult* result);
 
     [StructLayout(LayoutKind.Sequential)]
     internal unsafe struct QgMatchView
@@ -181,18 +175,6 @@ internal static partial class NativeSearcher
         byte** outErrorMsg,
         nuint* outErrorMsgLen);
 
-    [LibraryImport(DllName, EntryPoint = "qg_session_scan_paths_parallel_ex")]
-    private static unsafe partial int QgSessionScanPathsParallelEx(
-        IntPtr session,
-        char* pathsUtf16Concat,
-        uint* pathLengths,
-        nuint pathCount,
-        uint threadCount,
-        int* cancelFlag,
-        delegate* unmanaged[Cdecl]<void*, uint, QgMatchView*, int> onMatch,
-        delegate* unmanaged[Cdecl]<void*, uint, int, ulong, ulong, void> onFileDone,
-        void* onMatchCtx);
-
     // ── Streaming scanner FFI ──
 
     [LibraryImport(DllName, EntryPoint = "qg_create_streaming_scanner")]
@@ -218,6 +200,132 @@ internal static partial class NativeSearcher
     [LibraryImport(DllName, EntryPoint = "qg_scanner_destroy")]
     private static unsafe partial void QgScannerDestroy(IntPtr scanner);
 
+    internal unsafe interface INativeApi
+    {
+        int SearchFileStream(
+            char* pathUtf16,
+            nuint pathLen,
+            byte* patternUtf8,
+            nuint patternLen,
+            QgOptions* options,
+            int* cancelFlag,
+            delegate* unmanaged[Cdecl]<void*, QgMatchView*, int> onMatch,
+            void* onMatchCtx,
+            int* outStatus,
+            byte** outErrorMsg,
+            nuint* outErrorMsgLen);
+
+        int SearchFileStreamMultiline(
+            char* pathUtf16,
+            nuint pathLen,
+            byte* patternUtf8,
+            nuint patternLen,
+            QgOptions* options,
+            int* cancelFlag,
+            delegate* unmanaged[Cdecl]<void*, QgMultilineMatchView*, int> onMatch,
+            void* onMatchCtx,
+            int* outStatus,
+            byte** outErrorMsg,
+            nuint* outErrorMsgLen);
+
+        IntPtr CreateSession(
+            byte* patternUtf8,
+            nuint patternLen,
+            QgOptions* options,
+            byte** outErrorMsg,
+            nuint* outErrorMsgLen);
+
+        int SearchFileStreamWithSession(
+            IntPtr session,
+            char* pathUtf16,
+            nuint pathLen,
+            int* cancelFlag,
+            delegate* unmanaged[Cdecl]<void*, QgMatchView*, int> onMatch,
+            void* onMatchCtx,
+            int* outStatus,
+            byte** outErrorMsg,
+            nuint* outErrorMsgLen);
+
+        IntPtr CreateStreamingScanner(
+            IntPtr session,
+            uint threadCount,
+            int* cancelFlag,
+            delegate* unmanaged[Cdecl]<void*, uint, QgMatchView*, int> onMatch,
+            delegate* unmanaged[Cdecl]<void*, uint, int, ulong, ulong, void> onFileDone,
+            void* onMatchCtx);
+
+        void FreeBuffer(byte* ptr, nuint len);
+    }
+
+    private sealed unsafe class PInvokeNativeApi : INativeApi
+    {
+        internal static readonly PInvokeNativeApi Instance = new();
+
+        private PInvokeNativeApi() { }
+
+        public int SearchFileStream(
+            char* pathUtf16,
+            nuint pathLen,
+            byte* patternUtf8,
+            nuint patternLen,
+            QgOptions* options,
+            int* cancelFlag,
+            delegate* unmanaged[Cdecl]<void*, QgMatchView*, int> onMatch,
+            void* onMatchCtx,
+            int* outStatus,
+            byte** outErrorMsg,
+            nuint* outErrorMsgLen)
+            => QgSearchFileStream(pathUtf16, pathLen, patternUtf8, patternLen, options, cancelFlag,
+                onMatch, onMatchCtx, outStatus, outErrorMsg, outErrorMsgLen);
+
+        public int SearchFileStreamMultiline(
+            char* pathUtf16,
+            nuint pathLen,
+            byte* patternUtf8,
+            nuint patternLen,
+            QgOptions* options,
+            int* cancelFlag,
+            delegate* unmanaged[Cdecl]<void*, QgMultilineMatchView*, int> onMatch,
+            void* onMatchCtx,
+            int* outStatus,
+            byte** outErrorMsg,
+            nuint* outErrorMsgLen)
+            => QgSearchFileStreamMultiline(pathUtf16, pathLen, patternUtf8, patternLen, options, cancelFlag,
+                onMatch, onMatchCtx, outStatus, outErrorMsg, outErrorMsgLen);
+
+        public IntPtr CreateSession(
+            byte* patternUtf8,
+            nuint patternLen,
+            QgOptions* options,
+            byte** outErrorMsg,
+            nuint* outErrorMsgLen)
+            => QgCreateSession(patternUtf8, patternLen, options, outErrorMsg, outErrorMsgLen);
+
+        public int SearchFileStreamWithSession(
+            IntPtr session,
+            char* pathUtf16,
+            nuint pathLen,
+            int* cancelFlag,
+            delegate* unmanaged[Cdecl]<void*, QgMatchView*, int> onMatch,
+            void* onMatchCtx,
+            int* outStatus,
+            byte** outErrorMsg,
+            nuint* outErrorMsgLen)
+            => QgSessionSearchFileStream(session, pathUtf16, pathLen, cancelFlag,
+                onMatch, onMatchCtx, outStatus, outErrorMsg, outErrorMsgLen);
+
+        public IntPtr CreateStreamingScanner(
+            IntPtr session,
+            uint threadCount,
+            int* cancelFlag,
+            delegate* unmanaged[Cdecl]<void*, uint, QgMatchView*, int> onMatch,
+            delegate* unmanaged[Cdecl]<void*, uint, int, ulong, ulong, void> onFileDone,
+            void* onMatchCtx)
+            => QgCreateStreamingScanner(session, threadCount, cancelFlag, onMatch, onFileDone, onMatchCtx);
+
+        public void FreeBuffer(byte* ptr, nuint len) => QgFreeBuffer(ptr, len);
+    }
+
     private static readonly Lazy<bool> _available = new(TryLoad, LazyThreadSafetyMode.ExecutionAndPublication);
     public static bool IsAvailable => _available.Value;
 
@@ -236,13 +344,18 @@ internal static partial class NativeSearcher
             });
         }
 
+        return TryReadAbiVersion(QgAbiVersion);
+    }
+
+    internal static bool TryReadAbiVersion(Func<uint> readAbiVersion)
+    {
         try
         {
-            return QgAbiVersion() == 7;
+            return readAbiVersion() == 8;
         }
-        catch (DllNotFoundException) { LogService.Instance.Info("NativeSearcher", "yagu_core.dll not found"); return false; }
-        catch (BadImageFormatException ex) { LogService.Instance.Warning("NativeSearcher", "yagu_core.dll bad image format", ex); return false; }
-        catch (EntryPointNotFoundException ex) { LogService.Instance.Warning("NativeSearcher", "yagu_core.dll missing entry point", ex); return false; }
+        catch (DllNotFoundException) { YaguLog.For("NativeSearcher").LogInformation("yagu_core.dll not found"); return false; }
+        catch (BadImageFormatException ex) { YaguLog.For("NativeSearcher").LogWarning(ex, "yagu_core.dll bad image format"); return false; }
+        catch (EntryPointNotFoundException ex) { YaguLog.For("NativeSearcher").LogWarning(ex, "yagu_core.dll missing entry point"); return false; }
     }
 
     /// <summary>
@@ -263,7 +376,7 @@ internal static partial class NativeSearcher
     private static uint NativeContextLineCount(SearchOptions options)
         => (uint)Math.Max(0, options.ContextLines);
 
-    private static QgOptions CreateOptions(SearchOptions options)
+    internal static QgOptions CreateOptions(SearchOptions options)
     {
         uint contextLineCount = NativeContextLineCount(options);
         return new QgOptions
@@ -284,6 +397,8 @@ internal static partial class NativeSearcher
             MultiLine = 0,
             MultiLineDotAll = 0,
             MultilineEngine = 0,
+            AvoidSourceMemoryMap = (byte)(options.AvoidSourceMemoryMap ? 1 : 0),
+            FileIoTimeoutSeconds = (ushort)Math.Clamp(options.FileIoTimeoutSeconds, 1, 600),
             MaxMatchesPerLine = options.MaxMatchesPerLine > 0 ? (ulong)options.MaxMatchesPerLine : 0UL,
         };
     }
@@ -296,7 +411,7 @@ internal static partial class NativeSearcher
     /// the native path skips the EXACT same over-cap files the managed Phase-1
     /// path does (parity-critical, plan §9).
     /// </summary>
-    private static QgOptions CreateMultilineOptions(SearchOptions options)
+    internal static QgOptions CreateMultilineOptions(SearchOptions options)
     {
         uint contextLineCount = NativeContextLineCount(options);
         return new QgOptions
@@ -322,58 +437,27 @@ internal static partial class NativeSearcher
         };
     }
 
-    /// <summary>
-    /// Search a single file. Returns null when the native engine isn't loaded
-    /// or the file should be skipped by the binary/size policy.
-    /// </summary>
-    public static unsafe NativeSearchOutcome SearchFile(
-        string filePath,
-        string pattern,
-        SearchOptions options,
-        int* cancelFlag)
+    internal static void ThrowIfCaptured(INativeSinkState sink, string message)
     {
-        if (!IsAvailable) return NativeSearchOutcome.Unavailable;
-
-        var ffiOptions = CreateOptions(options);
-
-        QgResult result = default;
-        int status;
-        var patternBytes = Encoding.UTF8.GetBytes(pattern);
-        fixed (char* pPath = filePath)
-        fixed (byte* pPattern = patternBytes)
-        {
-            status = QgSearchFile(
-                pPath, (nuint)filePath.Length,
-                pPattern, (nuint)patternBytes.Length,
-                &ffiOptions,
-                cancelFlag,
-                &result);
-        }
-
-        try
-        {
-            return status switch
-            {
-                StatusOk => NativeSearchOutcome.FromBuffer(filePath, result, options.ContextLines),
-                StatusBinarySkipped => NativeSearchOutcome.Skipped("binary"),
-                StatusHiddenSkipped => NativeSearchOutcome.Skipped("hidden"),
-                StatusTooLarge => NativeSearchOutcome.Skipped("too-large"),
-                StatusOpenFailed => NativeSearchOutcome.Skipped("open-failed"),
-                StatusCancelled => NativeSearchOutcome.Cancelled(),
-                StatusInvalidRegex => NativeSearchOutcome.Error(ReadError(result) ?? "invalid regex"),
-                _ => NativeSearchOutcome.Error($"native status {status}"),
-            };
-        }
-        finally
-        {
-            QgFreeResult(&result);
-        }
+        Exception? exception = sink.CapturedException;
+        if (exception != null) throw new InvalidOperationException(message, exception);
     }
 
-    private static unsafe string? ReadError(QgResult result)
+    internal static unsafe void SetInvalidRegexError(
+        INativeSinkState sink,
+        int status,
+        byte* errorMessage,
+        nuint errorMessageLength)
     {
-        if (result.ErrorMsg == IntPtr.Zero || result.ErrorMsgLen == 0) return null;
-        return Encoding.UTF8.GetString((byte*)result.ErrorMsg, (int)result.ErrorMsgLen);
+        if (status != StatusInvalidRegex) return;
+        if (errorMessage == null) return;
+        if (errorMessageLength == 0) return;
+        sink.ErrorMessage = Encoding.UTF8.GetString(errorMessage, (int)errorMessageLength);
+    }
+
+    internal static unsafe void FreeBufferIfPresent(INativeApi nativeApi, byte* buffer, nuint length)
+    {
+        if (buffer != null) nativeApi.FreeBuffer(buffer, length);
     }
 
     /// <summary>
@@ -386,8 +470,18 @@ internal static partial class NativeSearcher
         SearchOptions options,
         int* cancelFlag,
         IStreamingSink sink)
+        => SearchFileStreamCore(filePath, pattern, options, cancelFlag, sink, IsAvailable, PInvokeNativeApi.Instance);
+
+    internal static unsafe int SearchFileStreamCore(
+        string filePath,
+        string pattern,
+        SearchOptions options,
+        int* cancelFlag,
+        IStreamingSink sink,
+        bool isAvailable,
+        INativeApi nativeApi)
     {
-        if (!IsAvailable) return StatusOpenFailed;
+        if (!isAvailable) return StatusOpenFailed;
 
         var ffiOptions = CreateOptions(options);
 
@@ -401,7 +495,7 @@ internal static partial class NativeSearcher
             fixed (char* pPath = filePath)
             fixed (byte* pPattern = patternBytes)
             {
-                _ = QgSearchFileStream(
+                _ = nativeApi.SearchFileStream(
                     pPath, (nuint)filePath.Length,
                     pPattern, (nuint)patternBytes.Length,
                     &ffiOptions,
@@ -413,53 +507,40 @@ internal static partial class NativeSearcher
                     &errMsgLen);
             }
 
-            // Surface any error message captured by the sink (callback exception).
-            if (sink.CapturedException is { } ex)
-            {
-                throw new InvalidOperationException("Streaming sink threw inside native callback", ex);
-            }
-
-            if (status == StatusInvalidRegex && errMsg != null && errMsgLen > 0)
-            {
-                sink.ErrorMessage = Encoding.UTF8.GetString(errMsg, (int)errMsgLen);
-            }
+            ThrowIfCaptured(sink, "Streaming sink threw inside native callback");
+            SetInvalidRegexError(sink, status, errMsg, errMsgLen);
 
             return status;
         }
         finally
         {
-            if (errMsg != null) QgFreeBuffer(errMsg, errMsgLen);
+            FreeBufferIfPresent(nativeApi, errMsg, errMsgLen);
             handle.Free();
         }
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static unsafe int OnMatchTrampoline(void* ctx, QgMatchView* m)
+        => DispatchMatch(GCHandle.FromIntPtr((IntPtr)ctx), m);
+
+    internal static unsafe int DispatchMatch(GCHandle handle, QgMatchView* match)
     {
-        // Must NOT throw — UnmanagedCallersOnly forbids managed exceptions across the FFI boundary.
+        if (handle.Target is not IStreamingSink sink) return 1;
         try
         {
-            var handle = GCHandle.FromIntPtr((IntPtr)ctx);
-            if (handle.Target is IStreamingSink sink)
-            {
-                return sink.OnMatch(m);
-            }
-            return 1; // stop
+            return sink.OnMatch(match);
         }
         catch (Exception ex)
         {
-            // Stash on the sink (best-effort) and signal stop.
-            try
-            {
-                var handle = GCHandle.FromIntPtr((IntPtr)ctx);
-                if (handle.Target is IStreamingSink sink)
-                {
-                    sink.CapturedException = ex;
-                }
-            }
-            catch { /* swallow */ }
+            CaptureException(sink, ex);
             return 1;
         }
+    }
+
+    private static void CaptureException(INativeSinkState sink, Exception exception)
+    {
+        try { sink.CapturedException = exception; }
+        catch { }
     }
 
     /// <summary>
@@ -476,8 +557,18 @@ internal static partial class NativeSearcher
         SearchOptions options,
         int* cancelFlag,
         IMultilineStreamingSink sink)
+        => SearchFileStreamMultilineCore(filePath, pattern, options, cancelFlag, sink, IsAvailable, PInvokeNativeApi.Instance);
+
+    internal static unsafe int SearchFileStreamMultilineCore(
+        string filePath,
+        string pattern,
+        SearchOptions options,
+        int* cancelFlag,
+        IMultilineStreamingSink sink,
+        bool isAvailable,
+        INativeApi nativeApi)
     {
-        if (!IsAvailable) return StatusOpenFailed;
+        if (!isAvailable) return StatusOpenFailed;
 
         var ffiOptions = CreateMultilineOptions(options);
         var patternBytes = Encoding.UTF8.GetBytes(pattern);
@@ -490,7 +581,7 @@ internal static partial class NativeSearcher
             fixed (char* pPath = filePath)
             fixed (byte* pPattern = patternBytes)
             {
-                _ = QgSearchFileStreamMultiline(
+                _ = nativeApi.SearchFileStreamMultiline(
                     pPath, (nuint)filePath.Length,
                     pPattern, (nuint)patternBytes.Length,
                     &ffiOptions,
@@ -502,49 +593,32 @@ internal static partial class NativeSearcher
                     &errMsgLen);
             }
 
-            if (sink.CapturedException is { } ex)
-            {
-                throw new InvalidOperationException("Multiline streaming sink threw inside native callback", ex);
-            }
-
-            if (status == StatusInvalidRegex && errMsg != null && errMsgLen > 0)
-            {
-                sink.ErrorMessage = Encoding.UTF8.GetString(errMsg, (int)errMsgLen);
-            }
+            ThrowIfCaptured(sink, "Multiline streaming sink threw inside native callback");
+            SetInvalidRegexError(sink, status, errMsg, errMsgLen);
 
             return status;
         }
         finally
         {
-            if (errMsg != null) QgFreeBuffer(errMsg, errMsgLen);
+            FreeBufferIfPresent(nativeApi, errMsg, errMsgLen);
             handle.Free();
         }
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static unsafe int OnMultilineMatchTrampoline(void* ctx, QgMultilineMatchView* m)
+        => DispatchMultilineMatch(GCHandle.FromIntPtr((IntPtr)ctx), m);
+
+    internal static unsafe int DispatchMultilineMatch(GCHandle handle, QgMultilineMatchView* match)
     {
-        // Must NOT throw — UnmanagedCallersOnly forbids managed exceptions across the FFI boundary.
+        if (handle.Target is not IMultilineStreamingSink sink) return 1;
         try
         {
-            var handle = GCHandle.FromIntPtr((IntPtr)ctx);
-            if (handle.Target is IMultilineStreamingSink sink)
-            {
-                return sink.OnMultilineMatch(m);
-            }
-            return 1; // stop
+            return sink.OnMultilineMatch(match);
         }
         catch (Exception ex)
         {
-            try
-            {
-                var handle = GCHandle.FromIntPtr((IntPtr)ctx);
-                if (handle.Target is IMultilineStreamingSink sink)
-                {
-                    sink.CapturedException = ex;
-                }
-            }
-            catch { /* swallow */ }
+            CaptureException(sink, ex);
             return 1;
         }
     }
@@ -555,7 +629,18 @@ internal static partial class NativeSearcher
     /// </summary>
     public static unsafe NativeSession? CreateSession(string pattern, SearchOptions options)
     {
-        if (!IsAvailable) return null;
+        IntPtr handle = CreateSessionHandleCore(pattern, options, IsAvailable, PInvokeNativeApi.Instance);
+        if (handle == IntPtr.Zero) return null;
+        return new NativeSession(handle);
+    }
+
+    internal static unsafe IntPtr CreateSessionHandleCore(
+        string pattern,
+        SearchOptions options,
+        bool isAvailable,
+        INativeApi nativeApi)
+    {
+        if (!isAvailable) return IntPtr.Zero;
 
         var ffiOptions = CreateOptions(options);
 
@@ -565,11 +650,10 @@ internal static partial class NativeSearcher
         IntPtr handle;
         fixed (byte* pPattern = patternBytes)
         {
-            handle = QgCreateSession(pPattern, (nuint)patternBytes.Length, &ffiOptions, &errMsg, &errMsgLen);
+            handle = nativeApi.CreateSession(pPattern, (nuint)patternBytes.Length, &ffiOptions, &errMsg, &errMsgLen);
         }
-        if (errMsg != null) QgFreeBuffer(errMsg, errMsgLen);
-        if (handle == IntPtr.Zero) return null;
-        return new NativeSession(handle);
+        FreeBufferIfPresent(nativeApi, errMsg, errMsgLen);
+        return handle;
     }
 
     /// <summary>
@@ -581,6 +665,14 @@ internal static partial class NativeSearcher
         string filePath,
         int* cancelFlag,
         IStreamingSink sink)
+        => SearchFileStreamWithSessionCore(session, filePath, cancelFlag, sink, PInvokeNativeApi.Instance);
+
+    internal static unsafe int SearchFileStreamWithSessionCore(
+        NativeSession session,
+        string filePath,
+        int* cancelFlag,
+        IStreamingSink sink,
+        INativeApi nativeApi)
     {
         var gcHandle = GCHandle.Alloc(sink, GCHandleType.Normal);
         int status = StatusOk;
@@ -590,7 +682,7 @@ internal static partial class NativeSearcher
         {
             fixed (char* pPath = filePath)
             {
-                _ = QgSessionSearchFileStream(
+                _ = nativeApi.SearchFileStreamWithSession(
                     session.Handle,
                     pPath, (nuint)filePath.Length,
                     cancelFlag,
@@ -601,17 +693,14 @@ internal static partial class NativeSearcher
                     &errMsgLen);
             }
 
-            if (sink.CapturedException is { } ex)
-                throw new InvalidOperationException("Streaming sink threw inside native callback", ex);
-
-            if (status == StatusInvalidRegex && errMsg != null && errMsgLen > 0)
-                sink.ErrorMessage = Encoding.UTF8.GetString(errMsg, (int)errMsgLen);
+            ThrowIfCaptured(sink, "Streaming sink threw inside native callback");
+            SetInvalidRegexError(sink, status, errMsg, errMsgLen);
 
             return status;
         }
         finally
         {
-            if (errMsg != null) QgFreeBuffer(errMsg, errMsgLen);
+            FreeBufferIfPresent(nativeApi, errMsg, errMsgLen);
             gcHandle.Free();
         }
     }
@@ -623,79 +712,6 @@ internal static partial class NativeSearcher
     {
         unsafe int OnMatchForFile(uint fileIndex, QgMatchView* m);
         void OnFileDone(uint fileIndex, int status, ulong fileLength, ulong lastModifiedFileTime);
-    }
-
-    /// <summary>
-    /// Parallel batch search using a pre-compiled session and a worker pool
-    /// inside the native library. Files are scanned concurrently so reads
-    /// overlap; the match and per-file-done callbacks on <paramref name="sink"/>
-    /// are serialised by the native layer so the sink can be non-thread-safe.
-    /// </summary>
-    public static unsafe int ScanPathsParallel(
-        NativeSession session,
-        IReadOnlyList<string> paths,
-        int threadCount,
-        int* cancelFlag,
-        IParallelSink sink)
-    {
-        if (!IsAvailable) return StatusOpenFailed;
-        if (paths.Count == 0) return StatusOk;
-
-        // Concatenate UTF-16 paths and build a parallel length array. These
-        // buffers are hot per-batch allocations, so rent them and reuse the
-        // backing storage across searches.
-        int totalChars = 0;
-        for (int i = 0; i < paths.Count; i++)
-            totalChars = checked(totalChars + paths[i].Length);
-
-        var concat = ArrayPool<char>.Shared.Rent(totalChars);
-        var lengths = ArrayPool<uint>.Shared.Rent(paths.Count);
-        try
-        {
-            var concatSpan = concat.AsSpan(0, totalChars);
-            var lengthsSpan = lengths.AsSpan(0, paths.Count);
-            int cursor = 0;
-            for (int i = 0; i < paths.Count; i++)
-            {
-                var s = paths[i];
-                s.AsSpan().CopyTo(concatSpan[cursor..]);
-                lengthsSpan[i] = (uint)s.Length;
-                cursor += s.Length;
-            }
-
-            var gcHandle = GCHandle.Alloc(sink, GCHandleType.Normal);
-            try
-            {
-                fixed (char* pConcat = concatSpan)
-                fixed (uint* pLengths = lengthsSpan)
-                {
-                    int ret = QgSessionScanPathsParallelEx(
-                        session.Handle,
-                        pConcat,
-                        pLengths,
-                        (nuint)paths.Count,
-                        (uint)Math.Max(0, threadCount),
-                        cancelFlag,
-                        &OnParallelMatchTrampoline,
-                        &OnParallelFileDoneTrampoline,
-                        (void*)GCHandle.ToIntPtr(gcHandle));
-
-                    if (sink.CapturedException is { } ex)
-                        throw new InvalidOperationException("Parallel sink threw inside native callback", ex);
-
-                    return ret;
-                }
-            }
-            finally
-            {
-                gcHandle.Free();
-            }
-        }
-        finally
-        {
-            ArrayPool<uint>.Shared.Return(lengths);
-            ArrayPool<char>.Shared.Return(concat);
-        }
     }
 
     // ── Streaming scanner high-level API ──
@@ -711,11 +727,22 @@ internal static partial class NativeSearcher
         int* cancelFlag,
         IParallelSink sink,
         out GCHandle sinkHandle)
+        => CreateStreamingScannerCore(session, threadCount, cancelFlag, sink, out sinkHandle,
+            IsAvailable, PInvokeNativeApi.Instance);
+
+    internal static unsafe IntPtr CreateStreamingScannerCore(
+        NativeSession session,
+        int threadCount,
+        int* cancelFlag,
+        IParallelSink sink,
+        out GCHandle sinkHandle,
+        bool isAvailable,
+        INativeApi nativeApi)
     {
-        if (!IsAvailable) { sinkHandle = default; return IntPtr.Zero; }
+        if (!isAvailable) { sinkHandle = default; return IntPtr.Zero; }
 
         sinkHandle = GCHandle.Alloc(sink, GCHandleType.Normal);
-        var scanner = QgCreateStreamingScanner(
+        var scanner = nativeApi.CreateStreamingScanner(
             session.Handle,
             (uint)Math.Max(0, threadCount),
             cancelFlag,
@@ -796,41 +823,41 @@ internal static partial class NativeSearcher
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static unsafe int OnParallelMatchTrampoline(void* ctx, uint fileIndex, QgMatchView* m)
+        => DispatchParallelMatch(GCHandle.FromIntPtr((IntPtr)ctx), fileIndex, m);
+
+    internal static unsafe int DispatchParallelMatch(GCHandle handle, uint fileIndex, QgMatchView* match)
     {
+        if (handle.Target is not IParallelSink sink) return 1;
         try
         {
-            var handle = GCHandle.FromIntPtr((IntPtr)ctx);
-            if (handle.Target is IParallelSink sink) return sink.OnMatchForFile(fileIndex, m);
-            return 1;
+            return sink.OnMatchForFile(fileIndex, match);
         }
         catch (Exception ex)
         {
-            try
-            {
-                var handle = GCHandle.FromIntPtr((IntPtr)ctx);
-                if (handle.Target is IStreamingSink s) s.CapturedException = ex;
-            }
-            catch { /* swallow */ }
+            CaptureException(sink, ex);
             return 1;
         }
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static unsafe void OnParallelFileDoneTrampoline(void* ctx, uint fileIndex, int status, ulong fileLength, ulong lastModifiedFileTime)
+        => DispatchParallelFileDone(GCHandle.FromIntPtr((IntPtr)ctx), fileIndex, status, fileLength, lastModifiedFileTime);
+
+    internal static void DispatchParallelFileDone(
+        GCHandle handle,
+        uint fileIndex,
+        int status,
+        ulong fileLength,
+        ulong lastModifiedFileTime)
     {
+        if (handle.Target is not IParallelSink sink) return;
         try
         {
-            var handle = GCHandle.FromIntPtr((IntPtr)ctx);
-            if (handle.Target is IParallelSink sink) sink.OnFileDone(fileIndex, status, fileLength, lastModifiedFileTime);
+            sink.OnFileDone(fileIndex, status, fileLength, lastModifiedFileTime);
         }
         catch (Exception ex)
         {
-            try
-            {
-                var handle = GCHandle.FromIntPtr((IntPtr)ctx);
-                if (handle.Target is IStreamingSink s) s.CapturedException = ex;
-            }
-            catch { /* swallow */ }
+            CaptureException(sink, ex);
         }
     }
 }
@@ -873,11 +900,9 @@ internal sealed class NativeSession : IDisposable
 /// copy any pointer-backed data inside <see cref="OnMatch"/> before returning.
 /// Return 0 to continue scanning, non-zero to stop.
 /// </summary>
-internal interface IStreamingSink
+internal interface IStreamingSink : INativeSinkState
 {
     unsafe int OnMatch(NativeSearcher.QgMatchView* m);
-    Exception? CapturedException { get; set; }
-    string? ErrorMessage { get; set; }
 }
 
 /// <summary>
@@ -885,9 +910,13 @@ internal interface IStreamingSink
 /// Like <see cref="IStreamingSink"/> but each view carries the true span end.
 /// Implementations must copy pointer-backed data before returning.
 /// </summary>
-internal interface IMultilineStreamingSink
+internal interface IMultilineStreamingSink : INativeSinkState
 {
     unsafe int OnMultilineMatch(NativeSearcher.QgMultilineMatchView* m);
+}
+
+internal interface INativeSinkState
+{
     Exception? CapturedException { get; set; }
     string? ErrorMessage { get; set; }
 }
@@ -925,7 +954,7 @@ internal sealed class NativeSearchOutcome
         // would indicate a runaway native allocation — bail to managed scan.
         if (result.BufferLen > (nuint)int.MaxValue)
         {
-            LogService.Instance.Warning("NativeSearcher", $"Native buffer too large ({result.BufferLen} bytes) for {filePath}");
+            YaguLog.For("NativeSearcher").LogWarning("Native buffer too large ({BufferLen} bytes) for {File}", result.BufferLen, filePath);
             return new NativeSearchOutcome(OutcomeKind.Error, null, "buffer too large");
         }
 
@@ -944,34 +973,17 @@ internal sealed class NativeSearchOutcome
                     || !reader.TryReadU32(out uint sourceMatchStart)
                     || !reader.TryReadU32(out uint matchLen)
                     || !reader.TryReadU32(out uint lineLen)
-                    || !reader.TryReadUtf8String(lineLen, out string? line))
+                    || !reader.TryReadUtf8String(lineLen, out string line))
                 {
-                    LogService.Instance.Warning("NativeSearcher", $"Truncated record {i}/{count} in native buffer for {filePath}");
+                    YaguLog.For("NativeSearcher").LogWarning("Truncated record {Index}/{Count} in native buffer for {File}", i, count, filePath);
                     break;
                 }
 
-                if (!reader.TryReadU32(out uint beforeCount))
-                    break;
-                var before = new List<string>((int)Math.Min(beforeCount, 64));
-                bool ctxOk = true;
-                for (uint b = 0; b < beforeCount && ctxOk; b++)
-                {
-                    if (!reader.TryReadU32(out uint blen) || !reader.TryReadUtf8String(blen, out string? bs))
-                    { ctxOk = false; break; }
-                    before.Add(bs!);
-                }
-                if (!ctxOk) break;
+                if (!reader.TryReadU32(out uint beforeCount)) break;
+                if (!TryReadContext(ref reader, beforeCount, out List<string> before)) break;
 
-                if (!reader.TryReadU32(out uint afterCount))
-                    break;
-                var after = new List<string>((int)Math.Min(afterCount, 64));
-                for (uint a = 0; a < afterCount && ctxOk; a++)
-                {
-                    if (!reader.TryReadU32(out uint alen) || !reader.TryReadUtf8String(alen, out string? aS))
-                    { ctxOk = false; break; }
-                    after.Add(aS!);
-                }
-                if (!ctxOk) break;
+                if (!reader.TryReadU32(out uint afterCount)) break;
+                if (!TryReadContext(ref reader, afterCount, out List<string> after)) break;
 
                 // Defensive numeric clamps: line numbers / columns from Rust are u64/u32
                 // but UI/SearchResult are int. Negative values would crash callers.
@@ -983,7 +995,7 @@ internal sealed class NativeSearchOutcome
                 list.Add(new SearchResult(
                     FilePath: filePath,
                     LineNumber: lineNum,
-                    MatchLine: line!,
+                    MatchLine: line,
                     MatchStartColumn: col,
                     MatchLength: mlen,
                     ContextBefore: before,
@@ -994,9 +1006,24 @@ internal sealed class NativeSearchOutcome
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("NativeSearcher", $"Failed to parse native buffer for {filePath}", ex);
+            YaguLog.For("NativeSearcher").LogWarning(ex, "Failed to parse native buffer for {File}", filePath);
             return new NativeSearchOutcome(OutcomeKind.Error, null, $"buffer parse failed: {ex.Message}");
         }
+    }
+
+    internal static bool TryReadContext(
+        ref BufferReader reader,
+        uint count,
+        out List<string> lines)
+    {
+        lines = new List<string>((int)Math.Min(count, 64));
+        for (uint index = 0; index < count; index++)
+        {
+            if (!reader.TryReadU32(out uint length)) return false;
+            if (!reader.TryReadUtf8String(length, out string line)) return false;
+            lines.Add(line);
+        }
+        return true;
     }
 
 
@@ -1008,7 +1035,7 @@ internal sealed class NativeSearchOutcome
 
         public bool TryReadU32(out uint value)
         {
-            if (_pos < 0 || _pos + 4 > _data.Length) { value = 0; return false; }
+            if (_data.Length - _pos < 4) { value = 0; return false; }
             value = BinaryPrimitives.ReadUInt32LittleEndian(_data.Slice(_pos, 4));
             _pos += 4;
             return true;
@@ -1016,19 +1043,19 @@ internal sealed class NativeSearchOutcome
 
         public bool TryReadU64(out ulong value)
         {
-            if (_pos < 0 || _pos + 8 > _data.Length) { value = 0; return false; }
+            if (_data.Length - _pos < 8) { value = 0; return false; }
             value = BinaryPrimitives.ReadUInt64LittleEndian(_data.Slice(_pos, 8));
             _pos += 8;
             return true;
         }
 
-        public bool TryReadUtf8String(uint len, out string? value)
+        public bool TryReadUtf8String(uint len, out string value)
         {
             if (len == 0) { value = string.Empty; return true; }
-            // Reject lengths that would overflow int or exceed the remaining buffer.
-            if (len > int.MaxValue) { value = null; return false; }
+            // Remaining bytes are always <= int.MaxValue, so this single comparison
+            // rejects both oversized lengths and truncated buffers without overflow.
+            if (len > (uint)(_data.Length - _pos)) { value = string.Empty; return false; }
             int ilen = (int)len;
-            if (_pos < 0 || _pos + ilen > _data.Length || _pos + ilen < 0) { value = null; return false; }
             value = Encoding.UTF8.GetString(_data.Slice(_pos, ilen));
             _pos += ilen;
             return true;

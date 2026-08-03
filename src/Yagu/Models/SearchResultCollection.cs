@@ -1,5 +1,7 @@
 using Yagu.Helpers;
+using Microsoft.Extensions.Logging;
 using Yagu.Services;
+using Yagu.Services.Logging;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -253,8 +255,9 @@ public sealed class SearchResultCollection
         }
 
         sw.Stop();
-        LogService.Instance.Info("SearchResultCollection",
-            $"EvictAll enqueued {enqueued:N0} results for async paging in {sw.ElapsedMilliseconds}ms (drain runs on background thread)");
+        YaguLog.For("SearchResultCollection").LogInformation(
+            "EvictAll enqueued {Enqueued:N0} results for async paging in {ElapsedMs}ms (drain runs on background thread)",
+            enqueued, sw.ElapsedMilliseconds);
 
         return enqueued;
     }

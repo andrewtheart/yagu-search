@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Pdf;
 
@@ -112,7 +114,7 @@ public class PdfTextExtractor
         using var process = new Process { StartInfo = psi };
         try
         {
-            if (!process.Start())
+            if (!StartProcess(process))
                 return PdfTextResult.Fail("pdftotext failed to start");
         }
         catch (Exception ex)
@@ -172,6 +174,17 @@ public class PdfTextExtractor
     }
 
     /// <summary>
+    /// Launches the configured <paramref name="process"/>, returning the result of
+    /// <see cref="Process.Start()"/>. This is an isolated virtual seam so a test can exercise the
+    /// "failed to start" catch branch deterministically by throwing here, instead of planting a fake
+    /// executable on disk: a non-PE file with an <c>.exe</c> extension is routed by the Windows loader
+    /// to the (removed) 16-bit subsystem on 64-bit Windows, which pops a blocking "Unsupported 16-Bit
+    /// Application" dialog on some machines. Overriding this seam keeps the failure path covered with
+    /// no real subprocess and no OS dialog.
+    /// </summary>
+    internal virtual bool StartProcess(Process process) => process.Start();
+
+    /// <summary>
     /// Resolves the <c>pdftotext.exe</c> path. Order: explicit test override → <see cref="ToolPathEnvVar"/>
     /// environment override → the app's own install directory (<c>&lt;app&gt;\pdftotext\pdftotext.exe</c>).
     /// <para>
@@ -209,10 +222,10 @@ public class PdfTextExtractor
             return;
 
         string besideApp = Path.Combine(AppContext.BaseDirectory, "pdftotext", "pdftotext.exe");
-        LogService.Instance.Warning(
-            "PdfText",
+        YaguLog.For("PdfText").LogWarning(
             "PDF-text search is unavailable: pdftotext.exe was not found, so PDF files cannot be " +
-            "converted to text and PDF searches will return no matches. Probed: " + ToolPathEnvVar +
-            " environment variable and \"" + besideApp + "\".");
+            "converted to text and PDF searches will return no matches. Probed: {EnvVar} " +
+            "environment variable and \"{BesideApp}\".",
+            ToolPathEnvVar, besideApp);
     }
 }

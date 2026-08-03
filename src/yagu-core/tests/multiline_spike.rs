@@ -284,6 +284,7 @@ fn line_opts() -> ScanOptions {
         multi_line: false,
         multi_line_dotall: false,
         multiline_engine: 0,
+        max_matches_per_line: 0,
     }
 }
 

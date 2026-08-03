@@ -1,6 +1,8 @@
 namespace Yagu.Helpers;
 
+using Microsoft.Extensions.Logging;
 using Yagu.Services;
+using Yagu.Services.Logging;
 
 /// <summary>
 /// Detects binary files via known magic numbers, NUL byte presence, and a
@@ -19,7 +21,7 @@ public static class BinaryDetector
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("BinaryDetector", $"Cannot read file, treating as binary: {filePath}", ex);
+            YaguLog.For("BinaryDetector").LogDebug(ex, "Cannot read file, treating as binary: {FilePath}", filePath);
             return true;
         }
     }

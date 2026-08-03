@@ -25,6 +25,10 @@ use crate::scan::{
     copy_context_line_for_record, copy_match_line_for_record, MatchRecord, ScanError, ScanOptions,
 };
 
+fn invalid_regex_error(error: grep_regex::Error) -> ScanError {
+    ScanError::InvalidRegex(error.to_string())
+}
+
 /// Reusable scan session built on `grep-searcher` / `grep-regex`. Construct
 /// once per pattern, then call [`GrepSession::scan`] for each file.
 pub struct GrepSession {
@@ -46,7 +50,7 @@ impl GrepSession {
             .case_smart(false)
             .line_terminator(Some(b'\n'))
             .build(&final_pattern)
-            .map_err(|e| ScanError::InvalidRegex(e.to_string()))?;
+            .map_err(invalid_regex_error)?;
 
         Ok(Self { matcher })
     }
@@ -92,7 +96,7 @@ impl GrepSession {
 
         searcher
             .search_slice(&self.matcher, bytes, &mut sink)
-            .map_err(|e| ScanError::Io(std::io::Error::other(e.to_string())))?;
+            .expect("in-memory grep search must be infallible");
 
         if sink.binary_skipped {
             return Err(ScanError::BinarySkipped);
@@ -136,7 +140,14 @@ where
     F: FnMut(MatchRecord) -> bool,
 {
     let session = GrepSession::new(pattern, options)?;
-    session.scan(bytes, options, || false, emit)
+    let mut never_cancel = || false;
+    let mut emit = emit;
+    session.scan(
+        bytes,
+        options,
+        &mut never_cancel as &mut dyn FnMut() -> bool,
+        &mut emit as &mut dyn FnMut(MatchRecord) -> bool,
+    )
 }
 
 /// Whole-buffer cross-line (multiline) scan built on ripgrep's `grep-searcher`
@@ -185,7 +196,7 @@ where
         .multi_line(true)
         .dot_matches_new_line(options.multi_line_dotall)
         .build(&final_pattern)
-        .map_err(|e| ScanError::InvalidRegex(e.to_string()))?;
+        .map_err(invalid_regex_error)?;
 
     let mut searcher = SearcherBuilder::new()
         .multi_line(true)
@@ -208,7 +219,7 @@ where
 
     searcher
         .search_slice(&matcher, hay, &mut sink)
-        .map_err(|e| ScanError::Io(std::io::Error::other(e.to_string())))?;
+        .expect("in-memory grep search must be infallible");
 
     Ok(sink.emitted)
 }
@@ -262,7 +273,7 @@ where
                 ranges.push(mat);
                 true
             })
-            .map_err(|_| SinkAbort)?;
+            .unwrap();
 
         for mat in ranges {
             if mat.start() == mat.end() {
@@ -331,23 +342,16 @@ where
     C: FnMut() -> bool,
     E: FnMut(MatchRecord) -> bool,
 {
-    fn fill_after_context(&mut self, line: &[u8]) -> Result<bool, SinkAbort> {
+    fn fill_after_context(&mut self, line: &[u8]) -> bool {
         if self.pending.is_empty() {
-            return Ok(true);
+            return true;
         }
-        let prepared = if self.context_after_cap > 0 {
-            Some(copy_context_line_for_record(line))
-        } else {
-            None
-        };
+        debug_assert!(self.context_after_cap > 0);
+        let prepared = copy_context_line_for_record(line);
 
         for entry in self.pending.iter_mut() {
-            if entry.1 > 0 {
-                if let Some(p) = prepared.as_ref() {
-                    entry.0.context_after.push(p.clone());
-                }
-                entry.1 -= 1;
-            }
+            entry.0.context_after.push(prepared.clone());
+            entry.1 -= 1;
         }
 
         while let Some(front) = self.pending.front() {
@@ -359,13 +363,13 @@ where
             let keep = (self.emit)(rec);
             if !keep {
                 self.cancelled = true;
-                return Ok(false);
+                return false;
             }
             if self.max_results != 0 && self.emitted >= self.max_results {
-                return Ok(false);
+                return false;
             }
         }
-        Ok(true)
+        true
     }
 
     fn push_before_context(&mut self, line: &[u8]) {
@@ -401,7 +405,7 @@ where
         let line_view = &line_bytes[..trimmed_len];
         let line_number = sink_match.line_number().unwrap_or(0);
 
-        if !self.fill_after_context(line_view)? {
+        if !self.fill_after_context(line_view) {
             return Ok(false);
         }
 
@@ -413,7 +417,7 @@ where
         let mut search_from = 0usize;
         while search_from <= trimmed_len {
             let region = &line_view[search_from..];
-            let m: Option<Match> = self.matcher.find(region).map_err(|_| SinkAbort)?;
+            let m: Option<Match> = self.matcher.find(region).unwrap();
             let Some(m) = m else { break };
 
             let abs_start = search_from + m.start();
@@ -479,7 +483,7 @@ where
                 self.push_before_context(line_view);
             }
             SinkContextKind::After => {
-                if !self.fill_after_context(line_view)? {
+                if !self.fill_after_context(line_view) {
                     return Ok(false);
                 }
             }
@@ -530,6 +534,10 @@ mod tests {
 
     type ParityRow = (u64, u32, u32, Vec<u8>, Vec<Vec<u8>>, Vec<Vec<u8>>);
 
+    fn keep_record(_: MatchRecord) -> bool {
+        true
+    }
+
     fn collect(records: &mut Vec<ParityRow>) -> impl FnMut(MatchRecord) -> bool + '_ {
         move |r: MatchRecord| {
             records.push((
@@ -544,12 +552,13 @@ mod tests {
         }
     }
 
-    fn parity(bytes: &[u8], pattern: &str, options: &ScanOptions) {
+    fn parity(bytes: &[u8], pattern: &str, options: &ScanOptions) -> Vec<ParityRow> {
         let mut a = Vec::new();
         let _ = scan_bytes_ex(bytes, pattern, options, || false, collect(&mut a)).unwrap();
         let mut b = Vec::new();
         let _ = scan_bytes_grep(bytes, pattern, options, collect(&mut b)).unwrap();
         assert_eq!(a, b);
+        a
     }
 
     #[test]
@@ -576,19 +585,25 @@ mod tests {
     }
 
     #[test]
+    fn one_shot_rejects_invalid_regex() {
+        let mut o = opts();
+        o.use_regex = true;
+        let error = scan_bytes_grep(b"", "(", &o, keep_record).err().unwrap();
+        assert_eq!(
+            std::mem::discriminant(&error),
+            std::mem::discriminant(&ScanError::InvalidRegex(String::new()))
+        );
+    }
+
+    #[test]
     fn parity_max_results_cap() {
         let bytes = b"a\na\na\na\na\n";
         let mut o = opts();
         o.case_sensitive = true;
         o.max_results = 3;
 
-        let mut a = Vec::new();
-        let _ = scan_bytes_ex(bytes, "a", &o, || false, collect(&mut a)).unwrap();
-        let mut b = Vec::new();
-        let _ = scan_bytes_grep(bytes, "a", &o, collect(&mut b)).unwrap();
-
+        let a = parity(bytes, "a", &o);
         assert_eq!(a.len(), 3);
-        assert_eq!(a, b);
     }
 
     #[test]
@@ -597,13 +612,8 @@ mod tests {
         let mut o = opts();
         o.case_sensitive = true;
 
-        let mut a = Vec::new();
-        let _ = scan_bytes_ex(bytes, "foo", &o, || false, collect(&mut a)).unwrap();
-        let mut b = Vec::new();
-        let _ = scan_bytes_grep(bytes, "foo", &o, collect(&mut b)).unwrap();
-
+        let a = parity(bytes, "foo", &o);
         assert_eq!(a.len(), 4);
-        assert_eq!(a, b);
     }
 
     #[test]
@@ -651,15 +661,17 @@ mod tests {
 
         let session = GrepSession::new("hit", &o).unwrap();
         let count = std::cell::Cell::new(0usize);
+        let mut should_cancel = || count.get() >= 3;
+        let mut emit = |_| {
+            count.set(count.get() + 1);
+            true
+        };
         let _ = session
             .scan(
                 bytes,
                 &o,
-                || count.get() >= 3,
-                |_| {
-                    count.set(count.get() + 1);
-                    true
-                },
+                &mut should_cancel as &mut dyn FnMut() -> bool,
+                &mut emit as &mut dyn FnMut(MatchRecord) -> bool,
             )
             .unwrap();
         let final_count = count.get();
@@ -675,14 +687,180 @@ mod tests {
         let buffers: [&[u8]; 3] = [b"hit\n", b"miss\nhit\n", b"hit hit\n"];
         let mut total = 0usize;
         for b in buffers {
+            let mut never_cancel = || false;
+            let mut emit = |_| {
+                total += 1;
+                true
+            };
             let _ = session
-                .scan(b, &o, || false, |_| {
-                    total += 1;
-                    true
-                })
+                .scan(
+                    b,
+                    &o,
+                    &mut never_cancel as &mut dyn FnMut() -> bool,
+                    &mut emit as &mut dyn FnMut(MatchRecord) -> bool,
+                )
                 .unwrap();
         }
         assert_eq!(total, 4);
+    }
+
+    #[test]
+    fn binary_detection_returns_binary_skipped() {
+        let mut o = opts();
+        o.skip_binary = true;
+        let error = scan_bytes_grep(b"\0", "x", &o, keep_record).err().unwrap();
+        assert_eq!(
+            std::mem::discriminant(&error),
+            std::mem::discriminant(&ScanError::BinarySkipped)
+        );
+    }
+
+    #[test]
+    fn eof_pending_flush_honors_callback_and_result_cap() {
+        let mut o = opts();
+        o.case_sensitive = true;
+        o.context_after = 1;
+
+        let mut stopped = 0;
+        let n = scan_bytes_grep(b"hit\n", "hit", &o, |_| {
+            stopped += 1;
+            false
+        })
+        .unwrap();
+        assert_eq!(stopped, 1);
+        assert_eq!(n, 1);
+
+        o.max_results = 1;
+        assert_eq!(scan_bytes_grep(b"hit\n", "hit", &o, keep_record).unwrap(), 1);
+        o.max_results = 2;
+        assert_eq!(scan_bytes_grep(b"hit\n", "hit", &o, keep_record).unwrap(), 1);
+    }
+
+    #[test]
+    fn completed_pending_context_honors_callback_and_result_cap() {
+        let mut o = opts();
+        o.case_sensitive = true;
+        o.context_after = 1;
+
+        let mut stopped = 0;
+        let n = scan_bytes_grep(b"hit\nctx\n", "hit", &o, |_| {
+            stopped += 1;
+            false
+        })
+        .unwrap();
+        assert_eq!(stopped, 1);
+        assert_eq!(n, 1);
+
+        o.max_results = 1;
+        assert_eq!(
+            scan_bytes_grep(b"hit\nctx\n", "hit", &o, keep_record).unwrap(),
+            1
+        );
+        o.max_results = 2;
+        assert_eq!(
+            scan_bytes_grep(b"hit\nctx\n", "hit", &o, keep_record).unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn pending_record_completed_by_next_match_can_stop() {
+        let mut o = opts();
+        o.case_sensitive = true;
+        o.context_after = 1;
+        let mut calls = 0;
+        let n = scan_bytes_grep(b"hit\nhit\n", "hit", &o, |_| {
+            calls += 1;
+            false
+        })
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn immediate_emit_can_stop_and_zero_width_does_not_loop() {
+        let mut o = opts();
+        o.case_sensitive = true;
+        let mut calls = 0;
+        let n = scan_bytes_grep(b"hit\n", "hit", &o, |_| {
+            calls += 1;
+            false
+        })
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(n, 1);
+
+        o.use_regex = true;
+        assert_eq!(scan_bytes_grep(b"x\n", "^", &o, keep_record).unwrap(), 0);
+    }
+
+    #[test]
+    fn cancellation_during_after_context_stops_scan() {
+        let mut o = opts();
+        o.case_sensitive = true;
+        o.context_after = 1;
+        let polls = std::cell::Cell::new(0);
+        let mut should_cancel = || {
+            polls.set(polls.get() + 1);
+            polls.get() > 1
+        };
+        let mut emit = |_| true;
+        let n = GrepSession::new("hit", &o)
+            .unwrap()
+            .scan(
+                b"hit\nctx\n",
+                &o,
+                &mut should_cancel as &mut dyn FnMut() -> bool,
+                &mut emit as &mut dyn FnMut(MatchRecord) -> bool,
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+        assert!(polls.get() > 1);
+    }
+
+    #[test]
+    fn passthrough_drives_other_context_without_mutating_state() {
+        let mut o = opts();
+        o.case_sensitive = true;
+        let session = GrepSession::new("hit", &o).unwrap();
+        let mut searcher = SearcherBuilder::new()
+            .line_number(true)
+            .passthru(true)
+            .build();
+        let mut emit = |_| true;
+        let mut never_cancel = || false;
+        let mut sink = QgSink {
+            matcher: &session.matcher,
+            emit: &mut emit as &mut dyn FnMut(MatchRecord) -> bool,
+            should_cancel: &mut never_cancel as &mut dyn FnMut() -> bool,
+            emitted: 0,
+            max_results: 0,
+            context_before_cap: 0,
+            context_after_cap: 0,
+            before: VecDeque::new(),
+            pending: VecDeque::new(),
+            binary_skipped: false,
+            cancelled: false,
+        };
+        searcher
+            .search_slice(&session.matcher, b"miss\nhit\n", &mut sink)
+            .unwrap();
+        assert_eq!(sink.emitted, 1);
+    }
+
+    #[test]
+    fn sink_abort_implements_required_error_traits() {
+        assert_eq!(format!("{SinkAbort}"), "sink aborted");
+        assert!(std::error::Error::source(&SinkAbort).is_none());
+        let _: SinkAbort = <SinkAbort as SinkError>::error_message("failure");
+    }
+
+    #[test]
+    fn trimmed_line_len_handles_empty_cr_and_unterminated_lines() {
+        assert_eq!(trimmed_line_len(b""), 0);
+        assert_eq!(trimmed_line_len(b"line"), 4);
+        assert_eq!(trimmed_line_len(b"line\r"), 4);
     }
 }
 
@@ -692,7 +870,7 @@ mod tests {
 /// share the span mapper, so any divergence is a bug.
 #[cfg(test)]
 mod ml_ab_tests {
-    use crate::scan::ScanOptions;
+    use crate::scan::{ScanError, ScanOptions};
     use crate::scan_grep::scan_multiline_grep;
     use crate::scan_multiline::{scan_multiline, MultilineMatchRecord};
 
@@ -709,27 +887,68 @@ mod ml_ab_tests {
             multi_line: true,
             multi_line_dotall: dotall,
             multiline_engine: 0,
+            max_matches_per_line: 0,
         }
     }
 
-    fn hand_rolled(bytes: &[u8], pattern: &str, o: &ScanOptions) -> Vec<MultilineMatchRecord> {
+    fn hand_rolled(
+        bytes: &[u8],
+        pattern: &str,
+        o: &ScanOptions,
+    ) -> Result<Vec<MultilineMatchRecord>, ScanError> {
         let mut recs = Vec::new();
         scan_multiline(bytes, pattern, o, || false, |r| {
             recs.push(r);
             true
+        })?;
+        Ok(recs)
+    }
+
+    struct GrepResult {
+        emitted: usize,
+        records: Vec<MultilineMatchRecord>,
+        emit_attempts: usize,
+        cancel_polls: usize,
+    }
+
+    fn grep_controlled(
+        bytes: &[u8],
+        pattern: &str,
+        o: &ScanOptions,
+        cancel_after_polls: usize,
+        reject_emit: usize,
+    ) -> Result<GrepResult, ScanError> {
+        let mut records = Vec::new();
+        let mut emit_attempts = 0usize;
+        let mut cancel_polls = 0usize;
+        let mut should_cancel = || {
+            cancel_polls += 1;
+            cancel_polls > cancel_after_polls
+        };
+        let mut emit = |record| {
+            emit_attempts += 1;
+            records.push(record);
+            emit_attempts != reject_emit
+        };
+        let emitted = scan_multiline_grep(
+            bytes,
+            pattern,
+            o,
+            &mut should_cancel as &mut dyn FnMut() -> bool,
+            &mut emit as &mut dyn FnMut(MultilineMatchRecord) -> bool,
+        )?;
+        Ok(GrepResult {
+            emitted,
+            records,
+            emit_attempts,
+            cancel_polls,
         })
-        .unwrap();
-        recs
     }
 
     fn grep(bytes: &[u8], pattern: &str, o: &ScanOptions) -> Vec<MultilineMatchRecord> {
-        let mut recs = Vec::new();
-        scan_multiline_grep(bytes, pattern, o, || false, |r| {
-            recs.push(r);
-            true
-        })
-        .unwrap();
-        recs
+        grep_controlled(bytes, pattern, o, usize::MAX, usize::MAX)
+            .unwrap()
+            .records
     }
 
     #[test]
@@ -749,7 +968,7 @@ mod ml_ab_tests {
         for (bytes, pattern, dotall) in cases {
             let o = opts(*dotall);
             assert_eq!(
-                hand_rolled(bytes, pattern, &o),
+                hand_rolled(bytes, pattern, &o).unwrap(),
                 grep(bytes, pattern, &o),
                 "engines diverge on pattern {pattern:?}"
             );
@@ -763,7 +982,7 @@ mod ml_ab_tests {
         o.context_before = 2;
         o.context_after = 2;
         assert_eq!(
-            hand_rolled(bytes, "START[\\s\\S]*?END", &o),
+            hand_rolled(bytes, "START[\\s\\S]*?END", &o).unwrap(),
             grep(bytes, "START[\\s\\S]*?END", &o),
         );
     }
@@ -773,10 +992,67 @@ mod ml_ab_tests {
         let bytes = b"m\nm\nm\nm\nm\n";
         let mut o = opts(false);
         o.max_results = 3;
-        let a = hand_rolled(bytes, "m", &o);
+        let a = hand_rolled(bytes, "m", &o).unwrap();
         let b = grep(bytes, "m", &o);
         assert_eq!(a.len(), 3);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn hand_rolled_rejects_invalid_regex() {
+        assert!(hand_rolled(b"foobar", "(?<=foo)bar", &opts(false)).is_err());
+        let error = grep_controlled(b"", "(", &opts(false), usize::MAX, usize::MAX)
+            .err()
+            .unwrap();
+        assert_eq!(
+            std::mem::discriminant(&error),
+            std::mem::discriminant(&ScanError::InvalidRegex(String::new()))
+        );
+    }
+
+    #[test]
+    fn grep_multiline_rejects_binary_and_honors_pre_cancel() {
+        let mut o = opts(false);
+        o.skip_binary = true;
+        let error = grep_controlled(b"x\0", "x", &o, usize::MAX, usize::MAX)
+            .err()
+            .unwrap();
+        assert_eq!(
+            std::mem::discriminant(&error),
+            std::mem::discriminant(&ScanError::BinarySkipped)
+        );
+
+        let text = grep_controlled(b"x", "x", &o, usize::MAX, usize::MAX).unwrap();
+        assert_eq!(text.emitted, 1);
+
+        o.skip_binary = false;
+        let cancelled = grep_controlled(b"x", "x", &o, 0, usize::MAX).unwrap();
+        assert_eq!(cancelled.emitted, 0);
+        assert_eq!(cancelled.cancel_polls, 1);
+    }
+
+    #[test]
+    fn grep_multiline_literal_escaping_matches_metacharacters() {
+        let mut o = opts(false);
+        o.use_regex = false;
+        let records = grep(b".", ".", &o);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].match_len, 1);
+    }
+
+    #[test]
+    fn grep_multiline_match_callback_honors_cancel_emit_and_zero_width() {
+        let o = opts(false);
+        let cancelled = grep_controlled(b"x", "x", &o, 1, usize::MAX).unwrap();
+        assert_eq!(cancelled.emitted, 0);
+        assert!(cancelled.cancel_polls > 1);
+
+        let stopped = grep_controlled(b"x", "x", &o, usize::MAX, 1).unwrap();
+        assert_eq!(stopped.emitted, 1);
+        assert_eq!(stopped.emit_attempts, 1);
+
+        let zero_width = grep_controlled(b"x\n", "^", &o, usize::MAX, usize::MAX).unwrap();
+        assert_eq!(zero_width.emitted, 0);
     }
 }
 

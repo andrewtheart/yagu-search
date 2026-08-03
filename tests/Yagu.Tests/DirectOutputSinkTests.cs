@@ -1,4 +1,5 @@
 using System.Text;
+using Yagu.Models;
 using Yagu.Native;
 using Yagu.Services;
 
@@ -6,6 +7,61 @@ namespace Yagu.Tests;
 
 public sealed class DirectOutputSinkTests
 {
+    [Fact]
+    public void WriteFileNameMatches_WritesVisibleGrepStyleRow()
+    {
+        using var output = new MemoryStream();
+        var result = new SearchResult(
+            @"E:\Pics\20200524_214115.jpg",
+            0,
+            "20200524_214115.jpg",
+            0,
+            19,
+            [],
+            []);
+
+        DirectOutputSink.WriteFileNameMatches(output, color: false, [result], new object());
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Equal("E:\\Pics\\20200524_214115.jpg\n0:20200524_214115.jpg\n\n", text);
+    }
+
+    [Fact]
+    public void WriteFileNameMatches_EmptyBatchWritesNothing()
+    {
+        using var output = new MemoryStream();
+
+        DirectOutputSink.WriteFileNameMatches(output, color: false, [], new object());
+
+        Assert.Equal(0, output.Length);
+    }
+
+    [Theory]
+    [InlineData(0, 8, "\u001b[1;31m20200524\u001b[0m_214115.jpg")]
+    [InlineData(-1, 8, "20200524_214115.jpg")]
+    [InlineData(99, 8, "20200524_214115.jpg")]
+    [InlineData(8, 0, "20200524_214115.jpg")]
+    [InlineData(8, 99, "20200524\u001b[1;31m_214115.jpg\u001b[0m")]
+    public void WriteFileNameMatches_ColorizesOnlyValidMatchSpan(
+        int matchStart, int matchLength, string expectedMatchLine)
+    {
+        using var output = new MemoryStream();
+        var result = new SearchResult(
+            @"E:\Pics\20200524_214115.jpg",
+            0,
+            "20200524_214115.jpg",
+            matchStart,
+            matchLength,
+            [],
+            []);
+
+        DirectOutputSink.WriteFileNameMatches(output, color: true, [result], new object());
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("\u001b[1;35mE:\\Pics\\20200524_214115.jpg\u001b[0m\n", text);
+        Assert.Contains($"\u001b[1;32m0\u001b[0m:{expectedMatchLine}\n\n", text);
+    }
+
     [Fact]
     public unsafe void OnMatchForFile_WritesPlainGrepStyleOutputWithContextSeparatorsAndTruncation()
     {

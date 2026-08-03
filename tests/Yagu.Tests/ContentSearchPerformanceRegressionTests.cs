@@ -317,10 +317,10 @@ public sealed class ContentSearchPerformanceRegressionTests
         var dir = new DirectoryInfo(assemblyDir);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+            if (File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
                 return dir.FullName;
             dir = dir.Parent;
         }
-        throw new InvalidOperationException($"Could not locate Yagu.sln walking up from {assemblyDir}.");
+        throw new InvalidOperationException($"Could not locate Yagu.slnx walking up from {assemblyDir}.");
     }
 }

@@ -2,9 +2,11 @@ using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
 using SharpSevenZip;
 using Yagu.Helpers;
 using Yagu.Models;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services;
 
@@ -139,7 +141,11 @@ public static class ZipArchiveSearcher
             using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             return IsZipByHeader(fs);
         }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            ZipArchiveSearcherLog.ZipHeaderProbeFailed(filePath, ex);
+            return false;
+        }
     }
 
     /// <summary>
@@ -188,11 +194,11 @@ public static class ZipArchiveSearcher
         }
         catch (InvalidDataException ex)
         {
-            LogService.Instance.Verbose("ZipArchiveSearcher", $"Invalid archive: {archivePath}", ex);
+            YaguLog.For("ZipArchiveSearcher").LogDebug(ex, "Invalid archive: {ArchivePath}", archivePath);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            LogService.Instance.Verbose("ZipArchiveSearcher", $"Error searching archive: {archivePath}", ex);
+            YaguLog.For("ZipArchiveSearcher").LogDebug(ex, "Error searching archive: {ArchivePath}", archivePath);
         }
 
         return (matchCount, entriesScanned);
@@ -454,7 +460,7 @@ public static class ZipArchiveSearcher
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            LogService.Instance.Verbose("ZipArchiveSearcher", $"Invalid 7z archive: {archiveDisplayPath}", ex);
+            YaguLog.For("ZipArchiveSearcher").LogDebug(ex, "Invalid 7z archive: {ArchiveDisplayPath}", archiveDisplayPath);
             return (0, 0);
         }
 
@@ -467,7 +473,7 @@ public static class ZipArchiveSearcher
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                LogService.Instance.Verbose("ZipArchiveSearcher", $"Could not enumerate 7z archive: {archiveDisplayPath}", ex);
+                YaguLog.For("ZipArchiveSearcher").LogDebug(ex, "Could not enumerate 7z archive: {ArchiveDisplayPath}", archiveDisplayPath);
                 return (0, 0);
             }
 
@@ -519,7 +525,7 @@ public static class ZipArchiveSearcher
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     ms?.Dispose();
-                    LogService.Instance.Verbose("ZipArchiveSearcher", $"Could not extract 7z entry: {virtualPath}", ex);
+                    YaguLog.For("ZipArchiveSearcher").LogDebug(ex, "Could not extract 7z entry: {VirtualPath}", virtualPath);
                     continue;
                 }
                 finally
@@ -841,7 +847,26 @@ public static class ZipArchiveSearcher
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("ZipArchiveSearcher", "Failed to clean temp files", ex);
+            YaguLog.For("ZipArchiveSearcher").LogDebug(ex, "Failed to clean temp files");
         }
     }
+}
+
+/// <summary>
+/// Source-generated, allocation-free log messages for <see cref="ZipArchiveSearcher"/>'s per-file hot
+/// paths (e.g. the ZIP-header probe, which runs for every discovered file). The <c>[LoggerMessage]</c>
+/// generator bakes the <c>IsEnabled</c> gate in before any argument work, so these cost effectively
+/// nothing when Verbose logging is off yet capture full structured detail when it is enabled.
+/// </summary>
+internal static partial class ZipArchiveSearcherLog
+{
+    private static readonly ILogger Logger = YaguLog.For("ZipArchiveSearcher");
+
+    /// <summary>Logs a failed ZIP-header probe (per-file hot path) via the cached category logger.</summary>
+    internal static void ZipHeaderProbeFailed(string path, Exception ex) => Emit(Logger, path, ex);
+
+    [LoggerMessage(
+        Level = Microsoft.Extensions.Logging.LogLevel.Debug,
+        Message = "ZIP header probe failed for {Path} → treating the file as not a ZIP archive.")]
+    private static partial void Emit(ILogger logger, string path, Exception ex);
 }

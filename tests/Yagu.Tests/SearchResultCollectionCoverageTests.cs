@@ -253,6 +253,7 @@ public sealed class SearchResultCollectionExtendedCoverageTests
         Assert.True(firstGroup.HasMore);
 
         firstGroup.IsExpanded = true;
+        Assert.Equal(2, firstGroup.MaterializeEvictedStubs());
 
         Assert.Equal(2, firstGroup.Count);
         Assert.All(firstGroup, result => Assert.True(result.IsEvicted));

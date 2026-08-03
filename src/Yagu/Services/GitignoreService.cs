@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
+
 namespace Yagu.Services;
 
 /// <summary>
@@ -47,11 +50,12 @@ internal static class GitignoreService
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("GitignoreService", $"Error scanning gitignore files: {ex.Message}");
+            YaguLog.For("GitignoreService").LogWarning("Error scanning gitignore files: {Error}", ex.Message);
         }
 
-        LogService.Instance.Info("GitignoreService",
-            $"Scanned gitignore: {folders.Count} excluded folders, {extensions.Count} excluded extensions, {fullPaths.Count} full-path exclusions");
+        YaguLog.For("GitignoreService").LogInformation(
+            "Scanned gitignore: {Folders} excluded folders, {Extensions} excluded extensions, {FullPaths} full-path exclusions",
+            folders.Count, extensions.Count, fullPaths.Count);
 
         return new GitignoreRules
         {
@@ -81,7 +85,7 @@ internal static class GitignoreService
             }
             catch (Exception ex)
             {
-                LogService.Instance.Info("GitignoreService", $"Could not read {gitignorePath}: {ex.Message}");
+                YaguLog.For("GitignoreService").LogInformation("Could not read {GitignorePath}: {Error}", gitignorePath, ex.Message);
             }
         }
 

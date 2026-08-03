@@ -1,5 +1,6 @@
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Index;
 
 namespace Yagu.Tests;
 
@@ -22,6 +23,21 @@ public class FileGroupTests
         return new(FilePath: filePath, LineNumber: line, MatchLine: "needle",
                    MatchStartColumn: 0, MatchLength: 6,
                    ContextBefore: before, ContextAfter: after);
+    }
+
+    [Fact]
+    public void Provenance_NotifiesAccelerationOnlyWhenValueChanges()
+    {
+        var group = new FileGroup(@"D:\indexed.txt");
+        var changed = new List<string?>();
+        ((System.ComponentModel.INotifyPropertyChanged)group).PropertyChanged +=
+            (_, args) => changed.Add(args.PropertyName);
+
+        group.Provenance = IndexProvenanceKind.IndexAccelerated;
+        group.Provenance = IndexProvenanceKind.IndexAccelerated;
+
+        Assert.True(group.IsIndexAccelerated);
+        Assert.Equal([nameof(FileGroup.IsIndexAccelerated)], changed);
     }
 
     // Flattens the file-list rendering order: each visible result's before-context line numbers,
@@ -73,17 +89,44 @@ public class FileGroupTests
     }
 
     [Fact]
-    public void FilenameOnlyMatch_Expanded_ShowsNoZeroLineRow()
+    public void FilenameOnlyMatch_HasNoExpandableContent()
     {
         // A group whose only match is the file NAME (LineNumber == 0) is conveyed by the header
-        // "file name" pill, so the "0" line row is never rendered — even when the group is expanded.
+        // "file name" pill, so the "0" line row is never rendered or offered as expandable content.
         var group = new FileGroup(@"D:\name-hit.txt");
         group.IsExpanded = true;
         group.Add(MakeResult(@"D:\name-hit.txt", 0));
 
         Assert.False(group.HasContentMatches);
         Assert.True(group.HasFileNameMatch);
+        Assert.True(group.IsFileNameOnlyMatch);
         Assert.Empty(group.VisibleResults);
+        Assert.False(group.HasMore);
+        Assert.Equal(0, group.RemainingCount);
+        Assert.Equal(0, group.ShowMore());
+        Assert.False(group.HasMore);
+    }
+
+    [Fact]
+    public void MixedFileNameAndContentMatches_CountOnlyRemainingContentRows()
+    {
+        var group = new FileGroup(@"D:\mixed-hit.txt");
+        group.IsExpanded = true;
+        group.Add(MakeResult(@"D:\mixed-hit.txt", 0));
+        for (int i = 0; i < FileGroup.PageSize + 10; i++)
+            group.Add(MakeResult(@"D:\mixed-hit.txt", i + 1));
+
+        Assert.True(group.HasContentMatches);
+        Assert.True(group.HasFileNameMatch);
+        Assert.False(group.IsFileNameOnlyMatch);
+        Assert.Equal(FileGroup.PageSize, group.VisibleResults.Count);
+        Assert.True(group.HasMore);
+        Assert.Equal(10, group.RemainingCount);
+
+        Assert.Equal(10, group.ShowMore());
+        Assert.Equal(FileGroup.PageSize + 10, group.VisibleResults.Count);
+        Assert.False(group.HasMore);
+        Assert.Equal(0, group.RemainingCount);
     }
 
     [Fact]
@@ -236,6 +279,7 @@ public class FileGroupTests
             group.Add(MakeResult(@"D:\file.txt", i + 1));
 
         Assert.Equal(FileGroup.PageSize, group.VisibleResults.Count);
+        Assert.False(group.IsFileNameOnlyMatch);
         Assert.True(group.HasMore);
         Assert.Equal(50, group.RemainingCount);
     }
@@ -355,6 +399,8 @@ public class FileGroupTests
         Assert.True(snapshot[1].IsSelected);
 
         group.IsExpanded = true;
+        Assert.Equal(1, group.Count); // state transition itself does not decode every compact stub
+        Assert.Equal(1, group.MaterializeEvictedStubs(maxItems: 1));
 
         Assert.Equal(2, group.Count);
         Assert.True(group[1].IsSelected);
@@ -363,7 +409,7 @@ public class FileGroupTests
     }
 
     [Fact]
-    public void SourceBackedMatchAddedToCollapsedGroup_IsCompactedAndMaterializedOnExpand()
+    public void SourceBackedMatchAddedToCollapsedGroup_IsCompactedAndMaterializedOnDemand()
     {
         var group = new FileGroup(@"D:\file.txt");
         group.Add(MakeResult(@"D:\file.txt", 1));
@@ -383,12 +429,33 @@ public class FileGroupTests
         Assert.Equal(2, snapshot[1].LineNumber);
 
         group.IsExpanded = true;
+        Assert.Equal(1, group.Count);
+        Assert.Equal(1, group.MaterializeEvictedStubs(maxItems: 1));
 
         Assert.Equal(2, group.Count);
         Assert.True(group[1].IsEvicted);
         Assert.True(group[1].IsSelected);
         Assert.Equal(3, group[1].MatchStartColumn);
         Assert.Equal(5, group[1].MatchLength);
+    }
+
+    [Fact]
+    public void SourceBackedFilenameOnlyMatch_HasNoExpandableContent()
+    {
+        var group = new FileGroup(@"D:\name-hit.txt");
+
+        group.AddSourceBackedMatch(
+            lineNumber: 0,
+            matchStartColumn: 0,
+            matchLength: 8,
+            sourceMatchStartColumn: 0);
+
+        Assert.True(group.IsFileNameOnlyMatch);
+        Assert.False(group.HasMore);
+        Assert.Equal(0, group.RemainingCount);
+        Assert.Equal(1, group.MaterializeEvictedStubs());
+        Assert.Equal(0, group.ShowMore());
+        Assert.Empty(group.VisibleResults);
     }
 
     [Fact]
@@ -409,10 +476,37 @@ public class FileGroupTests
         Assert.True(group.HasMore);
 
         group.IsExpanded = true;
+        Assert.Equal(0, group.Count);
+        Assert.Equal(3, group.MaterializeEvictedStubs(maxItems: 3));
 
         Assert.Equal(3, group.Count);
         Assert.All(group, result => Assert.True(result.IsEvicted));
         Assert.Equal([1, 2, 3], group.Select(result => result.LineNumber).ToArray());
+    }
+
+    [Fact]
+    public void SourceBackedMixedMatches_CountOnlyContentAsExpandable()
+    {
+        var group = new FileGroup(@"D:\mixed-hit.txt");
+        var matches = new List<SourceBackedMatch>
+        {
+            new(@"D:\mixed-hit.txt", 0, 0, 9, 0),
+            new(@"D:\mixed-hit.txt", 4, 2, 5, 2),
+        };
+
+        group.AddSourceBackedMatches(matches, 0, matches.Count);
+
+        Assert.True(group.HasFileNameMatch);
+        Assert.True(group.HasContentMatches);
+        Assert.False(group.IsFileNameOnlyMatch);
+        Assert.True(group.HasMore);
+        Assert.Equal(1, group.RemainingCount);
+
+        Assert.Equal(2, group.MaterializeEvictedStubs());
+        Assert.Equal(1, group.ShowMore());
+        Assert.Single(group.VisibleResults);
+        Assert.Equal(4, group.VisibleResults[0].LineNumber);
+        Assert.False(group.HasMore);
     }
 
     [Fact]
@@ -431,6 +525,45 @@ public class FileGroupTests
         Assert.All(snapshot, result => Assert.True(result.IsEvicted));
         Assert.All(snapshot, result => Assert.True(result.IsSelected));
         Assert.Equal([1, 2, 3], snapshot.Select(result => result.LineNumber).ToArray());
+    }
+
+    [Fact]
+    public void MaterializeEvictedStubs_PagesWithoutDecodingRemainder_AndSnapshotKeepsOrder()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        for (int i = 0; i < 500; i++)
+            group.Add(SearchResult.CreatePreEvicted(@"D:\file.txt", i + 1, i, 5, diskOffset: (i + 1) * 100L));
+
+        group.IsExpanded = true;
+        Assert.Equal(0, group.Count); // opening the drawer is allocation-free
+
+        Assert.Equal(50, group.MaterializeEvictedStubs(maxItems: 50));
+        Assert.Equal(50, group.Count);
+        Assert.True(group.HasMore);
+
+        // Snapshot combines the materialized prefix with unread encoded stubs without duplicating or
+        // restarting from stub zero.
+        var snapshot = group.GetPreviewSnapshot(55);
+        Assert.Equal(Enumerable.Range(1, 55), snapshot.Select(result => result.LineNumber));
+        Assert.Equal(50, group.Count);
+
+        Assert.Equal(50, group.MaterializeEvictedStubs(maxItems: 50));
+        Assert.Equal(Enumerable.Range(1, 100), group.Select(result => result.LineNumber));
+        Assert.Equal(400, group.MaterializeEvictedStubs());
+        Assert.Equal(500, group.Count);
+        Assert.True(group.HasMore); // materialized rows remain undisplayed until ShowMore fills VisibleResults
+    }
+
+    [Fact]
+    public void MaterializeEvictedStubs_ZeroRequestLeavesEncodedRowsUntouched()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        group.Add(SearchResult.CreatePreEvicted(@"D:\file.txt", 1, 0, 5, diskOffset: 100));
+
+        Assert.Equal(0, group.MaterializeEvictedStubs(maxItems: 0));
+        Assert.Equal(0, group.Count);
+        Assert.True(group.HasMore);
+        Assert.Equal(1, group.MaterializeEvictedStubs(maxItems: 1));
     }
 
     [Fact]
@@ -507,14 +640,19 @@ public class FileGroupTests
         group.Add(MakeResult(@"D:\file.txt", 0, "file.txt"));
 
         Assert.False(group.HasContentMatches);
+        Assert.True(group.IsFileNameOnlyMatch);
         Assert.Equal(1, group.MatchCount);
         Assert.DoesNotContain(nameof(FileGroup.HasContentMatches), changed);
+        Assert.Contains(nameof(FileGroup.IsFileNameOnlyMatch), changed);
 
+        changed.Clear();
         group.Add(MakeResult(@"D:\file.txt", 12));
 
         Assert.True(group.HasContentMatches);
+        Assert.False(group.IsFileNameOnlyMatch);
         Assert.Equal(1, group.MatchCount);
         Assert.Contains(nameof(FileGroup.HasContentMatches), changed);
+        Assert.Contains(nameof(FileGroup.IsFileNameOnlyMatch), changed);
         Assert.Contains(nameof(FileGroup.MatchCount), changed);
     }
 
@@ -789,6 +927,25 @@ public class FileGroupTests
         group.Add(MakeResult(@"D:\file.txt", 2));
 
         Assert.Equal(2, group.Count);
+    }
+
+    [Fact]
+    public void Provenance_IndexAccelerated_DrivesBadgeFlagAndRaisesNotify()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        Assert.Null(group.Provenance);
+        Assert.False(group.IsIndexAccelerated); // no badge by default
+
+        string? changed = null;
+        ((System.ComponentModel.INotifyPropertyChanged)group).PropertyChanged += (_, e) => changed = e.PropertyName;
+
+        group.Provenance = Yagu.Services.Index.IndexProvenanceKind.IndexAccelerated;
+        Assert.True(group.IsIndexAccelerated);
+        Assert.Equal(nameof(FileGroup.IsIndexAccelerated), changed);
+
+        // Live-scanned (or any non-accelerated) provenance shows no badge.
+        group.Provenance = Yagu.Services.Index.IndexProvenanceKind.LiveScanned;
+        Assert.False(group.IsIndexAccelerated);
     }
 }
 

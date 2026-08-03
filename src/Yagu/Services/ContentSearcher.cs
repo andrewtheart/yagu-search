@@ -9,6 +9,8 @@ using Yagu.Models;
 using static Yagu.Helpers.LineTruncator;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services;
 
@@ -71,6 +73,7 @@ public sealed class ContentSearcher
     public const int SkipBinary     = -1;
     public const int SkipAccessDenied = -2;
     public const int SkipIOError     = -3;
+    public const int SkipIoTimeout   = -13;
     public const int SkipTooLarge    = -4;
     public const int SkipTooSmall    = -9;
     public const int SkipNotFound    = -5;
@@ -87,7 +90,7 @@ public sealed class ContentSearcher
 
     private static int LogBinaryAndReturn(string filePath)
     {
-        LogService.Instance.Verbose("ContentSearcher", $"Binary detected (native): {filePath}");
+        ContentSearcherLog.BinaryDetectedNative(filePath);
         return SkipBinary;
     }
 
@@ -149,7 +152,7 @@ public sealed class ContentSearcher
         else
         {
             try { fi = new FileInfo(filePath); }
-            catch (Exception ex) { LogService.Instance.Verbose("ContentSearcher", $"Cannot stat file: {filePath}", ex); return new FileSearchOutcome(SkipOther, 0); }
+            catch (Exception ex) { YaguLog.For("ContentSearcher").LogDebug(ex, "Cannot stat file: {File}", filePath); return new FileSearchOutcome(SkipOther, 0); }
             if (!fi.Exists) return new FileSearchOutcome(SkipNotFound, 0);
 
             // Cloud-only placeholder guard. Opening a dehydrated OneDrive/Google
@@ -160,7 +163,7 @@ public sealed class ContentSearcher
             if (CloudFileHelper.IsCloudOnlyPlaceholder(fi.Attributes)
                 && CloudFileHelper.ShouldSkipPlaceholder(filePath, fi.Attributes, options.SearchOnlineOnlyFiles))
             {
-                LogService.Instance.Verbose("ContentSearcher", $"Cloud-only placeholder skipped: {filePath}");
+                ContentSearcherLog.CloudOnlySkipped(filePath);
                 return new FileSearchOutcome(SkipCloudOnly, 0);
             }
 
@@ -217,7 +220,7 @@ public sealed class ContentSearcher
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                LogService.Instance.Verbose("ContentSearcher", $"Archive header check failed for {filePath}, falling through to normal scan", ex);
+                YaguLog.For("ContentSearcher").LogDebug(ex, "Archive header check failed for {File}, falling through to normal scan", filePath);
             }
         }
 
@@ -248,9 +251,9 @@ public sealed class ContentSearcher
             {
                 mlResult = await SearchMultilineAsync(filePath, fileLength, regex, options, writer, metadata, cancellationToken).ConfigureAwait(false);
             }
-            catch (UnauthorizedAccessException ex) { LogService.Instance.Verbose("ContentSearcher", $"Access denied (multiline): {filePath}", ex); return new FileSearchOutcome(SkipAccessDenied, 0); }
-            catch (IOException ex) { LogService.Instance.Verbose("ContentSearcher", $"IO error (multiline): {filePath}", ex); return new FileSearchOutcome(SkipIOError, 0); }
-            catch (DecoderFallbackException ex) { LogService.Instance.Verbose("ContentSearcher", $"Encoding error (multiline): {filePath}", ex); return new FileSearchOutcome(SkipEncoding, 0); }
+            catch (UnauthorizedAccessException ex) { YaguLog.For("ContentSearcher").LogDebug(ex, "Access denied (multiline): {File}", filePath); return new FileSearchOutcome(SkipAccessDenied, 0); }
+            catch (IOException ex) { YaguLog.For("ContentSearcher").LogDebug(ex, "IO error (multiline): {File}", filePath); return new FileSearchOutcome(SkipIOError, 0); }
+            catch (DecoderFallbackException ex) { YaguLog.For("ContentSearcher").LogDebug(ex, "Encoding error (multiline): {File}", filePath); return new FileSearchOutcome(SkipEncoding, 0); }
             if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-MULTILINE", totalSw!.ElapsedMilliseconds, $"produced={mlResult}");
             return new FileSearchOutcome(mlResult, mlResult >= 0 ? fileLength : 0);
         }
@@ -272,7 +275,7 @@ public sealed class ContentSearcher
         try
         {
             int result;
-            if (fileLength >= MemoryMapThresholdBytes)
+            if (fileLength >= MemoryMapThresholdBytes && !options.AvoidSourceMemoryMap)
             {
                 // Large files: binary sniff still happens via the MMF view's first 8 KB.
                 result = await SearchMappedAsync(filePath, fileLength, regex, literal, literalComparison, options, writer, metadata, cancellationToken).ConfigureAwait(false);
@@ -287,9 +290,9 @@ public sealed class ContentSearcher
             if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-MANAGED", totalSw!.ElapsedMilliseconds, $"produced={result} size={fileLength}");
             return new FileSearchOutcome(result, result >= 0 ? fileLength : 0);
         }
-        catch (UnauthorizedAccessException ex) { LogService.Instance.Verbose("ContentSearcher", $"Access denied searching: {filePath}", ex); return new FileSearchOutcome(SkipAccessDenied, 0); }
-        catch (IOException ex) { LogService.Instance.Verbose("ContentSearcher", $"IO error searching: {filePath}", ex); return new FileSearchOutcome(SkipIOError, 0); }
-        catch (DecoderFallbackException ex) { LogService.Instance.Verbose("ContentSearcher", $"Encoding error searching: {filePath}", ex); return new FileSearchOutcome(SkipEncoding, 0); }
+        catch (UnauthorizedAccessException ex) { YaguLog.For("ContentSearcher").LogDebug(ex, "Access denied searching: {File}", filePath); return new FileSearchOutcome(SkipAccessDenied, 0); }
+        catch (IOException ex) { YaguLog.For("ContentSearcher").LogDebug(ex, "IO error searching: {File}", filePath); return new FileSearchOutcome(SkipIOError, 0); }
+        catch (DecoderFallbackException ex) { YaguLog.For("ContentSearcher").LogDebug(ex, "Encoding error searching: {File}", filePath); return new FileSearchOutcome(SkipEncoding, 0); }
     }
 
 
@@ -339,7 +342,7 @@ public sealed class ContentSearcher
 
         if (options.SkipBinary && peekRead > 0 && BinaryDetector.IsBinary(peek.AsSpan(0, peekRead)))
         {
-            LogService.Instance.Verbose("ContentSearcher", $"Binary detected (content sniff): {filePath}");
+            ContentSearcherLog.BinaryDetectedSniff(filePath);
             return SkipBinary;
         }
 
@@ -382,7 +385,7 @@ public sealed class ContentSearcher
 
             if (options.SkipBinary && peekRead > 0 && BinaryDetector.IsBinary(peek[..peekRead]))
             {
-                LogService.Instance.Verbose("ContentSearcher", $"Binary detected (content sniff, MMF): {filePath}");
+                ContentSearcherLog.BinaryDetectedSniffMmf(filePath);
                 return SkipBinary;
             }
 
@@ -440,7 +443,7 @@ public sealed class ContentSearcher
             // so multiline never scans binaries the line path skips.
             if (options.SkipBinary && peekRead > 0 && BinaryDetector.IsBinary(peek.AsSpan(0, peekRead)))
             {
-                LogService.Instance.Verbose("ContentSearcher", $"Binary detected (multiline sniff): {filePath}");
+                ContentSearcherLog.BinaryDetectedMultilineSniff(filePath);
                 return SkipBinary;
             }
 
@@ -513,7 +516,7 @@ public sealed class ContentSearcher
         }
         catch (RegexMatchTimeoutException)
         {
-            LogService.Instance.Warning("ContentSearcher", $"Multiline regex timed out; skipping file: {filePath}");
+            YaguLog.For("ContentSearcher").LogWarning("Multiline regex timed out; skipping file: {File}", filePath);
             return SkipMultilineTimeout;
         }
 
@@ -869,7 +872,7 @@ public sealed class ContentSearcher
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Warning("ContentSearcher", $"Native streaming scan threw for {filePath}; falling back to managed", ex);
+                    YaguLog.For("ContentSearcher").LogWarning(ex, "Native streaming scan threw for {File}; falling back to managed", filePath);
                     if (watched) FileWatchDiagnostics.Checkpoint(filePath, "NATIVE-SCAN-THREW", scanSw!.ElapsedMilliseconds, ex.GetType().Name);
                     return NativeFellThrough;
                 }
@@ -882,6 +885,7 @@ public sealed class ContentSearcher
                     Native.NativeSearcher.StatusBinarySkipped => LogBinaryAndReturn(filePath),
                     Native.NativeSearcher.StatusTooLarge => SkipTooLarge,
                     Native.NativeSearcher.StatusOpenFailed => SkipAccessDenied,
+                    Native.NativeSearcher.StatusIoTimeout => SkipIoTimeout,
                     Native.NativeSearcher.StatusCancelled => Cancel(sink.Emitted, cancellationToken),
                     Native.NativeSearcher.StatusInvalidRegex => NativeFellThrough,
                     _ => NativeFellThrough,
@@ -932,7 +936,7 @@ public sealed class ContentSearcher
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Warning("ContentSearcher", $"Native multiline scan threw for {filePath}; falling back to managed", ex);
+                    YaguLog.For("ContentSearcher").LogWarning(ex, "Native multiline scan threw for {File}; falling back to managed", filePath);
                     return NativeFellThrough;
                 }
 
@@ -942,6 +946,7 @@ public sealed class ContentSearcher
                     Native.NativeSearcher.StatusBinarySkipped => LogBinaryAndReturn(filePath),
                     Native.NativeSearcher.StatusTooLarge => SkipMultilineTooLarge,
                     Native.NativeSearcher.StatusOpenFailed => SkipAccessDenied,
+                    Native.NativeSearcher.StatusIoTimeout => SkipIoTimeout,
                     Native.NativeSearcher.StatusCancelled => Cancel(sink.Emitted, cancellationToken),
                     // Lookaround / invalid regex: run the managed whole-file engine instead.
                     Native.NativeSearcher.StatusInvalidRegex => NativeFellThrough,
@@ -1326,4 +1331,41 @@ public sealed class ContentSearcher
             return Truncate(s);
         }
     }
+}
+
+/// <summary>
+/// Source-generated, allocation-free log messages for <c>ContentSearcher</c>'s per-file hot paths — the
+/// binary-file and cloud-only skips fire for a large fraction of scanned files. The <c>[LoggerMessage]</c>
+/// generator bakes the <c>IsEnabled</c> gate in before any argument work, so these cost effectively nothing
+/// when Verbose logging is off (no per-file <c>object[]</c> argument allocation) yet capture full structured
+/// detail when it is on. The rarer error paths (access-denied / IO / encoding) stay plain structured.
+/// </summary>
+internal static partial class ContentSearcherLog
+{
+    private static readonly ILogger Logger = YaguLog.For("ContentSearcher");
+
+    internal static void BinaryDetectedNative(string file) => EmitBinaryNative(Logger, file);
+
+    [LoggerMessage(Level = Microsoft.Extensions.Logging.LogLevel.Debug, Message = "Binary detected (native): {File}")]
+    private static partial void EmitBinaryNative(ILogger logger, string file);
+
+    internal static void BinaryDetectedSniff(string file) => EmitBinarySniff(Logger, file);
+
+    [LoggerMessage(Level = Microsoft.Extensions.Logging.LogLevel.Debug, Message = "Binary detected (content sniff): {File}")]
+    private static partial void EmitBinarySniff(ILogger logger, string file);
+
+    internal static void BinaryDetectedSniffMmf(string file) => EmitBinarySniffMmf(Logger, file);
+
+    [LoggerMessage(Level = Microsoft.Extensions.Logging.LogLevel.Debug, Message = "Binary detected (content sniff, MMF): {File}")]
+    private static partial void EmitBinarySniffMmf(ILogger logger, string file);
+
+    internal static void BinaryDetectedMultilineSniff(string file) => EmitBinaryMultilineSniff(Logger, file);
+
+    [LoggerMessage(Level = Microsoft.Extensions.Logging.LogLevel.Debug, Message = "Binary detected (multiline sniff): {File}")]
+    private static partial void EmitBinaryMultilineSniff(ILogger logger, string file);
+
+    internal static void CloudOnlySkipped(string file) => EmitCloudOnly(Logger, file);
+
+    [LoggerMessage(Level = Microsoft.Extensions.Logging.LogLevel.Debug, Message = "Cloud-only placeholder skipped: {File}")]
+    private static partial void EmitCloudOnly(ILogger logger, string file);
 }

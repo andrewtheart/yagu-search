@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services;
 
@@ -151,7 +153,7 @@ internal static class CloudFileHelper
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("CloudFileHelper", "Could not enumerate cloud sync roots", ex);
+            YaguLog.For("CloudFileHelper").LogDebug(ex, "Could not enumerate cloud sync roots");
         }
         return prefixes.ToArray();
     }
@@ -176,7 +178,7 @@ internal static class CloudFileHelper
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("CloudFileHelper", $"Provider liveness query failed for {path}", ex);
+            YaguLog.For("CloudFileHelper").LogDebug(ex, "Provider liveness query failed for {Path}", path);
             return false;
         }
         finally

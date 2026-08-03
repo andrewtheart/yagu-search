@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text;
+using Yagu.Models;
 using Yagu.Native;
 using System.Globalization;
 
@@ -13,6 +14,7 @@ namespace Yagu.Services;
 internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposable
 {
     private readonly Stream _output;
+    private readonly object _outputLock;
     private readonly bool _color;
     private readonly bool _contextEnabled;
     private readonly List<string> _paths;
@@ -70,9 +72,11 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
         IntPtr cancelPtr,
         int* filesScannedPtr,
         bool contextEnabled = false,
-        int initialCapacity = 4096)
+        int initialCapacity = 4096,
+        object? outputLock = null)
     {
         _output = output;
+        _outputLock = outputLock ?? new object();
         _color = color;
         _contextEnabled = contextEnabled;
         _paths = paths;
@@ -110,6 +114,12 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
     public unsafe int OnMatch(NativeSearcher.QgMatchView* m) => 1;
 
     public unsafe int OnMatchForFile(uint fileIndex, NativeSearcher.QgMatchView* m)
+    {
+        lock (_outputLock)
+            return OnMatchForFileLocked(fileIndex, m);
+    }
+
+    private unsafe int OnMatchForFileLocked(uint fileIndex, NativeSearcher.QgMatchView* m)
     {
         if (_stopped) return 1;
 
@@ -186,6 +196,75 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
             return 1;
         }
         return 0;
+    }
+
+    /// <summary>
+    /// Writes filename-match rows into the same buffered stream as the native content sink. The shared
+    /// lock keeps a whole filename batch from interleaving with native callback output while a broad or
+    /// regex discovery pass is concurrently scanning content.
+    /// </summary>
+    internal static void WriteFileNameMatches(
+        Stream output,
+        bool color,
+        IReadOnlyList<SearchResult> matches,
+        object outputLock)
+    {
+        if (matches.Count == 0)
+            return;
+
+        lock (outputLock)
+        {
+            foreach (SearchResult result in matches)
+            {
+                if (color)
+                {
+                    output.Write(BoldMagenta);
+                    WriteUtf8String(output, result.FilePath);
+                    output.Write(Reset);
+                }
+                else
+                {
+                    WriteUtf8String(output, result.FilePath);
+                }
+                output.Write(Newline);
+
+                if (color)
+                {
+                    output.Write(BoldGreen);
+                    output.Write("0"u8);
+                    output.Write(Reset);
+                    output.Write(":"u8);
+                    WriteHighlightedFileName(output, result);
+                }
+                else
+                {
+                    output.Write("0:"u8);
+                    WriteUtf8String(output, result.MatchLine);
+                }
+                output.Write(Newline);
+                output.Write(Newline);
+            }
+            output.Flush();
+        }
+    }
+
+    private static void WriteHighlightedFileName(Stream output, SearchResult result)
+    {
+        int start = result.MatchStartColumn;
+        int length = result.MatchLength;
+        string text = result.MatchLine;
+        if (length <= 0 || start < 0 || start >= text.Length)
+        {
+            WriteUtf8String(output, text);
+            return;
+        }
+
+        int end = Math.Min(start + length, text.Length);
+        WriteUtf8String(output, text[..start]);
+        output.Write(BoldRed);
+        WriteUtf8String(output, text[start..end]);
+        output.Write(Reset);
+        WriteUtf8String(output, text[end..]);
     }
 
     public void OnFileDone(uint fileIndex, int status, ulong fileLength, ulong lastModifiedFileTime)
@@ -320,6 +399,9 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
     }
 
     private void WriteUtf8String(string s)
+        => WriteUtf8String(_output, s);
+
+    private static void WriteUtf8String(Stream output, string s)
     {
         // Encode string to UTF-8 and write — uses stackalloc for small strings
         int maxBytes = Encoding.UTF8.GetMaxByteCount(s.Length);
@@ -327,7 +409,7 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
         {
             Span<byte> buf = stackalloc byte[maxBytes];
             int written = Encoding.UTF8.GetBytes(s, buf);
-            _output.Write(buf[..written]);
+            output.Write(buf[..written]);
         }
         else
         {
@@ -335,7 +417,7 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
             try
             {
                 int written = Encoding.UTF8.GetBytes(s, rented);
-                _output.Write(rented.AsSpan(0, written));
+                output.Write(rented.AsSpan(0, written));
             }
             finally
             {

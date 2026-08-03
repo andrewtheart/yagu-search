@@ -21,7 +21,9 @@ use memmap2::Mmap;
 use std::fs::File;
 use std::io::Read;
 use std::os::raw::{c_int, c_uchar, c_uint, c_ulonglong, c_ushort, c_void};
-use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
+#[cfg(windows)]
+use std::sync::atomic::AtomicIsize;
 use std::sync::Mutex;
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
@@ -90,6 +92,11 @@ pub struct QgOptions {
     /// Multiline backend selector: 0 = hand-rolled `regex::bytes` (default),
     /// 1 = grep-searcher. Ignored unless `multi_line`.
     pub multiline_engine: c_uchar,
+    /// Non-zero prevents source-file memory mapping. Removable/optical volumes use owned reads so
+    /// disconnecting media cannot fault a mapped page inside the host process. ABI v8.
+    pub avoid_source_mmap: c_uchar,
+    /// Cooperative per-file deadline in seconds; zero disables. ABI v8.
+    pub file_io_timeout_seconds: c_ushort,
     /// Maximum matches emitted from a single line before the scanner moves to the
     /// next line; zero means unlimited. Bounds a match-everything pattern (e.g. the
     /// regex `.`) on a very long minified line from emitting millions of matches. ABI v7.
@@ -129,10 +136,27 @@ const STATUS_INVALID_REGEX: c_int = 4;
 const STATUS_INVALID_PATH: c_int = 5;
 const STATUS_CANCELLED: c_int = 6;
 const STATUS_HIDDEN_SKIPPED: c_int = 7;
+const STATUS_IO_TIMEOUT: c_int = 8;
 
 #[inline]
 fn use_ascii_literal_fast_path(pattern: &str, use_regex: bool, case_sensitive: bool) -> bool {
     !use_regex && !case_sensitive && pattern.is_ascii()
+}
+
+#[inline]
+fn checked_total_units(lengths: impl IntoIterator<Item = usize>) -> Option<usize> {
+    lengths
+        .into_iter()
+        .try_fold(0usize, |total, length| total.checked_add(length))
+}
+
+#[inline]
+fn checked_total_path_units(lengths: &[c_uint]) -> Option<usize> {
+    #[cfg(test)]
+    if test_inject::should_force_path_length_overflow() {
+        return None;
+    }
+    checked_total_units(lengths.iter().map(|&length| length as usize))
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +170,13 @@ mod test_inject {
     thread_local! {
         static FAIL_METADATA: Cell<bool> = const { Cell::new(false) };
         static FAIL_MMAP: Cell<bool> = const { Cell::new(false) };
+        static FORCE_EXPIRED_DEADLINE: Cell<bool> = const { Cell::new(false) };
+        static BYPASS_BINARY_PREPROBE: Cell<bool> = const { Cell::new(false) };
+        static READ_EXACT_ERROR: Cell<u8> = const { Cell::new(0) };
+        static FAIL_READ: Cell<bool> = const { Cell::new(false) };
+        static FAIL_SEEK: Cell<bool> = const { Cell::new(false) };
+        static FAIL_READ_TO_END: Cell<bool> = const { Cell::new(false) };
+        static FORCE_PATH_LENGTH_OVERFLOW: Cell<bool> = const { Cell::new(false) };
     }
     pub fn should_fail_metadata() -> bool {
         FAIL_METADATA.with(|c| c.get())
@@ -158,6 +189,48 @@ mod test_inject {
     }
     pub fn set_fail_mmap(fail: bool) {
         FAIL_MMAP.with(|c| c.set(fail));
+    }
+    pub fn should_force_expired_deadline() -> bool {
+        FORCE_EXPIRED_DEADLINE.with(|c| c.get())
+    }
+    pub fn set_force_expired_deadline(force: bool) {
+        FORCE_EXPIRED_DEADLINE.with(|c| c.set(force));
+    }
+    pub fn should_bypass_binary_preprobe() -> bool {
+        BYPASS_BINARY_PREPROBE.with(|c| c.get())
+    }
+    pub fn set_bypass_binary_preprobe(bypass: bool) {
+        BYPASS_BINARY_PREPROBE.with(|c| c.set(bypass));
+    }
+    pub fn take_read_exact_error() -> u8 {
+        READ_EXACT_ERROR.with(|c| c.replace(0))
+    }
+    pub fn set_read_exact_error(error: u8) {
+        READ_EXACT_ERROR.with(|c| c.set(error));
+    }
+    pub fn take_fail_read() -> bool {
+        FAIL_READ.with(|c| c.replace(false))
+    }
+    pub fn set_fail_read(fail: bool) {
+        FAIL_READ.with(|c| c.set(fail));
+    }
+    pub fn take_fail_seek() -> bool {
+        FAIL_SEEK.with(|c| c.replace(false))
+    }
+    pub fn set_fail_seek(fail: bool) {
+        FAIL_SEEK.with(|c| c.set(fail));
+    }
+    pub fn take_fail_read_to_end() -> bool {
+        FAIL_READ_TO_END.with(|c| c.replace(false))
+    }
+    pub fn set_fail_read_to_end(fail: bool) {
+        FAIL_READ_TO_END.with(|c| c.set(fail));
+    }
+    pub fn should_force_path_length_overflow() -> bool {
+        FORCE_PATH_LENGTH_OVERFLOW.with(|c| c.get())
+    }
+    pub fn set_force_path_length_overflow(force: bool) {
+        FORCE_PATH_LENGTH_OVERFLOW.with(|c| c.set(force));
     }
 }
 
@@ -185,6 +258,69 @@ fn try_mmap(file: &File) -> std::io::Result<Mmap> {
 #[cfg(not(test))]
 fn try_mmap(file: &File) -> std::io::Result<Mmap> {
     unsafe { Mmap::map(file) }
+}
+
+#[cfg(test)]
+fn try_read_exact(file: &mut File, buf: &mut [u8]) -> std::io::Result<()> {
+    match test_inject::take_read_exact_error() {
+        1 => {
+            let partial_len = (buf.len() / 2).max(1).min(buf.len());
+            let _ = file.read(&mut buf[..partial_len]);
+            Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
+        }
+        2 => Err(std::io::Error::from(std::io::ErrorKind::Other)),
+        _ => file.read_exact(buf),
+    }
+}
+
+#[cfg(test)]
+fn try_read(file: &mut File, buf: &mut [u8]) -> std::io::Result<usize> {
+    if test_inject::take_fail_read() {
+        return Err(std::io::Error::from(std::io::ErrorKind::Other));
+    }
+    file.read(buf)
+}
+
+#[cfg(not(test))]
+#[inline]
+fn try_read(file: &mut File, buf: &mut [u8]) -> std::io::Result<usize> {
+    file.read(buf)
+}
+
+#[cfg(test)]
+fn try_seek_start(file: &mut File) -> std::io::Result<u64> {
+    use std::io::Seek;
+    if test_inject::take_fail_seek() {
+        return Err(std::io::Error::from(std::io::ErrorKind::Other));
+    }
+    file.seek(std::io::SeekFrom::Start(0))
+}
+
+#[cfg(not(test))]
+#[inline]
+fn try_seek_start(file: &mut File) -> std::io::Result<u64> {
+    use std::io::Seek;
+    file.seek(std::io::SeekFrom::Start(0))
+}
+
+#[cfg(test)]
+fn try_read_to_end(file: &mut File, buf: &mut Vec<u8>) -> std::io::Result<usize> {
+    if test_inject::take_fail_read_to_end() {
+        return Err(std::io::Error::from(std::io::ErrorKind::Other));
+    }
+    file.read_to_end(buf)
+}
+
+#[cfg(not(test))]
+#[inline]
+fn try_read_to_end(file: &mut File, buf: &mut Vec<u8>) -> std::io::Result<usize> {
+    file.read_to_end(buf)
+}
+
+#[cfg(not(test))]
+#[inline]
+fn try_read_exact(file: &mut File, buf: &mut [u8]) -> std::io::Result<()> {
+    file.read_exact(buf)
 }
 
 /// Bytes for a single file, sourced from either a heap read (small files)
@@ -231,6 +367,7 @@ fn open_file_for_scan(
     path: &str,
     max_file_size: u64,
     skip_binary: bool,
+    avoid_source_mmap: bool,
 ) -> Result<FileBytes, c_int> {
     let mut file = open_for_scan(path).map_err(|_| STATUS_OPEN_FAILED)?;
     let file_size = try_metadata(&file).map_err(|_| STATUS_OPEN_FAILED)?.len();
@@ -249,13 +386,14 @@ fn open_file_for_scan(
     if file_size <= MMAP_THRESHOLD_BYTES {
         let size = file_size as usize;
         let mut buf: Vec<u8> = vec![0; size];
-        if let Err(e) = file.read_exact(&mut buf[..]) {
+        if let Err(e) = try_read_exact(&mut file, &mut buf[..]) {
             // Tolerate truncation between metadata() and read (rare on Windows
             // but possible if another process truncates concurrently). Fall
             // back to a normal read to recover whatever bytes are present.
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
                 buf.clear();
-                file.read_to_end(&mut buf).map_err(|_| STATUS_OPEN_FAILED)?;
+                try_seek_start(&mut file).map_err(|_| STATUS_OPEN_FAILED)?;
+                try_read_to_end(&mut file, &mut buf).map_err(|_| STATUS_OPEN_FAILED)?;
             } else {
                 return Err(STATUS_OPEN_FAILED);
             }
@@ -268,12 +406,22 @@ fn open_file_for_scan(
     if skip_binary {
         let mut probe = [0u8; BINARY_PROBE_BYTES];
         let probe_len = std::cmp::min(file_size as usize, BINARY_PROBE_BYTES);
-        let n = file
-            .read(&mut probe[..probe_len])
+        let n = try_read(&mut file, &mut probe[..probe_len])
             .map_err(|_| STATUS_OPEN_FAILED)?;
         if looks_binary(&probe[..n]) {
             return Err(STATUS_BINARY_SKIPPED);
         }
+    }
+
+    if avoid_source_mmap {
+        try_seek_start(&mut file).map_err(|_| STATUS_OPEN_FAILED)?;
+        #[cfg(target_pointer_width = "64")]
+        let size = file_size as usize;
+        #[cfg(not(target_pointer_width = "64"))]
+        let size = usize::try_from(file_size).map_err(|_| STATUS_TOO_LARGE)?;
+        let mut buf = vec![0u8; size];
+        try_read_exact(&mut file, &mut buf).map_err(|_| STATUS_OPEN_FAILED)?;
+        return Ok(FileBytes::Owned(buf));
     }
 
     // Memory-map the full file. mmap is independent of the read cursor we
@@ -294,7 +442,6 @@ fn read_file_owned_capped(
     max_file_size: u64,
     skip_binary: bool,
 ) -> Result<Vec<u8>, c_int> {
-    use std::io::Seek;
     let mut file = open_for_scan(path).map_err(|_| STATUS_OPEN_FAILED)?;
     let file_size = try_metadata(&file).map_err(|_| STATUS_OPEN_FAILED)?.len();
     if max_file_size != 0 && file_size > max_file_size {
@@ -303,20 +450,22 @@ fn read_file_owned_capped(
     if file_size == 0 {
         return Ok(Vec::new());
     }
-    if skip_binary {
+    #[cfg(test)]
+    let probe_binary = skip_binary && !test_inject::should_bypass_binary_preprobe();
+    #[cfg(not(test))]
+    let probe_binary = skip_binary;
+    if probe_binary {
         let mut probe = [0u8; BINARY_PROBE_BYTES];
         let probe_len = std::cmp::min(file_size as usize, BINARY_PROBE_BYTES);
-        let n = file
-            .read(&mut probe[..probe_len])
+        let n = try_read(&mut file, &mut probe[..probe_len])
             .map_err(|_| STATUS_OPEN_FAILED)?;
         if looks_binary(&probe[..n]) {
             return Err(STATUS_BINARY_SKIPPED);
         }
-        file.seek(std::io::SeekFrom::Start(0))
-            .map_err(|_| STATUS_OPEN_FAILED)?;
+        try_seek_start(&mut file).map_err(|_| STATUS_OPEN_FAILED)?;
     }
     let mut buf: Vec<u8> = Vec::with_capacity(file_size as usize);
-    file.read_to_end(&mut buf).map_err(|_| STATUS_OPEN_FAILED)?;
+    try_read_to_end(&mut file, &mut buf).map_err(|_| STATUS_OPEN_FAILED)?;
     Ok(buf)
 }
 
@@ -348,6 +497,7 @@ fn open_file_for_scan_into<'a>(
     max_file_size: u64,
     skip_binary: bool,
     skip_hidden: bool,
+    avoid_source_mmap: bool,
     scratch: &'a mut Vec<u8>,
 ) -> Result<(FileBytesRef<'a>, u64, u64), c_int> {
     let mut file = open_for_scan(path).map_err(|_| STATUS_OPEN_FAILED)?;
@@ -376,10 +526,11 @@ fn open_file_for_scan_into<'a>(
         let size = file_size as usize;
         scratch.clear();
         scratch.resize(size, 0);
-        if let Err(e) = file.read_exact(&mut scratch[..]) {
+        if let Err(e) = try_read_exact(&mut file, &mut scratch[..]) {
             scratch.clear();
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                file.read_to_end(scratch).map_err(|_| STATUS_OPEN_FAILED)?;
+                try_seek_start(&mut file).map_err(|_| STATUS_OPEN_FAILED)?;
+                try_read_to_end(&mut file, scratch).map_err(|_| STATUS_OPEN_FAILED)?;
             } else {
                 return Err(STATUS_OPEN_FAILED);
             }
@@ -390,12 +541,24 @@ fn open_file_for_scan_into<'a>(
     if skip_binary {
         let mut probe = [0u8; BINARY_PROBE_BYTES];
         let probe_len = std::cmp::min(file_size as usize, BINARY_PROBE_BYTES);
-        let n = file
-            .read(&mut probe[..probe_len])
+        let n = try_read(&mut file, &mut probe[..probe_len])
             .map_err(|_| STATUS_OPEN_FAILED)?;
         if looks_binary(&probe[..n]) {
             return Err(STATUS_BINARY_SKIPPED);
         }
+    }
+
+    if avoid_source_mmap {
+        try_seek_start(&mut file).map_err(|_| STATUS_OPEN_FAILED)?;
+        #[cfg(target_pointer_width = "64")]
+        let size = file_size as usize;
+        #[cfg(not(target_pointer_width = "64"))]
+        let size = usize::try_from(file_size).map_err(|_| STATUS_TOO_LARGE)?;
+        scratch.clear();
+        scratch.resize(size, 0);
+        try_read_exact(&mut file, &mut scratch[..])
+            .map_err(|_| STATUS_OPEN_FAILED)?;
+        return Ok((FileBytesRef::Borrowed(&scratch[..]), file_size, last_modified));
     }
 
     let mmap = try_mmap(&file).map_err(|_| STATUS_OPEN_FAILED)?;
@@ -531,7 +694,7 @@ pub unsafe extern "C" fn qg_search_file(
     };
 
     // Open + size check + (probe/read/mmap).
-    let file_bytes = match open_file_for_scan(&path, opts_in.max_file_size, scan_opts.skip_binary) {
+    let file_bytes = match open_file_for_scan(&path, opts_in.max_file_size, scan_opts.skip_binary, opts_in.avoid_source_mmap != 0) {
         Ok(b) => b,
         Err(status) => {
             result_slot.status = status;
@@ -665,11 +828,32 @@ pub extern "C" fn qg_abi_version() -> c_uint {
     // The C# loader calls this once at startup before any scan, so it is the reliable place to arm
     // the native panic logger (below) for the whole process lifetime.
     ensure_panic_logger();
-    7
+    8
 }
 
 /// One-time install guard for the native panic logger.
 static PANIC_LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+
+fn format_panic_location(location: Option<(&str, u32, u32)>) -> String {
+    match location {
+        Some((file, line, column)) => format!("{file}:{line}:{column}"),
+        None => "<unknown>".to_string(),
+    }
+}
+
+fn append_panic_record(record: &str, local_app_data: Option<std::ffi::OsString>) {
+    use std::io::Write;
+
+    if let Some(mut dir) = local_app_data.map(std::path::PathBuf::from) {
+        dir.push("Yagu");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.push("yagu_core_panic.log");
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&dir) {
+            let _ = file.write_all(record.as_bytes());
+            let _ = file.flush();
+        }
+    }
+}
 
 /// Installs a process-wide panic hook (once) that appends the panic message, its exact source
 /// `file:line:col`, and a backtrace to `%LOCALAPPDATA%\Yagu\yagu_core_panic.log` BEFORE the
@@ -682,10 +866,9 @@ pub(crate) fn ensure_panic_logger() {
         std::panic::set_hook(Box::new(move |info| {
             use std::io::Write;
 
-            let location = info
-                .location()
-                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-                .unwrap_or_else(|| "<unknown>".to_string());
+            let location = format_panic_location(
+                info.location().map(|location| (location.file(), location.line(), location.column())),
+            );
             let message = info
                 .payload()
                 .downcast_ref::<&str>()
@@ -703,15 +886,7 @@ pub(crate) fn ensure_panic_logger() {
                 "\n=== yagu_core PANIC (unix={secs}) ===\nthread: {thread}\nlocation: {location}\nmessage: {message}\nbacktrace:\n{backtrace}\n=== end yagu_core panic ===\n"
             );
 
-            if let Some(mut dir) = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from) {
-                dir.push("Yagu");
-                let _ = std::fs::create_dir_all(&dir);
-                dir.push("yagu_core_panic.log");
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&dir) {
-                    let _ = f.write_all(record.as_bytes());
-                    let _ = f.flush();
-                }
-            }
+            append_panic_record(&record, std::env::var_os("LOCALAPPDATA"));
             let _ = std::io::stderr().write_all(record.as_bytes());
 
             // Chain to the previous (default) hook, then the runtime aborts.
@@ -885,7 +1060,7 @@ pub unsafe extern "C" fn qg_search_file_stream(
         max_matches_per_line: opts_in.max_matches_per_line as usize,
     };
 
-    let file_bytes = match open_file_for_scan(&path, opts_in.max_file_size, scan_opts.skip_binary) {
+    let file_bytes = match open_file_for_scan(&path, opts_in.max_file_size, scan_opts.skip_binary, opts_in.avoid_source_mmap != 0) {
         Ok(b) => b,
         Err(status) => return set_status(status),
     };
@@ -1175,6 +1350,11 @@ pub unsafe extern "C" fn qg_search_file_stream_multiline(
         }
     };
 
+    if let Some(flag) = cancel_atomic {
+        if flag.load(Ordering::Relaxed) != 0 {
+            return set_status(STATUS_CANCELLED);
+        }
+    }
     match scan_result {
         Ok(_) => set_status(STATUS_OK),
         Err(e) => {
@@ -1212,6 +1392,10 @@ pub struct QgSession {
     max_file_size: u64,
     omit_line_bytes: bool,
     skip_hidden: bool,
+    avoid_source_mmap: bool,
+    file_io_timeout_seconds: u16,
+    #[cfg(test)]
+    worker_test_injection: u8,
 }
 
 // SAFETY: LineMatcher is Send+Sync, ScanOptions is plain data.
@@ -1288,6 +1472,10 @@ pub unsafe extern "C" fn qg_create_session(
         max_file_size: opts_in.max_file_size,
         omit_line_bytes: opts_in.omit_line_bytes != 0,
         skip_hidden: opts_in.skip_hidden != 0,
+        avoid_source_mmap: opts_in.avoid_source_mmap != 0,
+        file_io_timeout_seconds: opts_in.file_io_timeout_seconds,
+        #[cfg(test)]
+        worker_test_injection: 0,
     }))
 }
 
@@ -1351,7 +1539,12 @@ pub unsafe extern "C" fn qg_session_search_file_stream(
     };
 
     // Open + size check + (probe/read/mmap).
-    let file_bytes = match open_file_for_scan(&path, sess.max_file_size, sess.scan_opts.skip_binary) {
+    let file_bytes = match open_file_for_scan(
+        &path,
+        sess.max_file_size,
+        sess.scan_opts.skip_binary,
+        sess.avoid_source_mmap,
+    ) {
         Ok(b) => b,
         Err(status) => return set_status(status),
     };
@@ -1370,11 +1563,26 @@ pub unsafe extern "C" fn qg_session_search_file_stream(
     let mut before_buf: Vec<u8> = Vec::new();
     let mut after_buf: Vec<u8> = Vec::new();
     let mut line_poll_counter: u32 = 0;
+    #[cfg(test)]
+    let started_at = if test_inject::should_force_expired_deadline() {
+        std::time::Instant::now() - std::time::Duration::from_secs(2)
+    } else {
+        std::time::Instant::now()
+    };
+    #[cfg(not(test))]
+    let started_at = std::time::Instant::now();
+    let deadline = (sess.file_io_timeout_seconds != 0)
+        .then(|| std::time::Duration::from_secs(sess.file_io_timeout_seconds as u64));
+    let timed_out = std::cell::Cell::new(false);
 
     let cancel_check = || {
         line_poll_counter = line_poll_counter.wrapping_add(1);
         if line_poll_counter & 0x3f != 0 {
             return false;
+        }
+        if deadline.is_some_and(|limit| started_at.elapsed() >= limit) {
+            timed_out.set(true);
+            return true;
         }
         match cancel_atomic {
             Some(flag) => flag.load(Ordering::Relaxed) != 0,
@@ -1434,6 +1642,9 @@ pub unsafe extern "C" fn qg_session_search_file_stream(
         },
     );
 
+    if timed_out.get() {
+        return set_status(STATUS_IO_TIMEOUT);
+    }
     match scan_result {
         Ok(_) => set_status(STATUS_OK),
         Err(e) => set_status(scan_error_to_status(&e)),
@@ -1616,13 +1827,10 @@ unsafe fn qg_session_scan_paths_parallel_impl(
     // Materialize each path's u16 slice up front so worker threads can index in
     // O(1). Validate cumulative length against usize overflow.
     let lengths_slice = std::slice::from_raw_parts(path_lengths, path_count);
-    let mut total: usize = 0;
-    for &l in lengths_slice {
-        total = match total.checked_add(l as usize) {
-            Some(t) => t,
-            None => return STATUS_INVALID_PATH,
-        };
-    }
+    let total = match checked_total_path_units(lengths_slice) {
+        Some(total) => total,
+        None => return STATUS_INVALID_PATH,
+    };
     let all_utf16 = std::slice::from_raw_parts(paths_utf16_concat, total);
     let mut path_slices: Vec<&[u16]> = Vec::with_capacity(path_count);
     let mut cursor = 0usize;
@@ -1726,6 +1934,7 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                         sess.max_file_size,
                         sess.scan_opts.skip_binary,
                         sess.skip_hidden,
+                        sess.avoid_source_mmap,
                         &mut file_scratch,
                     ) {
                         Ok(b) => b,
@@ -1748,8 +1957,16 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                     match_buf.clear();
                     context_arena.clear();
 
+                    #[cfg(test)]
+                    let mut line_poll_counter: u32 =
+                        if sess.worker_test_injection == 3 { 63 } else { 0 };
+                    #[cfg(not(test))]
                     let mut line_poll_counter: u32 = 0;
                     let cancel_check = || {
+                        #[cfg(test)]
+                        if matches!(sess.worker_test_injection, 1 | 3) {
+                            early_stop.store(true, Ordering::Relaxed);
+                        }
                         line_poll_counter = line_poll_counter.wrapping_add(1);
                         if line_poll_counter & 0x3f != 0 {
                             return early_stop.load(Ordering::Relaxed);
@@ -1772,10 +1989,6 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                         &sess.scan_opts,
                         cancel_check,
                         |view: MatchView<'_>| {
-                            if early_stop.load(Ordering::Relaxed) {
-                                return false;
-                            }
-
                             let (before_offset, before_len, before_count) = if sess.omit_line_bytes {
                                 (0, 0, 0)
                             } else {
@@ -1823,6 +2036,11 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                         Ok(_) => STATUS_OK,
                         Err(e) => scan_error_to_status(&e),
                     };
+
+                    #[cfg(test)]
+                    if sess.worker_test_injection == 2 {
+                        early_stop.store(true, Ordering::Relaxed);
+                    }
 
                     // Phase 2: acquire the callback mutex ONCE, deliver all
                     // buffered matches, then always send file_done. The
@@ -1921,10 +2139,91 @@ struct StreamingWorkQueue {
     finished: std::sync::atomic::AtomicBool,
 }
 
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetCurrentThreadId() -> u32;
+    fn OpenThread(desired_access: u32, inherit_handle: i32, thread_id: u32) -> isize;
+    fn CancelSynchronousIo(thread_handle: isize) -> i32;
+    fn CloseHandle(handle: isize) -> i32;
+}
+
+/// Per-native-worker synchronous-I/O watchdog state. The watchdog thread calls
+/// CancelSynchronousIo on the exact scanner worker; the worker then reports STATUS_IO_TIMEOUT.
+#[cfg(windows)]
+struct WorkerIoWatch {
+    thread_handle: AtomicIsize,
+    active_since: Mutex<Option<std::time::Instant>>,
+    timed_out: AtomicBool,
+}
+
+#[cfg(windows)]
+impl WorkerIoWatch {
+    fn new() -> Self {
+        Self {
+            thread_handle: AtomicIsize::new(0),
+            active_since: Mutex::new(None),
+            timed_out: AtomicBool::new(false),
+        }
+    }
+
+    fn register_current_thread(&self) {
+        const THREAD_TERMINATE: u32 = 0x0001;
+        let thread_id = unsafe { GetCurrentThreadId() };
+        let handle = unsafe { OpenThread(THREAD_TERMINATE, 0, thread_id) };
+        self.thread_handle.store(handle, Ordering::Release);
+    }
+
+    fn begin(&self, started_at: std::time::Instant) {
+        self.timed_out.store(false, Ordering::Release);
+        *self.active_since.lock().unwrap() = Some(started_at);
+    }
+
+    fn finish(&self) -> bool {
+        *self.active_since.lock().unwrap() = None;
+        self.timed_out.swap(false, Ordering::AcqRel)
+    }
+
+    fn cancel_if_expired(&self, timeout: std::time::Duration) {
+        let expired = self
+            .active_since
+            .lock()
+            .unwrap()
+            .is_some_and(|started| started.elapsed() >= timeout);
+        if !expired {
+            return;
+        }
+        self.timed_out.store(true, Ordering::Release);
+        let handle = self.thread_handle.load(Ordering::Acquire);
+        if handle != 0 && handle != -1 {
+            unsafe { CancelSynchronousIo(handle); }
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WorkerIoWatch {
+    fn drop(&mut self) {
+        let handle = self.thread_handle.swap(0, Ordering::AcqRel);
+        if handle != 0 && handle != -1 {
+            unsafe { CloseHandle(handle); }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn status_after_io_watch(status: c_int, timed_out: bool) -> c_int {
+    if timed_out { STATUS_IO_TIMEOUT } else { status }
+}
+
 /// Opaque streaming scanner handle returned to C#.
 pub struct QgStreamingScanner {
     work: std::sync::Arc<StreamingWorkQueue>,
     workers: Vec<std::thread::JoinHandle<()>>,
+    #[cfg(windows)]
+    watchdog_stop: std::sync::Arc<AtomicBool>,
+    #[cfg(windows)]
+    watchdog: Option<std::thread::JoinHandle<()>>,
 }
 
 fn finish_streaming_scanner(sc: &mut QgStreamingScanner) {
@@ -1945,6 +2244,13 @@ fn finish_streaming_scanner(sc: &mut QgStreamingScanner) {
 
     for handle in sc.workers.drain(..) {
         let _ = handle.join();
+    }
+    #[cfg(windows)]
+    {
+        sc.watchdog_stop.store(true, Ordering::Release);
+        if let Some(watchdog) = sc.watchdog.take() {
+            let _ = watchdog.join();
+        }
     }
 }
 
@@ -2020,19 +2326,46 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
 
     let mut handles = Vec::with_capacity(workers);
 
-    for _ in 0..workers {
+    #[cfg(windows)]
+    let io_watch_states: Vec<std::sync::Arc<WorkerIoWatch>> = (0..workers)
+        .map(|_| std::sync::Arc::new(WorkerIoWatch::new()))
+        .collect();
+    #[cfg(windows)]
+    let watchdog_stop = std::sync::Arc::new(AtomicBool::new(false));
+    #[cfg(windows)]
+    let watchdog = if (*session).file_io_timeout_seconds == 0 {
+        None
+    } else {
+        let states = io_watch_states.clone();
+        let stop = std::sync::Arc::clone(&watchdog_stop);
+        let timeout = std::time::Duration::from_secs((*session).file_io_timeout_seconds as u64);
+        Some(std::thread::spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                for state in &states {
+                    state.cancel_if_expired(timeout);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }))
+    };
+
+    for worker_index in 0..workers {
         let work = std::sync::Arc::clone(&work);
         let cb_mutex = std::sync::Arc::clone(&cb_mutex);
         let early_stop = std::sync::Arc::clone(&early_stop);
         let ctx_wrapper = std::sync::Arc::clone(&ctx_wrapper);
         let sess_wrapper = std::sync::Arc::clone(&sess_wrapper);
         let cancel_wrapper = std::sync::Arc::clone(&cancel_wrapper);
+        #[cfg(windows)]
+        let io_watch = std::sync::Arc::clone(&io_watch_states[worker_index]);
 
         let handle = std::thread::spawn(move || {
             let sess: &QgSession = unsafe { &*sess_wrapper.0 };
             let cancel_atomic: Option<&AtomicI32> = unsafe {
                 cancel_wrapper.0.map(|p| &*p)
             };
+            #[cfg(windows)]
+            io_watch.register_current_thread();
 
             // Per-thread scratch buffers
             let mut context_arena: Vec<u8> = Vec::new();
@@ -2040,26 +2373,11 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
             let mut match_buf: Vec<BufferedMatchEntry> = Vec::new();
 
             loop {
-                if early_stop.load(Ordering::Relaxed) {
-                    return;
-                }
-                if let Some(flag) = cancel_atomic {
-                    if flag.load(Ordering::Relaxed) != 0 {
-                        return;
-                    }
-                }
-
                 // Pull the next path from the queue. The condvar avoids
                 // spinning while C# is still discovering more paths.
                 let item = {
                     let mut q = work.queue.lock().unwrap();
                     loop {
-                        if let Some(item) = q.pop_front() {
-                            break item;
-                        }
-                        if work.finished.load(Ordering::Acquire) {
-                            return; // no more work coming
-                        }
                         if early_stop.load(Ordering::Relaxed) {
                             return;
                         }
@@ -2068,22 +2386,42 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                                 return;
                             }
                         }
+                        if let Some(item) = q.pop_front() {
+                            break item;
+                        }
+                        if work.finished.load(Ordering::Acquire) {
+                            return; // no more work coming
+                        }
                         q = work.available.wait(q).unwrap();
                     }
                 };
 
                 let file_index = item.file_index;
                 let path = &item.path;
+                #[cfg(test)]
+                let file_started_at = if sess.file_io_timeout_seconds == u16::MAX {
+                    std::time::Instant::now()
+                        - std::time::Duration::from_secs(u16::MAX as u64 + 1)
+                } else {
+                    std::time::Instant::now()
+                };
+                #[cfg(not(test))]
+                let file_started_at = std::time::Instant::now();
+                #[cfg(windows)]
+                io_watch.begin(file_started_at);
 
                 let (file_bytes, file_len, last_modified) = match open_file_for_scan_into(
                     path,
                     sess.max_file_size,
                     sess.scan_opts.skip_binary,
                     sess.skip_hidden,
+                    sess.avoid_source_mmap,
                     &mut file_scratch,
                 ) {
                     Ok(b) => b,
                     Err(status) => {
+                        #[cfg(windows)]
+                        let status = status_after_io_watch(status, io_watch.finish());
                         let _g = cb_mutex.lock().unwrap();
                         unsafe {
                             on_file_done(
@@ -2102,13 +2440,28 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                 match_buf.clear();
                 context_arena.clear();
 
+                #[cfg(test)]
+                let mut line_poll_counter: u32 =
+                    if sess.worker_test_injection == 3 { 63 } else { 0 };
+                #[cfg(not(test))]
                 let mut line_poll_counter: u32 = 0;
+                let deadline = (sess.file_io_timeout_seconds != 0)
+                    .then(|| std::time::Duration::from_secs(sess.file_io_timeout_seconds as u64));
+                let timed_out = std::cell::Cell::new(false);
                 let cancel_check = || {
+                    #[cfg(test)]
+                    if matches!(sess.worker_test_injection, 1 | 3) {
+                        early_stop.store(true, Ordering::Relaxed);
+                    }
                     line_poll_counter = line_poll_counter.wrapping_add(1);
                     if line_poll_counter & 0x3f != 0 {
                         return early_stop.load(Ordering::Relaxed);
                     }
                     if early_stop.load(Ordering::Relaxed) {
+                        return true;
+                    }
+                    if deadline.is_some_and(|limit| file_started_at.elapsed() >= limit) {
+                        timed_out.set(true);
                         return true;
                     }
                     match cancel_atomic {
@@ -2123,10 +2476,6 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                     &sess.scan_opts,
                     cancel_check,
                     |view: MatchView<'_>| {
-                        if early_stop.load(Ordering::Relaxed) {
-                            return false;
-                        }
-
                         let (before_offset, before_len, before_count) = if sess.omit_line_bytes {
                             (0, 0, 0)
                         } else {
@@ -2168,10 +2517,21 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                     },
                 );
 
-                let final_status = match scan_result {
+                #[cfg(windows)]
+                let watchdog_timed_out = io_watch.finish();
+                #[cfg(not(windows))]
+                let watchdog_timed_out = false;
+                let final_status = if timed_out.get() | watchdog_timed_out {
+                    STATUS_IO_TIMEOUT
+                } else { match scan_result {
                     Ok(_) => STATUS_OK,
                     Err(e) => scan_error_to_status(&e),
-                };
+                }};
+
+                #[cfg(test)]
+                if sess.worker_test_injection == 2 {
+                    early_stop.store(true, Ordering::Relaxed);
+                }
 
                 // Acquire the callback mutex ONCE, deliver all buffered
                 // matches, then always send file_done. All QgMatchView pointers
@@ -2249,6 +2609,10 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
     Box::into_raw(Box::new(QgStreamingScanner {
         work,
         workers: handles,
+        #[cfg(windows)]
+        watchdog_stop,
+        #[cfg(windows)]
+        watchdog,
     }))
 }
 
@@ -2275,13 +2639,10 @@ pub unsafe extern "C" fn qg_scanner_push_paths(
 
     // Decode paths
     let lengths_slice = std::slice::from_raw_parts(path_lengths, path_count);
-    let mut total: usize = 0;
-    for &l in lengths_slice {
-        total = match total.checked_add(l as usize) {
-            Some(t) => t,
-            None => return STATUS_INVALID_PATH,
-        };
-    }
+    let total = match checked_total_path_units(lengths_slice) {
+        Some(total) => total,
+        None => return STATUS_INVALID_PATH,
+    };
     let all_utf16 = std::slice::from_raw_parts(paths_utf16_concat, total);
 
     let mut items = Vec::with_capacity(path_count);
@@ -2369,6 +2730,8 @@ mod tests {
             multi_line: 0,
             multi_line_dotall: 0,
             multiline_engine: 0,
+            avoid_source_mmap: 0,
+            file_io_timeout_seconds: 30,
             max_matches_per_line: 0,
         }
     }
@@ -2383,10 +2746,85 @@ mod tests {
         (dir, path.to_string_lossy().into_owned())
     }
 
+    fn set_local_app_data(value: Option<&std::ffi::OsStr>) {
+        match value {
+            Some(value) => std::env::set_var("LOCALAPPDATA", value),
+            None => std::env::remove_var("LOCALAPPDATA"),
+        }
+    }
+
     // ---- qg_abi_version ----
     #[test]
-    fn abi_version_returns_7() {
-        assert_eq!(qg_abi_version(), 7);
+    fn abi_version_returns_8() {
+        assert_eq!(qg_abi_version(), 8);
+    }
+
+    #[test]
+    fn panic_logger_records_string_and_non_string_payloads() {
+        let local_app_data = tempfile::tempdir().unwrap();
+        let previous_local_app_data = std::env::var_os("LOCALAPPDATA");
+        set_local_app_data(Some(local_app_data.path().as_os_str()));
+        ensure_panic_logger();
+
+        std::thread::spawn(|| {
+            let _ = std::panic::catch_unwind(|| panic!("borrowed panic payload"));
+            let _ = std::panic::catch_unwind(|| std::panic::panic_any(String::from("owned panic payload")));
+            let _ = std::panic::catch_unwind(|| std::panic::panic_any(42u32));
+        })
+        .join()
+        .unwrap();
+
+        set_local_app_data(None);
+        let _ = std::panic::catch_unwind(|| panic!("panic without local app data"));
+
+        set_local_app_data(previous_local_app_data.as_deref());
+
+        let log = std::fs::read_to_string(
+            local_app_data.path().join("Yagu").join("yagu_core_panic.log"),
+        )
+        .unwrap();
+        assert!(log.contains("thread: <unnamed>"));
+        assert!(log.contains("message: borrowed panic payload"));
+        assert!(log.contains("message: owned panic payload"));
+        assert!(log.contains("message: <non-string panic payload>"));
+        assert!(log.contains("backtrace:"));
+
+        assert_eq!(format_panic_location(Some(("file.rs", 12, 34))), "file.rs:12:34");
+        assert_eq!(format_panic_location(None), "<unknown>");
+        let blocked_directory = tempfile::NamedTempFile::new().unwrap();
+        append_panic_record(
+            "unwritable",
+            Some(blocked_directory.path().as_os_str().to_os_string()),
+        );
+    }
+
+    #[test]
+    fn checked_total_units_rejects_overflow() {
+        assert_eq!(checked_total_units([1, 2, 3]), Some(6));
+        assert_eq!(checked_total_units([usize::MAX, 1]), None);
+        assert_eq!(checked_total_path_units(&[2, 3]), Some(5));
+
+        assert!(use_ascii_literal_fast_path("ascii", false, false));
+        assert!(!use_ascii_literal_fast_path("ascii", true, false));
+        assert!(!use_ascii_literal_fast_path("ascii", false, true));
+        assert!(!use_ascii_literal_fast_path("é", false, false));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn worker_io_watch_without_registered_handle_times_out_and_drops() {
+        let watch = WorkerIoWatch::new();
+        watch.begin(std::time::Instant::now() - std::time::Duration::from_secs(2));
+        watch.cancel_if_expired(std::time::Duration::from_secs(1));
+        assert!(watch.finish());
+
+        let invalid_watch = WorkerIoWatch::new();
+        invalid_watch.thread_handle.store(-1, Ordering::Release);
+        invalid_watch.begin(std::time::Instant::now() - std::time::Duration::from_secs(2));
+        invalid_watch.cancel_if_expired(std::time::Duration::from_secs(1));
+        assert!(invalid_watch.finish());
+        assert_eq!(status_after_io_watch(STATUS_OPEN_FAILED, false), STATUS_OPEN_FAILED);
+        assert_eq!(status_after_io_watch(STATUS_OPEN_FAILED, true), STATUS_IO_TIMEOUT);
     }
 
     // ---- QgOptions ABI layout ----
@@ -2409,7 +2847,9 @@ mod tests {
         assert_eq!(offset_of!(QgOptions, multi_line), 33);
         assert_eq!(offset_of!(QgOptions, multi_line_dotall), 34);
         assert_eq!(offset_of!(QgOptions, multiline_engine), 35);
-        // max_matches_per_line is a u64 (align 8): offset 36 rounds up to 40.
+        assert_eq!(offset_of!(QgOptions, avoid_source_mmap), 36);
+        assert_eq!(offset_of!(QgOptions, file_io_timeout_seconds), 38);
+        // max_matches_per_line is a u64 (align 8): offset 40 is already aligned.
         assert_eq!(offset_of!(QgOptions, max_matches_per_line), 40);
         // 8-byte alignment (u64 fields) makes the struct 48 bytes total.
         assert_eq!(std::mem::size_of::<QgOptions>(), 48);
@@ -2492,6 +2932,44 @@ mod tests {
     ) {
     }
 
+    #[derive(Default)]
+    struct StreamingCollector {
+        matches: Vec<(u32, bool, bool, bool)>,
+        done: Vec<(u32, c_int, u64)>,
+        stop_after: Option<usize>,
+    }
+
+    unsafe extern "C" fn collect_streaming_match_callback(
+        ctx: *mut c_void,
+        file_index: c_uint,
+        m: *const QgMatchView,
+    ) -> c_int {
+        let collector = &mut *(ctx as *mut StreamingCollector);
+        let view = &*m;
+        collector.matches.push((
+            file_index,
+            view.line_ptr.is_null(),
+            view.ctx_before_ptr.is_null(),
+            view.ctx_after_ptr.is_null(),
+        ));
+        if collector.stop_after == Some(collector.matches.len()) {
+            1
+        } else {
+            0
+        }
+    }
+
+    unsafe extern "C" fn collect_streaming_done_callback(
+        ctx: *mut c_void,
+        file_index: c_uint,
+        status: c_int,
+        file_len: c_ulonglong,
+        _last_modified: c_ulonglong,
+    ) {
+        let collector = &mut *(ctx as *mut StreamingCollector);
+        collector.done.push((file_index, status, file_len));
+    }
+
     #[test]
     fn streaming_scanner_destroy_joins_workers_without_explicit_finish() {
         unsafe {
@@ -2530,11 +3008,301 @@ mod tests {
         }
     }
 
+    #[test]
+    fn streaming_scanner_processes_context_errors_and_invalid_paths() {
+        unsafe {
+            assert!(qg_create_streaming_scanner(
+                std::ptr::null(),
+                1,
+                std::ptr::null(),
+                collect_streaming_match_callback,
+                collect_streaming_done_callback,
+                std::ptr::null_mut(),
+            )
+            .is_null());
+            assert_eq!(qg_scanner_finish(std::ptr::null_mut()), STATUS_OK);
+
+            let mut opts = default_opts();
+            opts.context_before = 1;
+            opts.context_after = 1;
+            let pattern = b"needle";
+            let session = qg_create_session(
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert!(!session.is_null());
+
+            let mut collector = StreamingCollector::default();
+            let scanner = qg_create_streaming_scanner(
+                session,
+                0,
+                std::ptr::null(),
+                collect_streaming_match_callback,
+                collect_streaming_done_callback,
+                &mut collector as *mut StreamingCollector as *mut c_void,
+            );
+            assert!(!scanner.is_null());
+            assert_eq!(
+                qg_scanner_push_paths(
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    1,
+                    0,
+                ),
+                STATUS_OK
+            );
+            assert_eq!(
+                qg_scanner_push_paths(scanner, std::ptr::null(), std::ptr::null(), 0, 0),
+                STATUS_OK
+            );
+
+            let (_dir, path) = temp_file("streaming-context.txt", b"before\nneedle\nafter\n");
+            let (_binary_dir, binary) = temp_file("streaming-binary.bin", b"text\0binary");
+            let missing = format!("{path}.missing");
+            let (paths, lengths) = pack_paths_utf16(&[&path, &missing, &binary]);
+            assert_eq!(
+                qg_scanner_push_paths(scanner, paths.as_ptr(), lengths.as_ptr(), lengths.len(), 10),
+                STATUS_OK
+            );
+
+            let invalid_path = [0xD800u16];
+            let invalid_length = [1u32];
+            assert_eq!(
+                qg_scanner_push_paths(scanner, invalid_path.as_ptr(), invalid_length.as_ptr(), 1, 13),
+                STATUS_OK
+            );
+            assert_eq!(qg_scanner_finish(scanner), STATUS_OK);
+
+            assert_eq!(collector.matches, vec![(10, false, false, false)]);
+            assert_eq!(collector.done.len(), 3);
+            collector.done.sort_unstable_by_key(|entry| entry.0);
+            assert_eq!(collector.done[0].0, 10);
+            assert_eq!(collector.done[0].1, STATUS_OK);
+            assert!(collector.done[0].2 > 0);
+            assert_eq!(collector.done[1], (11, STATUS_OPEN_FAILED, 0));
+            assert_eq!(collector.done[2].0, 12);
+            assert_eq!(collector.done[2].1, STATUS_BINARY_SKIPPED);
+
+            qg_scanner_destroy(scanner);
+            qg_free_session(session);
+        }
+    }
+
+    #[test]
+    fn streaming_scanner_metadata_only_callback_stops_workers() {
+        unsafe {
+            let mut opts = default_opts();
+            opts.omit_line_bytes = 1;
+            opts.context_before = 1;
+            opts.context_after = 1;
+            let pattern = b"needle";
+            let session = qg_create_session(
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert!(!session.is_null());
+
+            let mut collector = StreamingCollector {
+                stop_after: Some(1),
+                ..Default::default()
+            };
+            let scanner = qg_create_streaming_scanner(
+                session,
+                1,
+                std::ptr::null(),
+                collect_streaming_match_callback,
+                collect_streaming_done_callback,
+                &mut collector as *mut StreamingCollector as *mut c_void,
+            );
+            let (_dir, path) = temp_file("streaming-metadata.txt", b"before\nneedle\nafter\n");
+            let (paths, lengths) = pack_paths_utf16(&[&path]);
+            assert_eq!(
+                qg_scanner_push_paths(scanner, paths.as_ptr(), lengths.as_ptr(), 1, 0),
+                STATUS_OK
+            );
+            assert_eq!(qg_scanner_finish(scanner), STATUS_OK);
+
+            assert_eq!(collector.matches, vec![(0, true, true, true)]);
+            assert_eq!(collector.done.len(), 1);
+            qg_scanner_destroy(scanner);
+            qg_free_session(session);
+        }
+    }
+
+    #[test]
+    fn streaming_scanner_pre_cancelled_exits_without_callbacks() {
+        unsafe {
+            let opts = default_opts();
+            let pattern = b"needle";
+            let session = qg_create_session(
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            let cancel = AtomicI32::new(1);
+            let mut collector = StreamingCollector::default();
+            let scanner = qg_create_streaming_scanner(
+                session,
+                1,
+                cancel.as_ptr(),
+                collect_streaming_match_callback,
+                collect_streaming_done_callback,
+                &mut collector as *mut StreamingCollector as *mut c_void,
+            );
+            let (_dir, path) = temp_file("streaming-cancelled.txt", b"needle\n");
+            let (paths, lengths) = pack_paths_utf16(&[&path]);
+            assert_eq!(
+                qg_scanner_push_paths(scanner, paths.as_ptr(), lengths.as_ptr(), 1, 0),
+                STATUS_OK
+            );
+            assert_eq!(qg_scanner_finish(scanner), STATUS_OK);
+            assert!(collector.matches.is_empty());
+            assert!(collector.done.is_empty());
+            qg_scanner_destroy(scanner);
+            qg_free_session(session);
+        }
+    }
+
+    #[test]
+    fn streaming_scanner_covers_worker_stop_races_and_clear_cancel_poll() {
+        let (_dir, path) = temp_file("streaming-worker-states.txt", b"needle\n");
+        let (paths, lengths) = pack_paths_utf16(&[&path]);
+
+        unsafe {
+            for injection in [1, 2, 3] {
+                let mut opts = default_opts();
+                opts.file_io_timeout_seconds = 0;
+                let session = qg_create_session(
+                    b"needle".as_ptr(),
+                    6,
+                    &opts,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+                (*session).worker_test_injection = injection;
+                let mut collector = StreamingCollector::default();
+                let scanner = qg_create_streaming_scanner(
+                    session,
+                    1,
+                    std::ptr::null(),
+                    collect_streaming_match_callback,
+                    collect_streaming_done_callback,
+                    &mut collector as *mut StreamingCollector as *mut c_void,
+                );
+                assert_eq!(
+                    qg_scanner_push_paths(scanner, paths.as_ptr(), lengths.as_ptr(), 1, 0),
+                    STATUS_OK
+                );
+                assert_eq!(qg_scanner_finish(scanner), STATUS_OK);
+                assert!(collector.matches.is_empty());
+                assert_eq!(collector.done.len(), 1);
+                qg_scanner_destroy(scanner);
+                qg_free_session(session);
+            }
+
+            let mut opts = default_opts();
+            opts.file_io_timeout_seconds = 0;
+            let session = qg_create_session(
+                b"missing".as_ptr(),
+                7,
+                &opts,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            let cancel = AtomicI32::new(0);
+            let mut collector = StreamingCollector::default();
+            let scanner = qg_create_streaming_scanner(
+                session,
+                1,
+                cancel.as_ptr(),
+                collect_streaming_match_callback,
+                collect_streaming_done_callback,
+                &mut collector as *mut StreamingCollector as *mut c_void,
+            );
+            let (_poll_dir, poll_path) = temp_file(
+                "streaming-clear-cancel.txt",
+                &b"plain text\n".repeat(70),
+            );
+            let (poll_paths, poll_lengths) = pack_paths_utf16(&[&poll_path]);
+            assert_eq!(
+                qg_scanner_push_paths(
+                    scanner,
+                    poll_paths.as_ptr(),
+                    poll_lengths.as_ptr(),
+                    1,
+                    0,
+                ),
+                STATUS_OK
+            );
+            assert_eq!(qg_scanner_finish(scanner), STATUS_OK);
+            assert!(collector.matches.is_empty());
+            assert_eq!(collector.done.len(), 1);
+            qg_scanner_destroy(scanner);
+            qg_free_session(session);
+        }
+    }
+
+    #[test]
+    fn streaming_scanner_expired_deadline_reports_timeout() {
+        unsafe {
+            let mut opts = default_opts();
+            opts.file_io_timeout_seconds = u16::MAX;
+            let session = qg_create_session(
+                b"missing".as_ptr(),
+                7,
+                &opts,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            let mut collector = StreamingCollector::default();
+            let scanner = qg_create_streaming_scanner(
+                session,
+                1,
+                std::ptr::null(),
+                collect_streaming_match_callback,
+                collect_streaming_done_callback,
+                &mut collector as *mut StreamingCollector as *mut c_void,
+            );
+            let (_dir, path) = temp_file("streaming-timeout.txt", &b"line\n".repeat(128));
+            let (paths, lengths) = pack_paths_utf16(&[&path]);
+            assert_eq!(
+                qg_scanner_push_paths(scanner, paths.as_ptr(), lengths.as_ptr(), 1, 0),
+                STATUS_OK
+            );
+            assert_eq!(qg_scanner_finish(scanner), STATUS_OK);
+            assert!(collector.matches.is_empty());
+            assert_eq!(collector.done.len(), 1);
+            assert_eq!(collector.done[0].1, STATUS_IO_TIMEOUT);
+            qg_scanner_destroy(scanner);
+            qg_free_session(session);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn streaming_scanner_io_watch_marks_expired_operation() {
+        let watch = WorkerIoWatch::new();
+        watch.register_current_thread();
+        watch.begin(std::time::Instant::now() - std::time::Duration::from_secs(2));
+        watch.cancel_if_expired(std::time::Duration::from_secs(1));
+        assert!(watch.finish());
+    }
+
     // ---- qg_free_result ----
     #[test]
     fn free_result_null() {
         unsafe {
             qg_free_result(std::ptr::null_mut());
+            qg_scanner_destroy(std::ptr::null_mut());
         }
     }
 
@@ -2948,7 +3716,7 @@ mod tests {
             );
             // With cancel flag set, scan may complete (checked every 256 matches)
             // or the post-scan recheck catches it.
-            assert!(ret == STATUS_OK || ret == STATUS_CANCELLED);
+            assert!([STATUS_OK, STATUS_CANCELLED].contains(&ret));
         }
     }
 
@@ -2969,6 +3737,24 @@ mod tests {
         let counter = &mut *(ctx as *mut u32);
         *counter += 1;
         1 // stop
+    }
+
+    #[derive(Default)]
+    struct ViewShape {
+        calls: usize,
+        line_is_null: bool,
+        before_is_null: bool,
+        after_is_null: bool,
+    }
+
+    unsafe extern "C" fn view_shape_callback(ctx: *mut c_void, m: *const QgMatchView) -> c_int {
+        let shape = &mut *(ctx as *mut ViewShape);
+        let view = &*m;
+        shape.calls += 1;
+        shape.line_is_null = view.line_ptr.is_null();
+        shape.before_is_null = view.ctx_before_ptr.is_null();
+        shape.after_is_null = view.ctx_after_ptr.is_null();
+        0
     }
 
     // ---- qg_search_file_stream_multiline ----
@@ -3004,6 +3790,50 @@ mod tests {
                 return 1; // stop
             }
         }
+        0
+    }
+
+    #[test]
+    fn multiline_callback_accepts_non_null_empty_line() {
+        let byte = b'x';
+        let view = QgMultilineMatchView {
+            line_number: 1,
+            match_start: 0,
+            source_match_start: 0,
+            match_len: 0,
+            line_ptr: &byte,
+            line_len: 0,
+            ctx_before_ptr: std::ptr::null(),
+            ctx_before_bytes: 0,
+            ctx_before_count: 0,
+            ctx_after_ptr: std::ptr::null(),
+            ctx_after_bytes: 0,
+            ctx_after_count: 0,
+            end_line: 1,
+            end_col: 0,
+        };
+        let mut collector = MlCollector::default();
+        unsafe {
+            assert_eq!(
+                ml_collect_callback(&mut collector as *mut MlCollector as *mut c_void, &view),
+                0
+            );
+        }
+        assert_eq!(collector.recs[0].5, "");
+    }
+
+    struct MlCancelAfterFirst {
+        cancel: *const AtomicI32,
+        calls: usize,
+    }
+
+    unsafe extern "C" fn ml_cancel_after_first_callback(
+        ctx: *mut c_void,
+        _m: *const QgMultilineMatchView,
+    ) -> c_int {
+        let state = &mut *(ctx as *mut MlCancelAfterFirst);
+        state.calls += 1;
+        (&*state.cancel).store(1, Ordering::Relaxed);
         0
     }
 
@@ -3086,6 +3916,253 @@ mod tests {
         let (ret, col) = run_ml_stream(&path_str, b"foobar", opts);
         assert_eq!(ret, STATUS_TOO_LARGE);
         assert!(col.recs.is_empty());
+    }
+
+    #[test]
+    fn multiline_stream_injected_preprobe_bypass_propagates_scanner_binary_error() {
+        let (_dir, path_str) = temp_file("ml_binary.txt", b"text\0binary");
+        let mut opts = default_opts();
+        opts.skip_binary = 1;
+        test_inject::set_bypass_binary_preprobe(true);
+        let (ret, col) = run_ml_stream(&path_str, b"a", opts);
+        test_inject::set_bypass_binary_preprobe(false);
+        assert_eq!(ret, STATUS_BINARY_SKIPPED);
+        assert!(col.recs.is_empty());
+    }
+
+    #[test]
+    fn multiline_stream_validates_inputs_and_initializes_error_outputs() {
+        let (_dir, path_str) = temp_file("ml_inputs.txt", b"text\n");
+        let path = to_utf16(&path_str);
+        let mut opts = default_opts();
+        opts.multi_line = 1;
+        opts.use_regex = 1;
+        let mut status = -1;
+        let mut error_msg = 1usize as *mut u8;
+        let mut error_msg_len = usize::MAX;
+        let mut col = MlCollector::default();
+
+        unsafe {
+            assert_eq!(
+                qg_search_file_stream_multiline(
+                    path.as_ptr(),
+                    path.len(),
+                    b"(".as_ptr(),
+                    1,
+                    &opts,
+                    std::ptr::null(),
+                    ml_collect_callback,
+                    &mut col as *mut MlCollector as *mut c_void,
+                    &mut status,
+                    &mut error_msg,
+                    &mut error_msg_len,
+                ),
+                STATUS_INVALID_REGEX
+            );
+            assert_eq!(status, STATUS_INVALID_REGEX);
+            assert!(!error_msg.is_null());
+            assert!(error_msg_len > 0);
+            qg_free_buffer(error_msg, error_msg_len);
+
+            assert_eq!(
+                qg_search_file_stream_multiline(
+                    std::ptr::null(),
+                    0,
+                    b"text".as_ptr(),
+                    4,
+                    &opts,
+                    std::ptr::null(),
+                    ml_collect_callback,
+                    std::ptr::null_mut(),
+                    &mut status,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                STATUS_INVALID_PATH
+            );
+
+            assert_eq!(
+                qg_search_file_stream_multiline(
+                    path.as_ptr(),
+                    path.len(),
+                    b"text".as_ptr(),
+                    4,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    ml_collect_callback,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                STATUS_INVALID_PATH
+            );
+
+            let invalid_utf16 = [0xD800u16];
+            assert_eq!(
+                qg_search_file_stream_multiline(
+                    invalid_utf16.as_ptr(),
+                    invalid_utf16.len(),
+                    b"text".as_ptr(),
+                    4,
+                    &opts,
+                    std::ptr::null(),
+                    ml_collect_callback,
+                    std::ptr::null_mut(),
+                    &mut status,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                STATUS_INVALID_PATH
+            );
+
+            let invalid_utf8 = [0xFFu8];
+            assert_eq!(
+                qg_search_file_stream_multiline(
+                    path.as_ptr(),
+                    path.len(),
+                    invalid_utf8.as_ptr(),
+                    invalid_utf8.len(),
+                    &opts,
+                    std::ptr::null(),
+                    ml_collect_callback,
+                    std::ptr::null_mut(),
+                    &mut status,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                STATUS_INVALID_PATH
+            );
+
+            assert_eq!(
+                qg_search_file_stream_multiline(
+                    path.as_ptr(),
+                    path.len(),
+                    std::ptr::null(),
+                    0,
+                    &opts,
+                    std::ptr::null(),
+                    ml_collect_callback,
+                    std::ptr::null_mut(),
+                    &mut status,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                STATUS_OK
+            );
+        }
+    }
+
+    #[test]
+    fn multiline_stream_marshals_context_and_metadata_only_records() {
+        let (_dir, path_str) = temp_file("ml_context.txt", b"before\nmatch\nafter\n");
+        let mut opts = default_opts();
+        opts.context_before = 1;
+        opts.context_after = 1;
+        let (ret, col) = run_ml_stream(&path_str, b"match", opts);
+        assert_eq!(ret, STATUS_OK);
+        assert_eq!(col.recs.len(), 1);
+        assert_eq!(col.recs[0].5, "match");
+
+        let mut metadata_opts = default_opts();
+        metadata_opts.context_before = 1;
+        metadata_opts.context_after = 1;
+        metadata_opts.omit_line_bytes = 1;
+        let (ret, metadata_col) = run_ml_stream(&path_str, b"match", metadata_opts);
+        assert_eq!(ret, STATUS_OK);
+        assert_eq!(metadata_col.recs.len(), 1);
+        assert!(metadata_col.recs[0].5.is_empty());
+    }
+
+    #[test]
+    fn multiline_stream_pre_cancelled_returns_cancelled() {
+        let (_dir, path_str) = temp_file("ml_cancel.txt", b"match\nmatch\n");
+        let path = to_utf16(&path_str);
+        let mut opts = default_opts();
+        opts.multi_line = 1;
+        let cancel = AtomicI32::new(1);
+        let mut status = -1;
+        let mut col = MlCollector::default();
+        unsafe {
+            let ret = qg_search_file_stream_multiline(
+                path.as_ptr(),
+                path.len(),
+                b"match".as_ptr(),
+                5,
+                &opts,
+                cancel.as_ptr(),
+                ml_collect_callback,
+                &mut col as *mut MlCollector as *mut c_void,
+                &mut status,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert_eq!(ret, STATUS_CANCELLED);
+            assert_eq!(status, STATUS_CANCELLED);
+            assert!(col.recs.is_empty());
+        }
+    }
+
+    #[test]
+    fn multiline_stream_with_clear_cancel_flag_completes() {
+        let (_dir, path_str) = temp_file("ml_clear_cancel.txt", b"plain text\n");
+        let path = to_utf16(&path_str);
+        let opts = default_opts();
+        let cancel = AtomicI32::new(0);
+        let mut status = -1;
+        let mut collector = MlCollector::default();
+        unsafe {
+            let ret = qg_search_file_stream_multiline(
+                path.as_ptr(),
+                path.len(),
+                b"missing".as_ptr(),
+                7,
+                &opts,
+                cancel.as_ptr(),
+                ml_collect_callback,
+                &mut collector as *mut MlCollector as *mut c_void,
+                &mut status,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert_eq!(ret, STATUS_OK);
+            assert_eq!(status, STATUS_OK);
+            assert!(collector.recs.is_empty());
+        }
+    }
+
+    #[cfg(feature = "grep_crates")]
+    #[test]
+    fn multiline_stream_cancel_between_grep_ranges_returns_cancelled() {
+        let (_dir, path_str) = temp_file("ml_cancel_ranges.txt", b"m m\n");
+        let path = to_utf16(&path_str);
+        let mut opts = default_opts();
+        opts.multi_line = 1;
+        opts.multiline_engine = 1;
+        let cancel = AtomicI32::new(0);
+        let mut status = -1;
+        let mut state = MlCancelAfterFirst {
+            cancel: &cancel,
+            calls: 0,
+        };
+        unsafe {
+            let ret = qg_search_file_stream_multiline(
+                path.as_ptr(),
+                path.len(),
+                b"m".as_ptr(),
+                1,
+                &opts,
+                cancel.as_ptr(),
+                ml_cancel_after_first_callback,
+                &mut state as *mut MlCancelAfterFirst as *mut c_void,
+                &mut status,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert_eq!(ret, STATUS_CANCELLED);
+            assert_eq!(status, STATUS_CANCELLED);
+            assert_eq!(state.calls, 1);
+        }
     }
 
     #[test]
@@ -3468,6 +4545,41 @@ mod tests {
             );
             assert_eq!(ret, STATUS_OK);
             assert_eq!(count, 1);
+        }
+    }
+
+    #[test]
+    fn stream_search_metadata_only_omits_all_byte_pointers() {
+        unsafe {
+            let (_dir, path_str) = temp_file("stream_metadata.txt", b"before\nmatch\nafter\n");
+            let path = to_utf16(&path_str);
+            let mut opts = default_opts();
+            opts.omit_line_bytes = 1;
+            opts.context_before = 1;
+            opts.context_after = 1;
+            let mut status = -1;
+            let mut shape = ViewShape::default();
+            assert_eq!(
+                qg_search_file_stream(
+                    path.as_ptr(),
+                    path.len(),
+                    b"match".as_ptr(),
+                    5,
+                    &opts,
+                    std::ptr::null(),
+                    view_shape_callback,
+                    &mut shape as *mut ViewShape as *mut c_void,
+                    &mut status,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                STATUS_OK
+            );
+            assert_eq!(status, STATUS_OK);
+            assert_eq!(shape.calls, 1);
+            assert!(shape.line_is_null);
+            assert!(shape.before_is_null);
+            assert!(shape.after_is_null);
         }
     }
 
@@ -3914,6 +5026,83 @@ mod tests {
     }
 
     #[test]
+    fn session_stream_metadata_only_omits_all_byte_pointers() {
+        unsafe {
+            let (_dir, path_str) = temp_file("sess_metadata.txt", b"before\nmatch\nafter\n");
+            let mut opts = default_opts();
+            opts.omit_line_bytes = 1;
+            opts.context_before = 1;
+            opts.context_after = 1;
+            let session = qg_create_session(
+                b"match".as_ptr(),
+                5,
+                &opts,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            let path = to_utf16(&path_str);
+            let mut status = -1;
+            let mut shape = ViewShape::default();
+            assert_eq!(
+                qg_session_search_file_stream(
+                    session,
+                    path.as_ptr(),
+                    path.len(),
+                    std::ptr::null(),
+                    view_shape_callback,
+                    &mut shape as *mut ViewShape as *mut c_void,
+                    &mut status,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                STATUS_OK
+            );
+            assert_eq!(status, STATUS_OK);
+            assert_eq!(shape.calls, 1);
+            assert!(shape.line_is_null);
+            assert!(shape.before_is_null);
+            assert!(shape.after_is_null);
+            qg_free_session(session);
+        }
+    }
+
+    #[test]
+    fn session_stream_expired_deadline_returns_timeout() {
+        unsafe {
+            let (_dir, path_str) = temp_file("sess_timeout.txt", &b"line\n".repeat(128));
+            let mut opts = default_opts();
+            opts.file_io_timeout_seconds = 1;
+            let session = qg_create_session(
+                b"missing".as_ptr(),
+                7,
+                &opts,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            let path = to_utf16(&path_str);
+            let mut status = -1;
+            let mut count = 0u32;
+            test_inject::set_force_expired_deadline(true);
+            let ret = qg_session_search_file_stream(
+                session,
+                path.as_ptr(),
+                path.len(),
+                std::ptr::null(),
+                count_callback,
+                &mut count as *mut u32 as *mut c_void,
+                &mut status,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            test_inject::set_force_expired_deadline(false);
+            assert_eq!(ret, STATUS_IO_TIMEOUT);
+            assert_eq!(status, STATUS_IO_TIMEOUT);
+            assert_eq!(count, 0);
+            qg_free_session(session);
+        }
+    }
+
+    #[test]
     fn session_stream_null_out_params() {
         unsafe {
             let (_dir, path_str) = temp_file("sess_nullout.txt", b"foo\n");
@@ -3975,7 +5164,7 @@ mod tests {
                 std::ptr::null_mut(),
             );
             // Few matches, so cancellation poll may not trigger; either result is OK
-            assert!(ret == STATUS_OK || ret == STATUS_CANCELLED);
+            assert!([STATUS_OK, STATUS_CANCELLED].contains(&ret));
             qg_free_session(session);
         }
     }
@@ -4441,6 +5630,19 @@ mod tests {
         assert_eq!(scan_error_to_status(&ScanError::Io(io_err)), STATUS_OPEN_FAILED);
     }
 
+    #[test]
+    fn write_scan_error_msg_requires_both_outputs() {
+        let mut message = std::ptr::null_mut();
+        unsafe {
+            write_scan_error_msg(
+                ScanError::InvalidRegex("bad".into()),
+                &mut message,
+                std::ptr::null_mut(),
+            );
+        }
+        assert!(message.is_null());
+    }
+
     // -----------------------------------------------------------------------
     // open_and_mmap tests
     // -----------------------------------------------------------------------
@@ -4746,7 +5948,7 @@ mod tests {
 
     #[test]
     fn open_file_for_scan_nonexistent() {
-        let r = open_file_for_scan("__no_such_path_xyz__", 0, true);
+        let r = open_file_for_scan("__no_such_path_xyz__", 0, true, false);
         assert_eq!(r.unwrap_err(), STATUS_OPEN_FAILED);
     }
 
@@ -4757,17 +5959,33 @@ mod tests {
         tmp.flush().unwrap();
         let path = tmp.path().to_str().unwrap();
         assert_eq!(
-            open_file_for_scan(path, 1, false).unwrap_err(),
+            open_file_for_scan(path, 1, false, false).unwrap_err(),
             STATUS_TOO_LARGE,
         );
+    }
+
+    #[test]
+    fn open_helpers_accept_nonzero_limits_and_visible_files() {
+        let (_dir, path) = temp_file("within-limit.txt", b"hello\n");
+        let limit = 1024;
+        assert_eq!(open_file_for_scan(&path, limit, false, false).unwrap().as_slice(), b"hello\n");
+        assert_eq!(read_file_owned_capped(&path, limit, false).unwrap(), b"hello\n");
+        assert_eq!(&open_and_mmap(&path, limit).unwrap()[..], b"hello\n");
+
+        let mut scratch = Vec::new();
+        let (bytes, _, _) = open_file_for_scan_into(&path, limit, false, true, false, &mut scratch).unwrap();
+        assert_eq!(bytes.as_slice(), b"hello\n");
     }
 
     #[test]
     fn open_file_for_scan_empty_returns_owned_empty() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let bytes = open_file_for_scan(path, 0, true).unwrap();
-        assert!(matches!(bytes, FileBytes::Owned(ref v) if v.is_empty()));
+        let bytes = open_file_for_scan(path, 0, true, false).unwrap();
+        assert_eq!(
+            std::mem::discriminant(&bytes),
+            std::mem::discriminant(&FileBytes::Owned(Vec::new()))
+        );
         assert_eq!(bytes.as_slice().len(), 0);
     }
 
@@ -4777,9 +5995,12 @@ mod tests {
         tmp.write_all(b"abc\n").unwrap();
         tmp.flush().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let bytes = open_file_for_scan(path, 0, true).unwrap();
+        let bytes = open_file_for_scan(path, 0, true, false).unwrap();
         // 4 bytes < MMAP_THRESHOLD_BYTES, so we expect the owned path.
-        assert!(matches!(bytes, FileBytes::Owned(_)));
+        assert_eq!(
+            std::mem::discriminant(&bytes),
+            std::mem::discriminant(&FileBytes::Owned(Vec::new()))
+        );
         assert_eq!(bytes.as_slice(), b"abc\n");
     }
 
@@ -4790,9 +6011,42 @@ mod tests {
         tmp.write_all(&big).unwrap();
         tmp.flush().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let bytes = open_file_for_scan(path, 0, true).unwrap();
-        assert!(matches!(bytes, FileBytes::Mapped(_)));
+        let bytes = open_file_for_scan(path, 0, true, false).unwrap();
+        assert_ne!(
+            std::mem::discriminant(&bytes),
+            std::mem::discriminant(&FileBytes::Owned(Vec::new()))
+        );
         assert_eq!(bytes.as_slice().len(), big.len());
+    }
+
+    #[test]
+    fn open_file_for_scan_large_file_avoid_mmap_uses_owned() {
+        let content = vec![b'x'; MMAP_THRESHOLD_BYTES as usize + 16];
+        let (_dir, path) = temp_file("large-owned.txt", &content);
+        test_inject::set_fail_mmap(true);
+        let bytes = open_file_for_scan(&path, 0, false, true).unwrap();
+        test_inject::set_fail_mmap(false);
+        assert_eq!(
+            std::mem::discriminant(&bytes),
+            std::mem::discriminant(&FileBytes::Owned(Vec::new()))
+        );
+        assert_eq!(bytes.as_slice(), content.as_slice());
+    }
+
+    #[test]
+    fn open_file_for_scan_into_large_file_avoid_mmap_uses_scratch() {
+        let content = vec![b'y'; MMAP_THRESHOLD_BYTES as usize + 16];
+        let (_dir, path) = temp_file("large-scratch.txt", &content);
+        let mut scratch = Vec::new();
+        test_inject::set_fail_mmap(true);
+        let (bytes, len, _) = open_file_for_scan_into(&path, 0, false, false, true, &mut scratch).unwrap();
+        test_inject::set_fail_mmap(false);
+        assert_eq!(
+            std::mem::discriminant(&bytes),
+            std::mem::discriminant(&FileBytesRef::Borrowed(&[]))
+        );
+        assert_eq!(len, content.len() as u64);
+        assert_eq!(bytes.as_slice(), content.as_slice());
     }
 
     #[test]
@@ -4806,7 +6060,7 @@ mod tests {
         tmp.flush().unwrap();
         let path = tmp.path().to_str().unwrap();
         assert_eq!(
-            open_file_for_scan(path, 0, true).unwrap_err(),
+            open_file_for_scan(path, 0, true, false).unwrap_err(),
             STATUS_BINARY_SKIPPED,
         );
     }
@@ -4820,7 +6074,7 @@ mod tests {
         tmp.flush().unwrap();
         let path = tmp.path().to_str().unwrap();
         assert_eq!(
-            open_file_for_scan(path, 0, true).unwrap_err(),
+            open_file_for_scan(path, 0, true, false).unwrap_err(),
             STATUS_BINARY_SKIPPED,
         );
     }
@@ -4834,10 +6088,10 @@ mod tests {
         tmp.flush().unwrap();
         let path = tmp.path().to_str().unwrap();
         let mut scratch = Vec::with_capacity(MMAP_THRESHOLD_BYTES as usize);
-        assert!(matches!(
-            open_file_for_scan_into(path, 0, true, false, &mut scratch),
-            Err(STATUS_BINARY_SKIPPED)
-        ));
+        assert_eq!(
+            open_file_for_scan_into(path, 0, true, false, false, &mut scratch).err(),
+            Some(STATUS_BINARY_SKIPPED)
+        );
     }
 
     #[test]
@@ -4850,8 +6104,11 @@ mod tests {
         tmp.write_all(&content).unwrap();
         tmp.flush().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let bytes = open_file_for_scan(path, 0, false).unwrap();
-        assert!(matches!(bytes, FileBytes::Mapped(_)));
+        let bytes = open_file_for_scan(path, 0, false, false).unwrap();
+        assert_ne!(
+            std::mem::discriminant(&bytes),
+            std::mem::discriminant(&FileBytes::Owned(Vec::new()))
+        );
     }
 
     #[test]
@@ -4866,8 +6123,11 @@ mod tests {
         tmp.write_all(&content).unwrap();
         tmp.flush().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let bytes = open_file_for_scan(path, 0, true).unwrap();
-        assert!(matches!(bytes, FileBytes::Mapped(_)));
+        let bytes = open_file_for_scan(path, 0, true, false).unwrap();
+        assert_ne!(
+            std::mem::discriminant(&bytes),
+            std::mem::discriminant(&FileBytes::Owned(Vec::new()))
+        );
     }
 
     #[test]
@@ -4877,7 +6137,7 @@ mod tests {
         tmp.flush().unwrap();
         let path = tmp.path().to_str().unwrap();
         test_inject::set_fail_metadata(true);
-        let r = open_file_for_scan(path, 0, true);
+        let r = open_file_for_scan(path, 0, true, false);
         test_inject::set_fail_metadata(false);
         assert_eq!(r.unwrap_err(), STATUS_OPEN_FAILED);
     }
@@ -4890,9 +6150,197 @@ mod tests {
         tmp.flush().unwrap();
         let path = tmp.path().to_str().unwrap();
         test_inject::set_fail_mmap(true);
-        let r = open_file_for_scan(path, 0, true);
+        let r = open_file_for_scan(path, 0, true, false);
         test_inject::set_fail_mmap(false);
         assert_eq!(r.unwrap_err(), STATUS_OPEN_FAILED);
+    }
+
+    #[test]
+    fn open_helpers_debug_storage_variants() {
+        let owned = FileBytes::Owned(vec![1, 2, 3]);
+        assert_eq!(format!("{owned:?}"), "Owned(3)");
+
+        let content = vec![b'm'; MMAP_THRESHOLD_BYTES as usize + 16];
+        let (_dir, path) = temp_file("debug-mapped.txt", &content);
+        let mapped = open_file_for_scan(&path, 0, false, false).unwrap();
+        assert_eq!(format!("{mapped:?}"), format!("Mapped({})", content.len()));
+    }
+
+    #[test]
+    fn open_helpers_owned_multiline_empty_and_binary() {
+        let empty = tempfile::NamedTempFile::new().unwrap();
+        assert!(read_file_owned_capped(empty.path().to_str().unwrap(), 0, true)
+            .unwrap()
+            .is_empty());
+
+        let (_dir, path) = temp_file("binary.txt", b"text\0binary");
+        assert_eq!(
+            read_file_owned_capped(&path, 0, true).unwrap_err(),
+            STATUS_BINARY_SKIPPED,
+        );
+    }
+
+    #[test]
+    fn open_helpers_scratch_boundaries_and_mmap() {
+        let empty = tempfile::NamedTempFile::new().unwrap();
+        let mut scratch = vec![1, 2, 3];
+        {
+            let (bytes, len, _) = open_file_for_scan_into(
+                empty.path().to_str().unwrap(),
+                0,
+                false,
+                false,
+                false,
+                &mut scratch,
+            )
+            .unwrap();
+            assert_eq!(len, 0);
+            assert!(bytes.as_slice().is_empty());
+        }
+        assert!(scratch.is_empty());
+
+        let (_small_dir, small_path) = temp_file("too-large.txt", b"abcd");
+        assert_eq!(
+            open_file_for_scan_into(&small_path, 3, false, false, false, &mut scratch).err(),
+            Some(STATUS_TOO_LARGE)
+        );
+
+        let content = vec![b'z'; MMAP_THRESHOLD_BYTES as usize + 16];
+        let (_large_dir, large_path) = temp_file("mapped.txt", &content);
+        {
+            let (bytes, len, _) =
+                open_file_for_scan_into(&large_path, 0, false, false, false, &mut scratch).unwrap();
+            assert_ne!(
+                std::mem::discriminant(&bytes),
+                std::mem::discriminant(&FileBytesRef::Borrowed(&[]))
+            );
+            assert_eq!(len, content.len() as u64);
+            assert_eq!(bytes.as_slice(), content.as_slice());
+        }
+
+        test_inject::set_fail_mmap(true);
+        let result = open_file_for_scan_into(&large_path, 0, false, false, false, &mut scratch);
+        test_inject::set_fail_mmap(false);
+        assert_eq!(result.err(), Some(STATUS_OPEN_FAILED));
+    }
+
+    #[test]
+    fn open_helpers_recover_partial_eof_and_reject_other_read_errors() {
+        let content = b"abcdef";
+        let (_dir, path) = temp_file("read-errors.txt", content);
+
+        test_inject::set_read_exact_error(1);
+        let recovered = open_file_for_scan(&path, 0, false, false).unwrap();
+        assert_eq!(recovered.as_slice(), content);
+
+        test_inject::set_read_exact_error(2);
+        assert_eq!(
+            open_file_for_scan(&path, 0, false, false).err(),
+            Some(STATUS_OPEN_FAILED)
+        );
+
+        let mut scratch = Vec::new();
+        test_inject::set_read_exact_error(1);
+        let (recovered, _, _) =
+            open_file_for_scan_into(&path, 0, false, false, false, &mut scratch).unwrap();
+        assert_eq!(recovered.as_slice(), content);
+
+        test_inject::set_read_exact_error(2);
+        assert_eq!(
+            open_file_for_scan_into(&path, 0, false, false, false, &mut scratch).err(),
+            Some(STATUS_OPEN_FAILED)
+        );
+    }
+
+    #[test]
+    fn open_helpers_propagate_injected_io_failures() {
+        let small = b"abcdef";
+        let (_small_dir, small_path) = temp_file("small-io-errors.txt", small);
+        let large = vec![b'a'; MMAP_THRESHOLD_BYTES as usize + 16];
+        let (_large_dir, large_path) = temp_file("large-io-errors.txt", &large);
+        let mut scratch = Vec::new();
+
+        test_inject::set_read_exact_error(1);
+        test_inject::set_fail_seek(true);
+        assert_eq!(open_file_for_scan(&small_path, 0, false, false).err(), Some(STATUS_OPEN_FAILED));
+        test_inject::set_read_exact_error(1);
+        test_inject::set_fail_read_to_end(true);
+        assert_eq!(open_file_for_scan(&small_path, 0, false, false).err(), Some(STATUS_OPEN_FAILED));
+
+        test_inject::set_fail_read(true);
+        assert_eq!(open_file_for_scan(&large_path, 0, true, false).err(), Some(STATUS_OPEN_FAILED));
+        test_inject::set_fail_seek(true);
+        assert_eq!(open_file_for_scan(&large_path, 0, false, true).err(), Some(STATUS_OPEN_FAILED));
+        test_inject::set_read_exact_error(2);
+        assert_eq!(open_file_for_scan(&large_path, 0, false, true).err(), Some(STATUS_OPEN_FAILED));
+
+        assert_eq!(read_file_owned_capped("__missing_owned_file__", 0, false).err(), Some(STATUS_OPEN_FAILED));
+        test_inject::set_fail_metadata(true);
+        assert_eq!(read_file_owned_capped(&small_path, 0, false).err(), Some(STATUS_OPEN_FAILED));
+        test_inject::set_fail_metadata(false);
+        test_inject::set_fail_read(true);
+        assert_eq!(read_file_owned_capped(&large_path, 0, true).err(), Some(STATUS_OPEN_FAILED));
+        test_inject::set_fail_seek(true);
+        assert_eq!(read_file_owned_capped(&large_path, 0, true).err(), Some(STATUS_OPEN_FAILED));
+        test_inject::set_fail_read_to_end(true);
+        assert_eq!(read_file_owned_capped(&large_path, 0, false).err(), Some(STATUS_OPEN_FAILED));
+
+        test_inject::set_fail_metadata(true);
+        assert_eq!(
+            open_file_for_scan_into(&small_path, 0, false, false, false, &mut scratch).err(),
+            Some(STATUS_OPEN_FAILED)
+        );
+        test_inject::set_fail_metadata(false);
+        test_inject::set_read_exact_error(1);
+        test_inject::set_fail_seek(true);
+        assert_eq!(
+            open_file_for_scan_into(&small_path, 0, false, false, false, &mut scratch).err(),
+            Some(STATUS_OPEN_FAILED)
+        );
+        test_inject::set_read_exact_error(1);
+        test_inject::set_fail_read_to_end(true);
+        assert_eq!(
+            open_file_for_scan_into(&small_path, 0, false, false, false, &mut scratch).err(),
+            Some(STATUS_OPEN_FAILED)
+        );
+        test_inject::set_fail_read(true);
+        assert_eq!(
+            open_file_for_scan_into(&large_path, 0, true, false, false, &mut scratch).err(),
+            Some(STATUS_OPEN_FAILED)
+        );
+        test_inject::set_fail_seek(true);
+        assert_eq!(
+            open_file_for_scan_into(&large_path, 0, false, false, true, &mut scratch).err(),
+            Some(STATUS_OPEN_FAILED)
+        );
+        test_inject::set_read_exact_error(2);
+        assert_eq!(
+            open_file_for_scan_into(&large_path, 0, false, false, true, &mut scratch).err(),
+            Some(STATUS_OPEN_FAILED)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn open_helpers_scratch_skips_hidden_file() {
+        let (_dir, path) = temp_file("hidden.txt", b"hidden");
+        let set_status = std::process::Command::new("attrib")
+            .arg("+H")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(set_status.success());
+
+        let mut scratch = Vec::new();
+        let result = open_file_for_scan_into(&path, 0, false, true, false, &mut scratch);
+
+        let clear_status = std::process::Command::new("attrib")
+            .arg("-H")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(clear_status.success());
+        assert_eq!(result.err(), Some(STATUS_HIDDEN_SKIPPED));
     }
 
     // -----------------------------------------------------------------------
@@ -4941,6 +6389,66 @@ mod tests {
     ) {
         let h = &mut *(ctx as *mut ParallelHarness);
         h.statuses[file_index as usize] = status;
+    }
+
+    #[derive(Default)]
+    struct ParallelExHarness {
+        views: Vec<(bool, bool, bool)>,
+        done: Vec<(u32, c_int, u64)>,
+    }
+
+    unsafe extern "C" fn parallel_ex_match_cb(
+        ctx: *mut c_void,
+        _file_index: c_uint,
+        m: *const QgMatchView,
+    ) -> c_int {
+        let harness = &mut *(ctx as *mut ParallelExHarness);
+        let view = &*m;
+        harness.views.push((
+            view.line_ptr.is_null(),
+            view.ctx_before_ptr.is_null(),
+            view.ctx_after_ptr.is_null(),
+        ));
+        0
+    }
+
+    unsafe extern "C" fn parallel_ex_done_cb(
+        ctx: *mut c_void,
+        file_index: c_uint,
+        status: c_int,
+        file_len: c_ulonglong,
+        _last_modified: c_ulonglong,
+    ) {
+        let harness = &mut *(ctx as *mut ParallelExHarness);
+        harness.done.push((file_index, status, file_len));
+    }
+
+    unsafe fn run_parallel_ex_case(path: &str, opts: &QgOptions) -> ParallelExHarness {
+        let pattern = b"needle";
+        let session = qg_create_session(
+            pattern.as_ptr(),
+            pattern.len(),
+            opts,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        assert!(!session.is_null());
+        let (paths, lengths) = pack_paths_utf16(&[path]);
+        let mut harness = ParallelExHarness::default();
+        let status = qg_session_scan_paths_parallel_ex(
+            session,
+            paths.as_ptr(),
+            lengths.as_ptr(),
+            1,
+            1,
+            std::ptr::null(),
+            parallel_ex_match_cb,
+            parallel_ex_done_cb,
+            &mut harness as *mut ParallelExHarness as *mut c_void,
+        );
+        assert_eq!(status, STATUS_OK);
+        qg_free_session(session);
+        harness
     }
 
     #[test]
@@ -5031,6 +6539,19 @@ mod tests {
                 &mut h as *mut _ as *mut c_void,
             );
             assert_eq!(ret, STATUS_INVALID_PATH);
+            let path = [b'x' as u16];
+            let ret = qg_session_scan_paths_parallel(
+                session,
+                path.as_ptr(),
+                std::ptr::null(),
+                1,
+                0,
+                std::ptr::null(),
+                parallel_match_cb,
+                parallel_done_cb,
+                &mut h as *mut _ as *mut c_void,
+            );
+            assert_eq!(ret, STATUS_INVALID_PATH);
             qg_free_session(session);
         }
     }
@@ -5086,6 +6607,171 @@ mod tests {
                 assert_eq!(h.statuses[i as usize], STATUS_OK);
             }
             qg_free_session(session);
+        }
+    }
+
+    #[test]
+    fn parallel_extended_marshals_context_and_metadata_only_views() {
+        let content = b"before\nneedle\nafter\n";
+        let (_dir, path) = temp_file("parallel-ex.txt", content);
+
+        let mut context_opts = default_opts();
+        context_opts.context_before = 1;
+        context_opts.context_after = 1;
+        let context = unsafe { run_parallel_ex_case(&path, &context_opts) };
+        assert_eq!(context.views, vec![(false, false, false)]);
+        assert_eq!(context.done, vec![(0, STATUS_OK, content.len() as u64)]);
+
+        let mut metadata_opts = default_opts();
+        metadata_opts.context_before = 1;
+        metadata_opts.context_after = 1;
+        metadata_opts.omit_line_bytes = 1;
+        let metadata = unsafe { run_parallel_ex_case(&path, &metadata_opts) };
+        assert_eq!(metadata.views, vec![(true, true, true)]);
+        assert_eq!(metadata.done, vec![(0, STATUS_OK, content.len() as u64)]);
+    }
+
+    #[test]
+    fn parallel_large_match_buffers_release_excess_capacity() {
+        const MATCH_COUNT: usize = 17_000;
+        let mut line = vec![b'a'; 256];
+        line[..6].copy_from_slice(b"needle");
+        line[255] = b'\n';
+        let mut content = Vec::with_capacity(line.len() * MATCH_COUNT);
+        for _ in 0..MATCH_COUNT {
+            content.extend_from_slice(&line);
+        }
+        let (_dir, path) = temp_file("parallel-large-buffers.txt", &content);
+        let (paths, lengths) = pack_paths_utf16(&[&path]);
+
+        unsafe {
+            let opts = default_opts();
+            let session = qg_create_session(
+                b"needle".as_ptr(),
+                6,
+                &opts,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            let mut parallel = ParallelHarness {
+                matches_per_file: vec![0],
+                statuses: vec![-1],
+                stop_after: -1,
+                total_matches_seen: 0,
+            };
+            assert_eq!(
+                qg_session_scan_paths_parallel(
+                    session,
+                    paths.as_ptr(),
+                    lengths.as_ptr(),
+                    1,
+                    1,
+                    std::ptr::null(),
+                    parallel_match_cb,
+                    parallel_done_cb,
+                    &mut parallel as *mut ParallelHarness as *mut c_void,
+                ),
+                STATUS_OK
+            );
+            assert_eq!(parallel.matches_per_file[0], MATCH_COUNT as u32);
+
+            let mut streaming = StreamingCollector::default();
+            let scanner = qg_create_streaming_scanner(
+                session,
+                1,
+                std::ptr::null(),
+                collect_streaming_match_callback,
+                collect_streaming_done_callback,
+                &mut streaming as *mut StreamingCollector as *mut c_void,
+            );
+            assert_eq!(
+                qg_scanner_push_paths(scanner, paths.as_ptr(), lengths.as_ptr(), 1, 0),
+                STATUS_OK
+            );
+            assert_eq!(qg_scanner_finish(scanner), STATUS_OK);
+            assert_eq!(streaming.matches.len(), MATCH_COUNT);
+            assert_eq!(streaming.done.len(), 1);
+
+            qg_scanner_destroy(scanner);
+            qg_free_session(session);
+        }
+    }
+
+    #[test]
+    fn parallel_covers_worker_stop_races_and_clear_cancel_poll() {
+        let (_dir, path) = temp_file("parallel-worker-states.txt", b"needle\n");
+        let (paths, lengths) = pack_paths_utf16(&[&path]);
+
+        unsafe {
+            let opts = default_opts();
+            let session = qg_create_session(
+                b"needle".as_ptr(),
+                6,
+                &opts,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            for injection in [1, 2, 3] {
+                (*session).worker_test_injection = injection;
+                let mut harness = ParallelHarness {
+                    matches_per_file: vec![0],
+                    statuses: vec![-1],
+                    stop_after: -1,
+                    total_matches_seen: 0,
+                };
+                assert_eq!(
+                    qg_session_scan_paths_parallel(
+                        session,
+                        paths.as_ptr(),
+                        lengths.as_ptr(),
+                        1,
+                        1,
+                        std::ptr::null(),
+                        parallel_match_cb,
+                        parallel_done_cb,
+                        &mut harness as *mut ParallelHarness as *mut c_void,
+                    ),
+                    STATUS_OK
+                );
+                assert_eq!(harness.matches_per_file, vec![0]);
+                assert_eq!(harness.statuses, vec![STATUS_OK]);
+            }
+            qg_free_session(session);
+
+            let poll_content = b"plain text\n".repeat(70);
+            let (_poll_dir, poll_path) = temp_file("parallel-clear-cancel.txt", &poll_content);
+            let (poll_paths, poll_lengths) = pack_paths_utf16(&[&poll_path]);
+            let poll_session = qg_create_session(
+                b"missing".as_ptr(),
+                7,
+                &opts,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            let cancel = AtomicI32::new(0);
+            let mut harness = ParallelHarness {
+                matches_per_file: vec![0],
+                statuses: vec![-1],
+                stop_after: -1,
+                total_matches_seen: 0,
+            };
+            assert_eq!(
+                qg_session_scan_paths_parallel(
+                    poll_session,
+                    poll_paths.as_ptr(),
+                    poll_lengths.as_ptr(),
+                    1,
+                    1,
+                    cancel.as_ptr(),
+                    parallel_match_cb,
+                    parallel_done_cb,
+                    &mut harness as *mut ParallelHarness as *mut c_void,
+                ),
+                STATUS_OK
+            );
+            assert_eq!(harness.matches_per_file, vec![0]);
+            assert_eq!(harness.statuses, vec![STATUS_OK]);
+            qg_free_session(poll_session);
         }
     }
 
@@ -5328,36 +7014,49 @@ mod tests {
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             );
-            // Two lengths whose u32-as-usize sum overflows usize on 64-bit
-            // platforms is unrealistic, but on any target we can force the
-            // overflow by claiming both halves are u32::MAX. The buffer is
-            // never read (we fail in the validation loop) so a null is fine
-            // \u2014 except the early-out check requires non-null when
-            // path_count > 0. Pass a non-null sentinel instead.
-            let buf: Vec<u16> = vec![0u16; 1];
-            let lengths: Vec<u32> = vec![u32::MAX, u32::MAX];
-            // On 32-bit usize this overflows; on 64-bit it does not. Skip
-            // the assertion when usize is 64 bits.
-            if std::mem::size_of::<usize>() < 8 {
-                let mut h = ParallelHarness {
-                    matches_per_file: vec![0; 2],
-                    statuses: vec![-1; 2],
-                    stop_after: -1,
-                    total_matches_seen: 0,
-                };
-                let ret = qg_session_scan_paths_parallel(
-                    session,
-                    buf.as_ptr(),
-                    lengths.as_ptr(),
-                    2,
-                    1,
-                    std::ptr::null(),
-                    parallel_match_cb,
-                    parallel_done_cb,
-                    &mut h as *mut _ as *mut c_void,
-                );
-                assert_eq!(ret, STATUS_INVALID_PATH);
-            }
+            let buf = [b'a' as u16];
+            let lengths = [1u32];
+            let mut h = ParallelHarness {
+                matches_per_file: vec![0],
+                statuses: vec![-1],
+                stop_after: -1,
+                total_matches_seen: 0,
+            };
+            test_inject::set_force_path_length_overflow(true);
+            let ret = qg_session_scan_paths_parallel(
+                session,
+                buf.as_ptr(),
+                lengths.as_ptr(),
+                1,
+                1,
+                std::ptr::null(),
+                parallel_match_cb,
+                parallel_done_cb,
+                &mut h as *mut _ as *mut c_void,
+            );
+            test_inject::set_force_path_length_overflow(false);
+            assert_eq!(ret, STATUS_INVALID_PATH);
+
+            let scanner = qg_create_streaming_scanner(
+                session,
+                1,
+                std::ptr::null(),
+                test_streaming_match_callback,
+                test_streaming_done_callback,
+                std::ptr::null_mut(),
+            );
+            test_inject::set_force_path_length_overflow(true);
+            let ret = qg_scanner_push_paths(
+                scanner,
+                buf.as_ptr(),
+                lengths.as_ptr(),
+                1,
+                0,
+            );
+            test_inject::set_force_path_length_overflow(false);
+            assert_eq!(ret, STATUS_INVALID_PATH);
+            assert_eq!(qg_scanner_finish(scanner), STATUS_OK);
+            qg_scanner_destroy(scanner);
             qg_free_session(session);
         }
     }

@@ -1,6 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using Microsoft.Extensions.Logging;
 using Yagu.Services;
+using Yagu.Services.Index;
+using Yagu.Services.Logging;
 using System.Globalization;
 
 namespace Yagu.Models;
@@ -37,6 +40,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     private int _nextEvictedStubPageBytes = MinEvictedStubPageBytes;
     private int _evictedStubPageOffset;
     private int _evictedStubCount;
+    private int _evictedStubReadPageIndex;
+    private int _evictedStubReadPageOffset;
+    private int _evictedStubReadIndex;
+    private int _nextEvictedStubIndex;
 
     /// <summary>
     /// Sparse span sidecar for cross-line (multiline, Phase 1b) evicted stubs, keyed by stub
@@ -60,12 +67,35 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public string FilePath { get; }
     private bool _selectFutureResults;
 
+    /// <summary>
+    /// Content-index candidacy provenance for this file (plan §6.2), set once by the view-model when the
+    /// index participated in the search. Null when provenance is not shown (feature/setting off or the
+    /// index did not participate). Match content is always read live regardless of this value.
+    /// </summary>
+    private IndexProvenanceKind? _provenance;
+    public IndexProvenanceKind? Provenance
+    {
+        get => _provenance;
+        set
+        {
+            if (_provenance == value)
+                return;
+            _provenance = value;
+            OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(IsIndexAccelerated)));
+        }
+    }
+
+    /// <summary>True when the content index selected this file as a candidate (drives the results-list
+    /// "index-accelerated" badge). False/absent files show no badge — a live scan is the default.</summary>
+    public bool IsIndexAccelerated => _provenance == IndexProvenanceKind.IndexAccelerated;
+
     /// <summary>Number of matches that were dropped due to <see cref="MaxMatchesPerGroup"/>.</summary>
     public int HiddenMatchCount { get; private set; }
     public bool HasHiddenMatches => HiddenMatchCount > 0;
 
     /// <summary>Number of filename-only matches (LineNumber == 0) in this group.</summary>
     private int _fileNameMatchCount;
+    private int _storedFileNameMatchCount;
 
     /// <summary>True when this group has content matches (LineNumber &gt; 0) alongside filename matches.</summary>
     public bool HasContentMatches => (Count + HiddenMatchCount + _evictedOnlyCount) > _fileNameMatchCount;
@@ -74,6 +104,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// i.e. the file's NAME matched the query. Independent of <see cref="HasContentMatches"/>: a group
     /// can have a name match only, content matches only, or both.</summary>
     public bool HasFileNameMatch => _fileNameMatchCount > 0;
+
+    /// <summary>True when the header represents the complete result and no content drawer exists.</summary>
+    public bool IsFileNameOnlyMatch => HasFileNameMatch && !HasContentMatches;
 
     /// <summary>True when this group represents a file inside an archive.</summary>
     public bool IsArchiveEntry => ZipArchiveSearcher.IsArchivePath(FilePath);
@@ -190,6 +223,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     private static readonly System.ComponentModel.PropertyChangedEventArgs s_hasContentMatchesChanged = new(nameof(HasContentMatches));
     private static readonly System.ComponentModel.PropertyChangedEventArgs s_matchCountChanged = new(nameof(MatchCount));
     private static readonly System.ComponentModel.PropertyChangedEventArgs s_hasFileNameMatchChanged = new(nameof(HasFileNameMatch));
+    private static readonly System.ComponentModel.PropertyChangedEventArgs s_isFileNameOnlyMatchChanged = new(nameof(IsFileNameOnlyMatch));
 
     protected override void InsertItem(int index, SearchResult item)
     {
@@ -197,7 +231,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         ApplySelectionIntent(item);
 
         if (item.LineNumber == 0 && _fileNameMatchCount++ == 0)
+        {
             OnPropertyChanged(s_hasFileNameMatchChanged);
+            OnPropertyChanged(s_isFileNameOnlyMatchChanged);
+        }
 
         if (Count >= MaxMatchesPerGroup)
         {
@@ -212,6 +249,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             NotifyContentMatchStateIfChanged(hadContentMatches);
             return;
         }
+
+        if (item.LineNumber == 0)
+            _storedFileNameMatchCount++;
 
         // Fast path for the common case: group is collapsed (no expanded UI rows bound to
         // this collection). Bypass ObservableCollection's per-item NotifyCollectionChanged
@@ -228,9 +268,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                 // Phase 1b: preserve a cross-line span through the compact stub. The sidecar is
                 // keyed by the stub's add-order index (== _evictedStubCount before AddEvictedStub
                 // increments it), so a single-line stub adds nothing to the sidecar or the stream.
+                int stubIndex = AddEvictedStub(new EvictedStub(item.LineNumber, item.MatchStartColumn, item.MatchLength, item.SourceMatchStartColumn, item.DiskOffset));
                 if (item.MatchEndLineNumber is int stubEndLine)
-                    (_evictedStubSpans ??= [])[_evictedStubCount] = (stubEndLine, item.MatchEndColumn ?? 0);
-                AddEvictedStub(new EvictedStub(item.LineNumber, item.MatchStartColumn, item.MatchLength, item.SourceMatchStartColumn, item.DiskOffset));
+                    (_evictedStubSpans ??= [])[stubIndex] = (stubEndLine, item.MatchEndColumn ?? 0);
                 _evictedOnlyCount++;
                 int totalStub = Items.Count + _evictedOnlyCount;
                 bool notifyStub = totalStub == PageSize + 1
@@ -281,7 +321,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         bool hadContentMatches = HasContentMatches;
 
         if (lineNumber == 0 && _fileNameMatchCount++ == 0)
+        {
             OnPropertyChanged(s_hasFileNameMatchChanged);
+            OnPropertyChanged(s_isFileNameOnlyMatchChanged);
+        }
 
         if (Count >= MaxMatchesPerGroup)
         {
@@ -296,6 +339,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             NotifyContentMatchStateIfChanged(hadContentMatches);
             return;
         }
+
+        if (lineNumber == 0)
+            _storedFileNameMatchCount++;
 
         AddEvictedStub(new EvictedStub(
             lineNumber,
@@ -346,13 +392,19 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         {
             var result = results[start + i];
             if (result.LineNumber == 0 && _fileNameMatchCount++ == 0)
+            {
                 OnPropertyChanged(s_hasFileNameMatchChanged);
+                OnPropertyChanged(s_isFileNameOnlyMatchChanged);
+            }
 
             if (TotalStoredCount >= MaxMatchesPerGroup)
             {
                 HiddenMatchCount++;
                 continue;
             }
+
+            if (result.LineNumber == 0)
+                _storedFileNameMatchCount++;
 
             AddEvictedStub(new EvictedStub(
                 result.LineNumber,
@@ -389,6 +441,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             return;
 
         OnPropertyChanged(s_hasContentMatchesChanged);
+        OnPropertyChanged(s_isFileNameOnlyMatchChanged);
         OnPropertyChanged(s_matchCountChanged);
     }
 
@@ -398,7 +451,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             item.IsSelected = true;
     }
 
-    private void AddEvictedStub(EvictedStub stub)
+    private int AddEvictedStub(EvictedStub stub)
     {
         if (_evictedStubPages is null || _evictedStubPages[^1].Length - _evictedStubPageOffset < MaxEncodedEvictedStubBytes)
         {
@@ -414,6 +467,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         _evictedStubPageOffset += written;
         _evictedStubPageLengths![^1] = _evictedStubPageOffset;
         _evictedStubCount++;
+        return _nextEvictedStubIndex++;
     }
 
     private static int WriteEvictedStub(Span<byte> destination, EvictedStub stub)
@@ -496,58 +550,82 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     }
 
     /// <summary>
-    /// Iter 16: Materialize any compact <see cref="EvictedStub"/> entries into real
-    /// <see cref="SearchResult"/> instances stored in <see cref="Items"/>. Called from
-    /// the <see cref="IsExpanded"/> setter (true transition) and from the UI's
-    /// expansion handler before <see cref="ShowMore"/> indexes into the group.
+    /// Materializes at most <paramref name="maxItems"/> compact <see cref="EvictedStub"/> entries into
+    /// real <see cref="SearchResult"/> instances stored in <see cref="Items"/>. Unread encoded pages stay
+    /// compact for subsequent Show-more calls, so opening a drawer never allocates every match merely to
+    /// display the first page. The parameterless call preserves the full-materialization contract needed
+    /// by session/export operations.
     /// </summary>
-    public void MaterializeEvictedStubs()
+    public int MaterializeEvictedStubs(int maxItems = int.MaxValue)
     {
         var pages = _evictedStubPages;
-        var pageLengths = _evictedStubPageLengths;
-        var spans = _evictedStubSpans;
-        int materialized = _evictedStubCount;
-        if (pages is null || pageLengths is null || materialized == 0) return;
-        _evictedStubPages = null;
-        _evictedStubPageLengths = null;
-        _evictedStubSpans = null;
-        _nextEvictedStubPageBytes = MinEvictedStubPageBytes;
-        _evictedStubPageOffset = 0;
-        _evictedStubCount = 0;
-        if (Items is List<SearchResult> list)
-            list.EnsureCapacity(list.Count + materialized);
+        if (pages is null)
+            return 0;
 
-        int remaining = materialized;
-        int stubIndex = 0;
-        for (int pageIndex = 0; pageIndex < pages.Count && remaining > 0; pageIndex++)
+        var pageLengths = _evictedStubPageLengths!;
+        var spans = _evictedStubSpans;
+        int requested = Math.Min(Math.Max(0, maxItems), _evictedStubCount);
+        if (requested == 0)
+            return 0;
+        if (Items is List<SearchResult> list)
+            list.EnsureCapacity(list.Count + requested);
+
+        int materialized = 0;
+        while (materialized < requested && _evictedStubReadPageIndex < pages.Count)
         {
-            var page = pages[pageIndex].AsSpan(0, pageLengths[pageIndex]);
-            int offset = 0;
-            while (remaining > 0 && offset < page.Length)
+            int pageIndex = _evictedStubReadPageIndex;
+            int pageLength = pageLengths[pageIndex];
+            if (_evictedStubReadPageOffset >= pageLength)
             {
-                var s = ReadEvictedStub(page, ref offset);
-                var result = s.DiskOffset == SearchResult.SourceBackedOffset
-                    ? SearchResult.CreateSourceBacked(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.SourceMatchStartColumn)
-                    : SearchResult.CreatePreEvicted(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.DiskOffset, s.SourceMatchStartColumn);
-                if (spans is not null && spans.TryGetValue(stubIndex, out var span))
-                {
-                    result.MatchEndLineNumber = span.EndLine;
-                    result.MatchEndColumn = span.EndColumn;
-                }
-                stubIndex++;
-                ApplySelectionIntent(result);
-                Items.Add(result);
-                remaining--;
+                // This page will never be read or written again (writers append only to the last page).
+                if (pageIndex < pages.Count - 1)
+                    pages[pageIndex] = Array.Empty<byte>();
+                _evictedStubReadPageIndex++;
+                _evictedStubReadPageOffset = 0;
+                continue;
             }
+
+            ReadOnlySpan<byte> page = pages[pageIndex].AsSpan(0, pageLength);
+            int offset = _evictedStubReadPageOffset;
+            EvictedStub stub = ReadEvictedStub(page, ref offset);
+            _evictedStubReadPageOffset = offset;
+
+            var result = stub.DiskOffset == SearchResult.SourceBackedOffset
+                ? SearchResult.CreateSourceBacked(FilePath, stub.LineNumber, stub.MatchStartColumn, stub.MatchLength, stub.SourceMatchStartColumn)
+                : SearchResult.CreatePreEvicted(FilePath, stub.LineNumber, stub.MatchStartColumn, stub.MatchLength, stub.DiskOffset, stub.SourceMatchStartColumn);
+            int stubIndex = _evictedStubReadIndex++;
+            if (spans is not null && spans.Remove(stubIndex, out var span))
+            {
+                result.MatchEndLineNumber = span.EndLine;
+                result.MatchEndColumn = span.EndColumn;
+            }
+            ApplySelectionIntent(result);
+            Items.Add(result);
+            materialized++;
         }
 
+        _evictedStubCount -= materialized;
         _evictedOnlyCount -= materialized;
+        if (_evictedStubCount == 0)
+        {
+            _evictedStubPages = null;
+            _evictedStubPageLengths = null;
+            _evictedStubSpans = null;
+            _nextEvictedStubPageBytes = MinEvictedStubPageBytes;
+            _evictedStubPageOffset = 0;
+            _evictedStubReadPageIndex = 0;
+            _evictedStubReadPageOffset = 0;
+            _evictedStubReadIndex = 0;
+            _nextEvictedStubIndex = 0;
+        }
+
         OnPropertyChanged(s_countChanged);
         OnPropertyChanged(s_indexerChanged);
         NotifyMoreStateChanged();
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(MatchCount)));
         if (_selectFutureResults || _allSelected)
             NotifySelectedCountChanged();
+        return materialized;
     }
 
     /// <summary>
@@ -559,6 +637,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         _cleaned = true;
         _evictedOnlyCount = 0;
         _fileNameMatchCount = 0;
+        _storedFileNameMatchCount = 0;
         _visibleSkipped = 0;
         _evictedStubPages = null;
         _evictedStubPageLengths = null;
@@ -566,6 +645,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         _nextEvictedStubPageBytes = MinEvictedStubPageBytes;
         _evictedStubPageOffset = 0;
         _evictedStubCount = 0;
+        _evictedStubReadPageIndex = 0;
+        _evictedStubReadPageOffset = 0;
+        _evictedStubReadIndex = 0;
+        _nextEvictedStubIndex = 0;
         CollectionChanged -= OnSelfChanged;
         VisibleResults.Clear();
         Clear();          // base ObservableCollection items
@@ -636,8 +719,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     // Iter 16: include unmaterialized evicted stubs in the "more" calculation so the
     // expand-evicted code path always finds work to do (and the UI's "Show more" text
     // reflects the true remaining count, not just the materialized Items count).
-    public bool HasMore => (VisibleResults.Count + _visibleSkipped) < (Count + _evictedOnlyCount);
-    public int RemainingCount => (Count + _evictedOnlyCount) - VisibleResults.Count - _visibleSkipped;
+    public bool HasMore => RemainingCount > 0;
+    public int RemainingCount => Math.Max(
+        0,
+        (Count + _evictedOnlyCount) - _storedFileNameMatchCount - VisibleResults.Count);
     public string ShowMoreText => $"Show more ({RemainingCount:N0} remaining)";
 
     public void ClearVisibleResults()
@@ -681,9 +766,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         }
         if (evictedCount > 0 || emptyMatchCount > 0)
         {
-            Services.LogService.Instance.Info("FileGroup",
-                $"ShowMore: file='{Path.GetFileName(FilePath)}', start={start}, end={end}, " +
-                $"batchSize={batch.Count}, stillEvicted={evictedCount}, emptyMatchLine={emptyMatchCount}");
+            YaguLog.For("FileGroup").LogInformation(
+                "ShowMore: file='{File}', start={Start}, end={End}, " +
+                "batchSize={BatchSize}, stillEvicted={StillEvicted}, emptyMatchLine={EmptyMatchLine}",
+                Path.GetFileName(FilePath), start, end, batch.Count, evictedCount, emptyMatchCount);
         }
         VisibleResults.AppendRange(batch);
         NotifyMoreStateChanged();
@@ -777,7 +863,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                 ApplyMetadata(cached.Length, cached.LastModified, cached.Created);
             }
         }
-        catch (Exception ex) { LogService.Instance.Verbose("FileGroup", $"Cannot load metadata for {FilePath}", ex); }
+        catch (Exception ex) { YaguLog.For("FileGroup").LogDebug(ex, "Cannot load metadata for {FilePath}", FilePath); }
     }
 
     /// <summary>
@@ -816,7 +902,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                     FileMetadataCache.Set(physicalPath, new FileMetadata(size, modified, created));
                 }
             }
-            catch (Exception ex) { LogService.Instance.Verbose("FileGroup", $"Cannot load metadata for {FilePath}", ex); return; }
+            catch (Exception ex) { YaguLog.For("FileGroup").LogDebug(ex, "Cannot load metadata for {FilePath}", FilePath); return; }
 
             if (_cleaned || cancellationToken.IsCancellationRequested) return;
             dispatch(() =>
@@ -861,10 +947,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         {
             if (_isExpanded != value)
             {
-                // Iter 16: hydrate compact stubs into real SearchResult instances BEFORE
-                // any code that indexes into Items (ShowMore, selection, preview) runs.
-                if (value)
-                    MaterializeEvictedStubs();
+                // Keep the expand/collapse state transition allocation-free. The UI materializes only
+                // the compact-stub page it is about to render; full-data operations explicitly call
+                // MaterializeEvictedStubs() with the default unlimited count.
                 _isExpanded = value;
                 OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(IsExpanded)));
             }
@@ -947,17 +1032,18 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     private void AppendPreviewSnapshotFromEvictedStubs(List<SearchResult> results, int maxResults, bool skipFileNameMatches)
     {
         var pages = _evictedStubPages;
-        var pageLengths = _evictedStubPageLengths;
-        var spans = _evictedStubSpans;
-        if (pages is null || pageLengths is null || _evictedStubCount == 0)
+        if (pages is null)
             return;
 
+        var pageLengths = _evictedStubPageLengths!;
+        var spans = _evictedStubSpans;
+
         int remaining = _evictedStubCount;
-        int stubIndex = 0;
-        for (int pageIndex = 0; pageIndex < pages.Count && remaining > 0 && results.Count < maxResults; pageIndex++)
+        int stubIndex = _evictedStubReadIndex;
+        for (int pageIndex = _evictedStubReadPageIndex; pageIndex < pages.Count && remaining > 0 && results.Count < maxResults; pageIndex++)
         {
             var page = pages[pageIndex].AsSpan(0, pageLengths[pageIndex]);
-            int offset = 0;
+            int offset = pageIndex == _evictedStubReadPageIndex ? _evictedStubReadPageOffset : 0;
             while (remaining > 0 && offset < page.Length && results.Count < maxResults)
             {
                 var stub = ReadEvictedStub(page, ref offset);

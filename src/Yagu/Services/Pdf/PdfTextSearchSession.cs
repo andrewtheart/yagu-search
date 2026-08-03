@@ -2,6 +2,8 @@ using System.Threading.Channels;
 using System.Text.RegularExpressions;
 using Yagu.Models;
 using Yagu.Services.Ocr;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services.Pdf;
 
@@ -118,7 +120,7 @@ public sealed class PdfTextSearchSession
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Verbose("PdfTextSearch", $"PDF extraction failed for {path}: {ex.Message}");
+                    YaguLog.For("PdfTextSearch").LogDebug("PDF extraction failed for {Path}: {Error}", path, ex.Message);
                 }
                 finally
                 {
@@ -139,7 +141,7 @@ public sealed class PdfTextSearchSession
             PdfTextResult extracted = await _extractor.ExtractAsync(path, _cancellationToken).ConfigureAwait(false);
             if (!extracted.Success)
             {
-                LogService.Instance.Verbose("PdfTextSearch", $"pdftotext could not read {path}: {extracted.Error}");
+                YaguLog.For("PdfTextSearch").LogDebug("pdftotext could not read {Path}: {Error}", path, extracted.Error);
                 return;
             }
 

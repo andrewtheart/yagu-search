@@ -246,7 +246,7 @@ impl From<std::io::Error> for ScanError {
 }
 
 /// Build a compiled matcher from a pattern and options. This can be called
-/// once and reused across many `scan_bytes_with_matcher` calls.
+/// once and reused across many `scan_bytes_with_matcher_ex` calls.
 pub fn build_matcher(
     pattern: &str,
     options: &ScanOptions,
@@ -264,25 +264,12 @@ pub fn build_matcher(
             pattern.as_bytes(),
         )))
     } else {
-        Ok(Box::new(LiteralMatcher::new_unicode_case_insensitive(
-            pattern,
-        )?))
+        LiteralMatcher::new_unicode_case_insensitive(pattern)
+            .map(|matcher| Box::new(matcher) as Box<dyn LineMatcher>)
     }
 }
 
-/// Scan an in-memory byte buffer for `pattern`, calling `emit` for every match.
-/// The closure may return `false` to stop early (cancellation / cap reached).
-pub fn scan_bytes(
-    bytes: &[u8],
-    pattern: &str,
-    options: &ScanOptions,
-    emit: impl FnMut(MatchRecord) -> bool,
-) -> Result<usize, ScanError> {
-    let matcher = build_matcher(pattern, options)?;
-    scan_bytes_with_matcher(bytes, &*matcher, options, emit)
-}
-
-/// Like `scan_bytes` but also polls `should_cancel` once per line.
+/// Scan an in-memory byte buffer for `pattern`, polling `should_cancel` once per line.
 pub fn scan_bytes_ex(
     bytes: &[u8],
     pattern: &str,
@@ -294,17 +281,7 @@ pub fn scan_bytes_ex(
     scan_bytes_with_matcher_ex(bytes, &*matcher, options, should_cancel, emit)
 }
 
-/// Like `scan_bytes` but accepts a pre-compiled matcher for reuse across files.
-pub fn scan_bytes_with_matcher(
-    bytes: &[u8],
-    matcher: &dyn LineMatcher,
-    options: &ScanOptions,
-    emit: impl FnMut(MatchRecord) -> bool,
-) -> Result<usize, ScanError> {
-    scan_bytes_with_matcher_ex(bytes, matcher, options, || false, emit)
-}
-
-/// Like `scan_bytes_with_matcher` but also polls `should_cancel` once per line
+/// Scan with a pre-compiled matcher and poll `should_cancel` once per line
 /// (including non-matching lines). When `should_cancel()` returns `true` the
 /// scan stops early and returns `Ok(emitted_so_far)`, matching the soft
 /// early-stop semantics of `emit` returning `false`. This lets long no-match
@@ -336,13 +313,11 @@ pub fn scan_bytes_with_matcher_ex(
         // Fill in pending after-context with this line.
         if !pending.is_empty() {
             for entry in pending.iter_mut() {
-                if entry.1 > 0 {
-                    entry
-                        .0
-                        .context_after
-                        .push(copy_context_line_for_record(line));
-                    entry.1 -= 1;
-                }
+                entry
+                    .0
+                    .context_after
+                    .push(copy_context_line_for_record(line));
+                entry.1 -= 1;
             }
             // Flush any pending records whose after-context is full.
             while let Some(front) = pending.front() {
@@ -440,7 +415,7 @@ pub fn scan_bytes_with_matcher_ex(
         }
         emitted += 1;
         if options.max_results != 0 && emitted >= options.max_results {
-            return Ok(emitted);
+            break;
         }
     }
 
@@ -523,12 +498,10 @@ where
         // Fill in pending after-context with this line.
         if !pending.is_empty() {
             for entry in pending.iter_mut() {
-                if entry.after_remaining > 0 {
-                    entry
-                        .context_after
-                        .push(copy_context_line_for_record(line));
-                    entry.after_remaining -= 1;
-                }
+                entry
+                    .context_after
+                    .push(copy_context_line_for_record(line));
+                entry.after_remaining -= 1;
             }
             // Flush completed pending records.
             while let Some(front) = pending.front() {
@@ -655,14 +628,14 @@ where
     }
 
     // Flush any pending (after-context never completed because EOF).
-    while let Some(rec) = pending.pop_front() {
+    while options.max_results == 0 || emitted < options.max_results {
+        let Some(rec) = pending.pop_front() else {
+            break;
+        };
         if !emit_pending(&rec, &mut emit) {
             return Ok(emitted);
         }
         emitted += 1;
-        if options.max_results != 0 && emitted >= options.max_results {
-            return Ok(emitted);
-        }
     }
 
     Ok(emitted)
@@ -672,10 +645,10 @@ where
 /// Allocates two small `Vec<&[u8]>` per call (cheap pointer Vecs); pending
 /// flush is the uncommon path (only when `options.context_after > 0`).
 #[inline]
-fn emit_pending<F>(rec: &PendingMatchOwned, emit: &mut F) -> bool
-where
-    F: FnMut(MatchView<'_>) -> bool,
-{
+fn emit_pending(
+    rec: &PendingMatchOwned,
+    emit: &mut dyn FnMut(MatchView<'_>) -> bool,
+) -> bool {
     let before_view: Vec<&[u8]> = rec.context_before.iter().map(|v| v.as_slice()).collect();
     let after_view: Vec<&[u8]> = rec.context_after.iter().map(|v| v.as_slice()).collect();
 
@@ -713,7 +686,7 @@ pub(crate) fn copy_context_line_for_record(line: &[u8]) -> Vec<u8> {
     }
 
     let mut end = MAX_EMITTED_LINE_BYTES;
-    while end > 0 && end < line.len() && (line[end] & 0xC0) == 0x80 {
+    while end > 0 && (line[end] & 0xC0) == 0x80 {
         end -= 1;
     }
 
@@ -744,11 +717,6 @@ pub(crate) fn copy_match_line_into(
     match_len: usize,
 ) -> u32 {
     out.clear();
-    if line.len() <= MAX_EMITTED_LINE_BYTES {
-        out.extend_from_slice(line);
-        return match_start as u32;
-    }
-
     let safe_start = match_start.min(line.len());
     let safe_len = match_len.min(line.len().saturating_sub(safe_start));
     let visible_match_len = safe_len.min(MAX_EMITTED_LINE_BYTES);
@@ -762,12 +730,6 @@ pub(crate) fn copy_match_line_into(
 
     start = snap_to_char_boundary_start(line, start);
     end = snap_to_char_boundary_end(line, end);
-    if end <= start {
-        // Fallback: emit the truncation-marker form via copy_context_line_for_record.
-        let ctx = copy_context_line_for_record(line);
-        out.extend_from_slice(&ctx);
-        return match_start.min(MAX_EMITTED_LINE_BYTES) as u32;
-    }
 
     let has_prefix = start > 0;
     let has_suffix = end < line.len();
@@ -832,103 +794,32 @@ pub(crate) fn looks_binary(bytes: &[u8]) -> bool {
     false
 }
 
-fn has_binary_magic(s: &[u8]) -> bool {
-    if s.len() < 4 {
-        return false;
-    }
-    // Gzip
-    if s[0] == 0x1F && s[1] == 0x8B {
-        return true;
-    }
-    // ZIP family
-    if s[0] == 0x50 && s[1] == 0x4B && (s[2] == 0x03 || s[2] == 0x05 || s[2] == 0x07) {
-        return true;
-    }
-    // PNG
-    if s[0] == 0x89 && s[1] == 0x50 && s[2] == 0x4E && s[3] == 0x47 {
-        return true;
-    }
-    // JPEG
-    if s[0] == 0xFF && s[1] == 0xD8 && s[2] == 0xFF {
-        return true;
-    }
-    // PDF
-    if s[0] == 0x25 && s[1] == 0x50 && s[2] == 0x44 && s[3] == 0x46 {
-        return true;
-    }
-    // ELF
-    if s[0] == 0x7F && s[1] == 0x45 && s[2] == 0x4C && s[3] == 0x46 {
-        return true;
-    }
-    // PE/DOS
-    if s[0] == 0x4D && s[1] == 0x5A {
-        return true;
-    }
-    // 7z
-    if s.len() >= 6
-        && s[0] == 0x37
-        && s[1] == 0x7A
-        && s[2] == 0xBC
-        && s[3] == 0xAF
-        && s[4] == 0x27
-        && s[5] == 0x1C
-    {
-        return true;
-    }
-    // Zstd
-    if s[0] == 0x28 && s[1] == 0xB5 && s[2] == 0x2F && s[3] == 0xFD {
-        return true;
-    }
-    // Mach-O 32-bit LE
-    if s[0] == 0xCE && s[1] == 0xFA && s[2] == 0xED && s[3] == 0xFE {
-        return true;
-    }
-    // Mach-O 64-bit LE
-    if s[0] == 0xCF && s[1] == 0xFA && s[2] == 0xED && s[3] == 0xFE {
-        return true;
-    }
-    // Mach-O fat / Java class
-    if s[0] == 0xCA && s[1] == 0xFE && s[2] == 0xBA && s[3] == 0xBE {
-        return true;
-    }
-    // SQLite
-    if s.len() >= 6
-        && s[0] == 0x53
-        && s[1] == 0x51
-        && s[2] == 0x4C
-        && s[3] == 0x69
-        && s[4] == 0x74
-        && s[5] == 0x65
-    {
-        return true;
-    }
-    // Bzip2
-    if s[0] == 0x42 && s[1] == 0x5A && s[2] == 0x68 {
-        return true;
-    }
-    // XZ
-    if s.len() >= 6
-        && s[0] == 0xFD
-        && s[1] == 0x37
-        && s[2] == 0x7A
-        && s[3] == 0x58
-        && s[4] == 0x5A
-        && s[5] == 0x00
-    {
-        return true;
-    }
-    // RAR
-    if s.len() >= 7
-        && s[0] == 0x52
-        && s[1] == 0x61
-        && s[2] == 0x72
-        && s[3] == 0x21
-        && s[4] == 0x1A
-        && s[5] == 0x07
-    {
-        return true;
-    }
-    false
+const BINARY_MAGIC_PREFIXES: &[&[u8]] = &[
+    b"\x1F\x8B",
+    b"PK\x03",
+    b"PK\x05",
+    b"PK\x07",
+    b"\x89PNG",
+    b"\xFF\xD8\xFF",
+    b"%PDF",
+    b"\x7FELF",
+    b"MZ",
+    b"7z\xBC\xAF\x27\x1C",
+    b"\x28\xB5\x2F\xFD",
+    b"\xCE\xFA\xED\xFE",
+    b"\xCF\xFA\xED\xFE",
+    b"\xCA\xFE\xBA\xBE",
+    b"SQLite",
+    b"BZh",
+    b"\xFD7zXZ\0",
+    b"Rar!\x1A\x07\0",
+    b"Rar!\x1A\x07\x01",
+];
+
+fn has_binary_magic(bytes: &[u8]) -> bool {
+    BINARY_MAGIC_PREFIXES
+        .iter()
+        .any(|prefix| bytes.starts_with(prefix))
 }
 
 pub trait LineMatcher: Send + Sync {
@@ -1124,6 +1015,135 @@ impl LineMatcher for RegexMatcher {
 mod tests {
     use super::*;
 
+    struct OwnedScanResult {
+        emitted: usize,
+        records: Vec<MatchRecord>,
+        emit_attempts: usize,
+        cancel_polls: usize,
+    }
+
+    struct StreamingRecord {
+        line_number: u64,
+        match_start: u32,
+        source_match_start: u32,
+        line: Vec<u8>,
+        context_before: Vec<Vec<u8>>,
+        context_after: Vec<Vec<u8>>,
+        borrows_input: bool,
+    }
+
+    struct StreamingScanResult {
+        emitted: usize,
+        records: Vec<StreamingRecord>,
+        emit_attempts: usize,
+        cancel_polls: usize,
+    }
+
+    fn assert_scan_error_kind(actual: ScanError, expected: ScanError) {
+        assert_eq!(
+            std::mem::discriminant(&actual),
+            std::mem::discriminant(&expected)
+        );
+    }
+
+    fn run_owned_controlled(
+        bytes: &[u8],
+        pattern: &str,
+        options: &ScanOptions,
+        cancel_after_polls: usize,
+        reject_emit: usize,
+    ) -> Result<OwnedScanResult, ScanError> {
+        let mut cancel_polls = 0usize;
+        let mut emit_attempts = 0usize;
+        let mut records = Vec::new();
+        let emitted = scan_bytes_ex(
+            bytes,
+            pattern,
+            options,
+            || {
+                cancel_polls += 1;
+                cancel_polls > cancel_after_polls
+            },
+            |record| {
+                emit_attempts += 1;
+                records.push(record);
+                emit_attempts != reject_emit
+            },
+        )?;
+        Ok(OwnedScanResult {
+            emitted,
+            records,
+            emit_attempts,
+            cancel_polls,
+        })
+    }
+
+    fn run_owned(
+        bytes: &[u8],
+        pattern: &str,
+        options: &ScanOptions,
+    ) -> Result<OwnedScanResult, ScanError> {
+        run_owned_controlled(bytes, pattern, options, usize::MAX, usize::MAX)
+    }
+
+    fn run_streaming_controlled(
+        bytes: &[u8],
+        pattern: &str,
+        options: &ScanOptions,
+        cancel_after_polls: usize,
+        reject_emit: usize,
+    ) -> Result<StreamingScanResult, ScanError> {
+        let input_range = bytes.as_ptr_range();
+        let mut cancel_polls = 0usize;
+        let mut emit_attempts = 0usize;
+        let mut records = Vec::new();
+        let emitted = scan_bytes_streaming_ex(
+            bytes,
+            pattern,
+            options,
+            || {
+                cancel_polls += 1;
+                cancel_polls > cancel_after_polls
+            },
+            |view| {
+                emit_attempts += 1;
+                let line_ptr = view.line.as_ptr();
+                records.push(StreamingRecord {
+                    line_number: view.line_number,
+                    match_start: view.match_start,
+                    source_match_start: view.source_match_start,
+                    line: view.line.to_vec(),
+                    context_before: view
+                        .context_before
+                        .iter()
+                        .map(|line| line.to_vec())
+                        .collect(),
+                    context_after: view
+                        .context_after
+                        .iter()
+                        .map(|line| line.to_vec())
+                        .collect(),
+                    borrows_input: line_ptr >= input_range.start && line_ptr < input_range.end,
+                });
+                emit_attempts != reject_emit
+            },
+        )?;
+        Ok(StreamingScanResult {
+            emitted,
+            records,
+            emit_attempts,
+            cancel_polls,
+        })
+    }
+
+    fn run_streaming(
+        bytes: &[u8],
+        pattern: &str,
+        options: &ScanOptions,
+    ) -> Result<StreamingScanResult, ScanError> {
+        run_streaming_controlled(bytes, pattern, options, usize::MAX, usize::MAX)
+    }
+
     fn opts() -> ScanOptions {
         ScanOptions {
             case_sensitive: false,
@@ -1209,30 +1229,32 @@ mod tests {
     }
 
     #[test]
+    fn utf16_col_cursor_defensive_fallbacks_do_not_corrupt_progress() {
+        let mut cursor = Utf16ColCursor::new();
+        assert_eq!(cursor.col_at(b"ab", 2), 2);
+        assert_eq!(cursor.col_at(b"ab", 1), 1);
+
+        let line = [0xC3, 0xA9];
+        let mut continuation_cursor = Utf16ColCursor::new();
+        assert_eq!(continuation_cursor.col_at(&line, 1), 1);
+        assert_eq!(continuation_cursor.col_at(&line, 2), 1);
+    }
+
+    #[test]
     fn literal_finds_multiple_per_line() {
         let bytes = b"foo bar foo baz\n";
-        let mut hits = Vec::new();
-        scan_bytes(bytes, "foo", &opts(), |r| {
-            hits.push(r);
-            true
-        })
-        .unwrap();
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].line_number, 1);
-        assert_eq!(hits[0].match_start, 0);
-        assert_eq!(hits[1].match_start, 8);
+        let result = run_owned(bytes, "foo", &opts()).unwrap();
+        assert_eq!(result.records.len(), 2);
+        assert_eq!(result.records[0].line_number, 1);
+        assert_eq!(result.records[0].match_start, 0);
+        assert_eq!(result.records[1].match_start, 8);
     }
 
     #[test]
     fn case_insensitive_default() {
         let bytes = b"FooBar\n";
-        let mut count = 0;
-        scan_bytes(bytes, "foobar", &opts(), |_| {
-            count += 1;
-            true
-        })
-        .unwrap();
-        assert_eq!(count, 1);
+        let result = run_owned(bytes, "foobar", &opts()).unwrap();
+        assert_eq!(result.records.len(), 1);
     }
 
     #[test]
@@ -1242,8 +1264,8 @@ mod tests {
             case_sensitive: true,
             ..opts()
         };
-        let n = scan_bytes(bytes, "foobar", &o, |_| true).unwrap();
-        assert_eq!(n, 0);
+        let result = run_owned(bytes, "foobar", &o).unwrap();
+        assert_eq!(result.emitted, 0);
     }
 
     #[test]
@@ -1253,13 +1275,8 @@ mod tests {
             use_regex: true,
             ..opts()
         };
-        let mut hits = Vec::new();
-        scan_bytes(bytes, r"\d+", &o, |r| {
-            hits.push(r);
-            true
-        })
-        .unwrap();
-        assert_eq!(hits.len(), 2);
+        let result = run_owned(bytes, r"\d+", &o).unwrap();
+        assert_eq!(result.records.len(), 2);
     }
 
     #[test]
@@ -1270,14 +1287,9 @@ mod tests {
             context_after: 2,
             ..opts()
         };
-        let mut hits = Vec::new();
-        scan_bytes(bytes, "MATCH", &o, |r| {
-            hits.push(r);
-            true
-        })
-        .unwrap();
-        assert_eq!(hits.len(), 1);
-        let h = &hits[0];
+        let result = run_owned(bytes, "MATCH", &o).unwrap();
+        assert_eq!(result.records.len(), 1);
+        let h = &result.records[0];
         assert_eq!(h.context_before, vec![b"b".to_vec(), b"c".to_vec()]);
         assert_eq!(h.context_after, vec![b"d".to_vec(), b"e".to_vec()]);
     }
@@ -1285,8 +1297,8 @@ mod tests {
     #[test]
     fn binary_skipped() {
         let bytes = b"abc\0def\n";
-        let res = scan_bytes(bytes, "abc", &opts(), |_| true);
-        assert!(matches!(res, Err(ScanError::BinarySkipped)));
+        let res = run_owned(bytes, "abc", &opts());
+        assert_scan_error_kind(res.err().unwrap(), ScanError::BinarySkipped);
     }
 
     #[test]
@@ -1296,13 +1308,8 @@ mod tests {
             max_results: 3,
             ..opts()
         };
-        let mut count = 0;
-        scan_bytes(bytes, "x", &o, |_| {
-            count += 1;
-            true
-        })
-        .unwrap();
-        assert_eq!(count, 3);
+        let result = run_owned(bytes, "x", &o).unwrap();
+        assert_eq!(result.records.len(), 3);
     }
 
     #[test]
@@ -1313,27 +1320,18 @@ mod tests {
             max_results: 1,
             ..opts()
         };
-        let mut hits = Vec::new();
-        scan_bytes(&bytes, "aaa", &o, |r| {
-            hits.push(r);
-            true
-        })
-        .unwrap();
-        assert_eq!(hits.len(), 1);
-        assert!(hits[0].line.len() <= MAX_EMITTED_LINE_BYTES + TRUNCATION_MARKER.len());
-        assert!(hits[0].line.ends_with(TRUNCATION_MARKER));
+        let result = run_owned(&bytes, "aaa", &o).unwrap();
+        assert_eq!(result.records.len(), 1);
+        assert!(result.records[0].line.len() <= MAX_EMITTED_LINE_BYTES + TRUNCATION_MARKER.len());
+        assert!(result.records[0].line.ends_with(TRUNCATION_MARKER));
     }
 
     #[test]
     fn case_insensitive_literal_matches_without_lowercase_buffer() {
         let bytes = b"prefix TeSt suffix test TEST\n";
-        let mut hits = Vec::new();
-        scan_bytes(bytes, "test", &opts(), |r| {
-            hits.push(r.match_start);
-            true
-        })
-        .unwrap();
-        assert_eq!(hits, vec![7, 19, 24]);
+        let result = run_owned(bytes, "test", &opts()).unwrap();
+        let starts: Vec<u32> = result.records.iter().map(|record| record.match_start).collect();
+        assert_eq!(starts, vec![7, 19, 24]);
     }
 
     // ---- Coverage: ScanError::Io From impl ----
@@ -1341,21 +1339,17 @@ mod tests {
     fn scan_error_io_from_impl() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
         let scan_err = ScanError::from(io_err);
-        assert!(matches!(scan_err, ScanError::Io(_)));
+        let expected = ScanError::Io(std::io::Error::other("expected kind"));
+        assert_scan_error_kind(scan_err, expected);
     }
 
     // ---- Coverage: emit returning false (early stop, no context) ----
     #[test]
     fn emit_returning_false_stops_scan() {
         let bytes = b"aaa\naaa\naaa\n";
-        let mut count = 0;
-        let n = scan_bytes(bytes, "aaa", &opts(), |_| {
-            count += 1;
-            false // stop after first
-        })
-        .unwrap();
-        assert_eq!(count, 1);
-        assert_eq!(n, 0); // emitted is only incremented AFTER emit returns true
+        let result = run_owned_controlled(bytes, "aaa", &opts(), usize::MAX, 1).unwrap();
+        assert_eq!(result.emit_attempts, 1);
+        assert_eq!(result.emitted, 0); // emitted is only incremented AFTER emit returns true
     }
 
     // ---- Coverage: zero-width regex match ----
@@ -1366,12 +1360,9 @@ mod tests {
             use_regex: true,
             ..opts()
         };
-        // \b is zero-width, but the scanner should skip it via the len==0 guard
-        // Actually we need a regex that produces zero-width matches.
-        // "(?=a)" is a lookahead — zero-width match at position of 'a'.
-        let result = scan_bytes(bytes, "(?=a)", &o, |_| true);
+        let result = run_owned(bytes, "^", &o);
         // Should not hang; the zero-width guard breaks the loop
-        assert!(result.unwrap_or(0) <= 3); // at most one per character
+        assert_eq!(result.unwrap().emitted, 0);
     }
 
     // ---- Coverage: max_results with pending after-context ----
@@ -1384,13 +1375,8 @@ mod tests {
             max_results: 2,
             ..opts()
         };
-        let mut hits = Vec::new();
-        let n = scan_bytes(bytes, "hit", &o, |r| {
-            hits.push(r.line_number);
-            true
-        })
-        .unwrap();
-        assert_eq!(n, 2);
+        let result = run_owned(bytes, "hit", &o).unwrap();
+        assert_eq!(result.emitted, 2);
     }
 
     // ---- Coverage: emit returns false during pending flush ----
@@ -1401,13 +1387,8 @@ mod tests {
             context_after: 1,
             ..opts()
         };
-        let mut count = 0;
-        scan_bytes(bytes, "hit", &o, |_| {
-            count += 1;
-            false // stop on first emitted
-        })
-        .unwrap();
-        assert_eq!(count, 1);
+        let result = run_owned_controlled(bytes, "hit", &o, usize::MAX, 1).unwrap();
+        assert_eq!(result.emit_attempts, 1);
     }
 
     // ---- Coverage: EOF flush of pending records with emit returning false ----
@@ -1419,13 +1400,8 @@ mod tests {
             context_after: 5,
             ..opts()
         };
-        let mut count = 0;
-        scan_bytes(bytes, "hit", &o, |_| {
-            count += 1;
-            false
-        })
-        .unwrap();
-        assert_eq!(count, 1);
+        let result = run_owned_controlled(bytes, "hit", &o, usize::MAX, 1).unwrap();
+        assert_eq!(result.emit_attempts, 1);
     }
 
     // ---- Coverage: EOF flush with max_results ----
@@ -1437,13 +1413,18 @@ mod tests {
             max_results: 2,
             ..opts()
         };
-        let mut count = 0;
-        scan_bytes(bytes, "hit", &o, |_| {
-            count += 1;
-            true
-        })
-        .unwrap();
-        assert_eq!(count, 2);
+        let result = run_owned(bytes, "hit", &o).unwrap();
+        assert_eq!(result.records.len(), 2);
+    }
+
+    #[test]
+    fn eof_flush_accepts_pending_record_without_result_cap() {
+        let o = ScanOptions {
+            context_after: 1,
+            ..opts()
+        };
+        let result = run_owned(b"hit", "hit", &o).unwrap();
+        assert_eq!(result.emitted, 1);
     }
 
     // ---- Coverage: copy_context_line_for_record truncation with multi-byte UTF-8 ----
@@ -1465,6 +1446,13 @@ mod tests {
         let line = b"short line";
         let result = copy_context_line_for_record(line);
         assert_eq!(result, line.to_vec());
+    }
+
+    #[test]
+    fn context_line_invalid_utf8_boundary_can_snap_to_start() {
+        let line = vec![0x80; MAX_EMITTED_LINE_BYTES + 1];
+        let result = copy_context_line_for_record(&line);
+        assert_eq!(result, TRUNCATION_MARKER);
     }
 
     // ---- Coverage: copy_match_line_for_record branches ----
@@ -1724,6 +1712,11 @@ mod tests {
         assert!(has_binary_magic(&data));
     }
 
+    #[test]
+    fn has_binary_magic_rar5_variant() {
+        assert!(has_binary_magic(b"Rar!\x1A\x07\x01"));
+    }
+
     // ---- Coverage: find_ascii_case_insensitive edge cases ----
     #[test]
     fn find_case_insensitive_empty_needle() {
@@ -1784,6 +1777,12 @@ mod tests {
         );
     }
 
+    #[test]
+    fn find_case_insensitive_anchored_exhausts_without_candidate() {
+        assert_eq!(find_ascii_ci_anchored(b"x", b"y", 0, b'x', b'x'), None);
+        assert_eq!(find_ascii_ci_anchored(b"z", b"y", 0, b'x', b'x'), None);
+    }
+
     // ---- Coverage: ascii_byte_eq_lower ----
     #[test]
     fn ascii_byte_eq_lower_alpha() {
@@ -1807,7 +1806,10 @@ mod tests {
             ..opts()
         };
         let result = build_matcher("[invalid", &o);
-        assert!(matches!(result, Err(ScanError::InvalidRegex(_))));
+        assert_scan_error_kind(
+            result.err().unwrap(),
+            ScanError::InvalidRegex(String::new()),
+        );
     }
 
     #[test]
@@ -1833,21 +1835,6 @@ mod tests {
         assert!(m.find(b"HELLO").is_some());
     }
 
-    // ---- Coverage: scan_bytes_with_matcher directly ----
-    #[test]
-    fn scan_bytes_with_matcher_basic() {
-        let o = opts();
-        let m = build_matcher("foo", &o).unwrap();
-        let mut hits = Vec::new();
-        let n = scan_bytes_with_matcher(b"foo bar\nfoo baz\n", &*m, &o, |r| {
-            hits.push(r.line_number);
-            true
-        })
-        .unwrap();
-        assert_eq!(n, 2);
-        assert_eq!(hits, vec![1, 2]);
-    }
-
     // ---- Coverage: skip_binary=false allows binary content ----
     #[test]
     fn skip_binary_false_allows_binary() {
@@ -1856,13 +1843,8 @@ mod tests {
             ..opts()
         };
         let bytes = b"abc\0def\n";
-        let mut count = 0;
-        scan_bytes(bytes, "abc", &o, |_| {
-            count += 1;
-            true
-        })
-        .unwrap();
-        assert_eq!(count, 1);
+        let result = run_owned(bytes, "abc", &o).unwrap();
+        assert_eq!(result.records.len(), 1);
     }
 
     // ---- Coverage: ScanError Debug ----
@@ -1920,13 +1902,8 @@ mod tests {
             max_results: 1,
             ..opts()
         };
-        let mut count = 0;
-        let n = scan_bytes(bytes, "hit", &o, |_| {
-            count += 1;
-            true
-        })
-        .unwrap();
-        assert_eq!(n, 1);
+        let result = run_owned(bytes, "hit", &o).unwrap();
+        assert_eq!(result.emitted, 1);
     }
 
     // ---- Coverage: long context line in before-context ----
@@ -1940,16 +1917,11 @@ mod tests {
             context_before: 1,
             ..opts()
         };
-        let mut hits = Vec::new();
-        scan_bytes(&bytes, "MATCH", &o, |r| {
-            hits.push(r);
-            true
-        })
-        .unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].context_before.len(), 1);
-        assert!(hits[0].context_before[0].len() <= MAX_EMITTED_LINE_BYTES + TRUNCATION_MARKER.len());
-        assert!(hits[0].context_before[0].ends_with(TRUNCATION_MARKER));
+        let result = run_owned(&bytes, "MATCH", &o).unwrap();
+        assert_eq!(result.records.len(), 1);
+        assert_eq!(result.records[0].context_before.len(), 1);
+        assert!(result.records[0].context_before[0].len() <= MAX_EMITTED_LINE_BYTES + TRUNCATION_MARKER.len());
+        assert!(result.records[0].context_before[0].ends_with(TRUNCATION_MARKER));
     }
 
     // ---- Coverage: long after-context line truncated ----
@@ -1963,16 +1935,11 @@ mod tests {
             context_after: 1,
             ..opts()
         };
-        let mut hits = Vec::new();
-        scan_bytes(&bytes, "MATCH", &o, |r| {
-            hits.push(r);
-            true
-        })
-        .unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].context_after.len(), 1);
-        assert!(hits[0].context_after[0].len() <= MAX_EMITTED_LINE_BYTES + TRUNCATION_MARKER.len());
-        assert!(hits[0].context_after[0].ends_with(TRUNCATION_MARKER));
+        let result = run_owned(&bytes, "MATCH", &o).unwrap();
+        assert_eq!(result.records.len(), 1);
+        assert_eq!(result.records[0].context_after.len(), 1);
+        assert!(result.records[0].context_after[0].len() <= MAX_EMITTED_LINE_BYTES + TRUNCATION_MARKER.len());
+        assert!(result.records[0].context_after[0].ends_with(TRUNCATION_MARKER));
     }
 
     // ---- Coverage: RegexMatcher find method ----
@@ -2001,19 +1968,12 @@ mod tests {
         assert_eq!(m.find(b"nope"), None);
     }
 
-    // ---- Coverage: copy_match_line_for_record fallback (end <= start) ----
+    // ---- Coverage: truncation preserves progress through invalid UTF-8 ----
     #[test]
-    fn copy_match_line_fallback_branch() {
-        // This exercises the (end <= start) fallback in copy_match_line_for_record.
-        // We need: line > MAX_EMITTED_LINE_BYTES, and after snap, end <= start.
-        // All continuation bytes (0x80). Match at position 0 so that `end`
-        // computes to MAX_EMITTED_LINE_BYTES (< line.len()), and snap_to_char_boundary_end
-        // walks all the 0x80 bytes back to 0, giving end=0 <= start=0.
+    fn copy_match_line_invalid_utf8_still_emits_the_match_window() {
         let line = vec![0x80u8; MAX_EMITTED_LINE_BYTES + 200];
         let (result, offset) = copy_match_line_for_record(&line, 0, 5);
-        // Should fall back to copy_context_line_for_record behavior
         assert!(!result.is_empty());
-        // Fallback returns match_start.min(MAX_EMITTED_LINE_BYTES) as u32 = 0
         assert_eq!(offset, 0);
     }
 
@@ -2058,6 +2018,16 @@ mod tests {
     }
 
     #[test]
+    fn literal_unicode_fold_reports_compiled_size_limit() {
+        let pattern = "a".repeat(1 << 17);
+        let result = LiteralMatcher::new_unicode_case_insensitive(&pattern);
+        assert_scan_error_kind(
+            result.err().unwrap(),
+            ScanError::InvalidRegex(String::new()),
+        );
+    }
+
+    #[test]
     fn literal_unicode_fold_eszett_documents_simple_fold() {
         // Document the chosen behavior for ß: regex's case_insensitive uses
         // Unicode *simple* case fold, which folds "ß" to itself (not "ss").
@@ -2089,30 +2059,17 @@ mod tests {
         for _ in 0..2000 {
             bytes.extend_from_slice(b"nothing here to find\n");
         }
-        let cancel_calls = std::cell::Cell::new(0u32);
-        let result = scan_bytes_ex(
-            &bytes,
-            "needle",
-            &opts(),
-            || {
-                let n = cancel_calls.get() + 1;
-                cancel_calls.set(n);
-                // Cancel after the first poll.
-                n >= 1
-            },
-            |_| true,
-        )
-        .unwrap();
-        assert_eq!(result, 0);
+        let result = run_owned_controlled(&bytes, "needle", &opts(), 0, usize::MAX).unwrap();
+        assert_eq!(result.emitted, 0);
         // Cancel was polled at least once even though there were zero matches.
-        assert!(cancel_calls.get() >= 1);
+        assert!(result.cancel_polls >= 1);
     }
 
     #[test]
     fn per_line_cancel_returning_false_completes_scan() {
         let bytes = b"foo\nbar\nfoo\n";
-        let n = scan_bytes_ex(bytes, "foo", &opts(), || false, |_| true).unwrap();
-        assert_eq!(n, 2);
+        let result = run_owned(bytes, "foo", &opts()).unwrap();
+        assert_eq!(result.emitted, 2);
     }
 
     // ---- Per-line match cap (bounds a match-everything pattern on a long line) ----
@@ -2124,8 +2081,8 @@ mod tests {
             max_matches_per_line: 3,
             ..opts()
         };
-        let n = scan_bytes_ex(bytes, "a", &o, || false, |_| true).unwrap();
-        assert_eq!(n, 3);
+        let result = run_owned(bytes, "a", &o).unwrap();
+        assert_eq!(result.emitted, 3);
     }
 
     #[test]
@@ -2135,8 +2092,8 @@ mod tests {
             max_matches_per_line: 0,
             ..opts()
         };
-        let n = scan_bytes_ex(bytes, "a", &o, || false, |_| true).unwrap();
-        assert_eq!(n, 8);
+        let result = run_owned(bytes, "a", &o).unwrap();
+        assert_eq!(result.emitted, 8);
     }
 
     #[test]
@@ -2147,8 +2104,8 @@ mod tests {
             max_matches_per_line: 2,
             ..opts()
         };
-        let n = scan_bytes_ex(bytes, "a", &o, || false, |_| true).unwrap();
-        assert_eq!(n, 4);
+        let result = run_owned(bytes, "a", &o).unwrap();
+        assert_eq!(result.emitted, 4);
     }
 
     #[test]
@@ -2158,13 +2115,8 @@ mod tests {
             max_matches_per_line: 3,
             ..opts()
         };
-        let mut count = 0usize;
-        scan_bytes_streaming_ex(bytes, "a", &o, || false, |_| {
-            count += 1;
-            true
-        })
-        .unwrap();
-        assert_eq!(count, 3);
+        let result = run_streaming(bytes, "a", &o).unwrap();
+        assert_eq!(result.emitted, 3);
     }
 
     // ---- Streaming API tests ----
@@ -2172,12 +2124,12 @@ mod tests {
     #[test]
     fn streaming_emits_all_matches_borrowed() {
         let bytes = b"foo bar foo baz\nbaz foo\n";
-        let mut hits: Vec<(u64, u32, Vec<u8>)> = Vec::new();
-        scan_bytes_streaming_ex(bytes, "foo", &opts(), || false, |v| {
-            hits.push((v.line_number, v.match_start, v.line.to_vec()));
-            true
-        })
-        .unwrap();
+        let result = run_streaming(bytes, "foo", &opts()).unwrap();
+        let hits: Vec<(u64, u32, Vec<u8>)> = result
+            .records
+            .iter()
+            .map(|record| (record.line_number, record.match_start, record.line.clone()))
+            .collect();
         assert_eq!(hits.len(), 3);
         assert_eq!(hits[0], (1, 0, b"foo bar foo baz".to_vec()));
         assert_eq!(hits[1], (1, 8, b"foo bar foo baz".to_vec()));
@@ -2189,18 +2141,11 @@ mod tests {
         // For a short line, MatchView.line should point INTO `bytes` itself
         // (no allocation, no copy).
         let bytes = b"hello world\n";
-        let bytes_range = bytes.as_ptr_range();
-        let mut saw = false;
-        scan_bytes_streaming_ex(bytes, "world", &opts(), || false, |v| {
-            let p = v.line.as_ptr();
-            assert!(p >= bytes_range.start && p < bytes_range.end,
-                    "match line should borrow from input, not be a fresh alloc");
-            assert_eq!(v.line, b"hello world");
-            saw = true;
-            true
-        })
-        .unwrap();
-        assert!(saw);
+        let result = run_streaming(bytes, "world", &opts()).unwrap();
+        assert_eq!(result.records.len(), 1);
+        assert!(result.records[0].borrows_input,
+            "match line should borrow from input, not be a fresh alloc");
+        assert_eq!(result.records[0].line, b"hello world");
     }
 
     #[test]
@@ -2210,16 +2155,13 @@ mod tests {
         line.extend_from_slice(b"NEEDLE");
         line.extend_from_slice(&vec![b'.'; 4 * 1024]);
         line.push(b'\n');
-        let mut emitted_len: usize = 0;
-        scan_bytes_streaming_ex(&line, "NEEDLE", &opts(), || false, |v| {
-            emitted_len = v.line.len();
-            // Truncated form should fit comfortably inside (4096 + 2x marker).
-            assert!(v.line.len() <= MAX_EMITTED_LINE_BYTES + 2 * TRUNCATION_MARKER.len());
-            assert!(v.line.windows(6).any(|w| w == b"NEEDLE"));
-            true
-        })
-        .unwrap();
-        assert!(emitted_len > 0);
+        let result = run_streaming(&line, "NEEDLE", &opts()).unwrap();
+        assert_eq!(result.records.len(), 1);
+        let emitted_line = &result.records[0].line;
+        // Truncated form should fit comfortably inside (4096 + 2x marker).
+        assert!(emitted_line.len() <= MAX_EMITTED_LINE_BYTES + 2 * TRUNCATION_MARKER.len());
+        assert!(emitted_line.windows(6).any(|window| window == b"NEEDLE"));
+        assert!(!result.records[0].borrows_input);
     }
 
     #[test]
@@ -2229,15 +2171,8 @@ mod tests {
             context_before: 2,
             ..opts()
         };
-        let mut got_before: Vec<Vec<u8>> = Vec::new();
-        scan_bytes_streaming_ex(bytes, "foo", &o, || false, |v| {
-            for ctx in v.context_before {
-                got_before.push(ctx.to_vec());
-            }
-            true
-        })
-        .unwrap();
-        assert_eq!(got_before, vec![b"b".to_vec(), b"c".to_vec()]);
+        let result = run_streaming(bytes, "foo", &o).unwrap();
+        assert_eq!(result.records[0].context_before, vec![b"b".to_vec(), b"c".to_vec()]);
     }
 
     #[test]
@@ -2247,15 +2182,103 @@ mod tests {
             context_after: 2,
             ..opts()
         };
-        let mut got_after: Vec<Vec<u8>> = Vec::new();
-        scan_bytes_streaming_ex(bytes, "foo", &o, || false, |v| {
-            for ctx in v.context_after {
-                got_after.push(ctx.to_vec());
-            }
-            true
-        })
-        .unwrap();
-        assert_eq!(got_after, vec![b"a".to_vec(), b"b".to_vec()]);
+        let result = run_streaming(bytes, "foo", &o).unwrap();
+        assert_eq!(result.records[0].context_after, vec![b"a".to_vec(), b"b".to_vec()]);
+    }
+
+    #[test]
+    fn streaming_pending_flush_honors_callback_and_result_cap() {
+        let bytes = b"foo\nctx\n";
+        let base = ScanOptions {
+            context_after: 1,
+            ..opts()
+        };
+
+        let stopped = run_streaming_controlled(bytes, "foo", &base, usize::MAX, 1).unwrap();
+        assert_eq!(stopped.emit_attempts, 1);
+        assert_eq!(stopped.emitted, 0);
+
+        let capped = ScanOptions {
+            max_results: 1,
+            ..base
+        };
+        assert_eq!(run_streaming(bytes, "foo", &capped).unwrap().emitted, 1);
+    }
+
+    #[test]
+    fn streaming_metadata_only_reports_source_columns_immediate_and_pending() {
+        let immediate = ScanOptions {
+            metadata_only: true,
+            ..opts()
+        };
+        let immediate_result = run_streaming(b"abx\n", "x", &immediate).unwrap();
+        assert!(immediate_result.records[0].line.is_empty());
+        assert_eq!(immediate_result.records[0].match_start, 2);
+        assert_eq!(immediate_result.records[0].source_match_start, 2);
+
+        let pending = ScanOptions {
+            context_after: 1,
+            max_results: 1,
+            ..immediate
+        };
+        let pending_result = run_streaming(b"abx\nctx", "x", &pending).unwrap();
+        assert_eq!(pending_result.records[0].source_match_start, 2);
+        assert_eq!(pending_result.records[0].context_after, vec![b"ctx".to_vec()]);
+    }
+
+    #[test]
+    fn streaming_eof_pending_flush_honors_callback_and_result_cap() {
+        let base = ScanOptions {
+            context_after: 1,
+            ..opts()
+        };
+        let stopped = run_streaming_controlled(b"foo", "foo", &base, usize::MAX, 1).unwrap();
+        assert_eq!(stopped.emitted, 0);
+        assert_eq!(stopped.emit_attempts, 1);
+
+        let capped = ScanOptions {
+            max_results: 1,
+            ..base
+        };
+        assert_eq!(run_streaming(b"foo", "foo", &capped).unwrap().emitted, 1);
+    }
+
+    #[test]
+    fn streaming_zero_width_and_uncapped_eof_pending_paths() {
+        let regex = ScanOptions {
+            use_regex: true,
+            ..opts()
+        };
+        assert_eq!(run_streaming(b"abc\n", "^", &regex).unwrap().emitted, 0);
+
+        let pending = ScanOptions {
+            context_after: 1,
+            ..opts()
+        };
+        assert_eq!(run_streaming(b"foo", "foo", &pending).unwrap().emitted, 1);
+
+        let nonbinding_cap = ScanOptions {
+            context_after: 1,
+            max_results: 2,
+            ..opts()
+        };
+        assert_eq!(
+            run_streaming(b"foo\nctx\n", "foo", &nonbinding_cap)
+                .unwrap()
+                .emitted,
+            1
+        );
+
+        let binary_allowed = ScanOptions {
+            skip_binary: false,
+            ..opts()
+        };
+        assert_eq!(
+            run_streaming(b"hello\0world\n", "hello", &binary_allowed)
+                .unwrap()
+                .emitted,
+            1
+        );
     }
 
     #[test]
@@ -2265,38 +2288,31 @@ mod tests {
             max_results: 2,
             ..opts()
         };
-        let mut count = 0;
-        scan_bytes_streaming_ex(bytes, "foo", &o, || false, |_| {
-            count += 1;
-            true
-        })
-        .unwrap();
-        assert_eq!(count, 2);
+        let result = run_streaming(bytes, "foo", &o).unwrap();
+        assert_eq!(result.emitted, 2);
     }
 
     #[test]
     fn streaming_callback_returning_false_stops_scan() {
         let bytes = b"foo\nfoo\nfoo\n";
-        let mut count = 0;
-        scan_bytes_streaming_ex(bytes, "foo", &opts(), || false, |_| {
-            count += 1;
-            count < 1 // stop after first
-        })
-        .unwrap();
-        assert_eq!(count, 1);
+        let result = run_streaming_controlled(bytes, "foo", &opts(), usize::MAX, 1).unwrap();
+        assert_eq!(result.emit_attempts, 1);
+        assert_eq!(result.emitted, 0);
     }
 
     #[test]
     fn streaming_cancellation_stops_scan() {
         let bytes = b"foo\nfoo\nfoo\n";
-        scan_bytes_streaming_ex(bytes, "foo", &opts(), || true, |_| true).unwrap();
+        let result = run_streaming_controlled(bytes, "foo", &opts(), 0, usize::MAX).unwrap();
+        assert_eq!(result.emitted, 0);
+        assert_eq!(result.cancel_polls, 1);
     }
 
     #[test]
     fn streaming_skip_binary_returns_error() {
         let bytes = b"hello\x00world\n";
-        let result = scan_bytes_streaming_ex(bytes, "hello", &opts(), || false, |_| true);
-        assert!(matches!(result, Err(ScanError::BinarySkipped)));
+        let result = run_streaming(bytes, "hello", &opts());
+        assert_scan_error_kind(result.err().unwrap(), ScanError::BinarySkipped);
     }
 
     #[test]
@@ -2306,12 +2322,7 @@ mod tests {
             use_regex: true,
             ..opts()
         };
-        let mut count = 0;
-        scan_bytes_streaming_ex(bytes, r"\bfn\s+\w+", &o, || false, |_| {
-            count += 1;
-            true
-        })
-        .unwrap();
-        assert_eq!(count, 2);
+        let result = run_streaming(bytes, r"\bfn\s+\w+", &o).unwrap();
+        assert_eq!(result.emitted, 2);
     }
 }

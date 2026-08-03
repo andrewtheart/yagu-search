@@ -3,6 +3,8 @@ using System.Text;
 using System.Threading.Channels;
 using Yagu.Helpers;
 using Yagu.Models;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services;
 
@@ -213,8 +215,8 @@ public sealed class ResultStore : IDisposable
                                 // failing disk can fault every item in a large batch and we don't
                                 // want to flood the log; the outer batch catch logs Warning.
                                 if (LogService.Instance.IsVerboseEnabled)
-                                    LogService.Instance.Verbose("ResultStore",
-                                        $"Skipped evicting result for '{batch[i].FilePath}' during drain", ex);
+                                    YaguLog.For("ResultStore").LogDebug(ex,
+                                        "Skipped evicting result for '{File}' during drain", batch[i].FilePath);
                             }
                         }
                     });
@@ -222,7 +224,7 @@ public sealed class ResultStore : IDisposable
                 catch (ObjectDisposedException) { break; }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Warning("ResultStore", "Eviction drain batch failed", ex);
+                    YaguLog.For("ResultStore").LogWarning(ex, "Eviction drain batch failed");
                 }
                 finally
                 {
@@ -237,7 +239,7 @@ public sealed class ResultStore : IDisposable
         catch (OperationCanceledException) { /* normal shutdown */ }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("ResultStore", "Eviction drain loop terminated unexpectedly", ex);
+            YaguLog.For("ResultStore").LogWarning(ex, "Eviction drain loop terminated unexpectedly");
         }
         finally
         {
@@ -267,7 +269,7 @@ public sealed class ResultStore : IDisposable
                 deleted += DeleteOrphanedTempFiles(directory, scheduledAtUtc);
 
             if (deleted > 0)
-                LogService.Instance.Info("ResultStore", $"Deleted {deleted:N0} orphaned Yagu temp result file(s)");
+                YaguLog.For("ResultStore").LogInformation("Deleted {Deleted:N0} orphaned Yagu temp result file(s)", deleted);
         });
     }
 
@@ -298,13 +300,13 @@ public sealed class ResultStore : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Verbose("ResultStore", $"Could not delete orphaned temp result file '{path}'", ex);
+                    YaguLog.For("ResultStore").LogDebug(ex, "Could not delete orphaned temp result file '{Path}'", path);
                 }
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("ResultStore", $"Could not enumerate orphaned Yagu temp files in '{tempDirectory}'", ex);
+            YaguLog.For("ResultStore").LogDebug(ex, "Could not enumerate orphaned Yagu temp files in '{TempDir}'", tempDirectory);
         }
 
         return deleted;
@@ -562,7 +564,7 @@ public sealed class ResultStore : IDisposable
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("ResultStore", $"Could not delete temp result file '{path}'", ex);
+            YaguLog.For("ResultStore").LogWarning(ex, "Could not delete temp result file '{Path}'", path);
         }
     }
 

@@ -1,7 +1,7 @@
 //! Whole-buffer cross-line (multiline) scanner — the Phase 2 native engine.
 //!
 //! This is a **sibling** of the per-line scanner in [`crate::scan`]: the
-//! single-line hot loop (`scan_bytes_with_matcher*`) is left completely
+//! single-line hot loop (`scan_bytes_with_matcher_ex` and its streaming variant) is left completely
 //! untouched. Multiline is selected once per file by `ScanOptions::multi_line`
 //! (plan §0), so the default search path keeps its exact performance budget.
 //!
@@ -379,14 +379,37 @@ mod tests {
         }
     }
 
+    fn run_controlled(
+        bytes: &[u8],
+        pattern: &str,
+        o: &ScanOptions,
+        cancel_after_polls: usize,
+        reject_emit: usize,
+    ) -> Result<(usize, Vec<MultilineMatchRecord>, usize), ScanError> {
+        let mut polls = 0usize;
+        let mut emit_attempts = 0usize;
+        let mut recs = Vec::new();
+        let n = scan_multiline(
+            bytes,
+            pattern,
+            o,
+            || {
+                polls += 1;
+                polls > cancel_after_polls
+            },
+            |record| {
+                emit_attempts += 1;
+                recs.push(record);
+                emit_attempts != reject_emit
+            },
+        )?;
+        Ok((n, recs, emit_attempts))
+    }
+
     /// Collect all records for a pattern over `bytes`.
     fn run(bytes: &[u8], pattern: &str, o: &ScanOptions) -> Vec<MultilineMatchRecord> {
-        let mut recs = Vec::new();
-        let n = scan_multiline(bytes, pattern, o, || false, |r| {
-            recs.push(r);
-            true
-        })
-        .expect("scan ok");
+        let (n, recs, _) = run_controlled(bytes, pattern, o, usize::MAX, usize::MAX)
+            .expect("scan ok");
         assert_eq!(n, recs.len());
         recs
     }
@@ -394,7 +417,8 @@ mod tests {
     #[test]
     fn normalize_lf_identity_when_no_cr() {
         let b = b"line1\nline2\n";
-        assert!(matches!(normalize_to_lf(b), Cow::Borrowed(_)));
+        let normalized = normalize_to_lf(b);
+        assert_eq!(normalized.as_ptr(), b.as_ptr());
     }
 
     #[test]
@@ -517,6 +541,15 @@ mod tests {
     }
 
     #[test]
+    fn metadata_only_reports_eager_utf16_source_column() {
+        let mut o = opts(true, false);
+        o.metadata_only = true;
+        let recs = run("éx".as_bytes(), "x", &o);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].source_match_start, 1);
+    }
+
+    #[test]
     fn end_col_is_utf16_on_nonascii_end_line() {
         // End line has an astral char (💩 = 2 UTF-16 units) before the match end.
         // Line 2 = "💩bar": end of "bar" is UTF-16 col 2 (💩) + 3 (bar) = 5.
@@ -530,24 +563,24 @@ mod tests {
     #[test]
     fn cancellation_between_matches_stops_early() {
         let bytes = b"m\nm\nm\nm\n";
-        let mut count = 0;
-        let mut emitted = Vec::new();
         // Cancel after the first match is yielded.
-        let n = scan_multiline_bytes(
+        let (n, _, _) = run_controlled(
             bytes,
-            &build_multiline_regex("m", &opts(true, false)).unwrap(),
+            "m",
             &opts(true, false),
-            || {
-                count += 1;
-                count > 2 // false for the pre-scan poll and first match, then cancel
-            },
-            |r| {
-                emitted.push(r);
-                true
-            },
+            2,
+            usize::MAX,
         )
         .unwrap();
         assert!(n < 4, "cancellation should stop before all four matches");
+    }
+
+    #[test]
+    fn cancellation_before_multiline_scan_emits_nothing() {
+        let o = opts(true, false);
+        let (n, records, _) = run_controlled(b"m", "m", &o, 0, usize::MAX).unwrap();
+        assert_eq!(n, 0);
+        assert!(records.is_empty());
     }
 
     #[test]
@@ -561,12 +594,8 @@ mod tests {
     #[test]
     fn emit_returning_false_stops_early() {
         let bytes = b"m\nm\nm\n";
-        let mut seen = 0;
-        let n = scan_multiline(bytes, "m", &opts(true, false), || false, |_| {
-            seen += 1;
-            seen < 2 // stop after the second emit
-        })
-        .unwrap();
+        let (n, _, seen) =
+            run_controlled(bytes, "m", &opts(true, false), usize::MAX, 2).unwrap();
         assert_eq!(n, 1); // returns count of fully-accepted emits before the stop
         assert_eq!(seen, 2);
     }
@@ -576,15 +605,38 @@ mod tests {
         let mut o = opts(true, false);
         o.skip_binary = true;
         let bytes = b"foo\x00\x00\x00bar\n";
-        let err = scan_multiline(bytes, "foo", &o, || false, |_| true).unwrap_err();
-        assert!(matches!(err, ScanError::BinarySkipped));
+        let err = run_controlled(bytes, "foo", &o, usize::MAX, usize::MAX).unwrap_err();
+        assert_eq!(
+            std::mem::discriminant(&err),
+            std::mem::discriminant(&ScanError::BinarySkipped)
+        );
+    }
+
+    #[test]
+    fn text_buffer_scanned_when_skip_binary_enabled() {
+        let mut o = opts(true, false);
+        o.skip_binary = true;
+        let (n, records, _) =
+            run_controlled(b"foo\n", "foo", &o, usize::MAX, usize::MAX).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(records.len(), 1);
     }
 
     #[test]
     fn lookaround_pattern_is_invalid_regex() {
         let o = opts(true, false);
-        let err = build_multiline_regex("(?<=foo)bar", &o).unwrap_err();
-        assert!(matches!(err, ScanError::InvalidRegex(_)));
+        let err = run_controlled(
+            b"foobar",
+            "(?<=foo)bar",
+            &o,
+            usize::MAX,
+            usize::MAX,
+        )
+        .unwrap_err();
+        assert_eq!(
+            std::mem::discriminant(&err),
+            std::mem::discriminant(&ScanError::InvalidRegex(String::new()))
+        );
     }
 
     #[test]
@@ -595,6 +647,17 @@ mod tests {
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].line_number, 1);
         assert_eq!(recs[0].end_line, 1);
+    }
+
+    #[test]
+    fn boundary_line_has_no_before_or_after_context() {
+        let mut o = opts(true, false);
+        o.context_before = 1;
+        o.context_after = 1;
+        let recs = run(b"x", "x", &o);
+        assert_eq!(recs.len(), 1);
+        assert!(recs[0].context_before.is_empty());
+        assert!(recs[0].context_after.is_empty());
     }
 
     #[test]

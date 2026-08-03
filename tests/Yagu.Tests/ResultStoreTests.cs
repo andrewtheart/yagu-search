@@ -427,7 +427,7 @@ public class ResultStoreAppCloseRegressionTests
 
         string deleteTempFile = ExtractMethodWindow(resultStoreSource, "DeleteTempFile", 800);
         Assert.Contains("File.Delete(path);", deleteTempFile);
-        Assert.Contains("LogService.Instance.Warning(\"ResultStore\"", deleteTempFile);
+        Assert.Contains("YaguLog.For(\"ResultStore\").LogWarning(", deleteTempFile);
     }
 
     private static string ExtractWindowAfter(string source, string marker, int window)
@@ -486,10 +486,10 @@ public class ResultStoreAppCloseRegressionTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
 
-        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.sln).");
+        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.slnx).");
     }
 
     [Fact]

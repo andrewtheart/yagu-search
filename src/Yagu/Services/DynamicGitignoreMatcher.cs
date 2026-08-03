@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
+
 namespace Yagu.Services;
 
 /// <summary>
@@ -205,8 +208,8 @@ internal sealed class DynamicGitignoreMatcher
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("DynamicGitignoreMatcher",
-                $"Could not read {gitignorePath}: {ex.Message}");
+            YaguLog.For("DynamicGitignoreMatcher").LogDebug(
+                "Could not read {GitignorePath}: {Error}", gitignorePath, ex.Message);
         }
 
         _rulesCache[directory] = rules;

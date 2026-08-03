@@ -5,6 +5,20 @@ namespace Yagu.Tests;
 
 public sealed class NativeSearcherBufferReaderTests
 {
+    [Theory]
+    [InlineData(8u, true)]
+    [InlineData(7u, false)]
+    public void TryReadAbiVersion_RequiresCurrentAbi(uint abiVersion, bool expected)
+        => Assert.Equal(expected, NativeSearcher.TryReadAbiVersion(() => abiVersion));
+
+    [Fact]
+    public void TryReadAbiVersion_NativeLoadFailuresReturnFalse()
+    {
+        Assert.False(NativeSearcher.TryReadAbiVersion(() => throw new DllNotFoundException()));
+        Assert.False(NativeSearcher.TryReadAbiVersion(() => throw new BadImageFormatException()));
+        Assert.False(NativeSearcher.TryReadAbiVersion(() => throw new EntryPointNotFoundException()));
+    }
+
     [Fact]
     public void TryReadU32_ValidData_ReadsCorrectly()
     {
@@ -74,5 +88,52 @@ public sealed class NativeSearcherBufferReaderTests
         Assert.Equal(99UL, v2);
         // Now at end, next read should fail
         Assert.False(reader.TryReadU32(out _));
+    }
+
+    [Fact]
+    public void TryReadUtf8String_IntMaxLengthAfterRead_ReturnsFalseWithoutOverflow()
+    {
+        var data = new byte[4];
+        var reader = new NativeSearchOutcome.BufferReader(data);
+
+        Assert.True(reader.TryReadU32(out _));
+        Assert.False(reader.TryReadUtf8String(int.MaxValue, out _));
+    }
+
+    [Fact]
+    public void TryReadUtf8String_ValidDataAfterRead_UsesRemainingLength()
+    {
+        byte[] data = [0, 0, 0, 0, (byte)'x'];
+        var reader = new NativeSearchOutcome.BufferReader(data);
+
+        Assert.True(reader.TryReadU32(out _));
+        Assert.True(reader.TryReadUtf8String(1, out string value));
+        Assert.Equal("x", value);
+    }
+
+    [Fact]
+    public void TryReadContext_EmptyAndPopulatedListsSucceed()
+    {
+        var emptyReader = new NativeSearchOutcome.BufferReader([]);
+        Assert.True(NativeSearchOutcome.TryReadContext(ref emptyReader, 0, out List<string> empty));
+        Assert.Empty(empty);
+
+        byte[] data = [1, 0, 0, 0, (byte)'a', 1, 0, 0, 0, (byte)'b'];
+        var reader = new NativeSearchOutcome.BufferReader(data);
+        Assert.True(NativeSearchOutcome.TryReadContext(ref reader, 2, out List<string> lines));
+        Assert.Equal(["a", "b"], lines);
+    }
+
+    [Fact]
+    public void TryReadContext_TruncatedLengthAndTextReturnFalse()
+    {
+        var missingLengthReader = new NativeSearchOutcome.BufferReader([]);
+        Assert.False(NativeSearchOutcome.TryReadContext(ref missingLengthReader, 1, out List<string> missingLength));
+        Assert.Empty(missingLength);
+
+        byte[] data = [2, 0, 0, 0, (byte)'a'];
+        var missingTextReader = new NativeSearchOutcome.BufferReader(data);
+        Assert.False(NativeSearchOutcome.TryReadContext(ref missingTextReader, 1, out List<string> missingText));
+        Assert.Empty(missingText);
     }
 }

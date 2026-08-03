@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Threading.Channels;
+using SharpSevenZip;
 using Yagu.Models;
 using Yagu.Services;
 
@@ -32,6 +33,27 @@ public sealed class ZipArchiveSearcherTests : IDisposable
             writer.Write(content);
         }
         return path;
+    }
+
+    private string CreateTestSevenZip(string name, Dictionary<string, string> entries)
+    {
+        string sourceDir = Path.Combine(_root, Path.GetFileNameWithoutExtension(name));
+        Directory.CreateDirectory(sourceDir);
+        foreach (var (entryName, content) in entries)
+        {
+            string path = Path.Combine(sourceDir, entryName);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, content);
+        }
+
+        string archivePath = Path.Combine(_root, name);
+        var compressor = new SharpSevenZipCompressor
+        {
+            ArchiveFormat = OutArchiveFormat.SevenZip,
+            DirectoryStructure = true,
+        };
+        compressor.CompressDirectory(sourceDir, archivePath);
+        return archivePath;
     }
 
     [Fact]
@@ -193,6 +215,32 @@ public sealed class ZipArchiveSearcherTests : IDisposable
 
         Assert.True(matchCount >= 1);
         Assert.True(entriesScanned >= 1);
+    }
+
+    [Fact]
+    public async Task SearchArchiveStreamAutoAsync_ValidSevenZip_FindsMatches()
+    {
+        string archivePath = CreateTestSevenZip("searchable.7z", new Dictionary<string, string>
+        {
+            ["hello.txt"] = "Hello from seven zip\n",
+            ["other.txt"] = "Nothing here",
+        });
+        using var stream = File.OpenRead(archivePath);
+        var channel = Channel.CreateUnbounded<SearchResult>();
+
+        var (matchCount, entriesScanned) = await ZipArchiveSearcher.SearchArchiveStreamAutoAsync(
+            stream,
+            archivePath,
+            regex: null,
+            literal: "Hello",
+            literalComparison: StringComparison.OrdinalIgnoreCase,
+            new SearchOptions { Directory = _root, Query = "Hello" },
+            channel.Writer,
+            nestingDepth: 0,
+            CancellationToken.None);
+
+        Assert.Equal(1, matchCount);
+        Assert.Equal(2, entriesScanned);
     }
 
     [Fact]

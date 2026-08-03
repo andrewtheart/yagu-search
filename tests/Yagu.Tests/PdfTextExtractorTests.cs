@@ -116,24 +116,67 @@ public class PdfTextExtractorTests
     }
 
     [Fact]
-    public async Task ExtractAsync_ToolPathIsNotExecutable_ReturnsStartFailure()
+    public async Task ExtractAsync_ToolStartThrows_ReturnsStartFailure()
     {
-        // A file that exists but is not a runnable executable: ResolveToolPath returns it, but
-        // Process.Start throws, exercising the "failed to start" catch branch.
-        string fakeTool = Path.Combine(Path.GetTempPath(), $"yagu-notexe-{Guid.NewGuid():N}.exe");
-        await File.WriteAllTextAsync(fakeTool, "not a real executable");
+        // The tool resolves fine, but launching it throws (bad image, access denied, etc.). We drive
+        // that through the StartProcess seam so the failure path is covered deterministically WITHOUT
+        // spawning a real process — planting a non-PE ".exe" and letting the Windows loader reject it
+        // pops a blocking "Unsupported 16-Bit Application" dialog on 64-bit machines (the 16-bit
+        // subsystem is gone), which stalls the test run.
+        string realishTool = Path.Combine(Path.GetTempPath(), $"yagu-pdftool-{Guid.NewGuid():N}.exe");
+        await File.WriteAllTextAsync(realishTool, "stub"); // exists so ResolveToolPath returns it
         try
         {
-            var extractor = new PdfTextExtractor(fakeTool);
+            var extractor = new ThrowOnStartPdfTextExtractor(realishTool);
             var result = await extractor.ExtractAsync("whatever.pdf", CancellationToken.None);
 
             Assert.False(result.Success);
+            Assert.Equal(string.Empty, result.Text);
             Assert.NotNull(result.Error);
+            Assert.Contains("failed to start", result.Error!);
         }
         finally
         {
-            TryDelete(fakeTool);
+            TryDelete(realishTool);
         }
+    }
+
+    [Fact]
+    public async Task ExtractAsync_ToolStartReturnsFalse_ReturnsStartFailure()
+    {
+        string realishTool = Path.Combine(Path.GetTempPath(), $"yagu-pdftool-{Guid.NewGuid():N}.exe");
+        await File.WriteAllTextAsync(realishTool, "stub");
+        try
+        {
+            var extractor = new FalseOnStartPdfTextExtractor(realishTool);
+            var result = await extractor.ExtractAsync("whatever.pdf", CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Equal("pdftotext failed to start", result.Error);
+        }
+        finally
+        {
+            TryDelete(realishTool);
+        }
+    }
+
+    // Subclass that forces the process launch to throw, exercising the "failed to start" catch branch
+    // in ExtractAsync without ever calling the real Process.Start (which would route a fake .exe through
+    // the 16-bit loader and pop a modal). PdfTextExtractor.cs is compiled into this test assembly, so
+    // the internal ctor and internal virtual seam are both accessible here.
+    private sealed class ThrowOnStartPdfTextExtractor : PdfTextExtractor
+    {
+        public ThrowOnStartPdfTextExtractor(string toolPath) : base(toolPath) { }
+
+        internal override bool StartProcess(System.Diagnostics.Process process) =>
+            throw new System.ComponentModel.Win32Exception("simulated launch failure");
+    }
+
+    private sealed class FalseOnStartPdfTextExtractor : PdfTextExtractor
+    {
+        public FalseOnStartPdfTextExtractor(string toolPath) : base(toolPath) { }
+
+        internal override bool StartProcess(System.Diagnostics.Process process) => false;
     }
 
     [Fact]
@@ -270,7 +313,7 @@ public sealed class PdfTextExtractorSecuritySourceTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+            if (File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
                 return dir.FullName;
             dir = dir.Parent;
         }

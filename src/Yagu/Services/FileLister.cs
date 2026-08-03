@@ -7,6 +7,8 @@ using Yagu.Native;
 using System.Runtime.CompilerServices;
 using System.Security.Principal;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services;
 
@@ -530,7 +532,7 @@ public sealed class FileLister : IFileLister
     {
         if (!_sdkAvailable)
         {
-            LogService.Instance.Warning("FileLister", "RunEverythingSdkAsync: _sdkAvailable=false, skipping SDK tier");
+            YaguLog.For("FileLister").LogWarning("RunEverythingSdkAsync: _sdkAvailable=false, skipping SDK tier");
             FallbackReason = "Everything SDK not available";
             yield break;
         }
@@ -646,7 +648,7 @@ public sealed class FileLister : IFileLister
         if (!SearchHiddenFiles && queryIsNarrowed && !EarlySuppressHiddenAttributeFilter)
             query += " !attrib:h";
 
-        LogService.Instance.Warning("FileLister", $"Everything SDK query: {query}");
+        YaguLog.For("FileLister").LogWarning("Everything SDK query: {Query}", query);
 
         // Stream results through a bounded channel instead of collecting all
         // into a List<string>. This avoids allocating a multi-million-entry
@@ -673,7 +675,7 @@ public sealed class FileLister : IFileLister
                 {
                     _sdkLockWait.Stop();
                     if (_sdkLockWait.ElapsedMilliseconds > 1000)
-                        LogService.Instance.Warning("FileLister", $"Everything SDK producer waited {_sdkLockWait.ElapsedMilliseconds}ms for the shared SyncLock (contention): {query}");
+                        YaguLog.For("FileLister").LogWarning("Everything SDK producer waited {WaitMs}ms for the shared SyncLock (contention): {Query}", _sdkLockWait.ElapsedMilliseconds, query);
                     try
                     {
                         if (!_sdkOps.IsDBLoaded())
@@ -754,7 +756,7 @@ public sealed class FileLister : IFileLister
                         uint count = _sdkOps.GetNumResults();
                         totalMatches = _sdkOps.GetTotResults();
                         SetKnownTotalFiles(totalMatches);
-                        LogService.Instance.Warning("FileLister", $"Everything SDK: returned={count}, total={totalMatches}, last error={_sdkOps.GetLastError()}");
+                        YaguLog.For("FileLister").LogWarning("Everything SDK: returned={Returned}, total={Total}, last error={LastError}", count, totalMatches, _sdkOps.GetLastError());
 
                         for (uint i = 0; i < count; i++)
                         {
@@ -870,7 +872,7 @@ public sealed class FileLister : IFileLister
 
                         if (skippedBySize > 0 || skippedByDate > 0 || excludedByExtension > 0)
                         {
-                            LogService.Instance.Warning("FileLister", $"Everything SDK: {skippedTooSmall:N0} too-small files skipped, {skippedTooLarge:N0} too-large files skipped, {skippedByDate:N0} date-filtered files skipped, {excludedByExtension:N0} files excluded by extension");
+                            YaguLog.For("FileLister").LogWarning("Everything SDK: {TooSmall:N0} too-small files skipped, {TooLarge:N0} too-large files skipped, {DateFiltered:N0} date-filtered files skipped, {ExtExcluded:N0} files excluded by extension", skippedTooSmall, skippedTooLarge, skippedByDate, excludedByExtension);
                         }
 
                         _sdkOps.Reset();
@@ -895,7 +897,7 @@ public sealed class FileLister : IFileLister
         if (error is not null)
         {
             FallbackReason = error;
-            LogService.Instance.Warning("FileLister", error);
+            YaguLog.For("FileLister").LogWarning("{FallbackReason}", error);
             yield break;
         }
 
@@ -917,7 +919,7 @@ public sealed class FileLister : IFileLister
         if (error is not null)
         {
             FallbackReason = error;
-            LogService.Instance.Warning("FileLister", error);
+            YaguLog.For("FileLister").LogWarning("{FallbackReason}", error);
             yield break;
         }
 
@@ -932,16 +934,16 @@ public sealed class FileLister : IFileLister
     public static string? FindEsExe()
     {
         var candidates = new List<string>();
-        var log = LogService.Instance;
+        var log = YaguLog.For("FileLister");
 
-        log.Info("FileLister", "FindEsExe: beginning Everything detection");
+        log.LogInformation("FindEsExe: beginning Everything detection");
 
         // 1. PATH
         var pathEnv = Environment.GetEnvironmentVariable("PATH");
         if (!string.IsNullOrEmpty(pathEnv))
         {
             var pathDirs = pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-            log.Info("FileLister", $"FindEsExe: PATH has {pathDirs.Length} entries");
+            log.LogInformation("FindEsExe: PATH has {PathDirCount} entries", pathDirs.Length);
             foreach (var dir in pathDirs)
             {
                 candidates.Add(Path.Combine(dir.Trim('"'), "es.exe"));
@@ -949,12 +951,12 @@ public sealed class FileLister : IFileLister
         }
         else
         {
-            log.Info("FileLister", "FindEsExe: PATH environment variable is empty/null");
+            log.LogInformation("FindEsExe: PATH environment variable is empty/null");
         }
 
         // 2. Registry — Everything writes its install location to Uninstall keys
         var registryDirs = GetEverythingInstallDirsFromRegistry();
-        log.Info("FileLister", $"FindEsExe: registry returned {registryDirs.Count} install dir(s): [{string.Join(", ", registryDirs)}]");
+        log.LogInformation("FindEsExe: registry returned {RegistryDirCount} install dir(s): [{RegistryDirs}]", registryDirs.Count, string.Join(", ", registryDirs));
         foreach (var installDir in registryDirs)
         {
             candidates.Add(Path.Combine(installDir, "es.exe"));
@@ -963,7 +965,7 @@ public sealed class FileLister : IFileLister
         // 3. LocalAppData
         var localAppData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Everything", "es.exe");
         candidates.Add(localAppData);
-        log.Info("FileLister", $"FindEsExe: LocalAppData candidate: {localAppData}");
+        log.LogInformation("FindEsExe: LocalAppData candidate: {LocalAppData}", localAppData);
 
         // 4. Program Files
         candidates.Add(@"C:\Program Files\Everything\es.exe");
@@ -971,13 +973,13 @@ public sealed class FileLister : IFileLister
         // 5. C:\tools
         candidates.Add(@"C:\tools\es.exe");
 
-        log.Info("FileLister", $"FindEsExe: total {candidates.Count} candidate paths to check");
+        log.LogInformation("FindEsExe: total {CandidateCount} candidate paths to check", candidates.Count);
 
         var result = FindEsExe(candidates, File.Exists);
         if (result != null)
-            log.Info("FileLister", $"FindEsExe: FOUND es.exe at: {result}");
+            log.LogInformation("FindEsExe: FOUND es.exe at: {Result}", result);
         else
-            log.Warning("FileLister", $"FindEsExe: es.exe NOT FOUND in any of {candidates.Count} candidates. Non-PATH candidates checked: {localAppData}, C:\\Program Files\\Everything\\es.exe, C:\\Program Files (x86)\\Everything\\es.exe, C:\\tools\\es.exe");
+            log.LogWarning("FindEsExe: es.exe NOT FOUND in any of {CandidateCount} candidates. Non-PATH candidates checked: {LocalAppData}, C:\\Program Files\\Everything\\es.exe, C:\\Program Files (x86)\\Everything\\es.exe, C:\\tools\\es.exe", candidates.Count, localAppData);
 
         return result;
     }
@@ -992,7 +994,7 @@ public sealed class FileLister : IFileLister
     internal static List<string> GetEverythingInstallDirsFromRegistryCore()
     {
         var dirs = new List<string>();
-        var log = LogService.Instance;
+        var log = YaguLog.For("FileLister");
         string[] registryPaths =
         [
             @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
@@ -1009,7 +1011,7 @@ public sealed class FileLister : IFileLister
                     using var key = root.OpenSubKey(subPath);
                     if (key == null)
                     {
-                        log.Info("FileLister", $"Registry: {root.Name}\\{subPath} — key not found");
+                        log.LogInformation("Registry: {RootName}\\{SubPath} — key not found", root.Name, subPath);
                         continue;
                     }
                     foreach (var subKeyName in key.GetSubKeyNames())
@@ -1023,26 +1025,26 @@ public sealed class FileLister : IFileLister
                                 continue;
                             var installLocation = subKey.GetValue("InstallLocation") as string
                                 ?? Path.GetDirectoryName(subKey.GetValue("UninstallString") as string ?? "");
-                            log.Info("FileLister", $"Registry: found Everything entry '{displayName}' in {root.Name}\\{subPath}\\{subKeyName}, InstallLocation='{installLocation}'");
+                            log.LogInformation("Registry: found Everything entry '{DisplayName}' in {RootName}\\{SubPath}\\{SubKeyName}, InstallLocation='{InstallLocation}'", displayName, root.Name, subPath, subKeyName, installLocation);
                             if (!string.IsNullOrWhiteSpace(installLocation))
                                 dirs.Add(installLocation.Trim('"'));
                             else
-                                log.Warning("FileLister", $"Registry: Everything entry '{displayName}' has no InstallLocation or UninstallString");
+                                log.LogWarning("Registry: Everything entry '{DisplayName}' has no InstallLocation or UninstallString", displayName);
                         }
                         catch (Exception ex)
                         {
-                            log.Verbose("FileLister", $"Registry: error reading subkey {subKeyName}: {ex.Message}");
+                            log.LogDebug("Registry: error reading subkey {SubKeyName}: {Error}", subKeyName, ex.Message);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    log.Warning("FileLister", $"Registry: cannot open {root.Name}\\{subPath}: {ex.Message}");
+                    log.LogWarning("Registry: cannot open {RootName}\\{SubPath}: {Error}", root.Name, subPath, ex.Message);
                 }
             }
         }
 
-        log.Info("FileLister", $"Registry: total {dirs.Count} install dir(s) found");
+        log.LogInformation("Registry: total {DirCount} install dir(s) found", dirs.Count);
         return dirs;
     }
 
@@ -1054,13 +1056,13 @@ public sealed class FileLister : IFileLister
             {
                 if (fileExists(c))
                 {
-                    LogService.Instance.Info("FileLister", $"FindEsExe: candidate EXISTS: {c}");
+                    YaguLog.For("FileLister").LogInformation("FindEsExe: candidate EXISTS: {Candidate}", c);
                     return c;
                 }
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warning("FileLister", $"FindEsExe: exception checking candidate: {c} — {ex.Message}", ex);
+                YaguLog.For("FileLister").LogWarning(ex, "FindEsExe: exception checking candidate: {Candidate} — {Error}", c, ex.Message);
             }
         }
         return null;
@@ -1253,7 +1255,7 @@ public sealed class FileLister : IFileLister
         catch (Exception ex)
         {
             FallbackReason = $"es.exe could not start: {ex.Message}";
-            LogService.Instance.Warning("FileLister", FallbackReason, ex);
+            YaguLog.For("FileLister").LogWarning(ex, "{FallbackReason}", FallbackReason);
             yield break;
         }
 
@@ -1319,7 +1321,7 @@ public sealed class FileLister : IFileLister
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            LogService.Instance.Verbose("FileLister", $"Could not get es.exe result count: {ex.Message}", ex);
+            YaguLog.For("FileLister").LogDebug(ex, "Could not get es.exe result count: {Error}", ex.Message);
             return 0;
         }
     }
@@ -1759,7 +1761,7 @@ public sealed class FileLister : IFileLister
         try { return RunEverythingSdkAsync(fullDir, includeExtensions ?? Array.Empty<string>(), maxFiles, ct); }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("FileLister", $"Everything SDK unavailable: {ex.Message}", ex);
+            YaguLog.For("FileLister").LogWarning(ex, "Everything SDK unavailable: {Error}", ex.Message);
             return null;
         }
     }
@@ -1772,7 +1774,7 @@ public sealed class FileLister : IFileLister
         catch (Exception ex)
         {
             FallbackReason = $"es.exe failed: {ex.Message}";
-            LogService.Instance.Warning("FileLister", FallbackReason, ex);
+            YaguLog.For("FileLister").LogWarning(ex, "{FallbackReason}", FallbackReason);
             return null;
         }
     }
@@ -1783,7 +1785,7 @@ public sealed class FileLister : IFileLister
     private static FileAttributes? TryGetAttributes(FileSystemInfo fsi, string entry)
     {
         try { return fsi.Attributes; }
-        catch (Exception ex) { LogService.Instance.Verbose("FileLister", $"Cannot get attrs: {entry}", ex); return null; }
+        catch (Exception ex) { YaguLog.For("FileLister").LogDebug(ex, "Cannot get attrs: {Entry}", entry); return null; }
     }
 
     [ExcludeFromCodeCoverage]
@@ -1793,7 +1795,7 @@ public sealed class FileLister : IFileLister
         catch (Exception ex)
         {
             Interlocked.Increment(ref _skippedDirectories);
-            LogService.Instance.Verbose("FileLister", $"Cannot resolve path: {current}", ex);
+            YaguLog.For("FileLister").LogDebug(ex, "Cannot resolve path: {Path}", current);
             return null;
         }
     }
@@ -1812,19 +1814,19 @@ public sealed class FileLister : IFileLister
         {
             Interlocked.Increment(ref _skippedDirectories);
             Interlocked.Increment(ref _accessDeniedDirectories);
-            LogService.Instance.Verbose("FileLister", $"Access denied: {canonical}", ex);
+            YaguLog.For("FileLister").LogDebug(ex, "Access denied: {Path}", canonical);
             return null;
         }
         catch (DirectoryNotFoundException ex)
         {
             Interlocked.Increment(ref _skippedDirectories);
-            LogService.Instance.Verbose("FileLister", $"Dir not found: {canonical}", ex);
+            YaguLog.For("FileLister").LogDebug(ex, "Dir not found: {Path}", canonical);
             return null;
         }
         catch (IOException ex)
         {
             Interlocked.Increment(ref _skippedDirectories);
-            LogService.Instance.Verbose("FileLister", $"IO error enumerating: {canonical}", ex);
+            YaguLog.For("FileLister").LogDebug(ex, "IO error enumerating: {Path}", canonical);
             return null;
         }
     }
@@ -1843,19 +1845,19 @@ public sealed class FileLister : IFileLister
             // Rare with IgnoreInaccessible=true; kept as a last-resort guard.
             Interlocked.Increment(ref _skippedDirectories);
             Interlocked.Increment(ref _accessDeniedDirectories);
-            LogService.Instance.Verbose("FileLister", $"Access denied while enumerating: {canonical}", ex);
+            YaguLog.For("FileLister").LogDebug(ex, "Access denied while enumerating: {Path}", canonical);
             return null;
         }
         catch (DirectoryNotFoundException ex)
         {
             Interlocked.Increment(ref _skippedDirectories);
-            LogService.Instance.Verbose("FileLister", $"Dir not found while enumerating: {canonical}", ex);
+            YaguLog.For("FileLister").LogDebug(ex, "Dir not found while enumerating: {Path}", canonical);
             return null;
         }
         catch (IOException ex)
         {
             Interlocked.Increment(ref _skippedDirectories);
-            LogService.Instance.Verbose("FileLister", $"IO error while enumerating: {canonical}", ex);
+            YaguLog.For("FileLister").LogDebug(ex, "IO error while enumerating: {Path}", canonical);
             return null;
         }
     }
@@ -1875,7 +1877,7 @@ public sealed class FileLister : IFileLister
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("FileLister", $"Cannot resolve reparse: {entry}", ex);
+            YaguLog.For("FileLister").LogDebug(ex, "Cannot resolve reparse: {Entry}", entry);
             return false;
         }
     }

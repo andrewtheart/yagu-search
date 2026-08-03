@@ -8,6 +8,16 @@ namespace Yagu.Tests;
 public sealed class ContentSearcherExtendedCoverageTests
 {
     [Fact]
+    public void ContentSearcherLog_AllSkipCategories_DoNotThrow()
+    {
+        ContentSearcherLog.BinaryDetectedNative("native.bin");
+        ContentSearcherLog.BinaryDetectedSniff("sniff.bin");
+        ContentSearcherLog.BinaryDetectedSniffMmf("mapped.bin");
+        ContentSearcherLog.BinaryDetectedMultilineSniff("multiline.bin");
+        ContentSearcherLog.CloudOnlySkipped("cloud.txt");
+    }
+
+    [Fact]
     public void FindMatches_Regex_FindsMultiple()
     {
         var regex = new Regex(@"\d+", RegexOptions.Compiled);

@@ -15,15 +15,6 @@ public enum SearchMode
     FileNameThenContent = 3,
 }
 
-/// <summary>How include/exclude file filters are interpreted.</summary>
-public enum FilterPatternMode
-{
-    /// <summary>Extensions, path segments, and glob wildcards.</summary>
-    GlobPath = 0,
-    /// <summary>A regular expression matched against the normalized full path.</summary>
-    Regex = 1,
-}
-
 /// <summary>
 /// Native multiline (cross-line) search backend selector (Phase 2, plan §5). Both engines scan the
 /// identical LF-normalized buffer and produce identical results, so this is a pure performance knob
@@ -49,6 +40,26 @@ public sealed class SearchOptions
     public bool ExactMatch { get; init; } = true;
     public int ContextLines { get; init; } = 3;
     public SearchMode SearchMode { get; init; } = SearchMode.Both;
+
+    /// <summary>
+    /// Internal orchestration hint for an all-roots search. A priority prepass sets this so a per-root
+    /// <see cref="SearchMode.Both"/> search stops after its Everything filename query and the immediate
+    /// content scans of those name-hit files. The later full sweep runs separately. Never user-facing or
+    /// persisted.
+    /// </summary>
+    internal bool StopAfterNameFirstPass { get; init; }
+
+    /// <summary>Internal orchestration hint: skip the per-root name-first query because an all-roots prepass
+    /// already ran it. Never user-facing or persisted.</summary>
+    internal bool SuppressNameFirstPass { get; init; }
+
+    /// <summary>Filename paths already emitted by the all-roots priority prepass. The full sweep suppresses
+    /// duplicate filename-only rows for these paths.</summary>
+    internal IReadOnlySet<string>? PreEmittedFileNamePaths { get; init; }
+
+    /// <summary>Paths whose content was already scanned by the all-roots priority prepass. The full sweep
+    /// counts but does not rescan them, preventing duplicate content matches.</summary>
+    internal IReadOnlySet<string>? PreScannedContentPaths { get; init; }
 
     /// <summary>
     /// When true, the query regex runs over the whole file buffer so a single match can span
@@ -127,6 +138,73 @@ public sealed class SearchOptions
     public int AbsoluteMaxResults { get; init; }
 
     public bool SkipBinary { get; init; } = true;
+
+    /// <summary>Root-level safety hint: use owned source reads instead of source-file memory maps. Set for
+    /// removable/optical volumes, where unplugging during a mapped page fault can terminate the process.</summary>
+    public bool AvoidSourceMemoryMap { get; init; }
+
+    /// <summary>Maximum time for one file's managed I/O work. Native streaming scans enforce the same
+    /// deadline cooperatively and report a timeout status. Default 30 seconds.</summary>
+    public int FileIoTimeoutSeconds { get; init; } = 30;
+
+    /// <summary>
+    /// When true, this search may use the persistent content index (plan §5) to prune the ordinary
+    /// raw-text candidate set before <see cref="Services.ContentSearcher"/> runs. The default is
+    /// derived from settings (<c>AppSettings.UseContentIndexByDefault</c> gated by the master
+    /// <c>AppSettings.EnableContentIndex</c>). This is a pure performance accelerator: when the index
+    /// is disabled, missing, ineligible, or the query is unsupported, the pipeline is byte-for-byte the
+    /// current live-scan path. It is <b>orthogonal</b> to the content-source toggles
+    /// (<see cref="SearchImageText"/>/<see cref="SearchPdfText"/>/<see cref="SearchInsideArchives"/>) —
+    /// it never enables or disables image/PDF/archive extraction. Session-only, never persisted, and
+    /// never mutated by a semantic plan (plan §5).
+    /// </summary>
+    public bool UseContentIndex { get; init; }
+
+    /// <summary>
+    /// Optional factory that creates the content-index pruning gate for this search (plan §5). The GUI and
+    /// CLI set it when <see cref="UseContentIndex"/> is on and the master feature is enabled; the search
+    /// pipeline invokes it once, off the UI thread, at the start of discovery. A null factory or a null
+    /// result means no pruning (the pipeline is byte-for-byte the live-scan path). Never persisted.
+    /// </summary>
+    public Func<Services.Index.ContentIndexSearchGate?>? ContentIndexGateFactory { get; set; }
+
+    /// <summary>
+    /// Optional factory for the Stage-3 <b>shadow</b> classification pipeline (plan §5.3). When set (only when
+    /// <c>IndexUseWorkerQuerySessions</c> is on and a mapped worker session can serve the
+    /// scope), the search offers every content-scan candidate path to it and completes it once discovery
+    /// drains. It runs in shadow — it never prunes, so the result set is unchanged — to validate the worker
+    /// pipeline and measure it before Stage 4 enables pruning. A null factory/result is a complete no-op
+    /// (byte-for-byte the current path). Never persisted; invoked once, off the UI thread, at discovery start.
+    /// </summary>
+    public Func<Services.Index.IContentIndexShadowScan?>? ContentIndexShadowScanFactory { get; set; }
+
+    /// <summary>
+    /// Optional factory for the Stage-4 <b>pruning</b> pipeline (plan §5.3/§5.5). When set (only when the
+    /// <c>IndexUseWorkerQuerySessions</c> setting is on and a mapped worker session can serve the
+    /// scope), the search offers every content-scan candidate to it <b>instead of</b> the in-process gate; the
+    /// pipeline forwards survivors to the provided content-scan sink and prunes proven-nonmembers, rescuing
+    /// the dirty subset at B1. The factory is invoked once, off the UI thread, at discovery start with the
+    /// survivor sink (the search's pending-file writer). A null factory/result means no worker pruning (the
+    /// in-process gate or a live scan is used). Never persisted.
+    /// </summary>
+    public Func<Func<string, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>, Services.Index.IContentIndexPruningScan?>? ContentIndexPruningScanFactory { get; set; }
+
+    /// <summary>
+    /// Optional factory that creates the extended-source (archive / PDF-text / OCR) pruning gate for this
+    /// search (plan §7 Phase 4). Set only when an extended-source namespace exists for the scope; the
+    /// pipeline invokes it once, off the UI thread, at discovery start and consults it before enqueuing an
+    /// image/PDF candidate to its extractor. A null factory or null result means every candidate is
+    /// extracted exactly as today (fail-safe). Never persisted.
+    /// </summary>
+    public Func<Services.Index.ExtendedSourceSearchGate?>? ExtendedSourceGateFactory { get; set; }
+
+    /// <summary>Optional test/host factory for the OCR engine used by this search. Null uses the configured
+    /// production engine. Never persisted.</summary>
+    internal Func<Services.Ocr.IOcrEngine>? ImageOcrEngineFactory { get; set; }
+
+    /// <summary>Optional test/host factory for the PDF text extractor used by this search. Null uses the
+    /// bundled production extractor. Never persisted.</summary>
+    internal Func<Services.Pdf.PdfTextExtractor>? PdfTextExtractorFactory { get; set; }
 
     /// <summary>
     /// When true (the default), files and folders carrying the Windows Hidden
@@ -273,6 +351,10 @@ public sealed class SearchOptions
     /// PaddleSharp. 0 = unlimited. Higher = better small-text accuracy, slower. Ignored by Tesseract.</summary>
     public int ImageOcrMaxSide { get; init; } = 960;
 
+    /// <summary>Effective number of independent OCR worker processes for this root. Per-root callers
+    /// resolve the persisted automatic/explicit setting and HDD safeguard before constructing options.</summary>
+    public int ImageOcrWorkerParallelism { get; init; } = 1;
+
     /// <summary>When true, PDF files are converted to text on a background queue (via the bundled Xpdf
     /// <c>pdftotext</c>) and their extracted text is matched against the query. The extensions in
     /// <see cref="PdfTextExtensions"/> are bypassed from the skip-extension prefilter so the scanner
@@ -311,6 +393,11 @@ public sealed class SearchOptions
 
     /// <summary>Whether to emit ANSI color codes in direct output mode.</summary>
     public bool DirectOutputColor { get; set; }
+
+    /// <summary>Shared lock for all writers targeting <see cref="DirectOutputStream"/>. CLI filename
+    /// events are managed while content matches come from native callbacks, so they must serialize
+    /// complete output records rather than interleave byte fragments.</summary>
+    internal object? DirectOutputLock { get; set; }
 
     /// <summary>
     /// When set, the native streaming scanner can use degraded metadata-only results:

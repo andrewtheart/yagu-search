@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Yagu.Services.Logging;
 
 namespace Yagu.Services;
 
@@ -61,11 +63,16 @@ public static class FileWatchDiagnostics
 
         string elapsedStr = elapsedMs >= 0 ? $" elapsed={elapsedMs}ms" : "";
         string extraStr = extra is null ? "" : $" {extra}";
-        LogService.Instance.Info("WATCH",
-            $"[{phase}] {Path.GetFileName(filePath)}{elapsedStr}{extraStr} | " +
-            $"WS={workingSetMB:N0}MB Priv={privateMB:N0}MB Heap={heapMB:N0}MB Mng={managedMB:N0}MB Frag={fragMB:N0}MB | " +
-            $"GC[g0={gen0} g1={gen1} g2={gen2}] | " +
-            $"TP[workers={workerMax - workerAvail}/{workerMax} pending={pendingItems} completed={completedItems}] | " +
-            $"threads={threads}");
+        YaguLog.For("WATCH").LogInformation(
+            "[{Phase}] {File}{ElapsedStr}{ExtraStr} | " +
+            "WS={WorkingSetMB:N0}MB Priv={PrivateMB:N0}MB Heap={HeapMB:N0}MB Mng={ManagedMB:N0}MB Frag={FragMB:N0}MB | " +
+            "GC[g0={Gen0} g1={Gen1} g2={Gen2}] | " +
+            "TP[workers={WorkersInUse}/{WorkerMax} pending={PendingItems} completed={CompletedItems}] | " +
+            "threads={Threads}",
+            phase, Path.GetFileName(filePath), elapsedStr, extraStr,
+            workingSetMB, privateMB, heapMB, managedMB, fragMB,
+            gen0, gen1, gen2,
+            workerMax - workerAvail, workerMax, pendingItems, completedItems,
+            threads);
     }
 }
