@@ -1,0 +1,12 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+C:\src\Yagu\src\Yagu\Services\Ai\FoundryLocalSemanticQueryTranslator.cs(525,53): warning CA1822: Member 'ResolveModelDirectoriesAsync' does not access instance data and can be marked as static (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1822) [C:\src\Yagu\src\Yagu.SemanticWorker\Yagu.SemanticWorker.csproj]
+  Yagu.SemanticWorker -> C:\src\Yagu\src\Yagu.SemanticWorker\bin\Debug\net10.0-windows10.0.19041.0\Yagu.SemanticWorker.dll
+
+Build succeeded.
+
+C:\src\Yagu\src\Yagu\Services\Ai\FoundryLocalSemanticQueryTranslator.cs(525,53): warning CA1822: Member 'ResolveModelDirectoriesAsync' does not access instance data and can be marked as static (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1822) [C:\src\Yagu\src\Yagu.SemanticWorker\Yagu.SemanticWorker.csproj]
+    1 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.58
