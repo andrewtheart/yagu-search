@@ -585,6 +585,10 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("--no-custom-instructions", buildAll);
         Assert.Contains("--no-ask-user", buildAll);
         Assert.Contains("'-p', $prompt", buildAll);
+        Assert.Contains("yagu-release-context-", buildAll);
+        Assert.Contains("& $CopilotCli @args > $stdoutPath 2> $stderrPath", buildAll);
+        Assert.Contains("ReadAllText($stdoutPath).Trim()", buildAll);
+        Assert.Contains("Remove-Item -LiteralPath $contextPath, $stdoutPath, $stderrPath", buildAll);
         Assert.DoesNotContain("--prompt-file", buildAll);
         Assert.Contains("function Add-DeterministicReleaseSections", buildAll);
         Assert.Contains("## Assets", buildAll);
