@@ -34,7 +34,7 @@
 
   NOTE: this sets up the command-line build/test/publish toolchain (dotnet build, Native
   AOT link, Rust, installer packaging) - which is all you need to build, test, and debug Yagu
-  from VS Code (or any editor) using the dotnet CLI. A full IDE is optional: to open Yagu.sln
+  from VS Code (or any editor) using the dotnet CLI. A full IDE is optional: to open Yagu.slnx
   in the Visual Studio IDE instead, install Visual Studio 2026 (18.x) separately - .NET 10
   projects do not load in VS 2022.
 
@@ -468,10 +468,10 @@ function Write-FinalSummary {
 
   Write-Host "===============================================================" -ForegroundColor Cyan
   Write-Host "You can build, test, and debug Yagu from VS Code (or any editor) with the dotnet CLI toolchain above - no full IDE required." -ForegroundColor Yellow
-  Write-Host "To open Yagu.sln in the Visual Studio IDE instead, install Visual Studio 2026 (18.x): https://visualstudio.microsoft.com/" -ForegroundColor Yellow
+  Write-Host "To open Yagu.slnx in the Visual Studio IDE instead, install Visual Studio 2026 (18.x): https://visualstudio.microsoft.com/" -ForegroundColor Yellow
   Write-Host "  (.NET 10 projects do NOT load in Visual Studio 2022; the Build Tools above are only for CLI builds.)" -ForegroundColor DarkGray
   Write-Host "Open a NEW terminal so PATH updates take effect, then build:" -ForegroundColor Cyan
-  Write-Host "  dotnet build Yagu.sln -c Release" -ForegroundColor Gray
+  Write-Host "  dotnet build Yagu.slnx -c Release" -ForegroundColor Gray
 }
 
 # ---------------------------------------------------------------------------
