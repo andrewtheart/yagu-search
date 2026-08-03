@@ -1084,16 +1084,14 @@ internal static partial class CliRunner
                 });
                 if (proc != null) await proc.WaitForExitAsync();
 
-                var installedEsPath = FileLister.FindEsExe();
-                if (installedEsPath != null && Process.GetProcessesByName("Everything").Length == 0)
+                // Everything's setup does not ship es.exe, so resolve Everything.exe directly when the
+                // ES command-line tool is absent (otherwise a successful install never gets started).
+                var postInstallExe = FindEverythingExe(FileLister.FindEsExe() ?? string.Empty);
+                if (postInstallExe != null && Process.GetProcessesByName("Everything").Length == 0)
                 {
-                    var postInstallExe = FindEverythingExe(installedEsPath);
-                    if (postInstallExe != null)
-                    {
-                        try { Process.Start(new ProcessStartInfo { FileName = postInstallExe, UseShellExecute = true }); }
-                        catch { /* ignore */ }
-                        await Task.Delay(2000);
-                    }
+                    try { Process.Start(new ProcessStartInfo { FileName = postInstallExe, UseShellExecute = true }); }
+                    catch { /* ignore */ }
+                    await Task.Delay(2000);
                 }
 
                 Console.Error.WriteLine("Everything installed. Proceeding with search...");

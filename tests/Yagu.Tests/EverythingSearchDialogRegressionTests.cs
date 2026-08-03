@@ -3,6 +3,25 @@ namespace Yagu.Tests;
 public sealed class EverythingSearchDialogRegressionTests
 {
     [Fact]
+    public void PostInstallDetection_FallsBackToEverythingExe_BecauseSetupDoesNotShipEsExe()
+    {
+        string root = FindRepoRoot();
+        string startupChecks = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string cli = File.ReadAllText(Path.Combine(root, "src", "Yagu", "CliRunner.cs"));
+
+        // voidtools ships the ES command-line tool separately, so gating post-install detection on
+        // es.exe made every successful install report "Restart Yagu if Everything was installed to a
+        // custom location" and never launched Everything.
+        Assert.Contains("var installedEverythingExe = installedEsPath is not null", startupChecks);
+        Assert.Contains(": FindEverythingExeStandalone();", startupChecks);
+        Assert.Contains("if (installedEverythingExe is null)", startupChecks);
+        Assert.DoesNotContain("if (installedEsPath is null)", startupChecks);
+
+        Assert.Contains("var postInstallExe = FindEverythingExe(FileLister.FindEsExe() ?? string.Empty);", cli);
+        Assert.Contains("foreach (var registryDir in FileLister.GetEverythingInstallDirsFromRegistry())", cli);
+    }
+
+    [Fact]
     public void EverythingNotFoundPrompt_UsesSharedCustomDialog()
     {
         string root = FindRepoRoot();

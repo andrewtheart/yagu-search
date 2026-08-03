@@ -1000,8 +1000,14 @@ public sealed partial class MainWindow
                 await proc.WaitForExitAsync();
             }
 
+            // Everything's own setup does NOT ship es.exe (the ES command-line tool is a separate
+            // voidtools download), so keying post-install detection on es.exe made every successful
+            // install look like a failure. Fall back to locating Everything.exe itself.
             var installedEsPath = FileLister.FindEsExe();
-            if (installedEsPath is null)
+            var installedEverythingExe = installedEsPath is not null
+                ? FindEverythingExe(installedEsPath)
+                : FindEverythingExeStandalone();
+            if (installedEverythingExe is null)
             {
                 ViewModel.StatusText = "Installer completed. Restart Yagu if Everything was installed to a custom location.";
                 return;
@@ -1009,21 +1015,17 @@ public sealed partial class MainWindow
 
             if (Process.GetProcessesByName("Everything").Length == 0)
             {
-                var everythingExe = FindEverythingExe(installedEsPath);
-                if (everythingExe != null)
+                try
                 {
-                    try
+                    Process.Start(new ProcessStartInfo
                     {
-                        Process.Start(new ProcessStartInfo
-                        {
-                            FileName = everythingExe,
-                            UseShellExecute = true,
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        YaguLog.For("MainWindow").LogWarning(ex, "Failed to start Everything after install");
-                    }
+                        FileName = installedEverythingExe,
+                        UseShellExecute = true,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    YaguLog.For("MainWindow").LogWarning(ex, "Failed to start Everything after install");
                 }
             }
 
