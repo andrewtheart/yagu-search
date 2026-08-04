@@ -280,6 +280,44 @@ public sealed class IndexBuildCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkerBuild_RoutesAndParsesPostBuildCatchUp()
+    {
+        string worker = FakeWorker("postBuildCatchUpNormal");
+        var coordinator = new IndexBuildCoordinator(() => new IndexMaintenanceWorkerClient(
+            worker, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(100)));
+        var catchUpProgress = new List<int>();
+
+        IndexBuildSuccess result = await coordinator.BuildFullScopePreferWorkerAsync(
+            BuildOperation(),
+            true,
+            CancellationToken.None,
+            postBuildCatchUpProgress: catchUpProgress.Add);
+
+        Assert.Equal(new[] { 99 }, catchUpProgress);
+        Assert.Equal(new PostBuildCatchUpResult(
+            true,
+            30_000,
+            IncrementalUpdateOutcome.SegmentAppended,
+            30_001,
+            true,
+            true), result.PostBuildCatchUp);
+    }
+
+    [Fact]
+    public async Task WorkerBuild_RejectsUnknownCheckedPostBuildCatchUpOutcome()
+    {
+        string worker = FakeWorker("postBuildCatchUpInvalid");
+        var coordinator = new IndexBuildCoordinator(() => new IndexMaintenanceWorkerClient(
+            worker, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(100)));
+
+        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            coordinator.BuildFullScopePreferWorkerAsync(
+                BuildOperation(), true, CancellationToken.None));
+
+        Assert.Contains("post-build catch-up outcome", error.Message);
+    }
+
+    [Fact]
     public async Task AcceptedWorkerCrash_IsSurfacedAndNeverRetriedInProcess()
     {
         string worker = FakeWorker("acceptThenExit");

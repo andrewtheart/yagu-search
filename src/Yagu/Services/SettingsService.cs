@@ -218,6 +218,10 @@ public sealed class AppSettings
     public const int DefaultIndexMaxJournalCatchupRecords = 500_000;
     public const int MinimumIndexMaxJournalCatchupRecords = 1000;
     public const int MaximumIndexMaxJournalCatchupRecords = 100_000_000;
+
+    public const int DefaultIndexPostBuildCatchUpThresholdChanges = 30_000;
+    public const int MinimumIndexPostBuildCatchUpThresholdChanges = 0;
+    public const int MaximumIndexPostBuildCatchUpThresholdChanges = 100_000_000;
     public const int DefaultFileIoTimeoutSeconds = 30;
     public const int MinimumFileIoTimeoutSeconds = 1;
     public const int MaximumFileIoTimeoutSeconds = 600;
@@ -355,6 +359,13 @@ public sealed class AppSettings
     public static int NormalizeIndexMaxJournalCatchupRecords(int value)
         => value <= 0 ? DefaultIndexMaxJournalCatchupRecords
             : Math.Clamp(value, MinimumIndexMaxJournalCatchupRecords, MaximumIndexMaxJournalCatchupRecords);
+
+    public static int NormalizeIndexPostBuildCatchUpThresholdChanges(int value)
+        => value < 0 ? DefaultIndexPostBuildCatchUpThresholdChanges
+            : Math.Clamp(
+                value,
+                MinimumIndexPostBuildCatchUpThresholdChanges,
+                MaximumIndexPostBuildCatchUpThresholdChanges);
 
     public static int NormalizeFileIoTimeoutSeconds(int value)
         => value <= 0 ? DefaultFileIoTimeoutSeconds
@@ -852,6 +863,10 @@ public sealed class AppSettings
     public int IndexMaxJournalCatchupMB { get; set; } = DefaultIndexMaxJournalCatchupMB;
     /// <summary>Foreground journal catch-up record budget. Default 500,000 (plan §6.1).</summary>
     public int IndexMaxJournalCatchupRecords { get; set; } = DefaultIndexMaxJournalCatchupRecords;
+    /// <summary>After a full build, automatically apply an incremental delta before publication when the
+    /// journal contains more than this many changes since the build started. Zero catches up any non-empty
+    /// delta; default 30,000.</summary>
+    public int IndexPostBuildCatchUpThresholdChanges { get; set; } = DefaultIndexPostBuildCatchUpThresholdChanges;
 
     /// <summary>Maximum wall time for one file open/read or low-level volume I/O operation. A timed-out
     /// search file is skipped; an index mutation fails closed or leaves the file live-scanned.</summary>
@@ -1500,6 +1515,8 @@ public sealed class SettingsService
         settings.IndexBuildWorkerParallelism = AppSettings.NormalizeIndexBuildWorkerParallelism(settings.IndexBuildWorkerParallelism);
         settings.IndexMaxJournalCatchupMB = AppSettings.NormalizeIndexMaxJournalCatchupMB(settings.IndexMaxJournalCatchupMB);
         settings.IndexMaxJournalCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(settings.IndexMaxJournalCatchupRecords);
+        settings.IndexPostBuildCatchUpThresholdChanges = AppSettings.NormalizeIndexPostBuildCatchUpThresholdChanges(
+            settings.IndexPostBuildCatchUpThresholdChanges);
         settings.FileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds(settings.FileIoTimeoutSeconds);
         settings.IndexMaxDeltaSegments = AppSettings.NormalizeIndexMaxDeltaSegments(settings.IndexMaxDeltaSegments);
         settings.IndexCompactionThresholdMB = AppSettings.NormalizeIndexCompactionThresholdMB(settings.IndexCompactionThresholdMB);

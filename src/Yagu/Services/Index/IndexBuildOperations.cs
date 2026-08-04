@@ -59,7 +59,7 @@ internal sealed class IndexIngestionPolicySnapshot
 /// <summary>Narrow, versioned snapshot for one explicit full build.</summary>
 internal sealed class IndexBuildOperation
 {
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 
     public int Version { get; set; } = CurrentVersion;
     public string StorageDirectory { get; set; } = "";
@@ -82,6 +82,10 @@ internal sealed class IndexBuildOperation
     /// <summary>Produce the additive format-v3 query structures during this build (plan §5.1). Off by
     /// default; no query path reads them yet.</summary>
     public bool ProduceV3QueryStructures { get; set; }
+    /// <summary>Incremental-maintenance settings used only for the staged post-build freshness check.
+    /// A negative threshold disables the check for internal/test callers; app-created operations always
+    /// snapshot the normalized persisted setting.</summary>
+    public IndexMaintenanceSettings PostBuildCatchUpSettings { get; set; } = new();
 }
 
 /// <summary>Worker-safe settings consumed by automatic refresh/compaction.</summary>
@@ -105,6 +109,7 @@ public sealed class IndexMaintenanceSettings
     /// journal delta exceeding it reads as <c>UsnReadStatus.Incomplete</c> → the refresh treats freshness as
     /// discontinuous and needs a full rebuild rather than trusting a partial delta.</summary>
     public int MaxJournalCatchupRecords { get; set; } = 500_000;
+    public int PostBuildCatchUpThresholdChanges { get; set; } = -1;
     public int FileIoTimeoutSeconds { get; set; } = IndexBuildDefaults.FileIoTimeoutSeconds;
 }
 
@@ -119,7 +124,7 @@ internal sealed class IndexMaintenanceRootOperation
 /// <summary>Narrow, versioned snapshot for an ordered automatic maintenance pass.</summary>
 internal sealed class IndexMaintenanceOperation
 {
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
     public const string ModeBuildDue = "buildDue";
     public const string ModeIncremental = "incremental";
 
@@ -199,7 +204,50 @@ internal readonly record struct IndexBuildSuccess(
     string? ImageOcrStatus,
     int ImagesSeen,
     int ImagesAdmitted,
-    int ImagesFailed);
+    int ImagesFailed,
+    PostBuildCatchUpResult PostBuildCatchUp);
+
+internal readonly record struct PostBuildCatchUpResult(
+    bool Checked,
+    int ThresholdChanges,
+    IncrementalUpdateOutcome Outcome,
+    int JournalChangeCount,
+    bool ChangeCountComplete,
+    bool ThresholdExceeded)
+{
+    public bool NeedsAttention => Checked
+        && (!ChangeCountComplete
+            || Outcome is IncrementalUpdateOutcome.NeedsFullRebuild
+                or IncrementalUpdateOutcome.NeedsCompatibilityRebuild);
+
+    public string Describe()
+    {
+        if (!Checked)
+            return string.Empty;
+        if (!ChangeCountComplete)
+        {
+            string observed = JournalChangeCount > 0 ? $" after at least {JournalChangeCount:N0} journal changes" : string.Empty;
+            return $"Post-build catch-up could not read a complete change-journal interval{observed}; the new index was kept safe and affected files will live-scan until maintenance catches up or the index is rebuilt.";
+        }
+        if (!ThresholdExceeded)
+        {
+            if (JournalChangeCount == 0)
+                return "Post-build freshness check found no journal changes since the crawl began.";
+            return $"Post-build freshness check found {JournalChangeCount:N0} journal change(s), at or below the {ThresholdChanges:N0}-change catch-up threshold; affected files remain safe through live scanning until normal maintenance.";
+        }
+        return Outcome switch
+        {
+            IncrementalUpdateOutcome.SegmentAppended =>
+                $"Post-build incremental catch-up applied {JournalChangeCount:N0} journal change(s).",
+            IncrementalUpdateOutcome.Compacted =>
+                $"Post-build incremental catch-up applied {JournalChangeCount:N0} journal change(s) and compacted the staged index.",
+            IncrementalUpdateOutcome.NoChanges =>
+                $"Post-build catch-up examined {JournalChangeCount:N0} journal change(s), but none required an index delta.",
+            _ =>
+                "Post-build catch-up could not prove a safe incremental update; affected files will live-scan until maintenance catches up or the index is rebuilt.",
+        };
+    }
+}
 
 /// <summary>Success payload for one ordered maintenance pass.</summary>
 internal readonly record struct IndexMaintenanceSuccess(
@@ -241,6 +289,8 @@ internal static class IndexOperationValidator
             operation.FileIoTimeoutSeconds,
             IndexBuildDefaults.MinimumFileIoTimeoutSeconds,
             IndexBuildDefaults.MaximumFileIoTimeoutSeconds);
+        ArgumentNullException.ThrowIfNull(operation.PostBuildCatchUpSettings);
+        NormalizeMaintenanceSettings(operation.PostBuildCatchUpSettings);
         NormalizeOcrSettings(operation);
     }
 
@@ -263,18 +313,7 @@ internal static class IndexOperationValidator
         }
         ArgumentNullException.ThrowIfNull(operation.Settings);
         operation.RetainedGenerations = Math.Max(1, operation.RetainedGenerations);
-        operation.Settings.BuildMemoryBudgetMB = operation.Settings.BuildMemoryBudgetMB > 0
-            ? operation.Settings.BuildMemoryBudgetMB
-            : IndexBuildDefaults.MemoryBudgetMB;
-        operation.Settings.MaxDiskUsagePercent = Math.Clamp(operation.Settings.MaxDiskUsagePercent, 0, 99);
-        operation.Settings.MaxDeltaSegments = Math.Clamp(operation.Settings.MaxDeltaSegments, 1, 64);
-        operation.Settings.CompactionThresholdMB = Math.Clamp(operation.Settings.CompactionThresholdMB, 1, 8192);
-        operation.Settings.MaxAutoCompactionSizeMB = Math.Max(0, operation.Settings.MaxAutoCompactionSizeMB);
-        operation.Settings.FileIoTimeoutSeconds = Math.Clamp(
-            operation.Settings.FileIoTimeoutSeconds,
-            IndexBuildDefaults.MinimumFileIoTimeoutSeconds,
-            IndexBuildDefaults.MaximumFileIoTimeoutSeconds);
-        NormalizeOcrSettings(operation.Settings);
+        NormalizeMaintenanceSettings(operation.Settings);
     }
 
     public static void Validate(IndexValidationOperation operation)
@@ -309,6 +348,26 @@ internal static class IndexOperationValidator
         settings.ImageOcrMaxSide = settings.ImageOcrMaxSide <= 0 ? 0 : Math.Clamp(settings.ImageOcrMaxSide, 320, 4096);
         settings.ImageOcrWorkerParallelism = Math.Clamp(settings.ImageOcrWorkerParallelism, 1, 4);
         settings.ImageOcrExtensions = NormalizeOcrExtensions(settings.ImageOcrExtensions);
+    }
+
+    private static void NormalizeMaintenanceSettings(IndexMaintenanceSettings settings)
+    {
+        settings.BuildMemoryBudgetMB = settings.BuildMemoryBudgetMB > 0
+            ? settings.BuildMemoryBudgetMB
+            : IndexBuildDefaults.MemoryBudgetMB;
+        settings.MaxDiskUsagePercent = Math.Clamp(settings.MaxDiskUsagePercent, 0, 99);
+        settings.MaxDeltaSegments = Math.Clamp(settings.MaxDeltaSegments, 1, 64);
+        settings.CompactionThresholdMB = Math.Clamp(settings.CompactionThresholdMB, 1, 8192);
+        settings.MaxAutoCompactionSizeMB = Math.Max(0, settings.MaxAutoCompactionSizeMB);
+        settings.MaxJournalCatchupRecords = Math.Clamp(settings.MaxJournalCatchupRecords, 1, 100_000_000);
+        settings.PostBuildCatchUpThresholdChanges = settings.PostBuildCatchUpThresholdChanges < 0
+            ? -1
+            : Math.Min(settings.PostBuildCatchUpThresholdChanges, 100_000_000);
+        settings.FileIoTimeoutSeconds = Math.Clamp(
+            settings.FileIoTimeoutSeconds,
+            IndexBuildDefaults.MinimumFileIoTimeoutSeconds,
+            IndexBuildDefaults.MaximumFileIoTimeoutSeconds);
+        NormalizeOcrSettings(settings);
     }
 
     private static string NormalizeOcrEngine(string? engine)

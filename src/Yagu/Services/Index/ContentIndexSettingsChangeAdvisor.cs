@@ -27,7 +27,7 @@ public sealed record ContentIndexRebuildReason(string SettingKey, string Descrip
 
 /// <summary>
 /// Recommendation produced after comparing two settings snapshots. Existing indexes remain correctness-safe:
-/// files omitted by an older policy live-scan, and unavailable optional sidecars cause a safe fallback. Rebuilding
+/// files omitted by an older policy live-scan, and unavailable optional query structures cause a safe fallback. Rebuilding
 /// makes coverage, optional namespaces, and storage location match the newly saved settings.
 /// </summary>
 public sealed record ContentIndexSettingsChangeAdvice(
@@ -98,6 +98,7 @@ public static class ContentIndexSettingsChangeAdvisor
         "IndexRemovableDrivePolicy",
         "IndexMaxJournalCatchupMB",
         "IndexMaxJournalCatchupRecords",
+        "IndexPostBuildCatchUpThresholdChanges",
         "IndexUseWatcherHints",
         "IndexMaxDeltaSegments",
         "IndexCompactionThresholdMB",
@@ -120,7 +121,7 @@ public static class ContentIndexSettingsChangeAdvisor
             ["IndexExcludedExtensions"] = "The global build-time excluded extensions changed.",
             ["IndexBuildPdfTextExtendedSource"] = "PDF-text index generation was enabled; existing indexes do not necessarily contain that namespace.",
             ["IndexBuildImageTextExtendedSource"] = "Image-text index generation was enabled; existing indexes do not contain OCR candidate postings.",
-            ["IndexProduceV3QueryStructures"] = "Format-v3 query structures were enabled; existing layers do not necessarily contain those sidecars.",
+            ["IndexProduceV3QueryStructures"] = "Format-v3 query structures were enabled; existing layers do not necessarily contain the required query files stored alongside each layer.",
             ["IndexedRoots"] = "One or more maintained index folders were added or broadened.",
             ["IndexedRootFilters"] = "Per-folder build-time include/exclude filters changed.",
         };

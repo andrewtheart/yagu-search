@@ -45,6 +45,7 @@ public sealed class ContentIndexSettingsTests
         Assert.True(s.IndexPauseOnBattery);
         Assert.True(s.IndexPauseDuringForegroundSearch);
         Assert.True(s.IndexAutoRepair);
+        Assert.Equal(30_000, s.IndexPostBuildCatchUpThresholdChanges);
         Assert.True(s.ShowIndexStatusInMainWindow);
         Assert.True(s.ShowIndexProvenanceInResults);
     }
@@ -208,6 +209,14 @@ public sealed class ContentIndexSettingsTests
         => Assert.Equal(expected, AppSettings.NormalizeIndexMaxJournalCatchupRecords(input));
 
     [Theory]
+    [InlineData(-1, AppSettings.DefaultIndexPostBuildCatchUpThresholdChanges)]
+    [InlineData(0, 0)]
+    [InlineData(30_000, 30_000)]
+    [InlineData(int.MaxValue, AppSettings.MaximumIndexPostBuildCatchUpThresholdChanges)]
+    public void NormalizeIndexPostBuildCatchUpThresholdChanges_Clamps(int input, int expected)
+        => Assert.Equal(expected, AppSettings.NormalizeIndexPostBuildCatchUpThresholdChanges(input));
+
+    [Theory]
     [InlineData(-5, AppSettings.DefaultIndexMaxInProcessSizeMB)] // negative → default (2048)
     [InlineData(0, 0)]                                            // 0 is valid: never load in-process (always live-scan)
     [InlineData(2048, 2048)]
@@ -368,6 +377,7 @@ public sealed class ContentIndexSettingsTests
                 IndexScheduleTimeOfDay = "3:30",       // → HH:mm on load
                 IndexBuildWorkerParallelism = 999,      // → bounded explicit cap
                 IndexQueryWorkerParallelism = -2,       // → automatic
+                IndexPostBuildCatchUpThresholdChanges = int.MaxValue,
                 IndexStorageDirectory = @"  E:\ix  ",
                 IndexRetainedGenerationCount = 3,
                 IndexedRoots = new List<string> { @"C:\Projects", @"C:\Projects\", @"c:\projects", "  ", @"D:\Data" },
@@ -387,6 +397,9 @@ public sealed class ContentIndexSettingsTests
             Assert.Equal("03:30", loaded.IndexScheduleTimeOfDay);
             Assert.Equal(AppSettings.MaximumIndexWorkerParallelism, loaded.IndexBuildWorkerParallelism);
             Assert.Equal(0, loaded.IndexQueryWorkerParallelism);
+            Assert.Equal(
+                AppSettings.MaximumIndexPostBuildCatchUpThresholdChanges,
+                loaded.IndexPostBuildCatchUpThresholdChanges);
             Assert.Equal(@"E:\ix", loaded.IndexStorageDirectory);
             Assert.Equal(3, loaded.IndexRetainedGenerationCount);
             // IndexedRoots normalize + de-dup (case-insensitive, trailing sep) + drop blanks on load.

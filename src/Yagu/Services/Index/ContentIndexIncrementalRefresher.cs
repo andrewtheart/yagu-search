@@ -3,6 +3,12 @@ using Yagu.Services.Logging;
 
 namespace Yagu.Services.Index;
 
+internal readonly record struct IncrementalRefreshResult(
+    IncrementalUpdateOutcome Outcome,
+    int JournalChangeCount,
+    bool ChangeCountComplete,
+    bool ThresholdExceeded);
+
 /// <summary>
 /// Drives one end-to-end Phase 3 incremental refresh for a scope (plan §3.5/§11.4): it reads the change
 /// journal since the newest layer's checkpoint, resolves each name-less USN record to a created/modified/
@@ -27,6 +33,7 @@ public sealed partial class ContentIndexIncrementalRefresher
     private readonly Func<string, IFileIdPathResolver?> _resolverFactory;
     private readonly Func<string, IncrementalFileRead?> _readAndClassify;
     private readonly Func<string, FileIdentity?>? _identityProvider;
+    private readonly Func<string, VolumeBinding?> _volumeBindingReader;
 
     public ContentIndexIncrementalRefresher(
         ContentIndexStore store,
@@ -35,7 +42,8 @@ public sealed partial class ContentIndexIncrementalRefresher
         ContentIndexFreshnessEvaluator.JournalReader journalReader,
         Func<string, IFileIdPathResolver?> resolverFactory,
         Func<string, IncrementalFileRead?> readAndClassify,
-        Func<string, FileIdentity?>? identityProvider = null)
+        Func<string, FileIdentity?>? identityProvider = null,
+        Func<string, VolumeBinding?>? volumeBindingReader = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _policy = policy ?? throw new ArgumentNullException(nameof(policy));
@@ -45,6 +53,7 @@ public sealed partial class ContentIndexIncrementalRefresher
         _resolverFactory = resolverFactory ?? throw new ArgumentNullException(nameof(resolverFactory));
         _readAndClassify = readAndClassify ?? throw new ArgumentNullException(nameof(readAndClassify));
         _identityProvider = identityProvider;
+        _volumeBindingReader = volumeBindingReader ?? VolumeBindingReader.TryCapture;
     }
 
     /// <summary>Runs an incremental refresh; never throws. <paramref name="progress"/> (when supplied)
@@ -68,6 +77,40 @@ public sealed partial class ContentIndexIncrementalRefresher
         DateTimeOffset builtUtc,
         Action<int>? progress = null,
         CancellationToken cancellationToken = default)
+        => RefreshWithDetailsUnderLease(
+            mutation,
+            scopeId,
+            settings,
+            builtUtc,
+            minimumJournalChanges: null,
+            progress,
+            cancellationToken).Outcome;
+
+    internal IncrementalRefreshResult RefreshIfJournalChangeCountExceedsUnderLease(
+        IndexMutationContext mutation,
+        string scopeId,
+        IndexMaintenanceSettings settings,
+        DateTimeOffset builtUtc,
+        int minimumJournalChanges,
+        Action<int>? progress = null,
+        CancellationToken cancellationToken = default)
+        => RefreshWithDetailsUnderLease(
+            mutation,
+            scopeId,
+            settings,
+            builtUtc,
+            Math.Max(0, minimumJournalChanges),
+            progress,
+            cancellationToken);
+
+    internal IncrementalRefreshResult RefreshWithDetailsUnderLease(
+        IndexMutationContext mutation,
+        string scopeId,
+        IndexMaintenanceSettings settings,
+        DateTimeOffset builtUtc,
+        int? minimumJournalChanges,
+        Action<int>? progress,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(mutation);
         ArgumentException.ThrowIfNullOrEmpty(scopeId);
@@ -78,7 +121,7 @@ public sealed partial class ContentIndexIncrementalRefresher
         if (activeManifest is null)
         {
             YaguLog.For("ContentIndex").LogDebug("Incremental refresh: no trusted active layer manifests for scope {Scope} → needs full rebuild.", scopeId);
-            return IncrementalUpdateOutcome.NeedsFullRebuild;
+            return Incomplete(IncrementalUpdateOutcome.NeedsFullRebuild);
         }
 
         if (_store.TryReadCurrentFreshnessInputs() is not { } freshnessInputs)
@@ -86,7 +129,7 @@ public sealed partial class ContentIndexIncrementalRefresher
             YaguLog.For("ContentIndex").LogWarning(
                 "Incremental refresh: scope {Scope} has unreadable file-identity metadata -> needs full rebuild.",
                 scopeId);
-            return IncrementalUpdateOutcome.NeedsFullRebuild;
+            return Incomplete(IncrementalUpdateOutcome.NeedsFullRebuild);
         }
 
         if (freshnessInputs.FileIds.HasExtendedIdentities)
@@ -97,7 +140,7 @@ public sealed partial class ContentIndexIncrementalRefresher
             YaguLog.For("ContentIndex").LogInformation(
                 "Incremental refresh: scope {Scope} has legacy extended file identities -> needs one compatibility rebuild.",
                 scopeId);
-            return IncrementalUpdateOutcome.NeedsCompatibilityRebuild;
+            return Incomplete(IncrementalUpdateOutcome.NeedsCompatibilityRebuild);
         }
 
         string root = activeManifest.NormalizedRootPath;
@@ -105,7 +148,7 @@ public sealed partial class ContentIndexIncrementalRefresher
         UsnCheckpoint since = activeManifest.FreshnessCheckpoint;
         VolumeBinding? mounted = string.IsNullOrWhiteSpace(activeManifest.VolumeGuidPath)
             ? null
-            : VolumeBindingReader.TryCapture(root);
+            : _volumeBindingReader(root);
         string volumeReason = "source volume unavailable";
         if (!string.IsNullOrWhiteSpace(activeManifest.VolumeGuidPath)
             && (mounted is not { } currentVolume
@@ -115,7 +158,7 @@ public sealed partial class ContentIndexIncrementalRefresher
                 "Incremental refresh: mounted volume mismatch for scope {Scope}: {Reason}.",
                 scopeId,
                 mounted is null ? "source volume unavailable" : volumeReason);
-            return IncrementalUpdateOutcome.NeedsFullRebuild;
+            return Incomplete(IncrementalUpdateOutcome.NeedsFullRebuild);
         }
 
         YaguLog.For("ContentIndex").LogDebug(
@@ -134,7 +177,7 @@ public sealed partial class ContentIndexIncrementalRefresher
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             YaguLog.For("ContentIndex").LogWarning(ex, "Incremental refresh: journal read threw for scope {Scope} → needs full rebuild.", scopeId);
-            return IncrementalUpdateOutcome.NeedsFullRebuild;
+            return Incomplete(IncrementalUpdateOutcome.NeedsFullRebuild);
         }
 
         // Any discontinuity (gap/journal-id change/unavailable) → can't trust an incremental step → full rebuild.
@@ -143,13 +186,29 @@ public sealed partial class ContentIndexIncrementalRefresher
             YaguLog.For("ContentIndex").LogInformation(
                 "Incremental refresh: journal status {Status} for scope {Scope} (not continuous) → needs full rebuild.",
                 read.Status, scopeId);
-            return IncrementalUpdateOutcome.NeedsFullRebuild;
+            return new IncrementalRefreshResult(
+                IncrementalUpdateOutcome.NeedsFullRebuild,
+                read.Changes.Count,
+                ChangeCountComplete: false,
+                ThresholdExceeded: minimumJournalChanges is { } threshold && read.Changes.Count > threshold);
+        }
+
+        bool thresholdExceeded = minimumJournalChanges is { } minimum
+            && read.Changes.Count > minimum;
+        if (minimumJournalChanges is not null && !thresholdExceeded)
+        {
+            YaguLog.For("ContentIndex").LogInformation(
+                "Incremental refresh: scope={Scope} found {ChangeCount} journal change(s), at or below the post-build threshold {Threshold}; leaving them for normal maintenance.",
+                scopeId,
+                read.Changes.Count,
+                minimumJournalChanges.Value);
+            return Complete(IncrementalUpdateOutcome.NoChanges, read.Changes.Count, thresholdExceeded);
         }
 
         if (read.Changes.Count == 0)
         {
             YaguLog.For("ContentIndex").LogDebug("Incremental refresh: no journal changes for scope {Scope} → no-op.", scopeId);
-            return IncrementalUpdateOutcome.NoChanges;
+            return Complete(IncrementalUpdateOutcome.NoChanges, 0, thresholdExceeded);
         }
 
         var changedIdentities = new HashSet<UsnFileIdentity>();
@@ -161,7 +220,7 @@ public sealed partial class ContentIndexIncrementalRefresher
             YaguLog.For("ContentIndex").LogWarning(
                 "Incremental refresh: active identity/path metadata was unreadable for scope {Scope} → needs full rebuild.",
                 scopeId);
-            return IncrementalUpdateOutcome.NeedsFullRebuild;
+            return Complete(IncrementalUpdateOutcome.NeedsFullRebuild, read.Changes.Count, thresholdExceeded);
         }
 
         IFileIdPathResolver? resolver = _resolverFactory(root);
@@ -170,7 +229,7 @@ public sealed partial class ContentIndexIncrementalRefresher
             YaguLog.For("ContentIndex").LogWarning(
                 "Incremental refresh: could not open a file-id path resolver for '{Root}' (scope {Scope}) → needs full rebuild.",
                 root, scopeId);
-            return IncrementalUpdateOutcome.NeedsFullRebuild;
+            return Complete(IncrementalUpdateOutcome.NeedsFullRebuild, read.Changes.Count, thresholdExceeded);
         }
 
         try
@@ -192,20 +251,20 @@ public sealed partial class ContentIndexIncrementalRefresher
             progress?.Invoke(100);
 
             var updater = new ContentIndexIncrementalUpdater(_store, _policy, _identityProvider);
-            VolumeBinding? beforePublish = mounted is null ? null : VolumeBindingReader.TryCapture(root);
+            VolumeBinding? beforePublish = mounted is null ? null : _volumeBindingReader(root);
             if (mounted is { } expectedVolume
                 && (beforePublish is not { } publishVolume || !VolumeBindingReader.Matches(expectedVolume, publishVolume)))
             {
                 YaguLog.For("ContentIndex").LogWarning(
                     "Incremental refresh: mounted volume changed before publication for scope {Scope}; the previous checkpoint remains active.",
                     scopeId);
-                return IncrementalUpdateOutcome.NeedsFullRebuild;
+                return Complete(IncrementalUpdateOutcome.NeedsFullRebuild, read.Changes.Count, thresholdExceeded);
             }
             IncrementalUpdateOutcome outcome = updater.ApplyUnderLease(
                 mutation, scopeId, volumeIdentity, root, resolved.Changed, resolved.Deleted,
                 read.NextCheckpoint, settings, builtUtc, cancellationToken);
             YaguLog.For("ContentIndex").LogInformation("Incremental refresh: scope={Scope} outcome={Outcome}.", scopeId, outcome);
-            return outcome;
+            return Complete(outcome, read.Changes.Count, thresholdExceeded);
         }
         catch (OperationCanceledException)
         {
@@ -214,11 +273,20 @@ public sealed partial class ContentIndexIncrementalRefresher
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             YaguLog.For("ContentIndex").LogWarning(ex, "Incremental refresh: applying changes threw for scope {Scope} → needs full rebuild.", scopeId);
-            return IncrementalUpdateOutcome.NeedsFullRebuild;
+            return Complete(IncrementalUpdateOutcome.NeedsFullRebuild, read.Changes.Count, thresholdExceeded);
         }
         finally
         {
             (resolver as IDisposable)?.Dispose();
         }
     }
+
+    private static IncrementalRefreshResult Incomplete(IncrementalUpdateOutcome outcome)
+        => new(outcome, 0, ChangeCountComplete: false, ThresholdExceeded: false);
+
+    private static IncrementalRefreshResult Complete(
+        IncrementalUpdateOutcome outcome,
+        int journalChangeCount,
+        bool thresholdExceeded)
+        => new(outcome, journalChangeCount, ChangeCountComplete: true, thresholdExceeded);
 }

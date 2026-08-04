@@ -94,11 +94,29 @@ public sealed class ContentIndexSettingsChangeAdvisorTests
         Assert.False(ContentIndexSettingsChangeAdvisor.Analyze(enabled, disabled).HasRecommendation);
     }
 
+    [Fact]
+    public void FormatV3Recommendation_ExplainsRequiredFilesWithoutSpecializedJargon()
+    {
+        AppSettings settings = Settings(@"C:\");
+        Assert.True(ContentIndexConfigService.Set(settings, "IndexProduceV3QueryStructures", "false").Success);
+        ContentIndexSettingsSnapshot before = ContentIndexSettingsChangeAdvisor.Capture(settings);
+        Assert.True(ContentIndexConfigService.Set(settings, "IndexProduceV3QueryStructures", "true").Success);
+
+        ContentIndexRebuildReason reason = Assert.Single(
+            ContentIndexSettingsChangeAdvisor.Analyze(
+                before,
+                ContentIndexSettingsChangeAdvisor.Capture(settings)).Reasons);
+
+        Assert.Contains("required query files stored alongside each layer", reason.Description);
+        Assert.DoesNotContain("sidecar", reason.Description, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData("IndexAccelerateRegex", "false")]
     [InlineData("IndexQueryWorkerParallelism", "4")]
     [InlineData("IndexBuildTrigger", "Continuous")]
     [InlineData("IndexBuildMemoryBudgetMB", "512")]
+    [InlineData("IndexPostBuildCatchUpThresholdChanges", "12000")]
     [InlineData("IndexMaxDeltaSegments", "16")]
     [InlineData("ShowIndexStatusInMainWindow", "false")]
     public void RuntimeSchedulingResourceOrPresentationChange_DoesNotRecommendRebuild(string key, string value)

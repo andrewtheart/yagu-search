@@ -93,7 +93,7 @@ internal static class IndexWorkerProtocol
     public const int RequiredIndexAbiVersion = 1;
 
     /// <summary>Managed control-protocol version, independent of the optional native query ABI.</summary>
-    public const int ControlProtocolVersion = 2;
+    public const int ControlProtocolVersion = 3;
 
     internal static class OutcomeKinds
     {
@@ -279,6 +279,12 @@ internal sealed class IndexWorkerMessage
     public int ImagesSeen { get; set; }
     public int ImagesAdmitted { get; set; }
     public int ImagesFailed { get; set; }
+    public bool PostBuildCatchUpChecked { get; set; }
+    public int PostBuildCatchUpThresholdChanges { get; set; }
+    public string? PostBuildCatchUpOutcome { get; set; }
+    public int PostBuildCatchUpJournalChangeCount { get; set; }
+    public bool PostBuildCatchUpChangeCountComplete { get; set; }
+    public bool PostBuildCatchUpThresholdExceeded { get; set; }
     public string? ActiveBaseGenerationId { get; set; }
     public long ActivePointerSequence { get; set; }
     public string? LastPublishedArtifactId { get; set; }

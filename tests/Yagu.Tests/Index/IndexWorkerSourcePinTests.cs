@@ -68,6 +68,17 @@ public sealed class IndexWorkerSourcePinTests
     }
 
     [Fact]
+    public void Worker_BuildHost_StreamsAndMapsPostBuildCatchUp()
+    {
+        string src = ReadSource("src", "Yagu.IndexWorker", "IndexWorkerBuildHost.cs");
+
+        Assert.Contains("postBuildCatchUpProgress:", src);
+        Assert.Contains("ProgressStage = \"postBuildCatchUp\"", src);
+        Assert.Contains("PostBuildCatchUpJournalChangeCount = result.PostBuildCatchUp.JournalChangeCount", src);
+        Assert.Contains("PostBuildCatchUpChangeCountComplete = result.PostBuildCatchUp.ChangeCountComplete", src);
+    }
+
+    [Fact]
     public void Worker_MaintenanceRole_DoesNotLoadNativeEngine_AndKeepsCancelResponsive()
     {
         string src = ReadSource("src", "Yagu.IndexWorker", "Program.cs");

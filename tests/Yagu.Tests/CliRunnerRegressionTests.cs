@@ -410,9 +410,11 @@ public sealed class CliRunnerRegressionTests
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
+        Assert.DoesNotContain("sidecar", source, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("CONTENT INDEX (opt-in accelerator):", source);
         Assert.Contains("--build-index [<path>]", source);
         Assert.Contains("--index-config <k>=<v>", source);
+        Assert.Contains("IndexPostBuildCatchUpThresholdChanges=30000", source);
         Assert.Contains("--index-add-root <path>", source);
     }
 
@@ -425,6 +427,8 @@ public sealed class CliRunnerRegressionTests
         Assert.Contains("`--use-index`", help);
         Assert.Contains("`--build-index [<path>]`", help);
         Assert.Contains("`--index-config reset`", help);
+        Assert.Contains("IndexPostBuildCatchUpThresholdChanges=30000", help);
+        Assert.Contains("Changes during a full build", help);
         Assert.Contains("`--index-add-root <path>`", help);
         Assert.Contains("Build-output changes print the affected roots", help);
     }

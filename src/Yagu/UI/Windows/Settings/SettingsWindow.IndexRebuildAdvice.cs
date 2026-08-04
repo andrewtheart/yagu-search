@@ -99,7 +99,7 @@ public sealed partial class SettingsWindow
 
         text.AppendLine();
         text.Append("Search results remain correct before rebuilding: files not represented by the old index are read live, ")
-            .Append("and missing optional sidecars safely fall back. Rebuilding updates acceleration coverage and uses a staged, ")
+            .Append("and missing optional format-v3 query files safely fall back to live scanning. Rebuilding updates acceleration coverage and uses a staged, ")
             .Append("atomic replacement, but a large folder can take substantial time.");
         if (canRebuildNow && advice.AffectedRoots.Count > 1)
             text.Append(" The folders will rebuild sequentially and the operation can be cancelled from this tab.");

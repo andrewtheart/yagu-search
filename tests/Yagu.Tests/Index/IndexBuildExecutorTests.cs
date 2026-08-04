@@ -132,6 +132,186 @@ public sealed class IndexBuildExecutorTests : IDisposable
     }
 
     [Fact]
+    public void BuildFullScope_RunsPostBuildCatchUpOnStagedIndexBeforeAtomicCommit()
+    {
+        IndexBuildOperation operation = BuildOperation();
+        operation.PostBuildCatchUpSettings.PostBuildCatchUpThresholdChanges = 30_000;
+        string scopeId = ContentIndexManager.ScopeIdForRoot(_root);
+        bool catchUpRan = false;
+        var runtime = new IndexBuildRuntime
+        {
+            RunPostBuildCatchUp = (mutation, stagedPaths, build, cancellationToken, progress) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                catchUpRan = true;
+                Assert.NotEqual(
+                    _paths.GetScopeDirectory(scopeId),
+                    stagedPaths.GetScopeDirectory(scopeId));
+                var stagedStore = new ContentIndexStore(stagedPaths, scopeId);
+                IndexManifest stagedManifest = stagedStore.TryReadCurrentIncrementalManifest()!;
+                var segmentBuilder = new ContentIndexDeltaSegmentBuilder(build.Policy.ToPolicy());
+                if (VolumeBindingReader.TryCapture(stagedManifest.NormalizedRootPath) is { } volumeBinding)
+                    segmentBuilder.SeedVolumeBinding(volumeBinding);
+                else
+                    segmentBuilder.SeedVolumeSerialNumber(stagedManifest.VolumeSerialNumber);
+                segmentBuilder.AddChangedDocument(
+                    Path.Combine(_root, "a.txt"),
+                    System.Text.Encoding.UTF8.GetBytes("changed during the staged build"));
+                stagedStore.PublishSegmentUnderLease(
+                    mutation,
+                    segmentBuilder.Build(
+                        scopeId,
+                        stagedManifest.VolumeIdentity,
+                        stagedManifest.NormalizedRootPath,
+                        new UsnCheckpoint(
+                            stagedManifest.FreshnessCheckpoint.JournalId,
+                            stagedManifest.FreshnessCheckpoint.NextUsn + 1),
+                        DateTimeOffset.UtcNow));
+                Assert.Equal(1, stagedStore.ActiveSegmentCount());
+                Assert.Null(new ContentIndexStore(_paths, scopeId).TryOpenCurrent());
+                progress?.Invoke(100);
+                return new PostBuildCatchUpResult(
+                    true,
+                    build.PostBuildCatchUpSettings.PostBuildCatchUpThresholdChanges,
+                    IncrementalUpdateOutcome.SegmentAppended,
+                    30_001,
+                    true,
+                    true);
+            },
+        };
+        var catchUpProgress = new List<int>();
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+
+        IndexBuildSuccess result = IndexBuildExecutor.BuildFullScopeUnderLease(
+            mutation,
+            operation,
+            CancellationToken.None,
+            null,
+            null,
+            runtime,
+            postBuildCatchUpProgress: catchUpProgress.Add);
+
+        Assert.True(catchUpRan);
+        Assert.Equal(new[] { 100 }, catchUpProgress);
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, result.PostBuildCatchUp.Outcome);
+        Assert.StartsWith("seg-", result.LastPublishedArtifactId);
+        var liveStore = new ContentIndexStore(_paths, scopeId);
+        Assert.NotNull(liveStore.TryOpenCurrent());
+        Assert.Equal(1, liveStore.ActiveSegmentCount());
+    }
+
+    [Fact]
+    public void BuildFullScope_CancelledPostBuildCatchUpPreservesPreviousGeneration()
+    {
+        IndexBuildSuccess previous;
+        using (IndexMutationContext initialMutation = IndexMutationContext.Acquire(_paths))
+        {
+            previous = IndexBuildExecutor.BuildFullScopeUnderLease(
+                initialMutation,
+                BuildOperation(),
+                CancellationToken.None,
+                null,
+                null);
+        }
+        IndexManifest previousManifest = new ContentIndexStore(_paths, previous.ScopeId)
+            .TryReadCurrentIncrementalManifest()!;
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "replacement content");
+        IndexBuildOperation replacement = BuildOperation();
+        replacement.PostBuildCatchUpSettings.PostBuildCatchUpThresholdChanges = 0;
+        var runtime = new IndexBuildRuntime
+        {
+            RunPostBuildCatchUp = static (_, _, _, _, _) => throw new OperationCanceledException(),
+        };
+
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+        Assert.Throws<OperationCanceledException>(() => IndexBuildExecutor.BuildFullScopeUnderLease(
+            mutation,
+            replacement,
+            CancellationToken.None,
+            null,
+            null,
+            runtime));
+
+        IndexManifest active = new ContentIndexStore(_paths, previous.ScopeId)
+            .TryReadCurrentIncrementalManifest()!;
+        Assert.Equal(previousManifest.BuiltUtc, active.BuiltUtc);
+        Assert.Equal(previousManifest.FreshnessCheckpoint, active.FreshnessCheckpoint);
+    }
+
+    [Fact]
+    public void ProductionPostBuildCatchUp_WithoutAStagedBaseFailsClosedBeforeJournalAccess()
+    {
+        IndexBuildOperation operation = BuildOperation();
+        operation.PostBuildCatchUpSettings.PostBuildCatchUpThresholdChanges = 30_000;
+        var emptyPaths = new FixedContentIndexPathProvider(Path.Combine(_sandbox, "empty-index"));
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(emptyPaths);
+
+        PostBuildCatchUpResult result = IndexMaintenanceRuntime.RunProductionPostBuildCatchUp(
+            mutation,
+            emptyPaths,
+            operation,
+            CancellationToken.None,
+            null);
+
+        Assert.Equal(new PostBuildCatchUpResult(
+            true,
+            30_000,
+            IncrementalUpdateOutcome.NeedsFullRebuild,
+            0,
+            false,
+            false), result);
+    }
+
+    [Fact]
+    public void MaintenanceBuildMapping_PropagatesCatchUpAttentionAndProgressSemantics()
+    {
+        PostBuildCatchUpResult warning = new(
+            true,
+            30_000,
+            IncrementalUpdateOutcome.NeedsFullRebuild,
+            30_001,
+            true,
+            true);
+        IndexBuildSuccess build = new(
+            "scope",
+            "gen-000001",
+            1,
+            "gen-000001",
+            "summary",
+            2,
+            3,
+            null,
+            0,
+            0,
+            null,
+            null,
+            0,
+            0,
+            0,
+            warning);
+
+        IndexMaintenanceRootResult warned = IndexBuildExecutor.FromBuild(_root, build);
+        IndexMaintenanceRootResult clean = IndexBuildExecutor.FromBuild(
+            _root,
+            build with
+            {
+                PostBuildCatchUp = new PostBuildCatchUpResult(
+                    true,
+                    30_000,
+                    IncrementalUpdateOutcome.NoChanges,
+                    0,
+                    true,
+                    false),
+            });
+
+        Assert.Equal(warning.Describe(), warned.Warning);
+        Assert.Null(clean.Warning);
+        Assert.Equal(-1, IndexBuildExecutor.MapPostBuildCatchUpProgress(-1));
+        Assert.Equal(99, IndexBuildExecutor.MapPostBuildCatchUpProgress(0));
+        Assert.Equal(99, IndexBuildExecutor.MapPostBuildCatchUpProgress(100));
+    }
+
+    [Fact]
     public void Maintenance_BuildDue_CoversMissingBuildFreshSkipDirtyRebuildAndMissingFolder()
     {
         using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);

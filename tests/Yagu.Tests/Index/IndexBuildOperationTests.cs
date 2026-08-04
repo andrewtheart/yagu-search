@@ -67,6 +67,7 @@ public sealed class IndexBuildOperationTests : IDisposable
             IndexMaxDiskUsagePercent = 88,
             IndexBuildPdfTextExtendedSource = true,
             IndexBuildImageTextExtendedSource = true,
+            IndexPostBuildCatchUpThresholdChanges = 12_000,
             IndexMaxFileSizeMB = 12,
             IndexExcludedGlobs = "**/obj/**",
         };
@@ -89,6 +90,7 @@ public sealed class IndexBuildOperationTests : IDisposable
         Assert.Equal(settings.ImageOcrEngine, operation.ImageOcrEngine);
         Assert.Contains("png", operation.ImageOcrExtensions);
         Assert.True(operation.ProduceV3QueryStructures);
+        Assert.Equal(12_000, operation.PostBuildCatchUpSettings.PostBuildCatchUpThresholdChanges);
         Assert.True(operation.Policy.IndexBinaryAsciiContent);
         Assert.Contains("**/obj/**", operation.Policy.ExcludedGlobs);
 
@@ -100,6 +102,7 @@ public sealed class IndexBuildOperationTests : IDisposable
         settings.IndexCompactionThresholdMB = 333;
         settings.IndexMaxAutoCompactionSizeMB = 444;
         settings.IndexMaxJournalCatchupRecords = 12_345;
+        settings.IndexPostBuildCatchUpThresholdChanges = 6_789;
         settings.IndexAutoRepair = false;
         IndexMaintenanceOperation maintenance = IndexBuildOperationFactory.CreateMaintenance(
             settings,
@@ -111,6 +114,7 @@ public sealed class IndexBuildOperationTests : IDisposable
         Assert.Equal(333, maintenance.Settings.CompactionThresholdMB);
         Assert.Equal(444, maintenance.Settings.MaxAutoCompactionSizeMB);
         Assert.Equal(12_345, maintenance.Settings.MaxJournalCatchupRecords);
+        Assert.Equal(6_789, maintenance.Settings.PostBuildCatchUpThresholdChanges);
         Assert.False(maintenance.AllowFullRebuildFallback);
         Assert.True(maintenance.AllowCompatibilityRebuild);
         Assert.False(maintenance.ForceRefresh);
@@ -122,6 +126,70 @@ public sealed class IndexBuildOperationTests : IDisposable
             7, Environment.ProcessorCount, IndexWorkerParallelism.DetectedPhysicalCoreCount, 512,
             settings.LimitParallelismOnHdd, DiskTypeDetector.IsHardDisk(root));
         Assert.Equal(expectedMaintenanceParallelism, maintenance.Roots[0].BuildParallelism);
+    }
+
+    [Fact]
+    public void PostBuildCatchUpResult_DescribesEveryOutcome()
+    {
+        var cases = new (PostBuildCatchUpResult Result, bool NeedsAttention, string Description)[]
+        {
+            (
+                new(false, 30_000, IncrementalUpdateOutcome.NoChanges, 0, false, false),
+                false,
+                string.Empty
+            ),
+            (
+                new(true, 30_000, IncrementalUpdateOutcome.NeedsFullRebuild, 0, false, false),
+                true,
+                "Post-build catch-up could not read a complete change-journal interval; the new index was kept safe and affected files will live-scan until maintenance catches up or the index is rebuilt."
+            ),
+            (
+                new(true, 30_000, IncrementalUpdateOutcome.NeedsFullRebuild, 12, false, false),
+                true,
+                "Post-build catch-up could not read a complete change-journal interval after at least 12 journal changes; the new index was kept safe and affected files will live-scan until maintenance catches up or the index is rebuilt."
+            ),
+            (
+                new(true, 30_000, IncrementalUpdateOutcome.NoChanges, 0, true, false),
+                false,
+                "Post-build freshness check found no journal changes since the crawl began."
+            ),
+            (
+                new(true, 30_000, IncrementalUpdateOutcome.NoChanges, 12, true, false),
+                false,
+                "Post-build freshness check found 12 journal change(s), at or below the 30,000-change catch-up threshold; affected files remain safe through live scanning until normal maintenance."
+            ),
+            (
+                new(true, 30_000, IncrementalUpdateOutcome.SegmentAppended, 30_001, true, true),
+                false,
+                "Post-build incremental catch-up applied 30,001 journal change(s)."
+            ),
+            (
+                new(true, 30_000, IncrementalUpdateOutcome.Compacted, 30_001, true, true),
+                false,
+                "Post-build incremental catch-up applied 30,001 journal change(s) and compacted the staged index."
+            ),
+            (
+                new(true, 30_000, IncrementalUpdateOutcome.NoChanges, 30_001, true, true),
+                false,
+                "Post-build catch-up examined 30,001 journal change(s), but none required an index delta."
+            ),
+            (
+                new(true, 30_000, IncrementalUpdateOutcome.NeedsFullRebuild, 30_001, true, true),
+                true,
+                "Post-build catch-up could not prove a safe incremental update; affected files will live-scan until maintenance catches up or the index is rebuilt."
+            ),
+            (
+                new(true, 30_000, IncrementalUpdateOutcome.NeedsCompatibilityRebuild, 30_001, true, true),
+                true,
+                "Post-build catch-up could not prove a safe incremental update; affected files will live-scan until maintenance catches up or the index is rebuilt."
+            ),
+        };
+
+        foreach ((PostBuildCatchUpResult result, bool needsAttention, string description) in cases)
+        {
+            Assert.Equal(needsAttention, result.NeedsAttention);
+            Assert.Equal(description, result.Describe());
+        }
     }
 
     [Fact]

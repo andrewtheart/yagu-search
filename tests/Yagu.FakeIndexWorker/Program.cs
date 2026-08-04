@@ -51,7 +51,7 @@ if (scenario == "hangBeforeReady")
     return;
 }
 
-int version = scenario == "mismatch" ? 3 : 2;
+int version = scenario == "mismatch" ? 4 : 3;
 Send($"{{\"type\":\"ready\",\"controlProtocolVersion\":{version},\"epoch\":7}}");
 if (scenario == "mismatch")
     return;
@@ -141,6 +141,15 @@ while ((line = Console.In.ReadLine()) is not null)
             Send($"{{\"type\":\"accepted\",\"id\":{id},\"ok\":true}}");
             Send($"{{\"type\":\"progress\",\"id\":{id},\"percent\":95,\"progressStage\":\"pdf\"}}");
             Send($"{{\"type\":\"result\",\"id\":{id},\"ok\":true,\"outcomeKind\":\"ok\",\"scopeId\":\"scope\",\"summary\":\"ok\"}}");
+            break;
+        case "postBuildCatchUpNormal":
+            Send($"{{\"type\":\"accepted\",\"id\":{id},\"ok\":true}}");
+            Send($"{{\"type\":\"progress\",\"id\":{id},\"percent\":99,\"progressStage\":\"postBuildCatchUp\"}}");
+            Send($"{{\"type\":\"result\",\"id\":{id},\"ok\":true,\"outcomeKind\":\"ok\",\"scopeId\":\"scope\",\"summary\":\"ok\",\"postBuildCatchUpChecked\":true,\"postBuildCatchUpThresholdChanges\":30000,\"postBuildCatchUpOutcome\":\"SegmentAppended\",\"postBuildCatchUpJournalChangeCount\":30001,\"postBuildCatchUpChangeCountComplete\":true,\"postBuildCatchUpThresholdExceeded\":true}}");
+            break;
+        case "postBuildCatchUpInvalid":
+            Send($"{{\"type\":\"accepted\",\"id\":{id},\"ok\":true}}");
+            Send($"{{\"type\":\"result\",\"id\":{id},\"ok\":true,\"outcomeKind\":\"ok\",\"scopeId\":\"scope\",\"postBuildCatchUpChecked\":true,\"postBuildCatchUpOutcome\":\"unexpected\"}}");
             break;
         case "buildNullFields":
             Send($"{{\"type\":\"accepted\",\"id\":{id},\"ok\":true}}");

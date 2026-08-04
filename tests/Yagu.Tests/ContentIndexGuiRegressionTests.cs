@@ -22,6 +22,7 @@ public sealed class ContentIndexGuiRegressionTests
     private static readonly string CliCommandSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.CliCommand.cs");
     private static readonly string SettingsIndexingSource = Read("src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.Indexing.cs");
     private static readonly string SettingsIndexingActionsSource = Read("src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.IndexingActions.cs");
+    private static readonly string SettingsIndexRebuildAdviceSource = Read("src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.IndexRebuildAdvice.cs");
     private static readonly string SettingsWindowSource = Read("src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs");
     private static readonly string StartupChecksSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs");
     private static readonly string IndexOnboardingSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.IndexOnboarding.cs");
@@ -30,6 +31,8 @@ public sealed class ContentIndexGuiRegressionTests
     private static readonly string MainWindowCodeBehindSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs");
     private static readonly string SettingsServiceSource = Read("src", "Yagu", "Services", "SettingsService.cs");
     private static readonly string HelpMarkdown = Read("HELP.md");
+    private static readonly string ReadmeMarkdown = Read("README.md");
+    private static readonly string CrashConsistencyDocumentation = Read("docs", "index-crash-consistency.md");
 
     // ── MainViewModel: session-only per-search toggle + settings accessor + SearchOptions wiring ──
 
@@ -514,6 +517,16 @@ public sealed class ContentIndexGuiRegressionTests
     }
 
     [Fact]
+    public void IndexingTab_ConfiguresAndReportsAtomicPostBuildCatchUp()
+    {
+        Assert.Contains("Post-build catch-up threshold (journal changes):", SettingsIndexingSource);
+        Assert.Contains("s.IndexPostBuildCatchUpThresholdChanges", SettingsIndexingSource);
+        Assert.Contains("AppSettings.NormalizeIndexPostBuildCatchUpThresholdChanges(v)", SettingsIndexingSource);
+        Assert.Contains("postBuildCatchUpProgress:", SettingsIndexingActionsSource);
+        Assert.Contains("result.PostBuildCatchUp.Describe()", SettingsIndexingActionsSource);
+    }
+
+    [Fact]
     public void PrivacyTab_HostsAggregateIndexTelemetryToggle()
     {
         // "Share aggregate content-index metrics" is a telemetry opt-in, so its toggle lives with the
@@ -797,6 +810,22 @@ public sealed class ContentIndexGuiRegressionTests
     {
         Assert.Contains("--use-index", HelpMarkdown);
         Assert.Contains("--no-index", HelpMarkdown);
+    }
+
+    [Fact]
+    public void UserFacingIndexText_ExplainsAdditionalQueryFilesWithoutSpecializedJargon()
+    {
+        Assert.DoesNotContain("sidecar", SettingsIndexingSource, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sidecar", SettingsIndexRebuildAdviceSource, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sidecar", HelpMarkdown, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sidecar", ReadmeMarkdown, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sidecar", CrashConsistencyDocumentation, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Contains("additional memory-map-friendly files", SettingsIndexingSource);
+        Assert.Contains("missing optional format-v3 query files", SettingsIndexRebuildAdviceSource);
+        Assert.Contains("additional memory-map-friendly query files", HelpMarkdown);
+        Assert.Contains("optional query files stored alongside an index layer", ReadmeMarkdown);
+        Assert.Contains("additional format-v3 query files stored beside each index layer", CrashConsistencyDocumentation);
     }
 
     // ── Main-window availability status indicator (real, presence-only data) ──

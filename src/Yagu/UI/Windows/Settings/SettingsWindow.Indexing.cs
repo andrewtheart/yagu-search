@@ -188,7 +188,7 @@ public sealed partial class SettingsWindow
             "Use memory-mapped worker query sessions (format-v3)",
             s => s.IndexUseWorkerQuerySessions,
             (s, v) => s.IndexUseWorkerQuerySessions = v,
-            "Moves the complete candidate/path-classification and pruning session into the long-lived isolated worker, so large indexes do not have to be opened in Yagu's process and are governed by the mapped-worker size limit instead of the in-process limit. Requires format-v3 structures in every active layer, which new builds produce by default. Missing sidecars or any worker/freshness failure safely live-scans. Default on.");
+            "Moves the complete candidate/path-classification and pruning session into the long-lived isolated worker, so large indexes do not have to be opened in Yagu's process and are governed by the mapped-worker size limit instead of the in-process limit. Requires the complete set of format-v3 query files in every active layer; new builds create those files by default. If any required file is missing, or the worker/freshness check fails, Yagu safely reads files live. Default on.");
 
         AddIndexNumber(accelerationGroup, "Query startup budget (ms):",
             s => s.IndexQueryStartupBudgetMs,
@@ -238,10 +238,10 @@ public sealed partial class SettingsWindow
             "Off by default. A full index build runs the selected OCR engine over eligible images and stores only positive trigram postings — never recognized text. Because OCR output is non-deterministic, this index prioritizes likely candidates but never skips OCR for a non-matching, changed, unknown, or fingerprint-mismatched image. Enabling it recommends rebuilding existing indexes and can make whole-drive builds substantially longer.");
         var produceV3Toggle = AddIndexToggle(scopeGroup, "Produce format-v3 query structures",
             s => s.IndexProduceV3QueryStructures, (s, v) => s.IndexProduceV3QueryStructures = v,
-            "On by default. Builds write memory-map-friendly postings, path/identity, and tombstone sidecars for each layer. They are actively consumed by mapped isolated-worker query sessions, and can also feed the optional in-process v3 reader. Cost: additional build I/O/time and disk space; every active layer needs sidecars, so older indexes require rebuilding before the all-v3 worker path can serve them.");
+            "On by default. Builds write additional memory-map-friendly files for postings, paths/identities, and deletion markers alongside each index layer. Mapped isolated-worker query sessions actively use these files, and the optional in-process v3 reader can also use them. Cost: additional build I/O/time and disk space; every active layer needs the complete file set, so older indexes require rebuilding before the all-v3 worker path can serve them.");
         var useV3Toggle = AddIndexToggle(scopeGroup, "Use format-v3 reader for in-process queries (experimental)",
             s => s.IndexUseV3QueryReader, (s, v) => s.IndexUseV3QueryReader = v,
-            "Controls only the in-process candidate reader. When on, candidates come from memory-mapped v3 postings instead of a deserialized posting index, reducing host allocations. The isolated mapped query-worker path uses v3 independently of this switch. Missing/incompatible sidecars or any read fault safely fall back or live-scan; results are identical.");
+            "Controls only the in-process candidate reader. When on, candidates come from memory-mapped v3 postings instead of a deserialized posting index, reducing host allocations. The isolated mapped query-worker path uses v3 independently of this switch. If the required format-v3 query files are missing or incompatible, or a read fails, Yagu safely falls back or reads files live; results are identical.");
         var v3ModeStatus = Description(string.Empty);
         v3ModeStatus.Opacity = 0.8;
         scopeGroup.Children.Add(v3ModeStatus);
@@ -252,11 +252,11 @@ public sealed partial class SettingsWindow
             v3ModeStatus.Text = settings.IndexUseWorkerQuerySessions
                 ? settings.IndexProduceV3QueryStructures
                     ? "Active query path: the isolated mapped query worker is using format-v3 structures for eligible roots. The in-process-reader switch above may remain off; it does not disable this worker path."
-                    : "Mapped query-worker mode is enabled, but v3 production is off. It can use only existing layers that already have all required sidecars; any root with a missing layer safely live-scans."
+                    : "Mapped query-worker mode is enabled, but v3 production is off. It can use only existing layers that already have the complete set of format-v3 query files; any root with a missing layer safely reads files live."
                 : settings.IndexUseV3QueryReader
-                    ? "Active query path: the in-process format-v3 candidate reader is selected where all required sidecars are available."
+                    ? "Active query path: the in-process format-v3 candidate reader is selected where all required format-v3 query files are available."
                     : settings.IndexProduceV3QueryStructures
-                        ? "Format-v3 sidecars are being produced, but the current query mode is not consuming them. They remain available for mapped-worker or in-process-v3 use after that mode is enabled."
+                        ? "Additional format-v3 query files are being produced alongside each index layer, but the current query mode is not using them. They remain available for mapped-worker or in-process-v3 use after that mode is enabled."
                         : "Format-v3 structures are neither produced nor selected. Searches use the compatible content.bin/in-process path or safely live-scan.";
         }
 
@@ -558,6 +558,11 @@ public sealed partial class SettingsWindow
         AddIndexToggle(resourcesGroup, "Automatically repair a corrupt or incompatible index",
             s => s.IndexAutoRepair, (s, v) => s.IndexAutoRepair = v,
             "Default on. Corruption always causes an immediate live-scan fallback; when on, a rebuild is also scheduled per the build trigger. When off, it is only reported.");
+        AddIndexNumber(resourcesGroup, "Post-build catch-up threshold (journal changes):",
+            s => s.IndexPostBuildCatchUpThresholdChanges,
+            (s, v) => s.IndexPostBuildCatchUpThresholdChanges = AppSettings.NormalizeIndexPostBuildCatchUpThresholdChanges(v),
+            0, AppSettings.MaximumIndexPostBuildCatchUpThresholdChanges,
+            "After a full build or rebuild, Yagu counts file-system journal changes since the crawl began. Above this threshold it applies an incremental catch-up to the staged index before publishing it. 0 catches up after any non-empty interval; default 30,000.");
         AddIndexNumber(resourcesGroup, "Foreground journal catch-up limit (MB):",
             s => s.IndexMaxJournalCatchupMB,
             (s, v) => s.IndexMaxJournalCatchupMB = AppSettings.NormalizeIndexMaxJournalCatchupMB(v),

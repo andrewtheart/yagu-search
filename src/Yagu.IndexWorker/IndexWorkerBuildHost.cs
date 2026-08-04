@@ -88,6 +88,14 @@ internal static class IndexWorkerBuildHost
                         Percent = progress.Total <= 0 ? -1 : 95 + Math.Clamp(progress.Processed * 4 / progress.Total, 0, 4),
                         ProgressRoot = build.Root,
                         ProgressStage = "ocr",
+                    }),
+                    postBuildCatchUpProgress: progress => send(new IndexWorkerMessage
+                    {
+                        Type = IndexWorkerProtocol.MessageTypes.Progress,
+                        Id = request.Id,
+                        Percent = progress < 0 ? -1 : 99,
+                        ProgressRoot = build.Root,
+                        ProgressStage = "postBuildCatchUp",
                     }));
                 return BuildResult(request.Id, result);
             }
@@ -184,6 +192,12 @@ internal static class IndexWorkerBuildHost
         ImagesSeen = result.ImagesSeen,
         ImagesAdmitted = result.ImagesAdmitted,
         ImagesFailed = result.ImagesFailed,
+        PostBuildCatchUpChecked = result.PostBuildCatchUp.Checked,
+        PostBuildCatchUpThresholdChanges = result.PostBuildCatchUp.ThresholdChanges,
+        PostBuildCatchUpOutcome = result.PostBuildCatchUp.Outcome.ToString(),
+        PostBuildCatchUpJournalChangeCount = result.PostBuildCatchUp.JournalChangeCount,
+        PostBuildCatchUpChangeCountComplete = result.PostBuildCatchUp.ChangeCountComplete,
+        PostBuildCatchUpThresholdExceeded = result.PostBuildCatchUp.ThresholdExceeded,
     };
 
     private static IndexWorkerMessage Failure(int id, string outcome, string error) => new()

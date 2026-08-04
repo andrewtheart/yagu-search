@@ -18,6 +18,7 @@ public sealed class ContentIndexConfigServiceTests
         Assert.Contains("EnableContentIndex", ContentIndexConfigService.Keys);
         Assert.Contains("IndexQueryStartupBudgetMs", ContentIndexConfigService.Keys);
         Assert.Contains("IndexBuildTrigger", ContentIndexConfigService.Keys);
+        Assert.Contains("IndexPostBuildCatchUpThresholdChanges", ContentIndexConfigService.Keys);
         Assert.Contains("IndexStorageDirectory", ContentIndexConfigService.Keys);
         Assert.True(ContentIndexConfigService.Keys.Count >= 25);
     }
@@ -90,6 +91,21 @@ public sealed class ContentIndexConfigServiceTests
         var settings = new AppSettings();
         Assert.True(ContentIndexConfigService.Set(settings, "IndexQueryStartupBudgetMs", "999999").Success);
         Assert.Equal(AppSettings.MaximumIndexQueryStartupBudgetMs, settings.IndexQueryStartupBudgetMs);
+    }
+
+    [Fact]
+    public void Set_PostBuildCatchUpThreshold_PreservesZeroAndClampsMaximum()
+    {
+        var settings = new AppSettings();
+        Assert.True(ContentIndexConfigService.Set(
+            settings, "IndexPostBuildCatchUpThresholdChanges", "0").Success);
+        Assert.Equal(0, settings.IndexPostBuildCatchUpThresholdChanges);
+
+        Assert.True(ContentIndexConfigService.Set(
+            settings, "IndexPostBuildCatchUpThresholdChanges", int.MaxValue.ToString()).Success);
+        Assert.Equal(
+            AppSettings.MaximumIndexPostBuildCatchUpThresholdChanges,
+            settings.IndexPostBuildCatchUpThresholdChanges);
     }
 
     [Fact]

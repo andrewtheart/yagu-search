@@ -2087,6 +2087,8 @@ internal static partial class CliRunner
                 Console.Out.WriteLine($"  PDF-text index: {result.PdfStatus} ({result.PdfAdmitted}/{result.PdfsSeen} PDF(s), determinism {result.PdfDeterminism}).");
             if (result.ImageOcrStatus is not null)
                 Console.Out.WriteLine($"  Image-text index: {result.ImageOcrStatus} ({result.ImagesAdmitted}/{result.ImagesSeen} image(s) admitted, {result.ImagesFailed} failed; positive candidates only, nonmembers still OCR live).");
+            if (result.PostBuildCatchUp.Checked)
+                Console.Out.WriteLine($"  {result.PostBuildCatchUp.Describe()}");
             return (int)ContentIndexExitCode.Success;
         }
         catch (DirectoryNotFoundException ex)
@@ -2894,7 +2896,9 @@ internal static partial class CliRunner
                                           --image-text / --pdf-text / --search-archives.
                   --no-index              Force a full live scan for this search (never use the index).
                   --build-index [<path>]  Build/update the content index for a scope (default: current
-                                          directory), print a summary, and exit.
+                                          directory), check journal changes since the crawl began,
+                                          catch up above IndexPostBuildCatchUpThresholdChanges, print
+                                          a summary, and exit.
                   --rebuild-index [<path>] Force a full rebuild of the index for a scope.
                   --index-status [<path>] Print the index manifest and last-build summary for a scope.
                   --delete-index <path>   Delete the index for one scope.
@@ -2902,6 +2906,7 @@ internal static partial class CliRunner
                   --index-config          Print every persisted Indexing setting and its value.
                   --index-config <k>=<v>  Set an Indexing setting (repeatable; validated like Settings).
                                           Build-output changes print affected-root rebuild commands.
+                                          Example: --index-config IndexPostBuildCatchUpThresholdChanges=30000
                   --index-config reset    Restore all Indexing settings to their defaults.
                   --index-list-roots      List the folders registered for content indexing (shows any per-folder filters).
                   --index-add-root <path> Register a folder and print its build command when newly maintained.
@@ -3652,8 +3657,8 @@ internal static partial class CliRunner
                   Does: Searches metadata files while skipping common binaries.
                   Cmd:  Yagu.exe --cli --directory assets "license" --skip-extensions "png;jpg;gif;webp"
 
-              184. Search media sidecars
-                  Does: Finds title in JSON sidecar files next to media assets.
+              184. Search media metadata files
+                  Does: Finds title in JSON metadata files stored next to media assets.
                   Cmd:  Yagu.exe --cli --directory assets "title" -g "*.json"
 
               185. Search logs with low noise

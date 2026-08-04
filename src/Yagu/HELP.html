@@ -2706,18 +2706,20 @@ memory-mapped worker query sessions (format-v3)</strong> is also on by
 default: it moves candidate/path classification and pruning into the
 long-lived worker, avoids opening the index in Yagu’s process, and uses
 the <strong>mapped worker query size limit</strong> instead (default
-30720 MB / 30 GB). It requires format-v3 sidecars in every active layer;
-new builds produce them by default, while missing sidecars or any
-worker/freshness failure safely live-scan. <strong>Query worker
-parallelism</strong> controls mapped candidate/path-classification
-lanes: 0 (default) selects a conservative logical-core-based degree,
-while 1–32 sets an explicit cap; the HDD safeguard overrides it to one
-lane for rotational roots. This group also includes query startup,
-candidate-percentage, and query-memory budgets. When the legacy path has
-a usable index within its in-process limit, Yagu warms it and shows
-<strong>Indexing: preparing…</strong>; starting a search can pause that
-warm-up. Case-insensitive searches accelerate when the query is ASCII;
-non-ASCII case-insensitive queries live-scan.</td>
+30720 MB / 30 GB). It requires the complete set of format-v3 query files
+in every active layer; new builds create those additional files
+alongside each layer by default. If any required file is missing, or the
+worker/freshness check fails, Yagu safely reads files live.
+<strong>Query worker parallelism</strong> controls mapped
+candidate/path-classification lanes: 0 (default) selects a conservative
+logical-core-based degree, while 1–32 sets an explicit cap; the HDD
+safeguard overrides it to one lane for rotational roots. This group also
+includes query startup, candidate-percentage, and query-memory budgets.
+When the legacy path has a usable index within its in-process limit,
+Yagu warms it and shows <strong>Indexing: preparing…</strong>; starting
+a search can pause that warm-up. Case-insensitive searches accelerate
+when the query is ASCII; non-ASCII case-insensitive queries
+live-scan.</td>
 </tr>
 <tr>
 <td>Scope &amp; Ingestion</td>
@@ -2734,10 +2736,10 @@ is non-deterministic, the image-text index never skips OCR for a
 nonmember, unknown, changed, or fingerprint-mismatched image; it only
 identifies prior positive candidates and can make large builds
 substantially longer. <strong>Produce format-v3 query
-structures</strong> writes extra memory-map-friendly postings,
-path/identity, and tombstone sidecars for every raw-index layer. The
-optional <strong>Use memory-mapped worker query sessions
-(format-v3)</strong> mode consumes those sidecars in the isolated
+structures</strong> writes additional memory-map-friendly query files
+for postings, paths/identities, and deletion markers alongside every
+raw-index layer. The optional <strong>Use memory-mapped worker query
+sessions (format-v3)</strong> mode reads those files in the isolated
 worker; the separate <strong>Use format-v3 reader for in-process
 queries</strong> switch controls only the in-process candidate reader.
 Benefits are bounded host memory, fewer large deserialization
@@ -2811,14 +2813,18 @@ the memory budget; 1–32 sets an explicit cap. File reads/classification
 run concurrently, but outcomes are committed in crawl order so content
 IDs, spill boundaries, and transactional publication remain
 deterministic. The existing <strong>Limit parallelism on HDDs</strong>
-safeguard overrides it to one lane for rotational roots. The remaining
-controls include <strong>use file-system watcher hints</strong> (off by
-default; a latency hint only — the change journal stays authoritative),
-the <strong>maximum delta segments</strong> (default 8),
-<strong>compaction size threshold</strong> (default 256 MB), and the
-<strong>auto-compaction size cap</strong> (default 512 MB, 0 = no cap).
-(The opt-in <strong>share aggregate content-index metrics</strong>
-telemetry toggle lives on the <strong>Privacy</strong> tab.)</td>
+safeguard overrides it to one lane for rotational roots. The
+<strong>post-build catch-up threshold</strong> (default 30,000 journal
+changes; 0 = any non-empty interval) controls whether a full build
+immediately applies changes that arrived while its crawl was running.
+The remaining controls include <strong>use file-system watcher
+hints</strong> (off by default; a latency hint only — the change journal
+stays authoritative), the <strong>maximum delta segments</strong>
+(default 8), <strong>compaction size threshold</strong> (default 256
+MB), and the <strong>auto-compaction size cap</strong> (default 512 MB,
+0 = no cap). (The opt-in <strong>share aggregate content-index
+metrics</strong> telemetry toggle lives on the <strong>Privacy</strong>
+tab.)</td>
 </tr>
 <tr>
 <td>Status &amp; Provenance</td>
@@ -2935,6 +2941,24 @@ watcher-triggered pass bypasses the old-identity preflight for the same
 reason. The HDD safeguard does not disable incremental indexing — it
 only limits that drive’s index worker to one lane, so an update may take
 longer but is still performed.</p>
+<p><strong>Changes during a full build.</strong> A full build records
+its starting change-journal checkpoint before crawling. After raw, PDF,
+and image-text staging finishes, Yagu counts the journal records that
+arrived during the build. If that count is greater than
+<strong>Post-build catch-up threshold</strong> (default 30,000), it
+applies an incremental delta to the private staged index and only then
+performs the single atomic publication. Cancellation during catch-up
+never exposes the replacement; the previous committed generation stays
+active. A complete interval at or below the threshold is left for normal
+scheduled maintenance, and affected paths continue to live-scan safely.
+The threshold counts journal records, not estimated KB, because the
+journal API does not expose a reliable byte total. The separate
+<strong>Foreground journal catch-up limit (records)</strong> remains the
+hard safety cap; if the build interval exceeds that cap or journal
+continuity cannot be proven, Yagu publishes the completed base with its
+original checkpoint, reports that post-build catch-up needs attention,
+and live-scans safely rather than trusting a partial delta or starting
+another expensive full rebuild automatically.</p>
 <h4 id="when-settings-require-a-rebuild">When settings require a
 rebuild</h4>
 <p><strong>Rebuild advice after settings changes.</strong> When saved
@@ -5312,13 +5336,16 @@ index work fails closed.</td>
 <tr>
 <td><code>--build-index [&lt;path&gt;]</code></td>
 <td>Build/update the index for a scope (default: current directory),
-print a summary, and exit. Refuses a duplicate child build when a
-different registered ancestor already covers the path.</td>
+count journal changes since the crawl began, apply a staged incremental
+catch-up above <code>IndexPostBuildCatchUpThresholdChanges</code>, print
+a summary, and exit. Refuses a duplicate child build when a different
+registered ancestor already covers the path.</td>
 </tr>
 <tr>
 <td><code>--rebuild-index [&lt;path&gt;]</code></td>
-<td>Force a full rebuild of the index for a scope. Refuses a redundant
-child rebuild beneath a registered ancestor.</td>
+<td>Force a full rebuild of the index for a scope, including the same
+pre-publication freshness check and optional catch-up. Refuses a
+redundant child rebuild beneath a registered ancestor.</td>
 </tr>
 <tr>
 <td><code>--index-status [&lt;path&gt;]</code></td>
@@ -5344,7 +5371,8 @@ summary for a scope.</td>
 <td>Set an Indexing setting (repeatable; validated exactly like the
 Settings tab — unknown keys or invalid values fail without saving any
 change). Build-output changes print the affected roots and exact
-<code>--rebuild-index</code> commands.</td>
+<code>--rebuild-index</code> commands. Example:
+<code>--index-config IndexPostBuildCatchUpThresholdChanges=30000</code>.</td>
 </tr>
 <tr>
 <td><code>--index-config reset</code></td>

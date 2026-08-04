@@ -32,6 +32,7 @@ internal static class IndexBuildOperationFactory
             ImageOcrWorkerParallelism = ResolveOcrBuildParallelism(settings, normalizedRoot),
             ImageOcrExtensions = SplitExtensions(AppSettings.DefaultImageOcrExtensions),
             ProduceV3QueryStructures = settings.IndexProduceV3QueryStructures,
+            PostBuildCatchUpSettings = CreateMaintenanceSettings(settings),
         };
         IndexOperationValidator.Validate(operation);
         return operation;
@@ -103,6 +104,8 @@ internal static class IndexBuildOperationFactory
             CompactionThresholdMB = AppSettings.NormalizeIndexCompactionThresholdMB(settings.IndexCompactionThresholdMB),
             MaxAutoCompactionSizeMB = AppSettings.NormalizeIndexMaxAutoCompactionSizeMB(settings.IndexMaxAutoCompactionSizeMB),
             MaxJournalCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(settings.IndexMaxJournalCatchupRecords),
+            PostBuildCatchUpThresholdChanges = AppSettings.NormalizeIndexPostBuildCatchUpThresholdChanges(
+                settings.IndexPostBuildCatchUpThresholdChanges),
             FileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds(settings.FileIoTimeoutSeconds),
         };
     }

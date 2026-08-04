@@ -11,8 +11,9 @@ mutation boundary on local NTFS/ReFS storage. The test harness kills the worker 
 so managed `catch`/`finally` cleanup does not run.
 
 Sudden power loss and storage devices that acknowledge a flush without persisting it are a separate hardware
-failure model. Core checksummed files, v3 sidecars, marker files, and pointer temp files are flushed to disk
-before publication, but Yagu does not claim to control a drive's volatile write cache.
+failure model. Core checksummed files, additional format-v3 query files stored beside each index layer,
+marker files, and pointer temp files are flushed to disk before publication, but Yagu does not claim to
+control a drive's volatile write cache.
 
 ## Commit invariants
 
@@ -55,7 +56,7 @@ The matrix covers:
 
 - first one-batch and paged builds;
 - rebuild over a prior complete index;
-- checksummed core-file and v3 sidecar write phases;
+- checksummed core-file and additional format-v3 query-file write phases;
 - base and segment write, validation, marker, promotion, pointer, and cleanup phases;
 - staged base/segment import and its sole live pointer switch;
 - incremental append;

@@ -28,6 +28,9 @@ internal sealed class IndexBuildRuntime
     public Func<IndexMutationContext, ContentIndexManager, IContentIndexPathProvider, string, IndexIngestionPolicy, IndexBuildOperation, CancellationToken, Action<ImageOcrBuildProgress>?, ImageOcrExtendedSourceBuildResult> BuildImageOcr { get; init; }
         = BuildProductionImageOcr;
 
+    public Func<IndexMutationContext, IContentIndexPathProvider, IndexBuildOperation, CancellationToken, Action<int>?, PostBuildCatchUpResult> RunPostBuildCatchUp { get; init; }
+        = IndexMaintenanceRuntime.RunProductionPostBuildCatchUp;
+
     private static ImageOcrExtendedSourceBuildResult BuildProductionImageOcr(
         IndexMutationContext mutation,
         ContentIndexManager manager,
@@ -100,6 +103,54 @@ internal sealed class IndexMaintenanceRuntime
         IndexMaintenanceSettings settings,
         CancellationToken cancellationToken,
         Action<int>? progress)
+        => RunProductionRefreshWithDetails(
+            mutation,
+            paths,
+            retainedGenerations,
+            root,
+            policy,
+            settings,
+            minimumJournalChanges: null,
+            cancellationToken,
+            progress).Outcome;
+
+    internal static PostBuildCatchUpResult RunProductionPostBuildCatchUp(
+        IndexMutationContext mutation,
+        IContentIndexPathProvider paths,
+        IndexBuildOperation operation,
+        CancellationToken cancellationToken,
+        Action<int>? progress)
+    {
+        int threshold = operation.PostBuildCatchUpSettings.PostBuildCatchUpThresholdChanges;
+        IncrementalRefreshResult result = RunProductionRefreshWithDetails(
+            mutation,
+            paths,
+            operation.RetainedGenerations,
+            operation.Root,
+            operation.Policy.ToPolicy(),
+            operation.PostBuildCatchUpSettings,
+            threshold,
+            cancellationToken,
+            progress);
+        return new PostBuildCatchUpResult(
+            Checked: true,
+            ThresholdChanges: threshold,
+            result.Outcome,
+            result.JournalChangeCount,
+            result.ChangeCountComplete,
+            result.ThresholdExceeded);
+    }
+
+    private static IncrementalRefreshResult RunProductionRefreshWithDetails(
+        IndexMutationContext mutation,
+        IContentIndexPathProvider paths,
+        int retainedGenerations,
+        string root,
+        IndexIngestionPolicy policy,
+        IndexMaintenanceSettings settings,
+        int? minimumJournalChanges,
+        CancellationToken cancellationToken,
+        Action<int>? progress)
     {
         string scopeId = ContentIndexManager.ScopeIdForRoot(root);
         var store = new ContentIndexStore(paths, scopeId, retainedGenerations);
@@ -122,8 +173,14 @@ internal sealed class IndexMaintenanceRuntime
             resolverRoot => BoundedFileIdPathResolver.ForRoot(resolverRoot, ioTimeout, cancellationToken),
             fileClassifier.Read,
             FileIdentityReader.TryGetIdentity);
-        return refresher.RefreshUnderLease(
-            mutation, scopeId, settings, DateTimeOffset.UtcNow, progress, cancellationToken);
+        return refresher.RefreshWithDetailsUnderLease(
+            mutation,
+            scopeId,
+            settings,
+            DateTimeOffset.UtcNow,
+            minimumJournalChanges,
+            progress,
+            cancellationToken);
     }
 }
 
@@ -138,7 +195,8 @@ internal static class IndexBuildExecutor
         Action<IndexBuildProgress>? progress,
         Action<PdfBuildProgress>? pdfProgress,
         IndexBuildRuntime? runtime = null,
-        Action<ImageOcrBuildProgress>? imageOcrProgress = null)
+        Action<ImageOcrBuildProgress>? imageOcrProgress = null,
+        Action<int>? postBuildCatchUpProgress = null)
     {
         IndexOperationValidator.Validate(operation);
         runtime ??= new IndexBuildRuntime();
@@ -228,6 +286,18 @@ internal static class IndexBuildExecutor
             }
         }
 
+        PostBuildCatchUpResult postBuildCatchUp = default;
+        if (operation.PostBuildCatchUpSettings.PostBuildCatchUpThresholdChanges >= 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            postBuildCatchUp = runtime.RunPostBuildCatchUp(
+                mutation,
+                transaction.Paths,
+                operation,
+                cancellationToken,
+                postBuildCatchUpProgress);
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         StagedIndexCommitResult commit = transaction.Commit(
             mutation, operation.RetainedGenerations, pdfMode, imageOcrMode);
@@ -246,7 +316,8 @@ internal static class IndexBuildExecutor
             imageOcrStatus,
             imagesSeen,
             imagesAdmitted,
-            imagesFailed);
+            imagesFailed,
+            postBuildCatchUp);
     }
 
     internal static IndexMaintenanceSuccess RunMaintenancePassUnderLease(
@@ -494,6 +565,7 @@ internal static class IndexBuildExecutor
             ImageOcrWorkerParallelism = pass.Settings.ImageOcrWorkerParallelism,
             ImageOcrExtensions = pass.Settings.ImageOcrExtensions,
             ProduceV3QueryStructures = pass.Settings.ProduceV3QueryStructures,
+            PostBuildCatchUpSettings = pass.Settings,
         };
         long usedBytes = IndexBuildProgressEstimate.DriveUsedBytes(root.Root);
         return BuildFullScopeUnderLease(
@@ -502,10 +574,14 @@ internal static class IndexBuildExecutor
             cancellationToken,
             p => progress?.Invoke(root.Root, IndexBuildProgressEstimate.Percent(p.BytesCrawled, usedBytes), "rawBuild"),
             p => progress?.Invoke(root.Root, p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5), "pdf"),
-            imageOcrProgress: p => progress?.Invoke(root.Root, p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4), "ocr"));
+            imageOcrProgress: p => progress?.Invoke(root.Root, p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4), "ocr"),
+            postBuildCatchUpProgress: p =>
+                progress?.Invoke(root.Root, MapPostBuildCatchUpProgress(p), "postBuildCatchUp"));
     }
 
-    private static IndexMaintenanceRootResult FromBuild(string root, IndexBuildSuccess success) => new()
+    internal static int MapPostBuildCatchUpProgress(int progress) => progress < 0 ? -1 : 99;
+
+    internal static IndexMaintenanceRootResult FromBuild(string root, IndexBuildSuccess success) => new()
     {
         Root = root,
         Action = IndexMaintenanceActions.Built,
@@ -513,6 +589,7 @@ internal static class IndexBuildExecutor
         SkippedCount = success.TotalSkipped,
         PdfStatus = success.PdfStatus,
         ImageOcrStatus = success.ImageOcrStatus,
+        Warning = success.PostBuildCatchUp.NeedsAttention ? success.PostBuildCatchUp.Describe() : null,
     };
 
     internal static bool TryProactiveReanchorUnderLease(

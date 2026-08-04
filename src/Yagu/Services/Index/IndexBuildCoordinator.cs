@@ -27,12 +27,13 @@ internal sealed class IndexBuildCoordinator
         CancellationToken cancellationToken,
         Action<IndexBuildProgress>? progress = null,
         Action<PdfBuildProgress>? pdfProgress = null,
-        Action<ImageOcrBuildProgress>? imageOcrProgress = null)
+        Action<ImageOcrBuildProgress>? imageOcrProgress = null,
+        Action<int>? postBuildCatchUpProgress = null)
     {
         IndexOperationValidator.Validate(operation);
         return useWorker
-            ? BuildWithWorkerAsync(operation, cancellationToken, progress, pdfProgress, imageOcrProgress)
-            : RunBuildFallbackAsync(operation, cancellationToken, progress, pdfProgress, imageOcrProgress);
+            ? BuildWithWorkerAsync(operation, cancellationToken, progress, pdfProgress, imageOcrProgress, postBuildCatchUpProgress)
+            : RunBuildFallbackAsync(operation, cancellationToken, progress, pdfProgress, imageOcrProgress, postBuildCatchUpProgress);
     }
 
     public Task<IndexMaintenanceSuccess> RunMaintenancePreferWorkerAsync(
@@ -63,7 +64,8 @@ internal sealed class IndexBuildCoordinator
         CancellationToken cancellationToken,
         Action<IndexBuildProgress>? progress,
         Action<PdfBuildProgress>? pdfProgress,
-        Action<ImageOcrBuildProgress>? imageOcrProgress)
+        Action<ImageOcrBuildProgress>? imageOcrProgress,
+        Action<int>? postBuildCatchUpProgress)
     {
         string json = JsonSerializer.Serialize(operation, IndexOperationJsonContext.Default.IndexBuildOperation);
         await using IndexMaintenanceWorkerClient client = _clientFactory();
@@ -75,6 +77,8 @@ internal sealed class IndexBuildCoordinator
                     pdfProgress?.Invoke(new PdfBuildProgress(Math.Max(0, message.Percent - 90), 5));
                 else if (message.ProgressStage == "ocr")
                     imageOcrProgress?.Invoke(new ImageOcrBuildProgress(Math.Max(0, message.Percent - 95), 4));
+                else if (message.ProgressStage == "postBuildCatchUp")
+                    postBuildCatchUpProgress?.Invoke(message.Percent);
                 else
                     progress?.Invoke(new IndexBuildProgress(message.BytesCrawled, message.FilesCrawled));
             },
@@ -83,7 +87,13 @@ internal sealed class IndexBuildCoordinator
         if (cancellationToken.IsCancellationRequested)
             throw new OperationCanceledException(cancellationToken);
         if (ShouldFallback(worker))
-            return await RunBuildFallbackAsync(operation, cancellationToken, progress, pdfProgress, imageOcrProgress).ConfigureAwait(false);
+            return await RunBuildFallbackAsync(
+                operation,
+                cancellationToken,
+                progress,
+                pdfProgress,
+                imageOcrProgress,
+                postBuildCatchUpProgress).ConfigureAwait(false);
         IndexWorkerMessage terminal = RequireTerminal(worker);
         ThrowIfFailed(terminal, cancellationToken, operation.StorageDirectory);
         return new IndexBuildSuccess(
@@ -101,7 +111,16 @@ internal sealed class IndexBuildCoordinator
             terminal.ImageOcrStatus,
             terminal.ImagesSeen,
             terminal.ImagesAdmitted,
-            terminal.ImagesFailed);
+            terminal.ImagesFailed,
+            new PostBuildCatchUpResult(
+                terminal.PostBuildCatchUpChecked,
+                terminal.PostBuildCatchUpThresholdChanges,
+                terminal.PostBuildCatchUpChecked
+                    ? ParseIncrementalOutcome(terminal.PostBuildCatchUpOutcome)
+                    : IncrementalUpdateOutcome.NoChanges,
+                terminal.PostBuildCatchUpJournalChangeCount,
+                terminal.PostBuildCatchUpChangeCountComplete,
+                terminal.PostBuildCatchUpThresholdExceeded));
     }
 
     private async Task<IndexMaintenanceSuccess> MaintenanceWithWorkerAsync(
@@ -185,19 +204,32 @@ internal sealed class IndexBuildCoordinator
         }
     }
 
+    private static IncrementalUpdateOutcome ParseIncrementalOutcome(string? value)
+    {
+        if (Enum.TryParse(value, ignoreCase: false, out IncrementalUpdateOutcome outcome)
+            && Enum.IsDefined(outcome))
+        {
+            return outcome;
+        }
+
+        throw new InvalidDataException($"The maintenance worker returned an invalid post-build catch-up outcome '{value}'.");
+    }
+
     private static Task<IndexBuildSuccess> RunBuildFallbackAsync(
         IndexBuildOperation operation,
         CancellationToken cancellationToken,
         Action<IndexBuildProgress>? progress,
         Action<PdfBuildProgress>? pdfProgress,
-        Action<ImageOcrBuildProgress>? imageOcrProgress)
+        Action<ImageOcrBuildProgress>? imageOcrProgress,
+        Action<int>? postBuildCatchUpProgress)
         => Task.Run(() =>
         {
             var paths = new FixedContentIndexPathProvider(operation.StorageDirectory);
             using IndexMutationContext mutation = IndexMutationContext.Acquire(paths);
             return IndexBuildExecutor.BuildFullScopeUnderLease(
                 mutation, operation, cancellationToken, progress, pdfProgress,
-                imageOcrProgress: imageOcrProgress);
+                imageOcrProgress: imageOcrProgress,
+                postBuildCatchUpProgress: postBuildCatchUpProgress);
         }, cancellationToken);
 
     private static Task<IndexMaintenanceSuccess> RunMaintenanceFallbackAsync(

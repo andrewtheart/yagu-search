@@ -1073,7 +1073,7 @@ public sealed class IndexWorkerClientTests : IDisposable
     private static FakeIndexWorkerProcess ReadyFakeProcess()
     {
         var process = new FakeIndexWorkerProcess();
-        process.Output.WriteLine("{\"type\":\"ready\",\"controlProtocolVersion\":2,\"epoch\":7}");
+        process.Output.WriteLine("{\"type\":\"ready\",\"controlProtocolVersion\":3,\"epoch\":7}");
         return process;
     }
 

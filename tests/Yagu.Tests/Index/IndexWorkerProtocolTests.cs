@@ -114,7 +114,33 @@ public sealed class IndexWorkerProtocolTests
         Assert.Equal("progress", IndexWorkerProtocol.MessageTypes.Progress);
         Assert.Equal("result", IndexWorkerProtocol.MessageTypes.Result);
         Assert.Equal("error", IndexWorkerProtocol.MessageTypes.Error);
-        Assert.Equal(2, IndexWorkerProtocol.ControlProtocolVersion);
+        Assert.Equal(3, IndexWorkerProtocol.ControlProtocolVersion);
+    }
+
+    [Fact]
+    public void Message_RoundTripsPostBuildCatchUpResult()
+    {
+        var message = new IndexWorkerMessage
+        {
+            PostBuildCatchUpChecked = true,
+            PostBuildCatchUpThresholdChanges = 30_000,
+            PostBuildCatchUpOutcome = IncrementalUpdateOutcome.SegmentAppended.ToString(),
+            PostBuildCatchUpJournalChangeCount = 30_001,
+            PostBuildCatchUpChangeCountComplete = true,
+            PostBuildCatchUpThresholdExceeded = true,
+        };
+
+        string json = JsonSerializer.Serialize(message, IndexWorkerJsonContext.Default.IndexWorkerMessage);
+        IndexWorkerMessage restored = JsonSerializer.Deserialize(
+            json,
+            IndexWorkerJsonContext.Default.IndexWorkerMessage)!;
+
+        Assert.True(restored.PostBuildCatchUpChecked);
+        Assert.Equal(30_000, restored.PostBuildCatchUpThresholdChanges);
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended.ToString(), restored.PostBuildCatchUpOutcome);
+        Assert.Equal(30_001, restored.PostBuildCatchUpJournalChangeCount);
+        Assert.True(restored.PostBuildCatchUpChangeCountComplete);
+        Assert.True(restored.PostBuildCatchUpThresholdExceeded);
     }
 
     [Fact]

@@ -1378,11 +1378,15 @@ public sealed partial class SettingsWindow
                 linkedCts.Token,
                 progress: p => _viewModel.ReportIndexBuildProgress(IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes)),
                 pdfProgress: p => _viewModel.ReportIndexBuildProgress(p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5)),
-                imageOcrProgress: p => _viewModel.ReportIndexBuildProgress(p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4)));
+                imageOcrProgress: p => _viewModel.ReportIndexBuildProgress(p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4)),
+                postBuildCatchUpProgress: _ => _viewModel.ReportIndexBuildProgress(99));
             string ocrSummary = string.IsNullOrWhiteSpace(result.ImageOcrStatus)
                 ? string.Empty
                 : $" Image-text index: {result.ImageOcrStatus} ({result.ImagesAdmitted:N0}/{result.ImagesSeen:N0} images admitted).";
-            SetIndexStatus($"Index build complete for {root}. {result.Summary}{ocrSummary}");
+            string catchUpSummary = result.PostBuildCatchUp.Checked
+                ? $" {result.PostBuildCatchUp.Describe()}"
+                : string.Empty;
+            SetIndexStatus($"Index build complete for {root}. {result.Summary}{ocrSummary}{catchUpSummary}");
         }
         catch (OperationCanceledException)
         {
