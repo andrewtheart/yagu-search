@@ -950,7 +950,7 @@ public sealed class MultilineSearchTests : IDisposable
     [Fact]
     public void MainViewModel_HasMultilinePropertyAndThreadsIntoOptions()
     {
-        string src = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
         Assert.Contains("public partial bool Multiline { get; set; }", src);
         Assert.Contains("public partial bool MultilineDotAll { get; set; }", src);
         Assert.Contains("Multiline = Multiline,", src);
@@ -988,7 +988,7 @@ public sealed class MultilineSearchTests : IDisposable
     {
         // Turning Multiline on/off drives UseRegex on/off, because a cross-line match is only
         // meaningful in regex mode (a plain literal is split on whitespace, newlines included).
-        string src = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
         Assert.Contains("partial void OnMultilineChanged(bool value)", src);
         Assert.Contains("UseRegex = value;", src);
         // Exact-match (whole-word) is unchecked while Multiline is on and restored when it turns off.

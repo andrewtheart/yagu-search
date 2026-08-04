@@ -37,8 +37,7 @@ public sealed class SettingsWindowRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "Services", "SettingsService.cs"));
     private static readonly string AppThemeServiceSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "Services", "AppThemeService.cs"));
-    private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
     private static readonly string ConPtyTerminalServiceSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "Services", "ConPtyTerminalService.cs"));
     private static readonly string AppSource = File.ReadAllText(

@@ -128,7 +128,7 @@ public sealed class FontContrastWarningServiceTests
     [Fact]
     public void ViewModel_CreatesSelectedAndUnselectedPreviewContrastCandidates()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string source = MainViewModelPartials.Text;
 
         Assert.Contains("selectedPreviewBackground", source);
         Assert.Contains("unselectedPreviewBackground", source);

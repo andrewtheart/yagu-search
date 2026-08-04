@@ -1,6 +1,6 @@
 ---
 description: "Yagu settings persistence & search-scope semantics — session-only vs persisted (JsonIgnore) toggles, BinaryExtensions skip-list, empty exclude/directory meaning, semantic snapshot leak guard, and the Yagu.Tests Compile-list requirement. Use when: editing AppSettings, SettingsService, MainViewModel, persist/load settings, JsonIgnore, search-box toggle default, BinaryExtensions, SkipExtensions, exclude globs, all-drives search, semantic snapshot, a new setting field, a new pure helper used by tests."
-applyTo: "src/Yagu/Services/SettingsService.cs, src/Yagu/ViewModels/MainViewModel.cs"
+applyTo: "src/Yagu/Services/SettingsService.cs, src/Yagu/ViewModels/MainViewModel*.cs"
 ---
 
 # Yagu — Settings Persistence & Search-Scope Semantics

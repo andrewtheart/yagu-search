@@ -11,8 +11,7 @@ public sealed class AdvancedOptionsTests
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs"));
     private static readonly string MainWindowXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
-    private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
     private static readonly string SearchInputSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs"));
     private static readonly string StartupChecksSource = File.ReadAllText(

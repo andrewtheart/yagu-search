@@ -7,8 +7,7 @@ public sealed class SessionLoadDialogRegressionTests
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string PreviewCommandsSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewCommands.cs"));
-    private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
     private static readonly string SessionLoadDialogSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "SessionLoadDialog.cs"));
     private static readonly string YaguDialogSource = File.ReadAllText(

@@ -12,7 +12,7 @@ public sealed class CodeAnnotationSearchRegressionTests
     [Fact]
     public void ViewModel_ApplyPresetLoadsTheCanonicalRegexInTraditionalMode()
     {
-        string src = ReadSource("src", "Yagu", "ViewModels", "MainViewModel.cs");
+        string src = MainViewModelPartials.Text;
 
         AssertContainsInOrder(src,
             "public void ApplyCodeAnnotationPreset()",

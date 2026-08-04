@@ -459,7 +459,7 @@ public class SearchResultCollectionCoverageTests
     public void PagingSource_PreEvictsNewMatchesAndQueuesBulkEviction()
     {
         string repoRoot = FindRepoRoot();
-        string viewModelSource = File.ReadAllText(Path.Combine(repoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string viewModelSource = MainViewModelPartials.Text;
         string collectionSource = File.ReadAllText(Path.Combine(repoRoot, "src", "Yagu", "Models", "SearchResultCollection.cs"));
         string storeSource = File.ReadAllText(Path.Combine(repoRoot, "src", "Yagu", "Services", "ResultStore.cs"));
 

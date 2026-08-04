@@ -23,7 +23,7 @@ public sealed class FoundryModelUpdateAlertTests
     [Fact]
     public void ViewModel_CheckMethod_IsGatedThrottledAndSeedsBaseline()
     {
-        string src = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         // Gating: alerts on + semantic on + has actually used semantic search (so we never trigger a
         // model/EP download just to check), plus the once/day throttle.

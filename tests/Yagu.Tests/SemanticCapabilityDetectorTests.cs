@@ -15,7 +15,7 @@ public sealed class SemanticCapabilityDetectorTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string ViewModelSource =
-        File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        MainViewModelPartials.Text;
     private static readonly string SettingsSource =
         File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "Services", "SettingsService.cs"));
     private static readonly string SettingsWindowSource =

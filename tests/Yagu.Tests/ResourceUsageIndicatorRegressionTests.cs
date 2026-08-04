@@ -15,7 +15,7 @@ public sealed class ResourceUsageIndicatorRegressionTests
     private static string Read(params string[] parts)
         => File.ReadAllText(Path.Combine(new[] { RepoRoot }.Concat(parts).ToArray()));
 
-    private static readonly string MainViewModelSource = Read("src", "Yagu", "ViewModels", "MainViewModel.cs");
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
     private static readonly string MainWindowXaml = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml");
     private static readonly string SettingsServiceSource = Read("src", "Yagu", "Services", "SettingsService.cs");
     private static readonly string SettingsWindowSource = Read("src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs");

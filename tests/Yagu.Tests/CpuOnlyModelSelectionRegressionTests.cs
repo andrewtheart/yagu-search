@@ -112,7 +112,7 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Gui_And_Cli_TellTranslatorTheDetectedHardware()
     {
-        string vm = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string vm = MainViewModelPartials.Text;
         string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         Assert.Contains("_semanticTranslator.SetAvailableAccelerators(_semanticHasGpu, _semanticHasNpu);", vm);
@@ -126,7 +126,7 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     {
         string translator = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
         string iface = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs"));
-        string vm = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string vm = MainViewModelPartials.Text;
         string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // Interface + translator expose a VRAM setter and a VRAM-budget helper.

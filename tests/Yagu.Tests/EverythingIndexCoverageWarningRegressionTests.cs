@@ -9,7 +9,7 @@ public sealed class EverythingIndexCoverageWarningRegressionTests
     private static readonly string WarningSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.EverythingIndexCoverage.cs");
     private static readonly string SearchInputSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs");
     private static readonly string SettingsServiceSource = Read("src", "Yagu", "Services", "SettingsService.cs");
-    private static readonly string MainViewModelSource = Read("src", "Yagu", "ViewModels", "MainViewModel.cs");
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
     private static readonly string SettingsWindowSource = Read("src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs");
     private static readonly string CliRunnerSource = Read("src", "Yagu", "CliRunner.cs");
 

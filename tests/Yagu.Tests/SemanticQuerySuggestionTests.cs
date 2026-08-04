@@ -31,7 +31,7 @@ public sealed class SemanticQuerySuggestionTests
     [Fact]
     public void ViewModel_GatesSuggestion_AndAppliesChoice()
     {
-        string src = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         // Offered in Traditional mode whenever a model is downloaded (the AI-search toggle may be off),
         // the user hasn't dismissed it, and the query passes the heuristic.

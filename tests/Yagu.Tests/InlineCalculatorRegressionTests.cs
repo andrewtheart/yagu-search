@@ -13,7 +13,7 @@ public sealed class InlineCalculatorRegressionTests
     [Fact]
     public void ViewModel_EvaluatesCalculatorOnQueryChange()
     {
-        string src = ReadSource("src", "Yagu", "ViewModels", "MainViewModel.cs");
+        string src = MainViewModelPartials.Text;
 
         // OnQueryChanged re-evaluates the inline calculator.
         AssertContainsInOrder(src,
@@ -33,7 +33,7 @@ public sealed class InlineCalculatorRegressionTests
     [Fact]
     public void ViewModel_ClearsCalculatorWhenSwitchingToSemanticMode()
     {
-        string src = ReadSource("src", "Yagu", "ViewModels", "MainViewModel.cs");
+        string src = MainViewModelPartials.Text;
 
         AssertContainsInOrder(src,
             "partial void OnIsSemanticQueryModeChanged(bool value)",

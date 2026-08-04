@@ -30,7 +30,7 @@ public sealed class SemanticModelRefreshTests
     [Fact]
     public void ViewModel_CurrentModelDisplay_SurfacesLoadedAutomaticModel_AndResolveRefresh()
     {
-        string vm = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string vm = MainViewModelPartials.Text;
         // Automatic mode surfaces the actually-loaded model name, not just a generic label.
         Assert.Contains("(_semanticTranslator as FoundryLocalSemanticQueryTranslator)?.SelectedModelAlias", vm);
         Assert.Contains("(automatic)", vm);

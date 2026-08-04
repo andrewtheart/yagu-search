@@ -2,8 +2,7 @@ namespace Yagu.Tests;
 
 public sealed class MainViewModelSearchStatusRegressionTests
 {
-    private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(FindRepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
 
     [Fact]
     public void SearchLoop_RefreshesStatusFromConsumedMatches_WhenProgressEventsAreBacklogged()
@@ -104,7 +103,7 @@ public sealed class MainViewModelSearchStatusRegressionTests
             "HasPerformedSearch = true;",
             "AccessDeniedCount = 0;");
 
-        string clearResults = ExtractWindow(MainViewModelSource, "public async Task ClearResultsAsync()", "public void HydrateResult");
+        string clearResults = ExtractWindow(MainViewModelSource, "public async Task ClearResultsAsync()", "OnPropertyChanged(nameof(HasResults));");
         AssertContainsInOrder(clearResults,
             "FilesSkipped = 0;",
             "HasPerformedSearch = false;",

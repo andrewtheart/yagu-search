@@ -187,7 +187,7 @@ public sealed class SemanticModelGenerationOverrideTests
     [Fact]
     public void ViewModel_PushesOverridesFromSettingsAtInit()
     {
-        string vm = ReadSrc("Yagu", "ViewModels", "MainViewModel.cs");
+        string vm = MainViewModelPartials.Text;
         Assert.Contains(
             "_semanticTranslator.SetModelGenerationOverrides(_settings.SemanticModelParameterOverrides);",
             vm);

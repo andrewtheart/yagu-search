@@ -175,7 +175,7 @@ public sealed class SemanticModelVramOptimizationTests
     [Fact]
     public void ViewModel_MirrorsUnloadSettingToTranslatorAndPersists()
     {
-        string vm = Read("Yagu", "ViewModels", "MainViewModel.cs");
+        string vm = MainViewModelPartials.Text;
 
         Assert.Contains("public partial bool SemanticUnloadModelAfterUse { get; set; }", vm);
         // Pushed to the translator at construction and on change; persisted.

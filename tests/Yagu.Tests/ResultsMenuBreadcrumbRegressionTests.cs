@@ -16,8 +16,7 @@ public sealed class ResultsMenuBreadcrumbRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
     private static readonly string PreviewCommandsSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewCommands.cs"));
-    private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
 
     [Fact]
     public void GroupMenu_HasBreadcrumbHeaderWiredToOpeningHandler()

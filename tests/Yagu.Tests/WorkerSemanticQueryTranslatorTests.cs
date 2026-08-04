@@ -157,7 +157,7 @@ public sealed class WorkerSemanticQueryTranslatorTests
     [Fact]
     public void MainViewModel_WiresTheOutOfProcessProxy_NotTheInProcessTranslator()
     {
-        string vm = Read("src", "Yagu", "ViewModels", "MainViewModel.cs");
+        string vm = MainViewModelPartials.Text;
         Assert.Contains("new Yagu.Services.Ai.Worker.WorkerSemanticQueryTranslator(_settings.SemanticSearchEnabled, _settings.SemanticModelAlias, _settings.SemanticDevicePreferenceOrder)", vm);
     }
 

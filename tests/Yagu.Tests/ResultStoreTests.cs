@@ -408,7 +408,7 @@ public class ResultStoreAppCloseRegressionTests
     {
         string root = FindRepoRoot();
         string mainWindowSource = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
-        string viewModelSource = File.ReadAllText(Path.Combine(root, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string viewModelSource = MainViewModelPartials.Text;
         string resultStoreSource = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Services", "ResultStore.cs"));
 
         string closedHandler = ExtractWindowAfter(mainWindowSource, "this.Closed += (_, _) =>", 400);
