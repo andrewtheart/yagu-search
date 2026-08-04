@@ -115,6 +115,68 @@ public sealed class ContentIndexAutoBuilderTests : IDisposable
         Assert.Equal(new[] { @"C:\a", @"D:\b" }, ContentIndexBuildScheduler.RootsForScheduledBuild(settings));
     }
 
+    // ── Update-mode recommendation (a recurring trigger left on ManualFullRebuild never refreshes) ──
+
+    [Theory]
+    [InlineData("AtStartup", true)]
+    [InlineData("WhenIdle", true)]
+    [InlineData("Continuous", true)]
+    [InlineData("OnSchedule", true)]
+    [InlineData("WhenIdle, Continuous", true)]
+    [InlineData("Manual", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    // WhenEnabled is a one-shot on enabling the feature, not recurring maintenance.
+    [InlineData("WhenEnabled", false)]
+    public void HasRecurringMaintenanceTrigger_OnlyCountsRepeatingTriggers(string? trigger, bool expected)
+        => Assert.Equal(expected, ContentIndexBuildScheduler.HasRecurringMaintenanceTrigger(trigger));
+
+    [Theory]
+    [InlineData("Continuous")]
+    [InlineData("WhenIdle")]
+    [InlineData("AtStartup")]
+    [InlineData("OnSchedule")]
+    public void RecommendedUpdateMode_UpgradesDefaultToIncrementalForARecurringTrigger(string trigger)
+    {
+        // The onboarding bug: picking "Continuously while Yagu is open" while the update mode stayed at
+        // the default meant automatic passes only ever created MISSING indexes.
+        Assert.Equal(
+            AppSettings.IndexUpdateModeAutomaticIncremental,
+            ContentIndexBuildScheduler.RecommendedUpdateMode(trigger, AppSettings.DefaultIndexUpdateMode));
+    }
+
+    [Theory]
+    [InlineData("Manual")]
+    [InlineData("")]
+    [InlineData("WhenEnabled")]
+    public void RecommendedUpdateMode_LeavesManualTriggersOnTheDefaultMode(string trigger)
+        => Assert.Equal(
+            AppSettings.DefaultIndexUpdateMode,
+            ContentIndexBuildScheduler.RecommendedUpdateMode(trigger, AppSettings.DefaultIndexUpdateMode));
+
+    [Theory]
+    [InlineData(AppSettings.IndexUpdateModeAutomaticFullRebuildWhenDirty)]
+    [InlineData(AppSettings.IndexUpdateModeAutomaticIncremental)]
+    public void RecommendedUpdateMode_NeverOverridesAModeTheUserAlreadyChose(string current)
+        => Assert.Equal(current, ContentIndexBuildScheduler.RecommendedUpdateMode("Continuous", current));
+
+    [Fact]
+    public void RecommendedUpdateMode_NormalizesAnUnknownMode()
+        => Assert.Equal(
+            AppSettings.IndexUpdateModeAutomaticIncremental,
+            ContentIndexBuildScheduler.RecommendedUpdateMode("Continuous", "not-a-mode"));
+
+    [Theory]
+    [InlineData("Continuous", AppSettings.DefaultIndexUpdateMode, true)]
+    [InlineData("AtStartup, OnSchedule", AppSettings.DefaultIndexUpdateMode, true)]
+    [InlineData("Continuous", AppSettings.IndexUpdateModeAutomaticIncremental, false)]
+    [InlineData("Continuous", AppSettings.IndexUpdateModeAutomaticFullRebuildWhenDirty, false)]
+    [InlineData("Manual", AppSettings.DefaultIndexUpdateMode, false)]
+    [InlineData("WhenEnabled", AppSettings.DefaultIndexUpdateMode, false)]
+    public void IsStaleAutomaticCombination_FlagsARecurringTriggerLeftOnManualFullRebuild(
+        string trigger, string mode, bool expected)
+        => Assert.Equal(expected, ContentIndexBuildScheduler.IsStaleAutomaticCombination(trigger, mode));
+
     [Fact]
     public void CombinedTrigger_OnScheduleOnly_DoesNotBuildAtStartup()
     {

@@ -4401,11 +4401,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     /// <summary>
     /// Registers several folders as indexed roots at once (first-run onboarding lets the user pick more
-    /// than one), optionally sets which automatic build trigger(s) maintain them, persists settings a
-    /// single time, then starts a background build for each distinct effective root. Folders already
-    /// covered by a broader registered root are skipped. Never throws.
+    /// than one), optionally sets which automatic build trigger(s) maintain them and the update mode those
+    /// passes use, persists settings a single time, then starts a background build for each distinct
+    /// effective root. Folders already covered by a broader registered root are skipped. Never throws.
     /// </summary>
-    public async Task AddFoldersToIndexAndBuildAsync(IReadOnlyList<string> folders, string? buildTrigger)
+    public async Task AddFoldersToIndexAndBuildAsync(IReadOnlyList<string> folders, string? buildTrigger, string? updateMode = null)
     {
         if (folders is null || folders.Count == 0)
             return;
@@ -4414,6 +4414,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         UseContentIndex = true;
         if (!string.IsNullOrWhiteSpace(buildTrigger))
             _settings.IndexBuildTrigger = AppSettings.NormalizeIndexBuildTrigger(buildTrigger);
+        // Onboarding decides the update mode alongside the trigger, so an automatic trigger cannot be left
+        // paired with ManualFullRebuild (which would only ever create missing indexes).
+        if (!string.IsNullOrWhiteSpace(updateMode))
+            _settings.IndexUpdateMode = AppSettings.NormalizeIndexUpdateMode(updateMode);
 
         var effectiveRoots = new List<string>(folders.Count);
         foreach (string folder in folders)

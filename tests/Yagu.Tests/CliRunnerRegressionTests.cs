@@ -81,6 +81,26 @@ public sealed class CliRunnerRegressionTests
     }
 
     [Fact]
+    public void CliFirstRunIndexOnboarding_PicksAnAutomaticUpdateModeForAnAutomaticTrigger()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliFirstRunPrompts.cs"));
+
+        // Parity with the GUI onboarding dialog: a recurring trigger must not be left on the default
+        // ManualFullRebuild, which only ever CREATES missing indexes (existing ones silently go stale).
+        Assert.Contains("settings.IndexUpdateMode = PromptIndexUpdateMode(settings.IndexBuildTrigger, settings.IndexUpdateMode);", source);
+        Assert.Contains("private static string PromptIndexUpdateMode(string buildTrigger, string currentUpdateMode)", source);
+        Assert.Contains("ContentIndexBuildScheduler.RecommendedUpdateMode(buildTrigger, currentUpdateMode)", source);
+        // The recommendation is a DEFAULT, not a lock-in — the user can still pick another mode.
+        Assert.Contains("(recommended)", source);
+        Assert.Contains("AppSettings.NormalizeIndexUpdateMode(mode)", source);
+        Assert.Contains("ContentIndexBuildScheduler.IsStaleAutomaticCombination(buildTrigger, mode)", source);
+        // Ordering: the trigger is chosen first, because it drives the recommended update mode.
+        int trigger = source.IndexOf("settings.IndexBuildTrigger = PromptIndexBuildTrigger(", StringComparison.Ordinal);
+        int mode = source.IndexOf("settings.IndexUpdateMode = PromptIndexUpdateMode(", StringComparison.Ordinal);
+        Assert.True(trigger >= 0 && mode > trigger, "The update-mode prompt must follow the build-trigger prompt.");
+    }
+
+    [Fact]
     public void ExplorerContextMenu_IsSharedByGuiAndCli()
     {
         string gui = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SettingsMenus.cs"));

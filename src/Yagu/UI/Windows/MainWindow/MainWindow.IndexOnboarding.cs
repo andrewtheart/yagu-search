@@ -12,8 +12,9 @@ namespace Yagu;
 
 /// <summary>
 /// "Add a folder to the content index" onboarding: the clickable main-window index-status indicator and
-/// the one-time first-run prompt. Both offer to add a folder (or a chosen ancestor "subpart of the path")
-/// to the index, warning first when the chosen folder is a very large root. All dialogs are title-bar-less
+/// the one-time first-run prompt. Both offer to add one or more folders (the picked folder, a chosen
+/// ancestor "subpart of the path", or further folders picked via "Add another folder…") to the index,
+/// warning first when a chosen folder is a very large root. All dialogs are title-bar-less
 /// <see cref="YaguDialog"/>s; the actual opt-in + background build is done by the view model.
 /// </summary>
 public sealed partial class MainWindow
@@ -728,13 +729,14 @@ public sealed partial class MainWindow
 
     /// <summary>
     /// Shows the "add this folder to the index" dialog for <paramref name="folder"/>. The user picks the
-    /// folder or one of its ancestors ("subpart of the path"); a very large chosen root triggers a warning
+    /// folder or one of its ancestors ("subpart of the path"), and may pick <em>additional, unrelated</em>
+    /// folders via "Add another folder…" before committing; a very large chosen root triggers a warning
     /// before the build starts. On confirmation the feature is enabled and a background build begins.
     /// </summary>
     private async Task ShowAddFolderToIndexDialogAsync(string folder)
     {
-        IReadOnlyList<string> choices = IndexOnboardingPlan.PathChoices(folder);
-        if (choices.Count == 0)
+        IReadOnlyList<string> initialChoices = IndexOnboardingPlan.PathChoices(folder);
+        if (initialChoices.Count == 0)
             return;
 
         // Keep the query/directory suggestion dropdowns parked shut across this multi-dialog flow (including
@@ -746,63 +748,32 @@ public sealed partial class MainWindow
         // instead of offering a no-op add.
         IReadOnlyList<string> indexedRoots = ViewModel.Settings.IndexedRoots;
         bool IsAlreadyCovered(string candidate) => IndexedRootsPolicy.FindBestCoveringRoot(indexedRoots, candidate) is not null;
-        if (choices.All(IsAlreadyCovered))
+        if (initialChoices.All(IsAlreadyCovered))
         {
             await ShowFolderAlreadyCoveredDialogAsync(folder);
             return;
         }
 
-        // Multi-select: the user may add the chosen folder AND/OR one or more of its ancestors at once,
-        // so each addable path choice is an independent CheckBox (not a single-select radio).
-        var folderChecks = new List<CheckBox>(choices.Count);
-        var panel = new StackPanel { Spacing = 10 };
-        panel.Children.Add(new TextBlock
+        // Path choices accumulate across "Add another folder…" rounds: each picked folder contributes itself
+        // and its ancestors, so unrelated trees (C:\src AND D:\data) can be added in one pass. Selections are
+        // held here — not in the discarded controls — so re-showing the dialog never loses the user's work.
+        var choices = new List<string>();
+        var seenChoices = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void MergeChoices(IEnumerable<string> more)
         {
-            Text = "Add one or more folders to the content index so future searches over them can skip files "
-                 + "that cannot contain a match. Matching files are always still read live from disk.",
-            TextWrapping = TextWrapping.Wrap,
-        });
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Index which folder(s)?",
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Margin = new Thickness(0, 6, 0, 0),
-        });
-
-        CheckBox? firstAddable = null;
-        for (int i = 0; i < choices.Count; i++)
-        {
-            string choice = choices[i];
-            bool already = IsAlreadyCovered(choice);
-            string label = choice;
-            if (IndexOnboardingPlan.IsLikelyLargeRoot(choice))
-                label += "   (whole drive or large system folder)";
-            if (already)
-                label += "   \u2014 already covered by the index";
-            var cb = new CheckBox
+            foreach (string candidate in more)
             {
-                Content = label,
-                Tag = choice,
-                IsEnabled = !already, // can't add a folder that is already an index root
-            };
-            if (!already && firstAddable is null)
-                firstAddable = cb;
-            folderChecks.Add(cb);
-            panel.Children.Add(cb);
+                if (seenChoices.Add(candidate))
+                    choices.Add(candidate);
+            }
         }
-        // Default-check the first choice that can actually be added (not one already in the index).
-        if (firstAddable is not null)
-            firstAddable.IsChecked = true;
+        MergeChoices(initialChoices);
 
-        // Build trigger(s): the same combinable choices as Settings ▸ Indexing so the user can decide up
-        // front how these folders' indexes are kept up to date. None checked = Manual (only builds on
-        // request). Seeded from the current setting.
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Keep the index up to date:",
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Margin = new Thickness(0, 6, 0, 0),
-        });
+        // Default-check the first choice that can actually be added (not one already in the index).
+        var checkedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (choices.FirstOrDefault(c => !IsAlreadyCovered(c)) is { } firstAddable)
+            checkedPaths.Add(firstAddable);
+
         var triggerFlags = new (string Flag, string Display)[]
         {
             ("AtStartup", "When Yagu starts"),
@@ -810,72 +781,249 @@ public sealed partial class MainWindow
             ("Continuous", "Continuously while Yagu is open"),
             ("OnSchedule", "On a schedule (configure in Settings)"),
         };
-        var triggerChecks = new List<(CheckBox Check, string Flag)>(triggerFlags.Length);
-        var triggerColumn = new StackPanel { Spacing = 2 };
-        foreach (var (flag, display) in triggerFlags)
+        var updateModes = new (string Mode, string Display)[]
         {
-            var cb = new CheckBox
-            {
-                Content = display,
-                MinWidth = 0,
-                IsChecked = AppSettings.IndexBuildTriggerHas(ViewModel.Settings.IndexBuildTrigger, flag),
-            };
-            triggerChecks.Add((cb, flag));
-            triggerColumn.Children.Add(cb);
-        }
-        panel.Children.Add(triggerColumn);
-        panel.Children.Add(new TextBlock
-        {
-            Text = "With none selected, indexing is Manual and only runs when you ask. You can change this "
-                 + "anytime in Settings \u25B8 Indexing.",
-            Opacity = 0.75,
-            FontSize = 12,
-            TextWrapping = TextWrapping.Wrap,
-        });
+            (AppSettings.IndexUpdateModeAutomaticIncremental, "Automatic incremental \u2014 apply small delta updates when changed (recommended)"),
+            (AppSettings.IndexUpdateModeAutomaticFullRebuildWhenDirty, "Automatic full rebuild when changed"),
+            (AppSettings.DefaultIndexUpdateMode, "Manual full rebuild \u2014 only create missing indexes"),
+        };
 
-        // "Included Locations" context (inspired by the Windows Indexing Options dialog).
-        panel.Children.Add(new TextBlock
+        var selectedTriggers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (flag, _) in triggerFlags)
         {
-            Text = "Currently indexed folders:",
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Margin = new Thickness(0, 6, 0, 0),
-        });
-        if (indexedRoots.Count == 0)
-        {
-            panel.Children.Add(new TextBlock { Text = "None yet.", Opacity = 0.75, TextWrapping = TextWrapping.Wrap });
+            if (AppSettings.IndexBuildTriggerHas(ViewModel.Settings.IndexBuildTrigger, flag))
+                selectedTriggers.Add(flag);
         }
-        else
-        {
-            foreach (string existing in indexedRoots)
-                panel.Children.Add(new TextBlock { Text = "\u2022 " + existing, Opacity = 0.85, TextWrapping = TextWrapping.Wrap });
-        }
+        // An automatic trigger paired with the default Manual full rebuild only ever creates MISSING
+        // indexes, so an existing index silently goes stale. Preselect the recommended mode for the current
+        // trigger selection, and keep tracking it live until the user overrides the combo themselves.
+        string updateMode = ContentIndexBuildScheduler.RecommendedUpdateMode(
+            string.Join(",", selectedTriggers), ViewModel.Settings.IndexUpdateMode);
+        bool updateModeOverridden = false;
 
-        var result = await YaguDialog.ShowAsync(
-            _hwnd,
-            new YaguDialogOptions
+        List<string> chosen;
+        while (true)
+        {
+            // Multi-select: the user may add the chosen folder AND/OR one or more of its ancestors at once,
+            // so each addable path choice is an independent CheckBox (not a single-select radio).
+            var folderChecks = new List<CheckBox>(choices.Count);
+            var panel = new StackPanel { Spacing = 10 };
+            panel.Children.Add(new TextBlock
             {
-                Title = "Add folders to the content index",
-                TitleGlyph = "\uE8F1",
-                Content = panel,
-                PrimaryButtonText = "Add to index",
-                CloseButtonText = "Cancel",
-                DefaultButton = YaguDialogDefaultButton.Primary,
-                RequestedTheme = RootGrid.ActualTheme,
-                ShowTitleBar = false,
-                ShowTopRightCloseButton = true,
-                Width = 640,
-                Height = 560,
-                MaxContentHeight = 480,
+                Text = "Add one or more folders to the content index so future searches over them can skip files "
+                     + "that cannot contain a match. Matching files are always still read live from disk.",
+                TextWrapping = TextWrapping.Wrap,
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Index which folder(s)?",
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Margin = new Thickness(0, 6, 0, 0),
             });
 
-        if (result != YaguDialogResult.Primary)
-            return;
+            foreach (string choice in choices)
+            {
+                bool already = IsAlreadyCovered(choice);
+                string label = choice;
+                if (IndexOnboardingPlan.IsLikelyLargeRoot(choice))
+                    label += "   (whole drive or large system folder)";
+                if (already)
+                    label += "   \u2014 already covered by the index";
+                var cb = new CheckBox
+                {
+                    Content = label,
+                    Tag = choice,
+                    IsEnabled = !already, // can't add a folder that is already an index root
+                    IsChecked = !already && checkedPaths.Contains(choice),
+                };
+                folderChecks.Add(cb);
+                panel.Children.Add(cb);
+            }
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Use \u201cAdd another folder\u2026\u201d to include a folder outside this path; your selections above are kept.",
+                Opacity = 0.75,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+            });
 
-        // Only addable (not-already-covered) checked choices proceed; the covered ones are disabled above.
-        var chosen = folderChecks
-            .Where(c => c.IsChecked == true && c.Tag is string s && !IsAlreadyCovered(s))
-            .Select(c => (string)c.Tag)
-            .ToList();
+            // Build trigger(s): the same combinable choices as Settings ▸ Indexing so the user can decide up
+            // front how these folders' indexes are kept up to date. None checked = Manual (only builds on
+            // request). Seeded from the current setting.
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Keep the index up to date:",
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Margin = new Thickness(0, 6, 0, 0),
+            });
+            var triggerChecks = new List<(CheckBox Check, string Flag)>(triggerFlags.Length);
+            var triggerColumn = new StackPanel { Spacing = 2 };
+            foreach (var (flag, display) in triggerFlags)
+            {
+                var cb = new CheckBox
+                {
+                    Content = display,
+                    MinWidth = 0,
+                    IsChecked = selectedTriggers.Contains(flag),
+                };
+                triggerChecks.Add((cb, flag));
+                triggerColumn.Children.Add(cb);
+            }
+            panel.Children.Add(triggerColumn);
+            panel.Children.Add(new TextBlock
+            {
+                Text = "With none selected, indexing is Manual and only runs when you ask. You can change this "
+                     + "anytime in Settings \u25B8 Indexing.",
+                Opacity = 0.75,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            // Update mode: what those automatic passes actually DO. Selecting an automatic trigger while this
+            // stayed on Manual full rebuild is the bug this control exists to prevent, so it follows the
+            // recommendation as triggers are toggled — until the user picks a mode themselves.
+            panel.Children.Add(new TextBlock
+            {
+                Text = "When a folder changes:",
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Margin = new Thickness(0, 6, 0, 0),
+            });
+            var updateModeCombo = new ComboBox { MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
+            foreach (var (mode, display) in updateModes)
+                updateModeCombo.Items.Add(new ComboBoxItem { Content = display, Tag = mode });
+            void SelectUpdateMode(string mode)
+            {
+                foreach (object item in updateModeCombo.Items)
+                {
+                    if (item is ComboBoxItem ci && string.Equals(ci.Tag?.ToString(), mode, StringComparison.OrdinalIgnoreCase))
+                    {
+                        updateModeCombo.SelectedItem = item;
+                        return;
+                    }
+                }
+            }
+            SelectUpdateMode(updateMode);
+            var updateModeHint = new TextBlock
+            {
+                Opacity = 0.75,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+            };
+            void RefreshUpdateModeHint()
+            {
+                updateModeHint.Text = ContentIndexBuildScheduler.IsStaleAutomaticCombination(
+                    string.Join(",", triggerChecks.Where(t => t.Check.IsChecked == true).Select(t => t.Flag)),
+                    updateModeCombo.SelectedItem is ComboBoxItem { Tag: string tag } ? tag : updateMode)
+                    ? "Manual full rebuild only creates MISSING indexes \u2014 the automatic trigger(s) above will never "
+                      + "refresh an index you already have, so it goes stale and searches fall back to a live scan."
+                    : "Incremental applies small append-only delta updates and periodically compacts them; a full "
+                      + "rebuild re-indexes the whole folder. Both fall back to a live scan when the index is stale.";
+            }
+            updateModeCombo.SelectionChanged += (_, _) =>
+            {
+                if (updateModeCombo.SelectedItem is ComboBoxItem { Tag: string tag }
+                    && !string.Equals(tag, updateMode, StringComparison.OrdinalIgnoreCase))
+                {
+                    updateMode = tag;
+                    updateModeOverridden = true; // an explicit pick wins over the trigger-driven default
+                }
+                RefreshUpdateModeHint();
+            };
+            foreach (var (check, _) in triggerChecks)
+            {
+                void OnTriggerToggled(object sender, RoutedEventArgs e)
+                {
+                    if (!updateModeOverridden)
+                    {
+                        string trigger = string.Join(",", triggerChecks.Where(t => t.Check.IsChecked == true).Select(t => t.Flag));
+                        string recommended = ContentIndexBuildScheduler.RecommendedUpdateMode(trigger, ViewModel.Settings.IndexUpdateMode);
+                        updateMode = recommended;
+                        SelectUpdateMode(recommended);
+                    }
+                    RefreshUpdateModeHint();
+                }
+                check.Checked += OnTriggerToggled;
+                check.Unchecked += OnTriggerToggled;
+            }
+            RefreshUpdateModeHint();
+            panel.Children.Add(updateModeCombo);
+            panel.Children.Add(updateModeHint);
+
+            // "Included Locations" context (inspired by the Windows Indexing Options dialog).
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Currently indexed folders:",
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Margin = new Thickness(0, 6, 0, 0),
+            });
+            if (indexedRoots.Count == 0)
+            {
+                panel.Children.Add(new TextBlock { Text = "None yet.", Opacity = 0.75, TextWrapping = TextWrapping.Wrap });
+            }
+            else
+            {
+                foreach (string existing in indexedRoots)
+                    panel.Children.Add(new TextBlock { Text = "\u2022 " + existing, Opacity = 0.85, TextWrapping = TextWrapping.Wrap });
+            }
+
+            var result = await YaguDialog.ShowAsync(
+                _hwnd,
+                new YaguDialogOptions
+                {
+                    Title = "Add folders to the content index",
+                    TitleGlyph = "\uE8F1",
+                    Content = panel,
+                    PrimaryButtonText = "Add to index",
+                    SecondaryButtonText = "Add another folder\u2026",
+                    CloseButtonText = "Cancel",
+                    DefaultButton = YaguDialogDefaultButton.Primary,
+                    RequestedTheme = RootGrid.ActualTheme,
+                    ShowTitleBar = false,
+                    ShowTopRightCloseButton = true,
+                    Width = 680,
+                    Height = 620,
+                    MaxContentHeight = 520,
+                });
+
+            // Carry every selection forward: a re-show (or the commit below) must reflect what the user
+            // last saw, not the state this round started with.
+            checkedPaths.Clear();
+            foreach (var cb in folderChecks)
+            {
+                if (cb.IsChecked == true && cb.Tag is string path)
+                    checkedPaths.Add(path);
+            }
+            selectedTriggers.Clear();
+            foreach (var (check, flag) in triggerChecks)
+            {
+                if (check.IsChecked == true)
+                    selectedTriggers.Add(flag);
+            }
+            if (updateModeCombo.SelectedItem is ComboBoxItem { Tag: string selectedMode })
+                updateMode = selectedMode;
+
+            if (result == YaguDialogResult.Secondary)
+            {
+                string? another = Win32FileDialog.SelectFolder(_hwnd, "Select another folder to index");
+                if (!string.IsNullOrWhiteSpace(another))
+                {
+                    IReadOnlyList<string> moreChoices = IndexOnboardingPlan.PathChoices(another);
+                    MergeChoices(moreChoices);
+                    // Pre-check the folder the user just picked (or its nearest addable ancestor).
+                    if (moreChoices.FirstOrDefault(c => !IsAlreadyCovered(c)) is { } newlyAddable)
+                        checkedPaths.Add(newlyAddable);
+                }
+                continue;
+            }
+
+            if (result != YaguDialogResult.Primary)
+                return;
+
+            // Only addable (not-already-covered) checked choices proceed; the covered ones are disabled above.
+            chosen = choices.Where(c => checkedPaths.Contains(c) && !IsAlreadyCovered(c)).ToList();
+            break;
+        }
+
         if (chosen.Count == 0)
             return;
 
@@ -887,13 +1035,9 @@ public sealed partial class MainWindow
         }
 
         // Resolve the selected build trigger(s) into the combined setting value ("Manual" if none).
-        var selectedTriggers = triggerChecks
-            .Where(t => t.Check.IsChecked == true)
-            .Select(t => t.Flag)
-            .ToList();
         string buildTrigger = AppSettings.NormalizeIndexBuildTrigger(string.Join(",", selectedTriggers));
 
-        await ViewModel.AddFoldersToIndexAndBuildAsync(chosen, buildTrigger);
+        await ViewModel.AddFoldersToIndexAndBuildAsync(chosen, buildTrigger, updateMode);
 
         string folderList = chosen.Count == 1
             ? chosen[0]

@@ -320,6 +320,9 @@ internal static class CliFirstRunPrompts
 
         // Build trigger(s): the same combinable choices as the GUI dialog / Settings ▸ Indexing.
         settings.IndexBuildTrigger = PromptIndexBuildTrigger(settings.IndexBuildTrigger);
+        // Update mode: what those automatic passes DO. Mirrors the GUI onboarding dialog so a CLI user who
+        // picks an automatic trigger isn't silently left on ManualFullRebuild (which only builds missing).
+        settings.IndexUpdateMode = PromptIndexUpdateMode(settings.IndexBuildTrigger, settings.IndexUpdateMode);
         service.Save(settings);
 
         Console.Error.WriteLine($"Building content index for {effectiveRoots.Count} folder(s)\u2026 (this can take a while for large folders)");
@@ -395,6 +398,53 @@ internal static class CliFirstRunPrompts
         string trigger = AppSettings.NormalizeIndexBuildTrigger(string.Join(",", selected));
         Console.Error.WriteLine($"Build trigger set to: {trigger}.");
         return trigger;
+    }
+
+    /// <summary>Prompts for the update mode an automatic pass uses, mirroring the GUI onboarding dialog.
+    /// The default offered is <see cref="ContentIndexBuildScheduler.RecommendedUpdateMode"/> so a recurring
+    /// trigger is never silently paired with ManualFullRebuild (which only creates missing indexes); the
+    /// user can still override it here. Returns the normalized mode.</summary>
+    private static string PromptIndexUpdateMode(string buildTrigger, string currentUpdateMode)
+    {
+        string recommended = ContentIndexBuildScheduler.RecommendedUpdateMode(buildTrigger, currentUpdateMode);
+        var options = new (string Mode, string Display)[]
+        {
+            (AppSettings.IndexUpdateModeAutomaticIncremental, "Automatic incremental \u2014 apply small delta updates when changed"),
+            (AppSettings.IndexUpdateModeAutomaticFullRebuildWhenDirty, "Automatic full rebuild when changed"),
+            (AppSettings.DefaultIndexUpdateMode, "Manual full rebuild \u2014 only create missing indexes"),
+        };
+
+        int defaultPick = 1;
+        for (int i = 0; i < options.Length; i++)
+        {
+            if (string.Equals(options[i].Mode, recommended, StringComparison.OrdinalIgnoreCase))
+                defaultPick = i + 1;
+        }
+
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("When an indexed folder changes, what should an automatic pass do?");
+        for (int i = 0; i < options.Length; i++)
+            Console.Error.WriteLine($"  [{i + 1}] {options[i].Display}{(i + 1 == defaultPick ? "  (recommended)" : string.Empty)}");
+        Console.Error.Write($"Enter a number, or blank for [{defaultPick}]: ");
+
+        string? answer = Console.ReadLine()?.Trim();
+        string mode = recommended;
+        if (!string.IsNullOrWhiteSpace(answer)
+            && int.TryParse(answer, out int pick)
+            && pick >= 1 && pick <= options.Length)
+        {
+            mode = options[pick - 1].Mode;
+        }
+
+        mode = AppSettings.NormalizeIndexUpdateMode(mode);
+        Console.Error.WriteLine($"Update mode set to: {mode}.");
+        if (ContentIndexBuildScheduler.IsStaleAutomaticCombination(buildTrigger, mode))
+        {
+            Console.Error.WriteLine(
+                "  Note: Manual full rebuild only creates MISSING indexes, so your automatic trigger(s) will not "
+                + "refresh an existing index (change it in Settings \u25b8 Indexing).");
+        }
+        return mode;
     }
 
     // ── New Foundry model alert (mirrors CheckForNewFoundryModelsAsync) ──

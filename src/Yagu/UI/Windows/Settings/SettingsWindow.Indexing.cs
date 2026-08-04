@@ -393,6 +393,10 @@ public sealed partial class SettingsWindow
         var schedulePanel = new StackPanel { Spacing = 6, Margin = new Thickness(12, 0, 0, 6) };
         scheduleGroup.Children.Add(schedulePanel);
 
+        // Assigned once the update-mode combo below exists; the trigger checkboxes re-evaluate the warning
+        // because the misconfiguration depends on BOTH the trigger and the update mode.
+        Action? refreshStaleUpdateModeWarning = null;
+
         var scheduleModeCombo = AddIndexCombo(schedulePanel, "Schedule:",
             new[]
             {
@@ -465,8 +469,8 @@ public sealed partial class SettingsWindow
         // combined IndexBuildTrigger value and re-evaluates whether the schedule sub-panel is shown.
         foreach (var cb in triggerChecks)
         {
-            cb.Checked += (_, _) => { ApplyTriggerSelection(); UpdateScheduleVisibility(); };
-            cb.Unchecked += (_, _) => { ApplyTriggerSelection(); UpdateScheduleVisibility(); };
+            cb.Checked += (_, _) => { ApplyTriggerSelection(); UpdateScheduleVisibility(); refreshStaleUpdateModeWarning?.Invoke(); };
+            cb.Unchecked += (_, _) => { ApplyTriggerSelection(); UpdateScheduleVisibility(); refreshStaleUpdateModeWarning?.Invoke(); };
         }
         reseed.Add(() =>
         {
@@ -477,10 +481,11 @@ public sealed partial class SettingsWindow
                 dayChecks[d].IsChecked = (getDaysMask(_viewModel.Settings) & (1 << d)) != 0;
             timePicker.Time = ContentIndexScheduleEvaluator.ParseTimeOfDay(getTime(_viewModel.Settings));
             UpdateScheduleVisibility();
+            refreshStaleUpdateModeWarning?.Invoke();
         });
         UpdateScheduleVisibility();
 
-        AddIndexCombo(scheduleGroup, "Update mode:",
+        var updateModeCombo = AddIndexCombo(scheduleGroup, "Update mode:",
             new[]
             {
                 ("ManualFullRebuild", "Manual full rebuild — only build missing indexes"),
@@ -490,6 +495,43 @@ public sealed partial class SettingsWindow
             s => s.IndexUpdateMode,
             (s, v) => s.IndexUpdateMode = AppSettings.NormalizeIndexUpdateMode(v),
             "What an automatic pass does. “When changed” rebuilds the whole folder; “Incremental” applies small append-only delta updates and periodically compacts them into a fresh index. Both fall back to a live scan when the index is stale or unsafe.");
+
+        // Inline warning for the footgun combination: an automatic trigger paired with Manual full rebuild
+        // only ever CREATES missing indexes, so existing indexes go stale and searches quietly live-scan.
+        // A Grid (not a horizontal StackPanel) so the message column can actually wrap.
+        var staleUpdateModeWarning = new Grid { Margin = new Thickness(0, 2, 0, 6), Visibility = Visibility.Collapsed };
+        staleUpdateModeWarning.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        staleUpdateModeWarning.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var staleWarningIcon = new FontIcon
+        {
+            Glyph = "\uE7BA",
+            FontSize = 14,
+            Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.DarkOrange),
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 1, 8, 0),
+        };
+        Grid.SetColumn(staleWarningIcon, 0);
+        staleUpdateModeWarning.Children.Add(staleWarningIcon);
+        var staleWarningText = new TextBlock
+        {
+            Text = "Automatic trigger(s) are selected, but “Manual full rebuild” only creates missing indexes — "
+                 + "existing indexes are never refreshed, so they go stale and searches fall back to a live scan. "
+                 + "Choose “Automatic incremental” (recommended) or “Automatic full rebuild when changed”.",
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.DarkOrange),
+        };
+        Grid.SetColumn(staleWarningText, 1);
+        staleUpdateModeWarning.Children.Add(staleWarningText);
+        scheduleGroup.Children.Add(staleUpdateModeWarning);
+        refreshStaleUpdateModeWarning = () => staleUpdateModeWarning.Visibility =
+            ContentIndexBuildScheduler.IsStaleAutomaticCombination(
+                _viewModel.Settings.IndexBuildTrigger, _viewModel.Settings.IndexUpdateMode)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        updateModeCombo.SelectionChanged += (_, _) => refreshStaleUpdateModeWarning();
+        refreshStaleUpdateModeWarning();
+
         AddIndexNumber(scheduleGroup, "Idle delay / continuous interval (minutes):",
             s => s.IndexIdleDelayMinutes,
             (s, v) => s.IndexIdleDelayMinutes = AppSettings.NormalizeIndexIdleDelayMinutes(v),

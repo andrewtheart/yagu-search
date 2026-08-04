@@ -75,6 +75,56 @@ public static class ContentIndexBuildScheduler
         return IndexedRootsPolicy.Normalize(settings.IndexedRoots);
     }
 
+    /// <summary>The triggers that fire a build pass <em>repeatedly</em> over the life of an install. Unlike
+    /// <c>WhenEnabled</c> (a one-shot on enabling the feature), these are the ones a user picks meaning
+    /// "keep my indexes current", so they are the ones that need an automatic update mode to do anything
+    /// beyond creating missing indexes.</summary>
+    private static readonly string[] RecurringMaintenanceTriggers =
+        { TriggerAtStartup, TriggerWhenIdle, TriggerContinuous, TriggerOnSchedule };
+
+    /// <summary>True when <paramref name="buildTrigger"/> selects at least one recurring maintenance
+    /// trigger (AtStartup / WhenIdle / Continuous / OnSchedule).</summary>
+    public static bool HasRecurringMaintenanceTrigger(string? buildTrigger)
+    {
+        foreach (string flag in RecurringMaintenanceTriggers)
+        {
+            if (AppSettings.IndexBuildTriggerHas(buildTrigger, flag))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The update mode to preselect for <paramref name="buildTrigger"/>. A recurring maintenance trigger
+    /// paired with the default <c>ManualFullRebuild</c> is a footgun: the pass wakes on schedule but only
+    /// ever creates <em>missing</em> indexes, so existing ones go stale and searches silently fall back to a
+    /// live scan (watcher hints are gated off entirely in that mode). Recommend <c>AutomaticIncremental</c>
+    /// in that case. An update mode the user already moved off the default is always preserved, and a
+    /// manual-only trigger never escalates the mode. Pure so it is unit-tested and shared by the GUI
+    /// onboarding dialog and the CLI first-run prompt.
+    /// </summary>
+    public static string RecommendedUpdateMode(string? buildTrigger, string? currentUpdateMode)
+    {
+        string current = AppSettings.NormalizeIndexUpdateMode(currentUpdateMode);
+        if (!string.Equals(current, AppSettings.DefaultIndexUpdateMode, StringComparison.Ordinal))
+            return current; // the user already chose an automatic mode — never override it
+        return HasRecurringMaintenanceTrigger(buildTrigger)
+            ? AppSettings.IndexUpdateModeAutomaticIncremental
+            : current;
+    }
+
+    /// <summary>
+    /// True for the misconfiguration <see cref="RecommendedUpdateMode"/> exists to prevent: a recurring
+    /// maintenance trigger is selected while the update mode is still <c>ManualFullRebuild</c>, so automatic
+    /// passes never refresh an existing index. Surfaced as an inline warning in Settings ▸ Indexing.
+    /// </summary>
+    public static bool IsStaleAutomaticCombination(string? buildTrigger, string? updateMode)
+        => HasRecurringMaintenanceTrigger(buildTrigger)
+           && string.Equals(
+               AppSettings.NormalizeIndexUpdateMode(updateMode),
+               AppSettings.DefaultIndexUpdateMode,
+               StringComparison.Ordinal);
+
     /// <summary>
     /// Whether an automatic build pass should pause right now given live power/foreground/disk state
     /// (plan §6.1): paused when the machine is on battery and <c>IndexPauseOnBattery</c> is set, while a

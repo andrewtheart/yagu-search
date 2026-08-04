@@ -2362,10 +2362,15 @@ visible before advanced tuning. Indexing is on by default but
 <strong>builds nothing on its own</strong> — no folder is indexed until
 you choose one (the first-run prompt, the status-bar indicator, or
 <strong>Build now</strong> here), so searches keep live-scanning until
-then. It keeps everything on the machine, and always falls back to a
-full live scan when the index is missing, stale, disabled, corrupt, or
-unsafe — results never change. Every setting here also has a matching
-CLI <code>--index-config &lt;key&gt;=&lt;value&gt;</code> key.</p>
+then. The first-run prompt (and the status-bar “add a folder” prompt)
+can register <strong>several folders in one pass</strong>: check the
+folder you picked and/or any of its parent folders, and use <strong>Add
+another folder…</strong> to pick an unrelated folder as well — your
+existing selections are kept. It keeps everything on the machine, and
+always falls back to a full live scan when the index is missing, stale,
+disabled, corrupt, or unsafe — results never change. Every setting here
+also has a matching CLI
+<code>--index-config &lt;key&gt;=&lt;value&gt;</code> key.</p>
 <h4 id="should-you-use-indexing">Should you use indexing?</h4>
 <p>Indexing is most useful when you repeatedly search file
 <strong>contents</strong> across the same large source tree, log
@@ -2780,12 +2785,17 @@ battery policy, low disk space, and a user pause. To keep existing
 indexes continuously current, select <strong>Automatic
 incremental</strong> (recommended) or <strong>Automatic full rebuild
 when changed</strong>; the default <strong>Manual full rebuild</strong>
-update mode only builds missing indexes, regardless of trigger.
-<strong>On a schedule</strong> supports an interval (5–10080 minutes) or
-selected weekdays/time. Automatic incremental applies small append-only
-deltas and never silently escalates to an expensive full rebuild when
-journal continuity cannot be proven. The only compatibility exception is
-a one-time automatic rebuild of an older ReFS index whose stored file
+update mode only builds missing indexes, regardless of trigger. Because
+that pairing silently leaves existing indexes to go stale, the first-run
+onboarding prompt now offers <strong>Automatic incremental</strong> as
+the default as soon as you pick an automatic trigger (you can override
+it right there), and this tab shows an inline warning if an automatic
+trigger is ever left on <strong>Manual full rebuild</strong>. <strong>On
+a schedule</strong> supports an interval (5–10080 minutes) or selected
+weekdays/time. Automatic incremental applies small append-only deltas
+and never silently escalates to an expensive full rebuild when journal
+continuity cannot be proven. The only compatibility exception is a
+one-time automatic rebuild of an older ReFS index whose stored file
 identities cannot match ReFS journal records; the old index remains
 active until the replacement commits, and searches safely live-scan
 changed content meanwhile.</td>
@@ -4748,8 +4758,13 @@ pages large result sets to.</li>
 <li><strong>Explorer context menu</strong> — add a “Search with Yagu”
 right-click entry (skipped if already registered).</li>
 <li><strong>Content index onboarding</strong> — optionally index one or
-more folders you search often, and choose which automatic build
-trigger(s) keep them up to date (or leave it Manual).</li>
+more folders you search often, choose which automatic build trigger(s)
+keep them up to date (or leave it Manual), and confirm the
+<strong>update mode</strong> those passes use. When you pick an
+automatic trigger, <strong>Automatic incremental</strong> is offered as
+the default (you can still override it) — otherwise the default
+<strong>Manual full rebuild</strong> would only ever create
+<em>missing</em> indexes and leave existing ones to go stale.</li>
 <li><strong>AI search on CPU</strong> — a warning when no GPU/NPU is
 present (only when AI search is enabled).</li>
 <li><strong>New AI models</strong> — a once-a-day notice when new

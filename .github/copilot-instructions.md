@@ -96,3 +96,19 @@ discovery. See [README.md](../README.md) for the feature tour and build prerequi
 - When a `dotnet test` invocation appears stalled, **poll terminal output or tail the log file** (e.g. `TestResults\dotnet-test-stream.log`) instead of killing the terminal. Only kill if there is concrete evidence of a hang (no new output for several minutes, no CPU activity from the `dotnet`/`testhost` processes, and no progress in the log).
 - Prefer streaming output to a file with `Tee-Object` so progress is visible while the run continues, rather than buffering through `Select-Object -Last N` (which only emits after the pipeline completes).
 - If you only need a fast signal, scope the run with `--filter` to a specific test class instead of cancelling the full suite.
+
+## Failing Test Rules
+
+- **Assume you broke it.** When any test fails, treat it as caused by your change until you have
+  *disproven* it with evidence. Never open with "that's pre-existing" — prove it.
+- **Disproving requires evidence, not reasoning.** Acceptable proof is: the failure reproduces on a
+  clean tree (`git stash` your changes, re-run the failing test, `git stash pop`), or the same
+  failure appears in a pre-change baseline log. "I didn't touch that file" is a hypothesis, not
+  proof — a source-pin test can fail because of a file you *did* touch, a shared helper, test
+  ordering, or a stale build artifact.
+- **Report the verdict explicitly**, per failing test: *caused by this change* (with the fix) or
+  *pre-existing* (with the evidence that proved it).
+- **Always offer to fix pre-existing failures too.** Never leave a red suite silently. After
+  proving a failure pre-dates your change, use the `ask_user` tool to ask whether to fix it now, as
+  a separate commit, or leave it — do not just note it in prose and move on.
+- Never delete, skip, weaken, or `[Trait]`-exclude a failing test to make a run go green.

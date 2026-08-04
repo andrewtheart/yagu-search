@@ -1147,7 +1147,50 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("private async Task<bool> ConfirmLargeFolderIfNeededAsync(string folder)", IndexOnboardingSource);
         Assert.Contains("IndexOnboardingPlan.IsLikelyLargeRoot(folder)", IndexOnboardingSource);
         Assert.Contains("BoundedFileCount(folder, IndexOnboardingPlan.LargeFolderFileThreshold)", IndexOnboardingSource);
-        Assert.Contains("await ViewModel.AddFoldersToIndexAndBuildAsync(chosen, buildTrigger);", IndexOnboardingSource);
+        Assert.Contains("await ViewModel.AddFoldersToIndexAndBuildAsync(chosen, buildTrigger, updateMode);", IndexOnboardingSource);
+    }
+
+    [Fact]
+    public void IndexOnboarding_AddFolderDialog_PicksAnAutomaticUpdateModeForAnAutomaticTrigger()
+    {
+        // The onboarding bug: selecting "Continuously while Yagu is open" left IndexUpdateMode at the
+        // default ManualFullRebuild, so automatic passes only ever created MISSING indexes and an existing
+        // index silently went stale. The dialog now preselects the recommended mode AND lets the user
+        // override it right there.
+        Assert.Contains("ContentIndexBuildScheduler.RecommendedUpdateMode(", IndexOnboardingSource);
+        Assert.Contains("var updateModeCombo = new ComboBox", IndexOnboardingSource);
+        Assert.Contains("AppSettings.IndexUpdateModeAutomaticIncremental", IndexOnboardingSource);
+        Assert.Contains("AppSettings.IndexUpdateModeAutomaticFullRebuildWhenDirty", IndexOnboardingSource);
+        Assert.Contains("AppSettings.DefaultIndexUpdateMode", IndexOnboardingSource);
+
+        // An explicit pick must stick even as the trigger checkboxes are toggled afterwards.
+        Assert.Contains("updateModeOverridden = true;", IndexOnboardingSource);
+        Assert.Contains("if (!updateModeOverridden)", IndexOnboardingSource);
+        Assert.Contains("ContentIndexBuildScheduler.IsStaleAutomaticCombination(", IndexOnboardingSource);
+
+        // The chosen mode is persisted with the roots and the trigger, in one settings write.
+        Assert.Contains(
+            "public async Task AddFoldersToIndexAndBuildAsync(IReadOnlyList<string> folders, string? buildTrigger, string? updateMode = null)",
+            MainViewModelSource);
+        Assert.Contains("_settings.IndexUpdateMode = AppSettings.NormalizeIndexUpdateMode(updateMode);", MainViewModelSource);
+    }
+
+    [Fact]
+    public void IndexOnboarding_AddFolderDialog_CanAddUnrelatedFoldersInOnePass()
+    {
+        // The first-run prompt picks ONE folder, so without this the user could only ever add that folder
+        // and its ancestors. "Add another folder…" re-opens the picker and merges the new path choices,
+        // carrying every existing selection forward.
+        Assert.Contains("SecondaryButtonText = \"Add another folder\\u2026\"", IndexOnboardingSource);
+        Assert.Contains("if (result == YaguDialogResult.Secondary)", IndexOnboardingSource);
+        Assert.Contains("Win32FileDialog.SelectFolder(_hwnd, \"Select another folder to index\")", IndexOnboardingSource);
+        Assert.Contains("void MergeChoices(IEnumerable<string> more)", IndexOnboardingSource);
+        Assert.Contains("MergeChoices(moreChoices);", IndexOnboardingSource);
+
+        // Selections live outside the per-round controls so re-showing the dialog never loses them.
+        Assert.Contains("var checkedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);", IndexOnboardingSource);
+        Assert.Contains("var selectedTriggers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);", IndexOnboardingSource);
+        Assert.Contains("chosen = choices.Where(c => checkedPaths.Contains(c) && !IsAlreadyCovered(c)).ToList();", IndexOnboardingSource);
     }
 
     [Fact]
@@ -1161,7 +1204,21 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("AppSettings.IndexBuildTriggerHas(ViewModel.Settings.IndexBuildTrigger, flag)", IndexOnboardingSource);
         Assert.Contains("string buildTrigger = AppSettings.NormalizeIndexBuildTrigger(string.Join(\",\", selectedTriggers));", IndexOnboardingSource);
         // The multi-folder VM entry point registers every chosen root, sets the trigger, and builds each.
-        Assert.Contains("public async Task AddFoldersToIndexAndBuildAsync(IReadOnlyList<string> folders, string? buildTrigger)", MainViewModelSource);
+        Assert.Contains("public async Task AddFoldersToIndexAndBuildAsync(IReadOnlyList<string> folders, string? buildTrigger", MainViewModelSource);
+    }
+
+    [Fact]
+    public void SettingsIndexing_WarnsWhenAnAutomaticTriggerIsLeftOnManualFullRebuild()
+    {
+        // Manual full rebuild only CREATES missing indexes, so pairing it with a recurring trigger means
+        // existing indexes are never refreshed — surfaced inline instead of being silently wrong.
+        Assert.Contains("ContentIndexBuildScheduler.IsStaleAutomaticCombination(", SettingsIndexingSource);
+        Assert.Contains("var staleUpdateModeWarning = new Grid", SettingsIndexingSource);
+        Assert.Contains("only creates missing indexes", SettingsIndexingSource);
+        Assert.Contains("refreshStaleUpdateModeWarning?.Invoke();", SettingsIndexingSource);
+        Assert.Contains("updateModeCombo.SelectionChanged += (_, _) => refreshStaleUpdateModeWarning();", SettingsIndexingSource);
+        // A Grid (not a horizontal StackPanel) so the message column actually wraps.
+        Assert.Contains("TextWrapping = TextWrapping.Wrap", SettingsIndexingSource);
     }
 
     [Fact]
@@ -1174,9 +1231,9 @@ public sealed class ContentIndexGuiRegressionTests
 
         // If the folder AND every parent choice are already indexed, an explanatory dialog is shown instead
         // of the add-choice dialog, and the add path never proceeds for an already-indexed/unselected choice.
-        Assert.Contains("if (choices.All(IsAlreadyCovered))", IndexOnboardingSource);
+        Assert.Contains("if (initialChoices.All(IsAlreadyCovered))", IndexOnboardingSource);
         Assert.Contains("await ShowFolderAlreadyCoveredDialogAsync(folder);", IndexOnboardingSource);
-        Assert.Contains("c.IsChecked == true && c.Tag is string s && !IsAlreadyCovered(s)", IndexOnboardingSource);
+        Assert.Contains("chosen = choices.Where(c => checkedPaths.Contains(c) && !IsAlreadyCovered(c)).ToList();", IndexOnboardingSource);
 
         // The explanatory dialog names the covering root without claiming its generation is already built.
         Assert.Contains("private async Task ShowFolderAlreadyCoveredDialogAsync(string folder)", IndexOnboardingSource);
