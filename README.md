@@ -106,10 +106,10 @@ To install Yagu without building from source, download the installer that matche
 
 | Installer | What it's for | Image-text (OCR) search |
 | --- | --- | --- |
-| [**x64** — YaguSetup-1.0.0.2389-x64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2389/YaguSetup-1.0.0.2389-x64.exe) (~193 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
+| [**x64** — YaguSetup-1.0.0.2390-x64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2390/YaguSetup-1.0.0.2390-x64.exe) (~193 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
 | [**x64 · Offline** — YaguSetup-1.0.0.2389-x64-offline.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2389/YaguSetup-1.0.0.2389-x64-offline.exe) (~483 MB) | Same as x64, but for machines that must run fully **offline** — air-gapped PCs, or to skip first-run downloads. Bundles everything needed offline: the voidtools **Everything** installer (installs with your consent, no download) and the Microsoft Edge **WebView2** runtime for the embedded terminal. | Works with **no download** — both engines ship inside the installer. **Defaults to PaddleOCR**, same as every other edition: this installer bundles PaddleOCR's full native runtime and English models, so the default engine runs completely offline with no first-run download. Tesseract is bundled too and can be selected in Settings. See the note below. |
-| [**Arm64** — YaguSetup-1.0.0.2389-arm64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2389/YaguSetup-1.0.0.2389-arm64.exe) (~190 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
-| [**x86** — YaguSetup-1.0.0.2389-x86.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2389/YaguSetup-1.0.0.2389-x86.exe) (~171 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
+| [**Arm64** — YaguSetup-1.0.0.2390-arm64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2390/YaguSetup-1.0.0.2390-arm64.exe) (~190 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
+| [**x86** — YaguSetup-1.0.0.2390-x86.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2390/YaguSetup-1.0.0.2390-x86.exe) (~171 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
 
 > There is no Arm64 or x86 "Offline" edition: the bundled OCR runtime is win-x64 only, so it can only be packaged offline for x64. On Arm64 and x86, image-text search still works — it downloads what it needs on first use.
 
@@ -202,7 +202,7 @@ The index stores compact signatures and file identity metadata, not cached searc
 ### Safety, Privacy, and Storage
 
 - **Offline and private:** index data stays on the computer. Paths, contents, and queries are never uploaded.
-- **Fail-safe:** missing sidecars, unsupported queries, journal gaps, removable-drive changes, corrupt data, and worker failures all fall back to live scanning.
+- **Fail-safe:** missing optional query files stored alongside an index layer, unsupported queries, journal gaps, removable-drive changes, corrupt data, and worker failures all fall back to live scanning.
 - **Crash-safe publication:** a full build writes to a private workspace and replaces the active generation only after validation. Cancellation, disk-full, a crash, or power loss leaves the previous complete index active.
 - **Incremental freshness:** updates advance their Windows change-journal checkpoint only when the matching delta commits. Interrupted updates replay from the last completed checkpoint.
 - **Explicit storage controls:** Settings exposes the index location, quota, free-space reserve, stop-when-full threshold, retained generations, cleanup, compaction, optional PDF/OCR output, and the default format-v3 mapped-query structures.
