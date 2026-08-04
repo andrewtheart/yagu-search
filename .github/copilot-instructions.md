@@ -71,6 +71,18 @@ discovery. See [README.md](../README.md) for the feature tour and build prerequi
 - When adding, changing, or removing user-facing features, update `HELP.md` so the help guide matches the current product behavior.
 - When changing CLI flags, adding CLI flags, or changing CLI command behavior, update the `Yagu.exe --help` output and example CLI commands in the CLI help section so the in-app/terminal help stays current.
 - On the same trigger, update `HELP.md` with the same CLI flag and example command information.
+- **`src/Yagu/HELP.html` is a tracked, generated artifact — never edit it by hand, and never commit a
+  `HELP.md` change without it.** Every build regenerates it from `HELP.md` with pandoc
+  (the `HELP.html` target in `Yagu.csproj`), and it ships in the installer as the in-app Help page.
+  After editing `HELP.md`, run a build to regenerate it and commit `HELP.md` + `src/Yagu/HELP.html`
+  **in the same commit** (this is the existing repo convention). If pandoc is not installed the target
+  skips silently, so confirm `git status` actually shows the regenerated `HELP.html`.
+- Leaving `HELP.html` stale **breaks the release build**: `build-all-installers.ps1` regenerates it
+  during the release build, and the post-build guard in `scripts/installer-git-commits.ps1` only
+  permits `build-version.txt`, `AppInfo.g.cs`, and `README.md`, so the run aborts with
+  "Unexpected post-build change(s) will not be committed or pushed: src/Yagu/HELP.html". Fix it by
+  committing the regenerated file with its `HELP.md` change — do **not** widen the guard's allowed
+  paths, which exists precisely to stop doc drift being swept into a release commit.
 
 ## Native Crash & Profiling Rules
 
