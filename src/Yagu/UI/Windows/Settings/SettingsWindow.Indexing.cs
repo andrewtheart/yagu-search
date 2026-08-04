@@ -456,6 +456,9 @@ public sealed partial class SettingsWindow
         weeklyPanel.Children.Add(timePicker);
         weeklyPanel.Children.Add(Description("The build runs at this time on each chosen day (24-hour clock)."));
 
+        var idleDelayPanel = new StackPanel { Spacing = 6 };
+        var continuousIntervalPanel = new StackPanel { Spacing = 6 };
+
         void UpdateScheduleVisibility()
         {
             bool onSchedule = AppSettings.IndexBuildTriggerHas(_viewModel.Settings.IndexBuildTrigger, "OnSchedule");
@@ -463,6 +466,14 @@ public sealed partial class SettingsWindow
             bool weekly = string.Equals(_viewModel.Settings.IndexScheduleMode, "Weekly", StringComparison.OrdinalIgnoreCase);
             intervalPanel.Visibility = weekly ? Visibility.Collapsed : Visibility.Visible;
             weeklyPanel.Visibility = weekly ? Visibility.Visible : Visibility.Collapsed;
+            idleDelayPanel.Visibility = AppSettings.IndexBuildTriggerHas(
+                _viewModel.Settings.IndexBuildTrigger, "WhenIdle")
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            continuousIntervalPanel.Visibility = AppSettings.IndexBuildTriggerHas(
+                _viewModel.Settings.IndexBuildTrigger, "Continuous")
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         }
         scheduleModeCombo.SelectionChanged += (_, _) => UpdateScheduleVisibility();
         // Now that the schedule sub-panel exists, wire the trigger checkboxes: each toggle rebuilds the
@@ -532,11 +543,19 @@ public sealed partial class SettingsWindow
         updateModeCombo.SelectionChanged += (_, _) => refreshStaleUpdateModeWarning();
         refreshStaleUpdateModeWarning();
 
-        AddIndexNumber(scheduleGroup, "Idle delay / continuous interval (minutes):",
+        AddIndexNumber(idleDelayPanel, "Idle delay (minutes):",
             s => s.IndexIdleDelayMinutes,
             (s, v) => s.IndexIdleDelayMinutes = AppSettings.NormalizeIndexIdleDelayMinutes(v),
             1, 120,
-            "When idle: required time without keyboard/mouse input. Continuously: minimum time between maintenance passes. Range 1–120; default 5.");
+            "Required time without keyboard or mouse input before idle maintenance runs. Range 1–120; default 5.");
+        scheduleGroup.Children.Add(idleDelayPanel);
+        AddIndexNumber(continuousIntervalPanel, "Continuous interval (minutes):",
+            s => s.IndexContinuousIntervalMinutes,
+            (s, v) => s.IndexContinuousIntervalMinutes = AppSettings.NormalizeIndexContinuousIntervalMinutes(v),
+            1, 120,
+            "Minimum time between continuous maintenance passes while Yagu remains open. Range 1–120; default 5.");
+        scheduleGroup.Children.Add(continuousIntervalPanel);
+        UpdateScheduleVisibility();
 
         // ── Build Resources ──
         AddIndexNumber(resourcesGroup, "Build memory budget (MB, 0 = automatic):",

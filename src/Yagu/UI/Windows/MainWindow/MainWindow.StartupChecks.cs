@@ -26,7 +26,7 @@ public sealed partial class MainWindow
     /// from launch and a weekly slot only fires if it is still upcoming today (never run retroactively).</summary>
     private DateTimeOffset _lastScheduledIndexRun = DateTimeOffset.Now;
     /// <summary>Prevents WhenIdle/Continuous maintenance from launching on every 30-second timer tick.
-    /// An idle machine or Continuous mode may run another pass after the configured interval elapses.</summary>
+    /// Either trigger may run another pass after its own configured cadence elapses.</summary>
     private DateTimeOffset _lastIdleIndexRunUtc = DateTimeOffset.MinValue;
 
     private async void OnContentLoaded(object sender, RoutedEventArgs e)
@@ -145,9 +145,10 @@ public sealed partial class MainWindow
             _ = RunIdleIndexBuildIfDueAsync();
     }
 
-    /// <summary>Runs idle-style maintenance. WhenIdle requires the configured period of no input;
-    /// Continuous treats that idleness condition as permanently satisfied. Both run at most once per
-    /// configured interval and preserve battery, foreground-search, disk-space, and pause safeguards.</summary>
+    /// <summary>Runs idle-style maintenance. WhenIdle uses its configured no-input delay and Continuous uses
+    /// its independent repeat interval. When both triggers are selected, whichever becomes due first can
+    /// start the next shared maintenance pass. Battery, foreground-search, disk-space, and pause safeguards
+    /// remain authoritative.</summary>
     private async Task RunIdleIndexBuildIfDueAsync()
     {
         try
@@ -155,19 +156,26 @@ public sealed partial class MainWindow
             AppSettings settings = ViewModel.Settings;
             TimeSpan requiredIdle = TimeSpan.FromMinutes(
                 AppSettings.NormalizeIndexIdleDelayMinutes(settings.IndexIdleDelayMinutes));
+            TimeSpan continuousInterval = TimeSpan.FromMinutes(
+                AppSettings.NormalizeIndexContinuousIntervalMinutes(settings.IndexContinuousIntervalMinutes));
+            bool idleMaintenance = AppSettings.IndexBuildTriggerHas(
+                settings.IndexBuildTrigger,
+                ContentIndexBuildScheduler.TriggerWhenIdle);
             bool continuousMaintenance = AppSettings.IndexBuildTriggerHas(
                 settings.IndexBuildTrigger,
                 ContentIndexBuildScheduler.TriggerContinuous);
             bool developerSimulatedIdle = ViewModel.SimulateSystemIdle;
-            bool bypassIdleGate = continuousMaintenance || developerSimulatedIdle;
-            TimeSpan? idleTime = bypassIdleGate
+            TimeSpan? idleTime = developerSimulatedIdle
                 ? requiredIdle
                 : Yagu.Helpers.SystemIdleDetector.TryGetIdleTime();
-            if (!bypassIdleGate && !Yagu.Helpers.SystemIdleDetector.HasBeenIdleFor(idleTime, requiredIdle))
-                return;
 
             DateTimeOffset nowUtc = DateTimeOffset.UtcNow;
-            if (nowUtc - _lastIdleIndexRunUtc < requiredIdle || ViewModel.IsIndexBuildActive
+            TimeSpan sinceLastPass = nowUtc - _lastIdleIndexRunUtc;
+            bool idleDue = idleMaintenance
+                && Yagu.Helpers.SystemIdleDetector.HasBeenIdleFor(idleTime, requiredIdle)
+                && sinceLastPass >= requiredIdle;
+            bool continuousDue = continuousMaintenance && sinceLastPass >= continuousInterval;
+            if ((!idleDue && !continuousDue) || ViewModel.IsIndexBuildActive
                 || ViewModel.IsIndexingPaused || ViewModel.IsSearching)
                 return;
 
@@ -183,7 +191,7 @@ public sealed partial class MainWindow
                     "Developer idle simulation active; starting an index-maintenance pass over {RootCount} root(s).",
                     roots.Count);
             }
-            else if (continuousMaintenance)
+            else if (continuousDue)
             {
                 YaguLog.For("ContentIndex").LogInformation(
                     "Continuous index maintenance due; starting a pass over {RootCount} root(s).",

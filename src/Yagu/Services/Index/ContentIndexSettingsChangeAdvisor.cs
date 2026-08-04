@@ -91,6 +91,7 @@ public static class ContentIndexSettingsChangeAdvisor
         "IndexScheduleTimeOfDay",
         "IndexUpdateMode",
         "IndexIdleDelayMinutes",
+        "IndexContinuousIntervalMinutes",
         "IndexBuildMemoryBudgetMB",
         "IndexBuildWorkerParallelism",
         "IndexPauseDuringForegroundSearch",

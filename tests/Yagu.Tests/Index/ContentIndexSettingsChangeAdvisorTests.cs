@@ -115,6 +115,7 @@ public sealed class ContentIndexSettingsChangeAdvisorTests
     [InlineData("IndexAccelerateRegex", "false")]
     [InlineData("IndexQueryWorkerParallelism", "4")]
     [InlineData("IndexBuildTrigger", "Continuous")]
+    [InlineData("IndexContinuousIntervalMinutes", "2")]
     [InlineData("IndexBuildMemoryBudgetMB", "512")]
     [InlineData("IndexPostBuildCatchUpThresholdChanges", "12000")]
     [InlineData("IndexMaxDeltaSegments", "16")]

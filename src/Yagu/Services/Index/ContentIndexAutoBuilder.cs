@@ -62,8 +62,9 @@ public static class ContentIndexBuildScheduler
 
     /// <summary>The registered roots eligible for an idle-style maintenance pass — the normalized
     /// <c>IndexedRoots</c> only when the master feature and either <c>WhenIdle</c> or
-    /// <c>Continuous</c> trigger are enabled. Continuous changes only the idleness gate; the normal
-    /// update mode and battery/search/disk/pause safeguards remain authoritative.</summary>
+    /// <c>Continuous</c> trigger are enabled. Continuous uses its own repeat interval instead of the
+    /// WhenIdle no-input delay; the normal update mode and battery/search/disk/pause safeguards remain
+    /// authoritative.</summary>
     public static IReadOnlyList<string> RootsForIdleBuild(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);

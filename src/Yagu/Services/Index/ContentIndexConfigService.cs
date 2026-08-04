@@ -190,6 +190,7 @@ public static class ContentIndexConfigService
         AddString("IndexScheduleTimeOfDay", s => s.IndexScheduleTimeOfDay, (s, v) => s.IndexScheduleTimeOfDay = AppSettings.NormalizeIndexScheduleTimeOfDay(v));
         AddEnum("IndexUpdateMode", s => s.IndexUpdateMode, (s, v) => s.IndexUpdateMode = AppSettings.NormalizeIndexUpdateMode(v), "ManualFullRebuild", "AutomaticFullRebuildWhenDirty", "AutomaticIncremental");
         AddInt("IndexIdleDelayMinutes", s => s.IndexIdleDelayMinutes, (s, v) => s.IndexIdleDelayMinutes = AppSettings.NormalizeIndexIdleDelayMinutes(v));
+        AddInt("IndexContinuousIntervalMinutes", s => s.IndexContinuousIntervalMinutes, (s, v) => s.IndexContinuousIntervalMinutes = AppSettings.NormalizeIndexContinuousIntervalMinutes(v));
         AddInt("IndexBuildMemoryBudgetMB", s => s.IndexBuildMemoryBudgetMB, (s, v) => s.IndexBuildMemoryBudgetMB = AppSettings.NormalizeIndexBuildMemoryBudgetMB(v));
         AddInt("IndexBuildWorkerParallelism", s => s.IndexBuildWorkerParallelism, (s, v) => s.IndexBuildWorkerParallelism = AppSettings.NormalizeIndexBuildWorkerParallelism(v));
         AddBool("IndexPauseDuringForegroundSearch", s => s.IndexPauseDuringForegroundSearch, (s, v) => s.IndexPauseDuringForegroundSearch = v);

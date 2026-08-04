@@ -18,6 +18,8 @@ public sealed class ContentIndexConfigServiceTests
         Assert.Contains("EnableContentIndex", ContentIndexConfigService.Keys);
         Assert.Contains("IndexQueryStartupBudgetMs", ContentIndexConfigService.Keys);
         Assert.Contains("IndexBuildTrigger", ContentIndexConfigService.Keys);
+        Assert.Contains("IndexIdleDelayMinutes", ContentIndexConfigService.Keys);
+        Assert.Contains("IndexContinuousIntervalMinutes", ContentIndexConfigService.Keys);
         Assert.Contains("IndexPostBuildCatchUpThresholdChanges", ContentIndexConfigService.Keys);
         Assert.Contains("IndexStorageDirectory", ContentIndexConfigService.Keys);
         Assert.True(ContentIndexConfigService.Keys.Count >= 25);
@@ -106,6 +108,18 @@ public sealed class ContentIndexConfigServiceTests
         Assert.Equal(
             AppSettings.MaximumIndexPostBuildCatchUpThresholdChanges,
             settings.IndexPostBuildCatchUpThresholdChanges);
+    }
+
+    [Fact]
+    public void Set_ContinuousInterval_ClampsIndependentlyFromIdleDelay()
+    {
+        var settings = new AppSettings { IndexIdleDelayMinutes = 37 };
+
+        Assert.True(ContentIndexConfigService.Set(
+            settings, "IndexContinuousIntervalMinutes", "1").Success);
+
+        Assert.Equal(37, settings.IndexIdleDelayMinutes);
+        Assert.Equal(1, settings.IndexContinuousIntervalMinutes);
     }
 
     [Fact]

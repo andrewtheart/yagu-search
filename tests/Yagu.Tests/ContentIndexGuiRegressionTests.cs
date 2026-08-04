@@ -1499,7 +1499,13 @@ public sealed class ContentIndexGuiRegressionTests
         // The schedule sub-panel is shown when the OnSchedule trigger is checked; interval vs weekly toggles on mode.
         Assert.Contains("void UpdateScheduleVisibility()", SettingsIndexingSource);
         Assert.Contains("AppSettings.IndexBuildTriggerHas(_viewModel.Settings.IndexBuildTrigger, \"OnSchedule\")", SettingsIndexingSource);
-        Assert.Contains("Idle delay / continuous interval (minutes):", SettingsIndexingSource);
+        Assert.Contains("Idle delay (minutes):", SettingsIndexingSource);
+        Assert.Contains("Continuous interval (minutes):", SettingsIndexingSource);
+        Assert.DoesNotContain("Idle delay / continuous interval (minutes):", SettingsIndexingSource);
+        Assert.Contains("_viewModel.Settings.IndexBuildTrigger, \"WhenIdle\"", SettingsIndexingSource);
+        Assert.Contains("idleDelayPanel.Visibility =", SettingsIndexingSource);
+        Assert.Contains("_viewModel.Settings.IndexBuildTrigger, \"Continuous\"", SettingsIndexingSource);
+        Assert.Contains("continuousIntervalPanel.Visibility =", SettingsIndexingSource);
         Assert.Contains("pair it with Automatic incremental", SettingsIndexingSource);
     }
 
@@ -1524,9 +1530,13 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("private async Task RunIdleIndexBuildIfDueAsync()", StartupChecksSource);
         Assert.Contains("SystemIdleDetector.TryGetIdleTime()", StartupChecksSource);
         Assert.Contains("NormalizeIndexIdleDelayMinutes(settings.IndexIdleDelayMinutes)", StartupChecksSource);
+        Assert.Contains("NormalizeIndexContinuousIntervalMinutes(settings.IndexContinuousIntervalMinutes)", StartupChecksSource);
         Assert.Contains("SystemIdleDetector.HasBeenIdleFor(idleTime, requiredIdle)", StartupChecksSource);
         Assert.Contains("ContentIndexBuildScheduler.RootsForIdleBuild(settings)", StartupChecksSource);
-        Assert.Contains("nowUtc - _lastIdleIndexRunUtc < requiredIdle", StartupChecksSource);
+        Assert.Contains("bool idleDue =", StartupChecksSource);
+        Assert.Contains("sinceLastPass >= requiredIdle", StartupChecksSource);
+        Assert.Contains("bool continuousDue =", StartupChecksSource);
+        Assert.Contains("sinceLastPass >= continuousInterval", StartupChecksSource);
         Assert.Contains("_ = RunIdleIndexBuildIfDueAsync();", StartupChecksSource);
         Assert.Contains("await RunIndexBuildPassAsync(roots);", StartupChecksSource);
     }
@@ -1537,9 +1547,8 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("public const string TriggerContinuous", Read("src", "Yagu", "Services", "Index", "ContentIndexAutoBuilder.cs"));
         Assert.Contains("bool continuousMaintenance = AppSettings.IndexBuildTriggerHas(", StartupChecksSource);
         Assert.Contains("ContentIndexBuildScheduler.TriggerContinuous", StartupChecksSource);
-        Assert.Contains("bool bypassIdleGate = continuousMaintenance || developerSimulatedIdle;", StartupChecksSource);
-        Assert.Contains("if (!bypassIdleGate && !Yagu.Helpers.SystemIdleDetector.HasBeenIdleFor(idleTime, requiredIdle))", StartupChecksSource);
-        Assert.Contains("nowUtc - _lastIdleIndexRunUtc < requiredIdle", StartupChecksSource);
+        Assert.Contains("bool continuousDue = continuousMaintenance && sinceLastPass >= continuousInterval;", StartupChecksSource);
+        Assert.DoesNotContain("continuousMaintenance || developerSimulatedIdle", StartupChecksSource);
         Assert.Contains("Continuous index maintenance due", StartupChecksSource);
         Assert.Contains("_ = RunIdleIndexBuildIfDueAsync();", StartupChecksSource);
         // The shared build pass retains all unattended-work safety gates.
@@ -1556,8 +1565,9 @@ public sealed class ContentIndexGuiRegressionTests
 
         Assert.Contains("ViewModel.RequestIdleIndexMaintenanceAsync = RunIdleIndexBuildIfDueAsync;", StartupChecksSource);
         Assert.Contains("bool developerSimulatedIdle = ViewModel.SimulateSystemIdle;", StartupChecksSource);
-        Assert.Contains("bool bypassIdleGate = continuousMaintenance || developerSimulatedIdle;", StartupChecksSource);
-        Assert.Contains("if (!bypassIdleGate && !Yagu.Helpers.SystemIdleDetector.HasBeenIdleFor(idleTime, requiredIdle))", StartupChecksSource);
+        Assert.Contains("TimeSpan? idleTime = developerSimulatedIdle", StartupChecksSource);
+        Assert.Contains("? requiredIdle", StartupChecksSource);
+        Assert.Contains("SystemIdleDetector.HasBeenIdleFor(idleTime, requiredIdle)", StartupChecksSource);
         Assert.Contains("ContentIndexBuildScheduler.RootsForIdleBuild(settings)", StartupChecksSource);
         Assert.Contains("await RunIndexBuildPassAsync(roots);", StartupChecksSource);
 

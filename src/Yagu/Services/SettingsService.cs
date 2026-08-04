@@ -168,6 +168,10 @@ public sealed class AppSettings
     public const int DefaultIndexIdleDelayMinutes = 5;
     public const int MinimumIndexIdleDelayMinutes = 1;
     public const int MaximumIndexIdleDelayMinutes = 120;
+    public const int DefaultIndexContinuousIntervalMinutes = 5;
+    public const int FirstRunDriveIndexContinuousIntervalMinutes = 1;
+    public const int MinimumIndexContinuousIntervalMinutes = 1;
+    public const int MaximumIndexContinuousIntervalMinutes = 120;
 
     // Storage/memory quotas scale with pointer size, giving x86 half the x64 defaults
     // for its constrained address space (plan §6.1/§11).
@@ -216,6 +220,7 @@ public sealed class AppSettings
     public const int MaximumIndexMaxJournalCatchupMB = 4096;
 
     public const int DefaultIndexMaxJournalCatchupRecords = 500_000;
+    public const int FirstRunDriveIndexMaxJournalCatchupRecords = 8_000_000;
     public const int MinimumIndexMaxJournalCatchupRecords = 1000;
     public const int MaximumIndexMaxJournalCatchupRecords = 100_000_000;
 
@@ -323,6 +328,10 @@ public sealed class AppSettings
     public static int NormalizeIndexIdleDelayMinutes(int value)
         => value <= 0 ? DefaultIndexIdleDelayMinutes
             : Math.Clamp(value, MinimumIndexIdleDelayMinutes, MaximumIndexIdleDelayMinutes);
+
+    public static int NormalizeIndexContinuousIntervalMinutes(int value)
+        => value <= 0 ? DefaultIndexContinuousIntervalMinutes
+            : Math.Clamp(value, MinimumIndexContinuousIntervalMinutes, MaximumIndexContinuousIntervalMinutes);
 
     public static int NormalizeIndexMaxDiskSizeMB(int value)
         => value <= 0 ? DefaultIndexMaxDiskSizeMB
@@ -828,9 +837,15 @@ public sealed class AppSettings
     /// journal proves it changed since the index was built. Only takes effect when <see cref="IndexBuildTrigger"/>
     /// is automatic. Incremental delta updates are a Phase 3 addition.</summary>
     public string IndexUpdateMode { get; set; } = DefaultIndexUpdateMode;
-    /// <summary>Idle delay before a WhenIdle pass, and minimum interval between Continuous passes
-    /// (minutes). Default 5 (plan §6.1).</summary>
+    /// <summary>Required time without keyboard or mouse input before a WhenIdle pass, and the minimum
+    /// interval between repeated idle passes while the machine remains idle. Default 5 minutes.</summary>
     public int IndexIdleDelayMinutes { get; set; } = DefaultIndexIdleDelayMinutes;
+    /// <summary>Minimum interval between Continuous maintenance passes while Yagu remains open. Default
+    /// 5 minutes.</summary>
+    public int IndexContinuousIntervalMinutes { get; set; } = DefaultIndexContinuousIntervalMinutes;
+    /// <summary>One-time migration guard for settings written when <see cref="IndexIdleDelayMinutes"/>
+    /// controlled both idle and continuous maintenance cadence.</summary>
+    public bool IndexContinuousIntervalMigrated { get; set; }
 
     /// <summary>Schedule mode when <see cref="IndexBuildTrigger"/> is OnSchedule: <c>Interval</c> (every N
     /// minutes) or <c>Weekly</c> (on chosen days of the week at a set time). Default Interval.</summary>
@@ -930,6 +945,73 @@ public sealed class AppSettings
     /// <summary>True when a search is allowed to use the index this session: the master feature is on
     /// and the persisted default opts in (plan §6.1). Per-search overrides apply on top of this.</summary>
     [JsonIgnore] public bool ContentIndexActiveByDefault => EnableContentIndex && UseContentIndexByDefault;
+
+    /// <summary>
+    /// Applies the approved indexing profile when a user opts into drive indexing from the one-time
+    /// first-launch prompt. Storage location, registered roots, and per-root filters are intentionally left
+    /// alone because the onboarding flow resolves those separately. Existing users are never migrated to
+    /// this profile.
+    /// </summary>
+    public void ApplyFirstRunDriveIndexingProfile()
+    {
+        EnableContentIndex = true;
+        UseContentIndexByDefault = true;
+        IndexAccelerateLiterals = true;
+        IndexAccelerateWholeWord = true;
+        IndexAccelerateRegex = true;
+        IndexAccelerateMultiline = true;
+        IndexUseNativeWorker = true;
+        IndexBuildPdfTextExtendedSource = false;
+        IndexBuildImageTextExtendedSource = false;
+        IndexProduceV3QueryStructures = true;
+        IndexUseV3QueryReader = false;
+        IndexUseWorkerQuerySessions = true;
+        IndexMappedWorkerDefaultsMigrated = true;
+        IndexQueryStartupBudgetMs = DefaultIndexQueryStartupBudgetMs;
+        IndexMaxCandidatePercent = DefaultIndexMaxCandidatePercent;
+        IndexQueryMemoryBudgetMB = DefaultIndexQueryMemoryBudgetMB;
+        IndexQueryWorkerParallelism = DefaultIndexQueryWorkerParallelism;
+        IndexMaxInProcessSizeMB = DefaultIndexMaxInProcessSizeMB;
+        IndexMaxWorkerQuerySizeMB = DefaultIndexMaxWorkerQuerySizeMB;
+        IndexMaxFileSizeMB = DefaultIndexMaxFileSizeMB;
+        IndexMaxDiskSizeMB = DefaultIndexMaxDiskSizeMB;
+        IndexMinimumFreeSpaceMB = DefaultIndexMinimumFreeSpaceMB;
+        IndexMaxDiskUsagePercent = DefaultIndexMaxDiskUsagePercent;
+        IndexRetainedGenerationCount = DefaultIndexRetainedGenerationCount;
+        IndexStaleTemporaryHours = DefaultIndexStaleTemporaryHours;
+        IndexQuarantineRetentionDays = DefaultIndexQuarantineRetentionDays;
+        IndexBuildTrigger = IndexBuildTriggerContinuous;
+        IndexUpdateMode = IndexUpdateModeAutomaticIncremental;
+        IndexIdleDelayMinutes = DefaultIndexIdleDelayMinutes;
+        IndexContinuousIntervalMinutes = FirstRunDriveIndexContinuousIntervalMinutes;
+        IndexContinuousIntervalMigrated = true;
+        IndexScheduleMode = DefaultIndexScheduleMode;
+        IndexScheduleIntervalMinutes = DefaultIndexScheduleIntervalMinutes;
+        IndexScheduleDaysOfWeekMask = DefaultIndexScheduleDaysOfWeekMask;
+        IndexScheduleTimeOfDay = DefaultIndexScheduleTimeOfDay;
+        IndexBuildMemoryBudgetMB = DefaultIndexBuildMemoryBudgetMB;
+        IndexBuildWorkerParallelism = DefaultIndexBuildWorkerParallelism;
+        IndexPauseDuringForegroundSearch = true;
+        IndexPauseOnBattery = true;
+        IndexRemovableDrivePolicy = DefaultIndexRemovableDrivePolicy;
+        IndexFollowReparsePoints = false;
+        IndexIncludeHiddenFiles = true;
+        IndexMaxJournalCatchupMB = DefaultIndexMaxJournalCatchupMB;
+        IndexMaxJournalCatchupRecords = FirstRunDriveIndexMaxJournalCatchupRecords;
+        IndexPostBuildCatchUpThresholdChanges = DefaultIndexPostBuildCatchUpThresholdChanges;
+        IndexAutoRepair = true;
+        IndexUseWatcherHints = false;
+        IndexMaxDeltaSegments = DefaultIndexMaxDeltaSegments;
+        IndexCompactionThresholdMB = DefaultIndexCompactionThresholdMB;
+        IndexMaxAutoCompactionSizeMB = DefaultIndexMaxAutoCompactionSizeMB;
+        ShareAggregateIndexTelemetry = false;
+        ShowIndexStatusInMainWindow = true;
+        ShowIndexBuildNotifications = true;
+        ShowIndexProvenanceInResults = true;
+        IndexExcludedGlobs = string.Empty;
+        IndexExcludedExtensions = string.Empty;
+    }
+
     /// <summary>True once the first-run telemetry/bug-reporting consent dialog has been shown. The
     /// dialog records the user's choices below and is then never shown again (regardless of what they
     /// chose). Default false.</summary>
@@ -1271,7 +1353,7 @@ public sealed class SettingsService
     {
         try
         {
-            if (!File.Exists(_path)) return new AppSettings();
+            if (!File.Exists(_path)) return CreateDefaultSettings();
             using var fs = File.OpenRead(_path);
             var settings = JsonSerializer.Deserialize(fs, AppSettingsJsonContext.Default.AppSettings) ?? new AppSettings();
             // Migrate: old default was int.MaxValue which caused unbounded memory growth.
@@ -1323,14 +1405,14 @@ public sealed class SettingsService
             settings.TelemetryInstallId ??= string.Empty;
             return settings;
         }
-        catch (Exception ex) { YaguLog.For("Settings").LogWarning(ex, "Failed to load settings from {Path}", _path); return new AppSettings(); }
+        catch (Exception ex) { YaguLog.For("Settings").LogWarning(ex, "Failed to load settings from {Path}", _path); return CreateDefaultSettings(); }
     }
 
     public async Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            if (!File.Exists(_path)) return new AppSettings();
+            if (!File.Exists(_path)) return CreateDefaultSettings();
             await using var fs = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.Asynchronous);
             var settings = await JsonSerializer.DeserializeAsync(fs, AppSettingsJsonContext.Default.AppSettings, cancellationToken).ConfigureAwait(false) ?? new AppSettings();
             if (settings.MaxResults > SearchOptions.MaxResultsCeiling)
@@ -1374,8 +1456,14 @@ public sealed class SettingsService
             settings.TelemetryInstallId ??= string.Empty;
             return settings;
         }
-        catch (Exception ex) { YaguLog.For("Settings").LogWarning(ex, "Failed to load settings from {Path}", _path); return new AppSettings(); }
+        catch (Exception ex) { YaguLog.For("Settings").LogWarning(ex, "Failed to load settings from {Path}", _path); return CreateDefaultSettings(); }
     }
+
+    private static AppSettings CreateDefaultSettings()
+        => new()
+        {
+            IndexContinuousIntervalMigrated = true,
+        };
 
     // Earlier Yagu versions stored the startup window mode (launcher vs traditional) and the
     // launcher's focus-loss behavior in a single setting (WindowFocusBehavior 0..3 where 3 meant
@@ -1510,7 +1598,17 @@ public sealed class SettingsService
         settings.IndexRetainedGenerationCount = AppSettings.NormalizeIndexRetainedGenerationCount(settings.IndexRetainedGenerationCount);
         settings.IndexStaleTemporaryHours = AppSettings.NormalizeIndexStaleTemporaryHours(settings.IndexStaleTemporaryHours);
         settings.IndexQuarantineRetentionDays = AppSettings.NormalizeIndexQuarantineRetentionDays(settings.IndexQuarantineRetentionDays);
+        // Builds before the cadence split stored both meanings in IndexIdleDelayMinutes. Copy that value once;
+        // settings saved by this build carry the guard and preserve independently chosen values thereafter.
+        if (!settings.IndexContinuousIntervalMigrated)
+        {
+            settings.IndexContinuousIntervalMinutes = AppSettings.NormalizeIndexContinuousIntervalMinutes(
+                settings.IndexIdleDelayMinutes);
+            settings.IndexContinuousIntervalMigrated = true;
+        }
         settings.IndexIdleDelayMinutes = AppSettings.NormalizeIndexIdleDelayMinutes(settings.IndexIdleDelayMinutes);
+        settings.IndexContinuousIntervalMinutes = AppSettings.NormalizeIndexContinuousIntervalMinutes(
+            settings.IndexContinuousIntervalMinutes);
         settings.IndexBuildMemoryBudgetMB = AppSettings.NormalizeIndexBuildMemoryBudgetMB(settings.IndexBuildMemoryBudgetMB);
         settings.IndexBuildWorkerParallelism = AppSettings.NormalizeIndexBuildWorkerParallelism(settings.IndexBuildWorkerParallelism);
         settings.IndexMaxJournalCatchupMB = AppSettings.NormalizeIndexMaxJournalCatchupMB(settings.IndexMaxJournalCatchupMB);
@@ -1637,6 +1735,7 @@ public sealed class SettingsService
     {
         try
         {
+            settings.IndexContinuousIntervalMigrated = true;
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             // Write to a temp file then atomically replace, so a concurrent reader (e.g. the bug
@@ -1660,6 +1759,7 @@ public sealed class SettingsService
     {
         try
         {
+            settings.IndexContinuousIntervalMigrated = true;
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             // Write to a temp file then atomically replace, so a concurrent reader (e.g. the bug

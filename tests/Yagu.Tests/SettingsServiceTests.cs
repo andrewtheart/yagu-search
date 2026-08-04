@@ -5,6 +5,137 @@ namespace Yagu.Tests;
 public class SettingsServiceTests
 {
     [Fact]
+    public void ApplyFirstRunDriveIndexingProfile_MatchesApprovedDebugConfiguration()
+    {
+        var settings = new AppSettings
+        {
+            IndexStorageDirectory = @"D:\preserved-index",
+            IndexedRoots = [@"E:\existing"],
+            IndexedRootFilters =
+            [
+                new Yagu.Services.Index.IndexedRootFilter
+                {
+                    Path = @"E:\existing",
+                    IncludeGlobs = "*.cs",
+                },
+            ],
+        };
+
+        settings.ApplyFirstRunDriveIndexingProfile();
+
+        Assert.True(settings.EnableContentIndex);
+        Assert.True(settings.UseContentIndexByDefault);
+        Assert.True(settings.IndexAccelerateLiterals);
+        Assert.True(settings.IndexAccelerateWholeWord);
+        Assert.True(settings.IndexAccelerateRegex);
+        Assert.True(settings.IndexAccelerateMultiline);
+        Assert.True(settings.IndexUseNativeWorker);
+        Assert.False(settings.IndexBuildPdfTextExtendedSource);
+        Assert.False(settings.IndexBuildImageTextExtendedSource);
+        Assert.True(settings.IndexProduceV3QueryStructures);
+        Assert.False(settings.IndexUseV3QueryReader);
+        Assert.True(settings.IndexUseWorkerQuerySessions);
+        Assert.True(settings.IndexMappedWorkerDefaultsMigrated);
+        Assert.Equal(AppSettings.DefaultIndexQueryStartupBudgetMs, settings.IndexQueryStartupBudgetMs);
+        Assert.Equal(AppSettings.DefaultIndexMaxCandidatePercent, settings.IndexMaxCandidatePercent);
+        Assert.Equal(AppSettings.DefaultIndexQueryMemoryBudgetMB, settings.IndexQueryMemoryBudgetMB);
+        Assert.Equal(AppSettings.DefaultIndexQueryWorkerParallelism, settings.IndexQueryWorkerParallelism);
+        Assert.Equal(AppSettings.DefaultIndexMaxInProcessSizeMB, settings.IndexMaxInProcessSizeMB);
+        Assert.Equal(AppSettings.DefaultIndexMaxWorkerQuerySizeMB, settings.IndexMaxWorkerQuerySizeMB);
+        Assert.Equal(AppSettings.DefaultIndexMaxFileSizeMB, settings.IndexMaxFileSizeMB);
+        Assert.Equal(AppSettings.DefaultIndexMaxDiskSizeMB, settings.IndexMaxDiskSizeMB);
+        Assert.Equal(AppSettings.DefaultIndexMinimumFreeSpaceMB, settings.IndexMinimumFreeSpaceMB);
+        Assert.Equal(AppSettings.DefaultIndexMaxDiskUsagePercent, settings.IndexMaxDiskUsagePercent);
+        Assert.Equal(AppSettings.DefaultIndexRetainedGenerationCount, settings.IndexRetainedGenerationCount);
+        Assert.Equal(AppSettings.DefaultIndexStaleTemporaryHours, settings.IndexStaleTemporaryHours);
+        Assert.Equal(AppSettings.DefaultIndexQuarantineRetentionDays, settings.IndexQuarantineRetentionDays);
+        Assert.Equal(AppSettings.IndexBuildTriggerContinuous, settings.IndexBuildTrigger);
+        Assert.Equal(AppSettings.IndexUpdateModeAutomaticIncremental, settings.IndexUpdateMode);
+        Assert.Equal(AppSettings.DefaultIndexIdleDelayMinutes, settings.IndexIdleDelayMinutes);
+        Assert.Equal(1, AppSettings.FirstRunDriveIndexContinuousIntervalMinutes);
+        Assert.Equal(
+            AppSettings.FirstRunDriveIndexContinuousIntervalMinutes,
+            settings.IndexContinuousIntervalMinutes);
+        Assert.Equal(AppSettings.DefaultIndexScheduleMode, settings.IndexScheduleMode);
+        Assert.Equal(AppSettings.DefaultIndexScheduleIntervalMinutes, settings.IndexScheduleIntervalMinutes);
+        Assert.Equal(AppSettings.DefaultIndexScheduleDaysOfWeekMask, settings.IndexScheduleDaysOfWeekMask);
+        Assert.Equal(AppSettings.DefaultIndexScheduleTimeOfDay, settings.IndexScheduleTimeOfDay);
+        Assert.Equal(AppSettings.DefaultIndexBuildMemoryBudgetMB, settings.IndexBuildMemoryBudgetMB);
+        Assert.Equal(AppSettings.DefaultIndexBuildWorkerParallelism, settings.IndexBuildWorkerParallelism);
+        Assert.True(settings.IndexPauseDuringForegroundSearch);
+        Assert.True(settings.IndexPauseOnBattery);
+        Assert.Equal(AppSettings.DefaultIndexRemovableDrivePolicy, settings.IndexRemovableDrivePolicy);
+        Assert.False(settings.IndexFollowReparsePoints);
+        Assert.True(settings.IndexIncludeHiddenFiles);
+        Assert.Equal(AppSettings.DefaultIndexMaxJournalCatchupMB, settings.IndexMaxJournalCatchupMB);
+        Assert.Equal(8_000_000, AppSettings.FirstRunDriveIndexMaxJournalCatchupRecords);
+        Assert.Equal(AppSettings.FirstRunDriveIndexMaxJournalCatchupRecords, settings.IndexMaxJournalCatchupRecords);
+        Assert.Equal(AppSettings.DefaultIndexPostBuildCatchUpThresholdChanges, settings.IndexPostBuildCatchUpThresholdChanges);
+        Assert.True(settings.IndexAutoRepair);
+        Assert.False(settings.IndexUseWatcherHints);
+        Assert.Equal(AppSettings.DefaultIndexMaxDeltaSegments, settings.IndexMaxDeltaSegments);
+        Assert.Equal(AppSettings.DefaultIndexCompactionThresholdMB, settings.IndexCompactionThresholdMB);
+        Assert.Equal(AppSettings.DefaultIndexMaxAutoCompactionSizeMB, settings.IndexMaxAutoCompactionSizeMB);
+        Assert.False(settings.ShareAggregateIndexTelemetry);
+        Assert.True(settings.ShowIndexStatusInMainWindow);
+        Assert.True(settings.ShowIndexBuildNotifications);
+        Assert.True(settings.ShowIndexProvenanceInResults);
+        Assert.Equal(string.Empty, settings.IndexExcludedGlobs);
+        Assert.Equal(string.Empty, settings.IndexExcludedExtensions);
+        Assert.Equal(@"D:\preserved-index", settings.IndexStorageDirectory);
+        Assert.Equal(new[] { @"E:\existing" }, settings.IndexedRoots);
+        Assert.Single(settings.IndexedRootFilters);
+    }
+
+    [Fact]
+    public void Load_LegacyCombinedIndexCadence_CopiesIdleDelayToContinuousInterval()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(temp, """{ "IndexIdleDelayMinutes": 17 }""");
+
+            AppSettings loaded = new SettingsService(temp).Load();
+
+            Assert.Equal(17, loaded.IndexIdleDelayMinutes);
+            Assert.Equal(17, loaded.IndexContinuousIntervalMinutes);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
+    public async Task LoadAsync_SeparateIndexCadences_PreservesBothValues()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(
+                temp,
+                """{ "IndexIdleDelayMinutes": 19, "IndexContinuousIntervalMinutes": 2, "IndexContinuousIntervalMigrated": true }""");
+
+            AppSettings loaded = await new SettingsService(temp).LoadAsync();
+
+            Assert.Equal(19, loaded.IndexIdleDelayMinutes);
+            Assert.Equal(2, loaded.IndexContinuousIntervalMinutes);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
+    public void Load_MissingSettingsFile_UsesBothCadenceDefaults()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+
+        AppSettings loaded = new SettingsService(temp).Load();
+
+        Assert.Equal(AppSettings.DefaultIndexIdleDelayMinutes, loaded.IndexIdleDelayMinutes);
+        Assert.Equal(
+            AppSettings.DefaultIndexContinuousIntervalMinutes,
+            loaded.IndexContinuousIntervalMinutes);
+        Assert.True(loaded.IndexContinuousIntervalMigrated);
+    }
+
+    [Fact]
     public void Load_MigratesLegacyDisabledUpdateChecksToOff()
     {
         var temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");

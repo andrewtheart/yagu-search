@@ -172,6 +172,13 @@ public sealed class ContentIndexSettingsTests
         => Assert.Equal(expected, AppSettings.NormalizeIndexIdleDelayMinutes(input));
 
     [Theory]
+    [InlineData(0, AppSettings.DefaultIndexContinuousIntervalMinutes)]
+    [InlineData(1, AppSettings.MinimumIndexContinuousIntervalMinutes)]
+    [InlineData(9999, AppSettings.MaximumIndexContinuousIntervalMinutes)]
+    public void NormalizeIndexContinuousIntervalMinutes_Clamps(int input, int expected)
+        => Assert.Equal(expected, AppSettings.NormalizeIndexContinuousIntervalMinutes(input));
+
+    [Theory]
     [InlineData(0, AppSettings.DefaultIndexMinimumFreeSpaceMB)]
     [InlineData(1, AppSettings.MinimumIndexMinimumFreeSpaceMB)]
     [InlineData(8192, 8192)]

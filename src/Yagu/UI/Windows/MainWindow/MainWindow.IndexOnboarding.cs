@@ -719,7 +719,7 @@ public sealed partial class MainWindow
             if (string.IsNullOrWhiteSpace(folder))
                 return;
 
-            await ShowAddFolderToIndexDialogAsync(folder);
+            await ShowAddFolderToIndexDialogAsync(folder, applyFirstRunDriveIndexingProfile: true);
         }
         catch (Exception ex)
         {
@@ -733,7 +733,7 @@ public sealed partial class MainWindow
     /// folders via "Add another folder…" before committing; a very large chosen root triggers a warning
     /// before the build starts. On confirmation the feature is enabled and a background build begins.
     /// </summary>
-    private async Task ShowAddFolderToIndexDialogAsync(string folder)
+    private async Task ShowAddFolderToIndexDialogAsync(string folder, bool applyFirstRunDriveIndexingProfile = false)
     {
         IReadOnlyList<string> initialChoices = IndexOnboardingPlan.PathChoices(folder);
         if (initialChoices.Count == 0)
@@ -788,17 +788,23 @@ public sealed partial class MainWindow
             (AppSettings.DefaultIndexUpdateMode, "Manual full rebuild \u2014 only create missing indexes"),
         };
 
+        string initialBuildTrigger = applyFirstRunDriveIndexingProfile
+            ? AppSettings.IndexBuildTriggerContinuous
+            : ViewModel.Settings.IndexBuildTrigger;
+        string initialUpdateMode = applyFirstRunDriveIndexingProfile
+            ? AppSettings.IndexUpdateModeAutomaticIncremental
+            : ViewModel.Settings.IndexUpdateMode;
         var selectedTriggers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (flag, _) in triggerFlags)
         {
-            if (AppSettings.IndexBuildTriggerHas(ViewModel.Settings.IndexBuildTrigger, flag))
+            if (AppSettings.IndexBuildTriggerHas(initialBuildTrigger, flag))
                 selectedTriggers.Add(flag);
         }
         // An automatic trigger paired with the default Manual full rebuild only ever creates MISSING
         // indexes, so an existing index silently goes stale. Preselect the recommended mode for the current
         // trigger selection, and keep tracking it live until the user overrides the combo themselves.
         string updateMode = ContentIndexBuildScheduler.RecommendedUpdateMode(
-            string.Join(",", selectedTriggers), ViewModel.Settings.IndexUpdateMode);
+            string.Join(",", selectedTriggers), initialUpdateMode);
         bool updateModeOverridden = false;
 
         List<string> chosen;
@@ -936,7 +942,7 @@ public sealed partial class MainWindow
                     if (!updateModeOverridden)
                     {
                         string trigger = string.Join(",", triggerChecks.Where(t => t.Check.IsChecked == true).Select(t => t.Flag));
-                        string recommended = ContentIndexBuildScheduler.RecommendedUpdateMode(trigger, ViewModel.Settings.IndexUpdateMode);
+                        string recommended = ContentIndexBuildScheduler.RecommendedUpdateMode(trigger, initialUpdateMode);
                         updateMode = recommended;
                         SelectUpdateMode(recommended);
                     }
@@ -1037,7 +1043,11 @@ public sealed partial class MainWindow
         // Resolve the selected build trigger(s) into the combined setting value ("Manual" if none).
         string buildTrigger = AppSettings.NormalizeIndexBuildTrigger(string.Join(",", selectedTriggers));
 
-        await ViewModel.AddFoldersToIndexAndBuildAsync(chosen, buildTrigger, updateMode);
+        await ViewModel.AddFoldersToIndexAndBuildAsync(
+            chosen,
+            buildTrigger,
+            updateMode,
+            applyFirstRunDriveIndexingProfile);
 
         string folderList = chosen.Count == 1
             ? chosen[0]
