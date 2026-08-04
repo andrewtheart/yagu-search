@@ -185,7 +185,9 @@ public sealed class IndexWorkerSourcePinTests
         Assert.Contains("index worker emitted unknown message type", src);
         Assert.Contains("private int _sessionId;", src);
         Assert.Contains("IsCurrentSession(process, sessionId)", src);
-        Assert.Contains("CleanupProcessUnderGate(forceKill: true)", src);
+        // A fatal channel failure tears the worker down (kill + dispose) before a fresh init is scheduled.
+        Assert.Contains("CleanupProcessUnderGate();", src);
+        Assert.Contains("liveProcess.Kill();", src);
         Assert.Contains("_initTask = null;", src);
     }
 
@@ -197,9 +199,10 @@ public sealed class IndexWorkerSourcePinTests
         Assert.Contains("JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000", src);
         Assert.Contains("JobObjectExtendedLimitInformation", src);
         Assert.Contains("AssignProcessToJobObject", src);
-        // Non-Windows / failure paths return an invalid (handle-less) instance instead of throwing.
+        // Non-Windows / failure paths return an invalid (handle-less) instance instead of throwing. The OS
+        // and native calls are injected for testability, so the handle-less instance carries the delegates.
         Assert.Contains("OperatingSystem.IsWindows()", src);
-        Assert.Contains("new WindowsJobObject(IntPtr.Zero)", src);
+        Assert.Contains("new WindowsJobObject(IntPtr.Zero, assignProcess, closeHandle)", src);
     }
 
     [Fact]
@@ -301,23 +304,16 @@ public sealed class IndexWorkerSourcePinTests
         Assert.DoesNotContain("IndexTelemetry.cs", csproj);
     }
 
-    /// <summary>Builds an invalid <see cref="WindowsJobObject"/> for the failure-path test. On a non-Windows
-    /// host <see cref="WindowsJobObject.CreateKillOnClose"/> already returns an invalid instance; on Windows
-    /// we reflect the private ctor to force the handle-less state deterministically.</summary>
+    /// <summary>Builds an invalid <see cref="WindowsJobObject"/> for the failure-path test by driving the
+    /// injectable factory down its non-Windows branch, which is exactly how a real failure surfaces (a
+    /// handle-less instance). This works identically on every host, so no reflection is needed.</summary>
     private static WindowsJobObject MakeInvalidJob()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return WindowsJobObject.CreateKillOnClose();
-        }
-
-        var ctor = typeof(WindowsJobObject).GetConstructor(
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance,
-            binder: null,
-            new[] { typeof(IntPtr) },
-            modifiers: null)!;
-        return (WindowsJobObject)ctor.Invoke(new object[] { IntPtr.Zero });
-    }
+        => WindowsJobObject.CreateKillOnClose(
+            isWindows: false,
+            createJob: static (_, _) => IntPtr.Zero,
+            setInformation: static (_, _, _, _) => false,
+            assignProcess: static (_, _) => false,
+            closeHandle: static _ => true);
 
     private static string ReadSource(params string[] parts)
     {

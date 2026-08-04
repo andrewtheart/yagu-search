@@ -60,8 +60,10 @@ public sealed class FileIdPathResolverSourcePinTests
         Assert.Contains("FileShare.ReadWrite | FileShare.Delete", src);
 
         // Fail-safe: a bad root, non-Windows, disposed instance, or invalid handle returns null (→ deletion /
-        // full-rebuild fallback), never throws to the caller.
-        Assert.Contains("!OperatingSystem.IsWindows()", src);
+        // full-rebuild fallback), never throws to the caller. The OS check is injected (isWindows) so the
+        // resolver is unit-testable; the public entry point supplies the real OperatingSystem.IsWindows().
+        Assert.Contains("OperatingSystem.IsWindows(),", src);
+        Assert.Contains("!isWindows", src);
         Assert.Contains("if (hint.IsInvalid)", src);
         Assert.Contains("if (handle.IsInvalid)", src);
         Assert.Contains("return null;", src);
