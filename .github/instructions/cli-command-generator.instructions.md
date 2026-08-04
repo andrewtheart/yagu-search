@@ -1,6 +1,6 @@
 ---
 description: "Keep the in-app CLI command generator in sync with Advanced Options. Use when: adding/changing/removing an Advanced Option, search/scope/performance option, BuildGeneratedCliCommand, CLI flag, --pattern, --semantic-pattern, hidden files flag."
-applyTo: "src/Yagu/UI/Windows/MainWindow/MainWindow.xaml, src/Yagu/UI/Windows/MainWindow/MainWindow.CliCommand.cs, src/Yagu/ViewModels/MainViewModel.cs, src/Yagu/Services/SettingsService.cs"
+applyTo: "src/Yagu/UI/Windows/MainWindow/MainWindow.xaml, src/Yagu/UI/Windows/MainWindow/MainWindow.CliCommand.cs, src/Yagu/ViewModels/MainViewModel*.cs, src/Yagu/Services/SettingsService.cs"
 ---
 
 # Keep the CLI Command Generator in Sync with Advanced Options

@@ -19,8 +19,7 @@ public sealed class ExtendedSourceSearchWiringRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "Services", "Index", "ExtendedSourceSearchGate.cs"));
     private static readonly string ManagerSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "Services", "Index", "ContentIndexManager.cs"));
-    private static readonly string ViewModelSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+    private static readonly string ViewModelSource = MainViewModelPartials.Text;
     private static readonly string CliRunnerSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "CliRunner.cs"));
     private static readonly string SettingsActionsSource = File.ReadAllText(

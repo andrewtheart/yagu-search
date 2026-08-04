@@ -1,6 +1,6 @@
 ---
 description: "Yagu content-index invariants, atomic build/update semantics, freshness safety, worker isolation, storage measurement, and UI/CLI documentation parity. Use when: content index, indexing, Build now, rebuild index, incremental refresh, USN journal, index checkpoint, index worker, index storage, index size, format-v3, PDF-text index, index status, index repair, index validation, interrupted indexing, resume indexing."
-applyTo: "src/Yagu/Services/Index/**, src/Yagu/Services/ResourceUsageMonitor.cs, src/Yagu/ViewModels/MainViewModel.cs, src/Yagu/UI/Windows/Settings/SettingsWindow.Index*.cs, src/Yagu/UI/Windows/MainWindow/MainWindow.IndexOnboarding.cs, src/Yagu/UI/Windows/MainWindow/MainWindow.StartupChecks.cs, src/Yagu/UI/Windows/MainWindow/MainWindow.xaml, src/Yagu/CliRunner.cs, tests/Yagu.Tests/**/*Index*.cs, tests/Yagu.Tests/ResourceUsage*.cs, HELP.md"
+applyTo: "src/Yagu/Services/Index/**, src/Yagu/Services/ResourceUsageMonitor.cs, src/Yagu/ViewModels/MainViewModel*.cs, src/Yagu/UI/Windows/Settings/SettingsWindow.Index*.cs, src/Yagu/UI/Windows/MainWindow/MainWindow.IndexOnboarding.cs, src/Yagu/UI/Windows/MainWindow/MainWindow.StartupChecks.cs, src/Yagu/UI/Windows/MainWindow/MainWindow.xaml, src/Yagu/CliRunner.cs, tests/Yagu.Tests/**/*Index*.cs, tests/Yagu.Tests/ResourceUsage*.cs, HELP.md"
 ---
 
 # Yagu - Content Indexing Invariants

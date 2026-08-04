@@ -26,7 +26,11 @@ discovery. See [README.md](../README.md) for the feature tour and build prerequi
 - `Services/Ai/` — **local, on-device** semantic search via Microsoft Foundry Local. Query → JSON plan → applied to search inputs: `FoundryLocalSemanticQueryTranslator` → `SemanticPlanJsonExtractor` → `SemanticPlanApplier`. No query leaves the machine.
 - `Services/Ocr/` — image-text (OCR) search (PaddleSharp / Tesseract engines, worker-backed).
 - `Services/Telemetry/` — opt-in telemetry; MUST stay offline by default (see the telemetry-config guard in tests).
-- `ViewModels/MainViewModel.cs` — MVVM state for the main window.
+- `ViewModels/MainViewModel.cs` — MVVM state for the main window. Like `MainWindow`, it is split
+  across ~40 `MainViewModel.*.cs` partial classes by concern (`.SearchExecution`, `.SemanticModel`,
+  `.IndexStatus`, `.Results`, `.SettingsPersistence`, …); the core file keeps the fields, both
+  constructors and `Dispose`. Source-pin tests read them through the `MainViewModelPartials.Text`
+  helper, which concatenates every partial.
 - `UI/Windows/MainWindow/` — `MainWindow` is split across ~25 `MainWindow.*.cs` partial classes by concern (`.SearchInput`, `.PreviewBuilder`, `.Launcher`, `.Terminal`, `.CliCommand`, `.TitleBar`, `.StartupChecks`, …). Dialogs live in `UI/Windows/` (`YaguDialog` shared base + custom owned-window modals).
 - `Native/` — P/Invoke bindings to `yagu_core.dll`. `Models/`, `Helpers/` — DTOs and pure helpers.
 

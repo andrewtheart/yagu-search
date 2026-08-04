@@ -12,8 +12,7 @@ namespace Yagu.Tests;
 /// </summary>
 public sealed class SearchCancelButtonRegressionTests
 {
-    private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(Root, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
 
     private static readonly string MainWindowXamlCsSource = File.ReadAllText(
         Path.Combine(Root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));

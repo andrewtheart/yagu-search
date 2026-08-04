@@ -15,8 +15,7 @@ public sealed class MemoryGuardTests
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
 
     private static readonly string MainWindowSource = ReadMainWindowSources();
-    private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
 
     // ══════════════════════════════════════════════════════════════════
     // MemoryGuard file existence and structure

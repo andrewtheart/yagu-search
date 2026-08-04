@@ -17,7 +17,7 @@ public sealed class ContentIndexGuiRegressionTests
     private static string Read(params string[] parts)
         => File.ReadAllText(Path.Combine(new[] { RepoRoot }.Concat(parts).ToArray()));
 
-    private static readonly string MainViewModelSource = Read("src", "Yagu", "ViewModels", "MainViewModel.cs");
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
     private static readonly string MainWindowXaml = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml");
     private static readonly string CliCommandSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.CliCommand.cs");
     private static readonly string SettingsIndexingSource = Read("src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.Indexing.cs");

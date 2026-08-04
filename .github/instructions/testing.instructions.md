@@ -38,6 +38,12 @@ default to the iterative `--filter "Category!=Slow&Category!=GPU&Category!=Heade
   compiled into Yagu.Tests, so it gets **source-pin tests**: read the `.cs` as a string and assert on
   substrings / ordering. Pin the actual `return "…"` / statement text (not a bare phrase that might
   also appear in a comment), and widen the scrape window if the anchor has comments before the token.
+- **`MainViewModel` and `MainWindow` are split across many partials**, so never pin a single
+  `MainViewModel.*.cs`/`MainWindow.*.cs` file: read `MainViewModelPartials.Text` (or the local
+  `ReadMainWindowSources()` helper), which concatenates every partial in file-name order. Because that
+  order is not the original member order, keep any "A appears before B" assertion **inside one
+  member** — scope the scrape to the method that owns the invariant instead of asserting order across
+  two unrelated declarations.
 
 ## Failing-test triage
 

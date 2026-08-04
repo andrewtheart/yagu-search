@@ -19,7 +19,7 @@ public sealed class ExcludedExtensionWarningWiringTests
     private static readonly string AdminSettingsSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdminSettings.cs");
     private static readonly string AdvancedOptionsSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs");
     private static readonly string StartupChecksSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs");
-    private static readonly string MainViewModelSource = ReadSource("Yagu", "ViewModels", "MainViewModel.cs");
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
     private static readonly string SettingsWindowSource = ReadSource("Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs");
 
     [Fact]

@@ -16,7 +16,7 @@ namespace Yagu.Tests;
 /// </summary>
 public sealed class SemanticResolutionVisibilityTests
 {
-    private static readonly string MainViewModelSource = ReadSource("Yagu", "ViewModels", "MainViewModel.cs");
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
 
     [Fact]
     public void BinaryDropdown_DisplayFlipped_ToCheckedEqualsSearch()

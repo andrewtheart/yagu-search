@@ -8,7 +8,7 @@ public sealed class IndexingCloseWarningTests
     private static readonly string MainWindowSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.IndexingCloseWarning.cs");
     private static readonly string LauncherSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Launcher.cs");
     private static readonly string AppUpdateSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AppUpdate.cs");
-    private static readonly string ViewModelSource = Read("src", "Yagu", "ViewModels", "MainViewModel.cs");
+    private static readonly string ViewModelSource = MainViewModelPartials.Text;
 
     [Fact]
     public void FullBuildUserExit_ExplainsDiscardAndCompleteRestart()

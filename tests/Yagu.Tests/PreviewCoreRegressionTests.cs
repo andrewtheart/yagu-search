@@ -31,8 +31,7 @@ public sealed class PreviewCoreRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
     private static readonly string HelpWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Help", "HelpWindow.xaml.cs"));
-    private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+    private static readonly string MainViewModelSource = MainViewModelPartials.Text;
     private static readonly string MainWindowXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
     private static readonly string Win32FileDialogSource = File.ReadAllText(
@@ -1935,7 +1934,7 @@ public sealed class PreviewCoreRegressionTests
     public void GutterTextColors_AreConfigurableForPreviewAndEditor()
     {
         string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "Services", "SettingsService.cs"));
-        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string viewModelSource = MainViewModelPartials.Text;
         string textControlBoxSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "TextControlBox.cs"));
 
         Assert.Contains("DefaultPreviewGutterColor = \"#FF9CDCFE\"", settingsSource);
@@ -1997,7 +1996,7 @@ public sealed class PreviewCoreRegressionTests
     public void EditorTextColor_IsConfigurableWithThemeAutoDefault()
     {
         string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "Services", "SettingsService.cs"));
-        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string viewModelSource = MainViewModelPartials.Text;
         string textControlBoxSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox", "TextControlBox.cs"));
 
         // Empty string is the "Auto" sentinel (follow the app/system theme) and must be normalized in the
@@ -2028,7 +2027,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("public bool ShowMemoryPressureWarningLabel { get; set; }", settingsSource);
         Assert.DoesNotContain("ShowMemoryPressureWarningLabel { get; set; } = true", settingsSource);
 
-        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string viewModelSource = MainViewModelPartials.Text;
         Assert.Contains("[ObservableProperty] public partial bool ShowMemoryPressureWarningLabel { get; set; }", viewModelSource);
         Assert.DoesNotContain("ShowMemoryPressureWarningLabel { get; set; } = true", viewModelSource);
         Assert.Contains("ShowMemoryPressureWarningLabel = _settings.ShowMemoryPressureWarningLabel;", viewModelSource);
@@ -2057,7 +2056,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("public bool ShowAutoScrollResultsCheckbox { get; set; }", settingsSource);
         Assert.DoesNotContain("ShowAutoScrollResultsCheckbox { get; set; } = true", settingsSource);
 
-        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string viewModelSource = MainViewModelPartials.Text;
         Assert.Contains("ShowAutoScrollResultsCheckbox = _settings.ShowAutoScrollResultsCheckbox;", viewModelSource);
         Assert.Contains("_settings.ShowAutoScrollResultsCheckbox = ShowAutoScrollResultsCheckbox;", viewModelSource);
         AssertContainsInOrder(viewModelSource,
@@ -2084,7 +2083,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("public bool ShowStatsForNerds { get; set; }", settingsSource);
         Assert.DoesNotContain("ShowStatsForNerds { get; set; } = true", settingsSource);
 
-        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string viewModelSource = MainViewModelPartials.Text;
         Assert.Contains("[ObservableProperty] public partial bool ShowStatsForNerds { get; set; }", viewModelSource);
         Assert.DoesNotContain("ShowStatsForNerds { get; set; } = true", viewModelSource);
         Assert.Contains("ShowStatsForNerds = _settings.ShowStatsForNerds;", viewModelSource);
@@ -2112,7 +2111,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("public bool ShowBuildNumberInTitleBar { get; set; }", settingsSource);
         Assert.DoesNotContain("ShowBuildNumberInTitleBar { get; set; } = true", settingsSource);
 
-        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string viewModelSource = MainViewModelPartials.Text;
         Assert.Contains("[ObservableProperty] public partial bool ShowBuildNumberInTitleBar { get; set; }", viewModelSource);
         Assert.DoesNotContain("ShowBuildNumberInTitleBar { get; set; } = true", viewModelSource);
         Assert.Contains("ShowBuildNumberInTitleBar = _settings.ShowBuildNumberInTitleBar;", viewModelSource);
@@ -2294,7 +2293,7 @@ public sealed class PreviewCoreRegressionTests
         // The filter box is hidden until a search has produced files. It keys off the UNFILTERED
         // AllGroups count (not HasResults, which reflects the filtered/visible groups) so filtering
         // to zero matches never hides the box the user is typing in.
-        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string viewModelSource = MainViewModelPartials.Text;
         AssertContainsInOrder(viewModelSource,
             "public Microsoft.UI.Xaml.Visibility ResultFileFilterVisibility =>",
             "_resultCollection.AllGroups.Count > 0",
@@ -2417,9 +2416,9 @@ public sealed class PreviewCoreRegressionTests
         Assert.DoesNotContain("<Grid Grid.Row=\"1\" Margin=\"22,6,34,6\" ColumnSpacing=\"6\">", MainWindowXaml);
         Assert.DoesNotContain("<Grid Grid.Row=\"1\" Margin=\"8,6\" ColumnSpacing=\"6\">", MainWindowXaml);
 
-        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string viewModelSource = MainViewModelPartials.Text;
+        Assert.Contains("public BatchObservableCollection<object> ResultRows { get; } = new();", viewModelSource);
         AssertContainsInOrder(viewModelSource,
-            "public BatchObservableCollection<object> ResultRows { get; } = new();",
             "public void ToggleResultGroupExpansion(ResultGroupHeaderRow header)",
             "private void RebuildResultRows()",
             "ResultRows.ReplaceAll(rows);");

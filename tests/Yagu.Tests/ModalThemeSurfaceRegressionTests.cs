@@ -52,7 +52,7 @@ public sealed class ModalThemeSurfaceRegressionTests
     [Fact]
     public void MainViewModel_KeepsStaticThemeIndexCurrent()
     {
-        string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         Assert.Contains("partial void OnThemeModeIndexChanged(int value)", src);
         Assert.Contains("AppThemeService.CurrentThemeModeIndex = AppThemeService.NormalizeThemeModeIndex(value)", src);

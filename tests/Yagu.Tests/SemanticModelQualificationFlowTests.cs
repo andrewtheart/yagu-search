@@ -263,7 +263,7 @@ public sealed class SemanticModelQualificationFlowTests
     [Fact]
     public void ViewModel_ShouldOfferDelegatesToCoordinator()
     {
-        string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         Assert.Contains("public bool ShouldOfferSemanticModelQualification =>", src);
         Assert.Contains("SemanticModelQualificationCoordinator.ShouldOffer(_settings, SemanticSearchAvailable)", src);
@@ -272,7 +272,7 @@ public sealed class SemanticModelQualificationFlowTests
     [Fact]
     public void ViewModel_RunUsesRunnerOverDefaultProbeSet()
     {
-        string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         Assert.Contains("public async Task<ModelQualificationResult> RunSemanticModelQualificationAsync(", src);
         Assert.Contains("new SemanticModelQualificationRunner(", src);
@@ -285,7 +285,7 @@ public sealed class SemanticModelQualificationFlowTests
     [Fact]
     public void ViewModel_RunPacesFailedProbesForTheChatTranscript()
     {
-        string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         // The interactive first-run sweep opts into the failed-probe hold so the qualification dialog can
         // show WHY a step failed for a couple of seconds before advancing to the next model.
@@ -295,7 +295,7 @@ public sealed class SemanticModelQualificationFlowTests
     [Fact]
     public void ViewModel_RunSuspendsUnloadAfterUseSoProbesMeasureWarmLatency()
     {
-        string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         // The sweep must keep the model resident across a candidate's probes; otherwise "release after
         // each search" reloads the model inside every timed probe and disqualifies large models on latency.
@@ -312,7 +312,7 @@ public sealed class SemanticModelQualificationFlowTests
     [Fact]
     public void ViewModel_ApplyPersistsAndSelectsModelLive()
     {
-        string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         Assert.Contains("public async Task ApplySemanticModelQualificationAsync(", src);
         Assert.Contains("SemanticModelQualificationCoordinator.ApplyResult(_settings, result, accepted, chosenAlias)", src);
@@ -323,7 +323,7 @@ public sealed class SemanticModelQualificationFlowTests
     [Fact]
     public void ViewModel_DeclineMarksCompleteAndPersists()
     {
-        string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         Assert.Contains("public async Task DeclineSemanticModelQualificationAsync()", src);
         Assert.Contains("SemanticModelQualificationCoordinator.MarkDeclined(_settings)", src);
@@ -332,11 +332,12 @@ public sealed class SemanticModelQualificationFlowTests
     [Fact]
     public void ViewModel_DeclineAndDisableTurnsSemanticOffAndPersists()
     {
-        string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
-        Assert.Contains("public async Task DeclineAndDisableSemanticSearchAsync()", src);
-        int mark = src.IndexOf("SemanticModelQualificationCoordinator.MarkDeclined(_settings);", StringComparison.Ordinal);
-        int disable = src.IndexOf("SemanticSearchAvailable = false;", StringComparison.Ordinal);
+        int method = src.IndexOf("public async Task DeclineAndDisableSemanticSearchAsync()", StringComparison.Ordinal);
+        Assert.True(method >= 0, "Expected DeclineAndDisableSemanticSearchAsync on the view model.");
+        int mark = src.IndexOf("SemanticModelQualificationCoordinator.MarkDeclined(_settings);", method, StringComparison.Ordinal);
+        int disable = src.IndexOf("SemanticSearchAvailable = false;", method, StringComparison.Ordinal);
         Assert.True(mark >= 0 && disable > mark, "Should mark the check complete before turning the toggle off.");
         Assert.Contains("await PersistSettingsAsync().ConfigureAwait(true);", src);
     }
@@ -344,7 +345,7 @@ public sealed class SemanticModelQualificationFlowTests
     [Fact]
     public void ViewModel_ResetReenablesSemanticAndClearsModel()
     {
-        string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         Assert.Contains("public async Task ResetSemanticModelQualificationAsync()", src);
         Assert.Contains("SemanticModelQualificationCoordinator.Reset(_settings);", src);

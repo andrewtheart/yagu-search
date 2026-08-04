@@ -31,7 +31,7 @@ public sealed class CpuSemanticWarningTests
     [Fact]
     public void ViewModel_GatesWarning_ToCpuOnlyFirstRun_AndAppliesTraditionalDefault()
     {
-        string src = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         // Shown only when semantic search is available, no GPU/NPU was detected, and not shown before.
         Assert.Contains(

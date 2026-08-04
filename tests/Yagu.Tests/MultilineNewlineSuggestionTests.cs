@@ -32,7 +32,7 @@ public sealed class MultilineNewlineSuggestionTests
     [Fact]
     public void ViewModel_GatesSuggestion_AndAppliesChoice()
     {
-        string src = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string src = MainViewModelPartials.Text;
 
         // Offered only in Traditional mode, when Multiline is off, the user hasn't dismissed it, and the
         // query actually contains the literal "\n" escape.

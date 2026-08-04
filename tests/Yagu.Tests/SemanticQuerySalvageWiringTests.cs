@@ -20,7 +20,7 @@ public sealed class SemanticQuerySalvageWiringTests
     }
 
     private static string ViewModel() =>
-        File.ReadAllText(Path.Combine(RepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        MainViewModelPartials.Text;
 
     private static string CliRunner() =>
         File.ReadAllText(Path.Combine(RepoRoot(), "src", "Yagu", "CliRunner.cs"));
