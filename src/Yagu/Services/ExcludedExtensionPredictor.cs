@@ -111,8 +111,9 @@ internal static class ExcludedExtensionPredictor
     /// <summary>
     /// Extracts the dot-less, lower-cased trailing extension of each query term that looks like a file
     /// name. With <paramref name="exactMatch"/> the whole query is one term; otherwise it is split on
-    /// whitespace (matching the search engine's any-term behavior). Surrounding quotes are stripped and
-    /// the extension must be 1–16 alphanumeric characters (so "v1.2.3" yields "3", "notes.txt" yields "txt").
+    /// whitespace (matching the search engine's any-term behavior). Surrounding quotes are stripped,
+    /// email-address-like trailing tokens are ignored, and the extension must be 1–16 alphanumeric
+    /// characters (so "v1.2.3" yields "3", "notes.txt" yields "txt").
     /// </summary>
     internal static List<string> ExtractCandidateExtensions(string? query, bool exactMatch)
     {
@@ -128,6 +129,8 @@ internal static class ExcludedExtensionPredictor
         foreach (var rawTerm in terms)
         {
             string term = rawTerm.Trim().Trim('"', '\'');
+            if (EndsWithEmailAddressLikeToken(term)) continue;
+
             int dot = term.LastIndexOf('.');
             if (dot <= 0 || dot == term.Length - 1) continue; // no name before the dot, or trailing dot
 
@@ -140,6 +143,39 @@ internal static class ExcludedExtensionPredictor
         }
 
         return result;
+    }
+
+    private static bool EndsWithEmailAddressLikeToken(string term)
+    {
+        int whitespace = term.LastIndexOfAny([' ', '\t', '\r', '\n']);
+        ReadOnlySpan<char> candidate = term.AsSpan(whitespace + 1);
+        int at = candidate.IndexOf('@');
+        if (at <= 0 || at != candidate.LastIndexOf('@') || at == candidate.Length - 1)
+            return false;
+
+        ReadOnlySpan<char> local = candidate[..at];
+        ReadOnlySpan<char> domain = candidate[(at + 1)..];
+        if (domain.IndexOf('.') <= 0 || domain[^1] == '.')
+            return false;
+
+        foreach (char c in local)
+        {
+            if (!char.IsLetterOrDigit(c) && c is not '.' and not '_' and not '+' and not '-')
+                return false;
+        }
+
+        foreach (string label in domain.ToString().Split('.'))
+        {
+            if (label.Length == 0 || label[0] == '-' || label[^1] == '-')
+                return false;
+            foreach (char c in label)
+            {
+                if (!char.IsLetterOrDigit(c) && c != '-')
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

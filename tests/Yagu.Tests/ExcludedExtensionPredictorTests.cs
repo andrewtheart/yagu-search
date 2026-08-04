@@ -80,6 +80,39 @@ public sealed class ExcludedExtensionPredictorTests
         Assert.Null(Predict("report.2024", binary: Set("exe")));
     }
 
+    [Theory]
+    [InlineData("andrew1stein@gmail.com")]
+    [InlineData("first.last+tag@sub.example.co.uk")]
+    [InlineData("contact andrew1stein@gmail.com")]
+    [InlineData("\"andrew1stein@gmail.com\"")]
+    public void Predict_EmailAddressLikeQuery_DoesNotTreatDomainSuffixAsExtension(string query)
+    {
+        Assert.Null(Predict(query, skip: Set("com", "uk")));
+    }
+
+    [Fact]
+    public void ExtractCandidateExtensions_EmailAddressLikeTermsAreIgnored()
+    {
+        Assert.Empty(ExcludedExtensionPredictor.ExtractCandidateExtensions(
+            "andrew1stein@gmail.com",
+            exactMatch: true));
+        Assert.Equal(
+            new[] { "exe" },
+            ExcludedExtensionPredictor.ExtractCandidateExtensions(
+                "andrew1stein@gmail.com setup.exe",
+                exactMatch: false));
+    }
+
+    [Fact]
+    public void ExtractCandidateExtensions_NonEmailAtSignFilenameStillAllowsExtension()
+    {
+        Assert.Equal(
+            new[] { "exe" },
+            ExcludedExtensionPredictor.ExtractCandidateExtensions(
+                "release@@local.exe",
+                exactMatch: true));
+    }
+
     [Fact]
     public void Predict_RegexMode_ReturnsNull()
     {
