@@ -29,6 +29,31 @@ public sealed class ContentIndexRecoverySpoolTests : IDisposable
     }
 
     [Fact]
+    public void ResolveDirectory_DefaultStorage_UsesResolvedLocalAppDataIndexRoot()
+    {
+        var provider = new DefaultContentIndexPathProvider(string.Empty, @"C:\LocalAppData");
+
+        string directory = ContentIndexRecoverySpool.ResolveDirectory(provider);
+
+        Assert.Equal(@"C:\LocalAppData\Yagu\content-index\query-spool", directory);
+        Assert.True(Path.IsPathFullyQualified(directory));
+    }
+
+    [Fact]
+    public void ResolveDirectory_CustomStorage_UsesConfiguredIndexRoot()
+    {
+        var provider = new DefaultContentIndexPathProvider(@"D:\YaguIndex", @"C:\LocalAppData");
+
+        Assert.Equal(
+            @"D:\YaguIndex\query-spool",
+            ContentIndexRecoverySpool.ResolveDirectory(provider));
+    }
+
+    [Fact]
+    public void ResolveDirectory_NullProvider_Throws()
+        => Assert.Throws<ArgumentNullException>(() => ContentIndexRecoverySpool.ResolveDirectory(null!));
+
+    [Fact]
     public void Append_ReturnsSequentialOrdinals_AndCounts()
     {
         using ContentIndexRecoverySpool spool = ContentIndexRecoverySpool.Create(_dir);

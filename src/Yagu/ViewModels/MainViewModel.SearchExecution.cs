@@ -282,19 +282,19 @@ public sealed partial class MainViewModel
                 if (settings.IndexUseWorkerQuerySessions)
                 {
                     Yagu.Services.Index.IndexWorkerClient pruningClient = GetOrCreateIndexWorkerClient();
+                    var workerPathProvider = DefaultContentIndexPathProvider.Create(storageDir);
+                    string spoolDir = Yagu.Services.Index.ContentIndexRecoverySpool.ResolveDirectory(workerPathProvider);
                     int maxCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(settings.IndexMaxJournalCatchupRecords);
                     int queryWorkerParallelism = Yagu.Services.Index.IndexWorkerParallelism.ResolveQueryDegree(
                         settings.IndexQueryWorkerParallelism,
                         Environment.ProcessorCount,
                         settings.LimitParallelismOnHdd,
                         Yagu.Helpers.DiskTypeDetector.IsHardDisk(root));
-                    string spoolDir = System.IO.Path.Combine(storageDir, "query-spool");
                     rootOptions.ContentIndexPruningScanFactory = survivorSink =>
                     {
                         // Out-of-process size cap (IndexMaxWorkerQuerySizeMB, default 30 GB): the worker MAPS
                         // rather than deserializes the index, so it serves far larger scopes than the in-process
                         // cap — but is still bounded. An index over this size (or none) live-scans instead.
-                        var workerPathProvider = DefaultContentIndexPathProvider.Create(storageDir);
                         string indexRoot = ResolveIndexRoot(workerPathProvider);
                         var store = new Yagu.Services.Index.ContentIndexStore(
                             workerPathProvider,

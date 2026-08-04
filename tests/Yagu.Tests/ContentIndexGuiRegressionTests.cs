@@ -214,6 +214,8 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("Yagu.Services.Index.ContentIndexShadowScopeBuilder.TryCreatePruningScan(", MainViewModelSource);
         Assert.Contains("GetOrCreateIndexWorkerClient()", MainViewModelSource);
         Assert.Contains("System.Threading.Interlocked.Increment(ref _shadowQuerySessionId)", MainViewModelSource);
+        Assert.Contains("string spoolDir = Yagu.Services.Index.ContentIndexRecoverySpool.ResolveDirectory(workerPathProvider);", MainViewModelSource);
+        Assert.DoesNotContain("Path.Combine(storageDir, \"query-spool\")", MainViewModelSource);
         // Out-of-process size cap (IndexMaxWorkerQuerySizeMB, default 30 GB): the worker path is ALSO bounded
         // — an index larger than the worker cap live-scans instead of engaging the worker (mapped, not
         // deserialized, so the cap is far larger than the 2 GB in-process one).
@@ -1176,7 +1178,7 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("private async Task<bool> ConfirmLargeFolderIfNeededAsync(string folder)", IndexOnboardingSource);
         Assert.Contains("IndexOnboardingPlan.IsLikelyLargeRoot(folder)", IndexOnboardingSource);
         Assert.Contains("BoundedFileCount(folder, IndexOnboardingPlan.LargeFolderFileThreshold)", IndexOnboardingSource);
-        Assert.Contains("await ViewModel.AddFoldersToIndexAndBuildAsync(chosen, buildTrigger, updateMode);", IndexOnboardingSource);
+        Assert.Contains("applyFirstRunDriveIndexingProfile);", IndexOnboardingSource);
     }
 
     [Fact]
@@ -1199,7 +1201,7 @@ public sealed class ContentIndexGuiRegressionTests
 
         // The chosen mode is persisted with the roots and the trigger, in one settings write.
         Assert.Contains(
-            "public async Task AddFoldersToIndexAndBuildAsync(IReadOnlyList<string> folders, string? buildTrigger, string? updateMode = null)",
+            "public async Task AddFoldersToIndexAndBuildAsync(",
             MainViewModelSource);
         Assert.Contains("_settings.IndexUpdateMode = AppSettings.NormalizeIndexUpdateMode(updateMode);", MainViewModelSource);
     }
@@ -1230,10 +1232,10 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("var folderChecks = new List<CheckBox>(choices.Count);", IndexOnboardingSource);
         Assert.DoesNotContain("var radios = new List<RadioButton>(choices.Count);", IndexOnboardingSource);
         Assert.Contains("var triggerChecks = new List<(CheckBox Check, string Flag)>", IndexOnboardingSource);
-        Assert.Contains("AppSettings.IndexBuildTriggerHas(ViewModel.Settings.IndexBuildTrigger, flag)", IndexOnboardingSource);
+        Assert.Contains("AppSettings.IndexBuildTriggerHas(initialBuildTrigger, flag)", IndexOnboardingSource);
         Assert.Contains("string buildTrigger = AppSettings.NormalizeIndexBuildTrigger(string.Join(\",\", selectedTriggers));", IndexOnboardingSource);
         // The multi-folder VM entry point registers every chosen root, sets the trigger, and builds each.
-        Assert.Contains("public async Task AddFoldersToIndexAndBuildAsync(IReadOnlyList<string> folders, string? buildTrigger", MainViewModelSource);
+        Assert.Contains("public async Task AddFoldersToIndexAndBuildAsync(", MainViewModelSource);
     }
 
     [Fact]
@@ -1292,13 +1294,29 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.DoesNotContain(".HasReadableStoredIndex()", IndexOnboardingSource);
         Assert.Contains("ViewModel.Settings.HasPromptedIndexOnboarding = true;", IndexOnboardingSource);
         Assert.Contains("Win32FileDialog.SelectFolder(_hwnd, \"Select a folder to index\")", IndexOnboardingSource);
-        Assert.Contains("await ShowAddFolderToIndexDialogAsync(folder);", IndexOnboardingSource);
+        Assert.Contains("await ShowAddFolderToIndexDialogAsync(folder, applyFirstRunDriveIndexingProfile: true);", IndexOnboardingSource);
 
         int registeredUseGate = IndexOnboardingSource.IndexOf("ViewModel.Settings.IndexedRoots.Count > 0", StringComparison.Ordinal);
         int preservedPrompt = IndexOnboardingSource.IndexOf("Title = \"Existing content indexes found\"", StringComparison.Ordinal);
         int freshPrompt = IndexOnboardingSource.IndexOf("Title = \"Speed up searches with an index?\"", StringComparison.Ordinal);
         Assert.True(registeredUseGate >= 0 && preservedPrompt > registeredUseGate && freshPrompt > preservedPrompt,
             "Registered roots may suppress onboarding, but unregistered stored indexes must be offered for adoption before fresh setup.");
+    }
+
+    [Fact]
+    public void IndexOnboarding_FirstRunDriveChoice_AppliesApprovedProfileOnlyToFreshOptIn()
+    {
+        Assert.Contains(
+            "private async Task ShowAddFolderToIndexDialogAsync(string folder, bool applyFirstRunDriveIndexingProfile = false)",
+            IndexOnboardingSource);
+        Assert.Contains("? AppSettings.IndexBuildTriggerContinuous", IndexOnboardingSource);
+        Assert.Contains("? AppSettings.IndexUpdateModeAutomaticIncremental", IndexOnboardingSource);
+        Assert.Contains("if (applyFirstRunDriveIndexingProfile)", MainViewModelSource);
+        Assert.Contains("_settings.ApplyFirstRunDriveIndexingProfile();", MainViewModelSource);
+
+        string statusClick = ExtractFrom(IndexOnboardingSource, "if (ViewModel.IndexStatusCanAddFolder)", 1400);
+        Assert.Contains("await ShowAddFolderToIndexDialogAsync(folder);", statusClick);
+        Assert.DoesNotContain("applyFirstRunDriveIndexingProfile: true", statusClick);
     }
 
     [Fact]

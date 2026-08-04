@@ -1524,7 +1524,8 @@ internal static partial class CliRunner
             if (gateSettings.IndexUseWorkerQuerySessions)
             {
                 var pruningClient = new IndexWorkerClient();
-                string pruningSpoolDir = System.IO.Path.Combine(gateStorageDir, "query-spool");
+                var pruningPathProvider = DefaultContentIndexPathProvider.Create(gateStorageDir);
+                string pruningSpoolDir = ContentIndexRecoverySpool.ResolveDirectory(pruningPathProvider);
                 int pruningMaxCatchup = AppSettings.NormalizeIndexMaxJournalCatchupRecords(gateSettings.IndexMaxJournalCatchupRecords);
                 int queryWorkerParallelism = IndexWorkerParallelism.ResolveQueryDegree(
                     gateSettings.IndexQueryWorkerParallelism,
@@ -1536,7 +1537,6 @@ internal static partial class CliRunner
                     // Out-of-process size cap (IndexMaxWorkerQuerySizeMB, default 30 GB): the worker MAPS
                     // rather than deserializes the index, so it serves far larger scopes than the in-process
                     // cap — but is still bounded. Over this size (or no index) → live-scan instead.
-                    var pruningPathProvider = DefaultContentIndexPathProvider.Create(gateStorageDir);
                     string indexRoot = ResolveGateIndexRoot(pruningPathProvider);
                     if (!ContentIndexSearchGate.IsScopeWithinWorkerMappedSizeLimit(pruningPathProvider, indexRoot, gateRetained, gateMaxWorkerQuerySizeMB))
                         return null;

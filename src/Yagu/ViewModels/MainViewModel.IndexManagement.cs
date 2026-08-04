@@ -37,11 +37,17 @@ public sealed partial class MainViewModel
     /// passes use, persists settings a single time, then starts a background build for each distinct
     /// effective root. Folders already covered by a broader registered root are skipped. Never throws.
     /// </summary>
-    public async Task AddFoldersToIndexAndBuildAsync(IReadOnlyList<string> folders, string? buildTrigger, string? updateMode = null)
+    public async Task AddFoldersToIndexAndBuildAsync(
+        IReadOnlyList<string> folders,
+        string? buildTrigger,
+        string? updateMode = null,
+        bool applyFirstRunDriveIndexingProfile = false)
     {
         if (folders is null || folders.Count == 0)
             return;
 
+        if (applyFirstRunDriveIndexingProfile)
+            _settings.ApplyFirstRunDriveIndexingProfile();
         _settings.EnableContentIndex = true;
         UseContentIndex = true;
         if (!string.IsNullOrWhiteSpace(buildTrigger))

@@ -310,6 +310,8 @@ public sealed class CliRunnerRegressionTests
         Assert.Contains("if (gateSettings.IndexUseWorkerQuerySessions)", source);
         Assert.Contains("searchOptions.ContentIndexPruningScanFactory = survivorSink =>", source);
         Assert.Contains("ContentIndexShadowScopeBuilder.TryCreatePruningScan(", source);
+        Assert.Contains("string pruningSpoolDir = ContentIndexRecoverySpool.ResolveDirectory(pruningPathProvider);", source);
+        Assert.DoesNotContain("Path.Combine(gateStorageDir, \"query-spool\")", source);
         // Out-of-process size cap (IndexMaxWorkerQuerySizeMB, default 30 GB): the CLI worker path is bounded
         // too — an index over the worker cap live-scans instead of engaging the worker.
         Assert.Contains("int gateMaxWorkerQuerySizeMB = AppSettings.NormalizeIndexMaxWorkerQuerySizeMB(gateSettings.IndexMaxWorkerQuerySizeMB);", source);

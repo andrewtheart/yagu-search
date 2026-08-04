@@ -58,6 +58,13 @@ internal sealed class ContentIndexRecoverySpool : IDisposable
     /// <summary>The number of paths appended so far.</summary>
     public long Count => _count;
 
+    /// <summary>Resolves the spool beneath the effective index root, including the LocalAppData fallback.</summary>
+    internal static string ResolveDirectory(IContentIndexPathProvider pathProvider)
+    {
+        ArgumentNullException.ThrowIfNull(pathProvider);
+        return Path.Combine(pathProvider.IndexRoot, "query-spool");
+    }
+
     /// <summary>
     /// Creates a fresh spool file in <paramref name="spoolDirectory"/> (created if absent). The write handle
     /// is opened with <see cref="FileShare.Read"/> so <see cref="ReplayAll"/> can read the file back while the
