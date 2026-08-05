@@ -107,8 +107,10 @@ public sealed class IndexMaintenanceSettings
     public int MaxAutoCompactionSizeMB { get; set; } = 512;
     /// <summary>The configurable USN catch-up record cap (AppSettings.IndexMaxJournalCatchupRecords). A
     /// journal delta exceeding it reads as <c>UsnReadStatus.Incomplete</c> → the refresh treats freshness as
-    /// discontinuous and needs a full rebuild rather than trusting a partial delta.</summary>
-    public int MaxJournalCatchupRecords { get; set; } = 500_000;
+    /// discontinuous and needs a full rebuild rather than trusting a partial delta. Kept in sync with
+    /// <c>AppSettings.DefaultIndexMaxJournalCatchupRecords</c>; the dispatching factory always sets it
+    /// explicitly, so this literal only covers operations built without settings.</summary>
+    public int MaxJournalCatchupRecords { get; set; } = 2_000_000;
     public int PostBuildCatchUpThresholdChanges { get; set; } = -1;
     public int FileIoTimeoutSeconds { get; set; } = IndexBuildDefaults.FileIoTimeoutSeconds;
 }

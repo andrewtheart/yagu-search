@@ -391,6 +391,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         BinaryExtensions = SettingsBinaryExtensions;
         ArchiveExtensions = SettingsArchiveExtensions;
         SuppressAdminWarning = _settings.SuppressAdminWarning;
+        AdvancedOptionsTabOrder = _settings.AdvancedOptionsTabOrder ?? [];
         SuppressEverythingNotRunningPrompt = _settings.SuppressEverythingNotRunningPrompt;
         SuppressEverythingIndexCoverageWarning = _settings.SuppressEverythingIndexCoverageWarning;
         SuppressExcludedExtensionWarnings = _settings.SuppressExcludedExtensionWarnings;

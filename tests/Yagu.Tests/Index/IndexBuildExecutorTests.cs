@@ -442,7 +442,7 @@ public sealed class IndexBuildExecutorTests : IDisposable
         {
             CheckFreshness = static (_, _, cap) =>
             {
-                Assert.Equal(500_000, cap);
+                Assert.Equal(2_000_000, cap);
                 return ContentIndexManager.ScopeFreshnessState.Uncertain;
             },
             Refresh = static (_, _, _, _, _, _, _, _) => throw new InvalidOperationException("uncertain preflight must not load/refresh the index"),

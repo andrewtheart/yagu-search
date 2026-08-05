@@ -9,10 +9,10 @@
 #   pwsh -File scripts/capture-readme-screenshots.ps1 -Scenario semantic
 #
 # Scenarios: all, match-nav, editor, multi-preview, semantic, traditional, settings-ai,
-#            settings-ocr, ocr-preview, advanced-options
+#            settings-ocr, ocr-preview, advanced-options, filter-options
 
 param(
-    [ValidateSet('all','match-nav','editor','multi-preview','semantic','traditional','settings-ai','settings-ocr','ocr-preview','advanced-options','terminal','session-load')]
+    [ValidateSet('all','match-nav','editor','multi-preview','semantic','traditional','settings-ai','settings-ocr','ocr-preview','advanced-options','filter-options','terminal','session-load')]
     [string]$Scenario = 'all',
     [string]$Directory = 'C:\src\Yagu\Yagu',
     [string]$OutDir = 'C:\src\Yagu\docs\images',
@@ -88,6 +88,65 @@ public static class Native {
         keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
     }
 
+    // Capture the main window and a windowed popup separately with PrintWindow, then composite the
+    // popup onto the main image at its true screen offset. The Advanced Options drawer is a Flyout
+    // with ShouldConstrainToRootBounds=False, so it lives in its own top-level HWND and PrintWindow
+    // of the main window alone never contains it. Compositing is deterministic (unlike a screen
+    // grab it works when the window is occluded or the session cannot hand out a desktop DC).
+    public static string CaptureComposite(IntPtr main, IntPtr popup, string outPath) {
+        RECT mr, pr;
+        if (!GetWindowRect(main, out mr)) return "NO_MAIN_RECT";
+        if (!GetWindowRect(popup, out pr)) return "NO_POPUP_RECT";
+        int mw = mr.Right - mr.Left, mh = mr.Bottom - mr.Top;
+        int pw = pr.Right - pr.Left, ph = pr.Bottom - pr.Top;
+        if (mw <= 0 || mh <= 0 || pw <= 0 || ph <= 0) return "BAD_SIZE";
+        using (var mbmp = new Bitmap(mw, mh, PixelFormat.Format32bppArgb))
+        using (var pbmp = new Bitmap(pw, ph, PixelFormat.Format32bppArgb)) {
+            using (var g = Graphics.FromImage(mbmp)) {
+                IntPtr hdc = g.GetHdc();
+                bool ok = PrintWindow(main, hdc, 2); // PW_RENDERFULLCONTENT
+                g.ReleaseHdc(hdc);
+                if (!ok) return "PRINTWINDOW_MAIN_FAILED";
+            }
+            using (var g = Graphics.FromImage(pbmp)) {
+                IntPtr hdc = g.GetHdc();
+                bool ok = PrintWindow(popup, hdc, 2);
+                g.ReleaseHdc(hdc);
+                if (!ok) return "PRINTWINDOW_POPUP_FAILED";
+            }
+            MakeOpaque(mbmp);
+            MakeOpaque(pbmp);
+            using (var g = Graphics.FromImage(mbmp)) {
+                g.DrawImage(pbmp, pr.Left - mr.Left, pr.Top - mr.Top, pw, ph);
+            }
+            mbmp.Save(outPath, ImageFormat.Png);
+            return "OK " + mw + "x" + mh + " popup " + pw + "x" + ph;
+        }
+    }
+
+    // PrintWindow leaves the alpha channel zeroed for many WinUI surfaces, which would make the
+    // bitmap fully transparent once composited or viewed. Force alpha to opaque.
+    private static void MakeOpaque(Bitmap bmp) {
+        var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+        var data = bmp.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+        try {
+            int bytes = Math.Abs(data.Stride) * bmp.Height;
+            byte[] buf = new byte[bytes];
+            Marshal.Copy(data.Scan0, buf, 0, bytes);
+            for (int i = 3; i < bytes; i += 4) buf[i] = 255;
+            Marshal.Copy(buf, 0, data.Scan0, bytes);
+        } finally { bmp.UnlockBits(data); }
+    }
+
+    // Area of a window's rect (0 when invalid). Used to reject intermediate content-island HWNDs
+    // that report an empty rect when walking up from a UIA element.
+    public static long RectArea(IntPtr h) {
+        RECT r; if (!GetWindowRect(h, out r)) return 0;
+        long w = r.Right - r.Left, hh = r.Bottom - r.Top;
+        if (w <= 0 || hh <= 0) return 0;
+        return w * hh;
+    }
+
     public static string Capture(IntPtr hwnd, string outPath) {
         RECT r; if (!GetWindowRect(hwnd, out r)) return "NO_RECT";
         int w = r.Right - r.Left, h = r.Bottom - r.Top;
@@ -135,10 +194,12 @@ if (-not (Test-Path $YaguExe)) { throw "Yagu.exe not found at $YaguExe. Build De
 function Write-Step($msg) { Write-Host "  $msg" }
 
 function Stop-AllYagu {
+    # Stop EVERY Yagu instance, not just the repo Debug copy: Yagu is single-instance, so an
+    # installed C:\Program Files\Yagu build left running would swallow the launch below and the
+    # screenshots would silently capture the released app instead of the Debug build.
     Get-Process Yagu -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -like '*\Yagu\bin\*' } |
         Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Milliseconds 800
 }
 
 $script:LaunchedPid = 0
@@ -153,10 +214,11 @@ function Start-Yagu {
 function Test-IsYaguAppWindow($w) {
     try {
         $n = $w.Current.Name
-        if ($n -eq 'Yagu - Yet Another Grep Utility') { return $true }
-        # Exclude lookalikes: voidtools "YaguSetup - Everything", installer, Settings.
-        if ($n -like '*Everything*' -or $n -like 'YaguSetup*' -or $n -like '*Settings*') { return $false }
-        return ($n -like 'Yagu - *')
+        # The title carries a version suffix ("Yagu - Yet Another Grep Utility 1.0.0.2395"), so match
+        # the product name as a prefix. A bare 'Yagu - *' test is NOT safe: an editor with the repo
+        # open is titled "Yagu - Visual Studio Code" and would be screenshotted instead of the app.
+        if ($n -like 'Yagu - Yet Another Grep Utility*') { return $true }
+        return $false
     } catch { return $false }
 }
 
@@ -285,6 +347,15 @@ function Get-TopWindowForElement($el) {
         try { $cur = $walker.GetParent($cur) } catch { break }
     }
     return [IntPtr]::Zero
+}
+
+# Capture a main window with a windowed popup (e.g. the Advanced Options drawer) composited on top,
+# so both appear in a single image even though the popup owns a separate HWND.
+function Capture-Composite([IntPtr]$MainHwnd, [IntPtr]$PopupHwnd, [string]$FileName) {
+    if ($MainHwnd -eq [IntPtr]::Zero -or $PopupHwnd -eq [IntPtr]::Zero) { Write-Step "No HWND for capture $FileName"; return }
+    $path = Join-Path $OutDir $FileName
+    $res = [Native]::CaptureComposite($MainHwnd, $PopupHwnd, $path)
+    Write-Step "Captured $FileName -> $res"
 }
 
 function Wait-Settle([int]$Seconds) { Start-Sleep -Seconds $Seconds }
@@ -766,6 +837,86 @@ function Scenario-AdvancedOptions {
     Capture-Hwnd $popup 'advanced-options.png'
 }
 
+# Captures the whole main window with the Advanced Options drawer open on the Filters tab.
+# Unlike 'advanced-options' (which PrintWindows only the drawer popup) this is a screen-region
+# grab, because the drawer is a separate top-level HWND that PrintWindow cannot composite.
+function Scenario-FilterOptions {
+    Write-Host "[filter-options] launching..."
+    Stop-AllYagu
+    Start-Yagu "--window-mode traditional" | Out-Null
+    $win = Get-YaguWindow 25
+    if (-not $win) { Write-Host 'FAILED: no Yagu window'; return }
+    $mainHwnd = [IntPtr]$win.Current.NativeWindowHandle
+    [Native]::Activate($mainHwnd)
+    # The window appears before its content is loaded; give the XAML tree time to build.
+    Wait-Settle 10
+
+    $toggle = Find-ById $win 'AdvancedOptionsToggle' 20
+    if (-not $toggle) { $toggle = Find-ById $AE::RootElement 'AdvancedOptionsToggle' 10 }
+    if (-not $toggle) { Write-Host 'FAILED: AdvancedOptionsToggle not found'; return }
+
+    # Dismiss the "Limited access" elevation banner so it does not crowd the shot. The banner's own
+    # close button is a session-only dismiss (unlike "Don't show again", which would persist a
+    # setting change on the developer's machine).
+    $close = Find-ById $win 'AdminBannerCloseButton' 3
+    if ($close) { [void](Invoke-El $close); Write-Step 'Dismissed admin banner.'; Wait-Settle 1 }
+
+    [void](Invoke-El $toggle)
+    Wait-Settle 2
+
+    $root = $AE::RootElement
+    $tabList = Find-ById $root 'AdvancedOptionsTabList' 6
+    if (-not $tabList) {
+        Write-Step 'AdvancedOptionsTabList not found - retrying open via physical click'
+        [Native]::Raise($mainHwnd)
+        Wait-Settle 1
+        $tr = $toggle.Current.BoundingRectangle
+        [Native]::LeftClickAt([int]($tr.X + $tr.Width/2), [int]($tr.Y + $tr.Height/2))
+        Wait-Settle 2
+        $tabList = Find-ById $root 'AdvancedOptionsTabList' 6
+    }
+    if (-not $tabList) { Write-Host 'FAILED: Advanced Options drawer did not open'; return }
+
+    # Select the Filters tab by its label rather than a positional index, so adding tabs
+    # (e.g. "Quick searches") cannot silently capture the wrong pane. The ListViewItems host a
+    # StackPanel, so they expose no UIA Name -- match the inner TextBlock and walk back up.
+    $items = $tabList.FindAll($TS::Descendants, $PC::new($AE::ControlTypeProperty, $CT::ListItem))
+    $filters = $null
+    foreach ($it in $items) {
+        $label = $it.FindFirst($TS::Descendants, $PC::new($AE::NameProperty, 'Filters'))
+        if ($label) { $filters = $it; break }
+    }
+    if (-not $filters) { Write-Host 'FAILED: Filters tab not found'; return }
+    $selected = $false
+    try {
+        $sel = $filters.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+        $sel.Select()
+        $selected = $true
+    } catch {}
+    if (-not $selected) {
+        [Native]::Raise($mainHwnd)
+        Start-Sleep -Milliseconds 400
+        $fr = $filters.Current.BoundingRectangle
+        [Native]::LeftClickAt([int]($fr.X + $fr.Width/2), [int]($fr.Y + $fr.Height/2))
+    }
+    Wait-Settle 2
+
+    # Move the pointer off the drawer so no row shows a hover highlight in the capture.
+    [void][Native]::SetCursorPos(10, 10)
+    Wait-Settle 1
+
+    # Derive the drawer's HWND from the tab list itself (walk up to the owning popup window) rather
+    # than picking the process's largest other window, which can latch onto a same-sized sibling.
+    # The walk can stop on an intermediate content-island HWND with an empty rect, so validate it.
+    $winPid = [uint32]$win.Current.ProcessId
+    $popup = Get-TopWindowForElement $tabList
+    if ($popup -eq $mainHwnd -or [Native]::RectArea($popup) -le 0) {
+        $popup = [Native]::FindPopup($winPid, $mainHwnd)
+    }
+    if ($popup -eq [IntPtr]::Zero -or [Native]::RectArea($popup) -le 0) { Write-Host 'FAILED: no popup HWND for drawer'; return }
+    Capture-Composite $mainHwnd $popup 'filter-options.png'
+}
+
 function Scenario-Terminal {
     Write-Host "[terminal] launching..."
     Stop-AllYagu
@@ -847,6 +998,7 @@ switch ($Scenario) {
     'settings-ocr'     { Scenario-SettingsOcr }
     'ocr-preview'      { Scenario-OcrPreview }
     'advanced-options' { Scenario-AdvancedOptions }
+    'filter-options'   { Scenario-FilterOptions }
     'terminal'         { Scenario-Terminal }
     'session-load'     { Scenario-SessionLoad }
     'all' {
@@ -859,6 +1011,7 @@ switch ($Scenario) {
         Scenario-SettingsOcr
         Scenario-OcrPreview
         Scenario-AdvancedOptions
+        Scenario-FilterOptions
         Scenario-Terminal
         Scenario-SessionLoad
     }

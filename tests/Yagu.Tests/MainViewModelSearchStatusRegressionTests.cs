@@ -53,7 +53,7 @@ public sealed class MainViewModelSearchStatusRegressionTests
         Assert.Contains("partial void OnTotalFilesChanged(int value)", MainViewModelSource);
         Assert.Contains("OnPropertyChanged(nameof(ProgressTooltip));", MainViewModelSource);
         Assert.Contains("OnPropertyChanged(nameof(SearchProgressRightLabel));", MainViewModelSource);
-        Assert.Contains("OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); OnPropertyChanged(nameof(ProgressTooltip)); }", MainViewModelSource);
+        Assert.Contains("OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); OnPropertyChanged(nameof(ProgressTooltip));", MainViewModelSource);
         Assert.Contains("[NotifyPropertyChangedFor(nameof(ProgressTooltip))]", MainViewModelSource);
     }
 

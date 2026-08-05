@@ -1801,24 +1801,53 @@ internal static partial class CliRunner
         }
 
         var b = s.SkipReasons;
-        if (b is not null && s.FilesSkipped > 0)
+        if (b is not null && (s.FilesSkipped > 0 || b.DiscoveryFilteredTotal > 0))
         {
-            WriteError("Skipped breakdown:", color);
-            if (b.GlobExcluded > 0)  WriteError($"  Glob exclusions:          {b.GlobExcluded,8:N0}", color);
-            if (b.Binary > 0)        WriteError($"  Binary files:             {b.Binary,8:N0}", color);
-            if (b.ByExtension > 0)   WriteError($"  Extension skips:          {b.ByExtension,8:N0}", color);
-            if (b.TooLarge > 0)      WriteError($"  Too large:                {b.TooLarge,8:N0}", color);
-            if (b.AccessDenied > 0)  WriteError($"  Access denied:            {b.AccessDenied,8:N0}", color);
-            if (b.Directories > 0)   WriteError($"  Inaccessible dirs:        {b.Directories,8:N0}", color);
-            if (b.IOError > 0)       WriteError($"  I/O errors:               {b.IOError,8:N0}", color);
-            if (b.NotFound > 0)      WriteError($"  Not found:                {b.NotFound,8:N0}", color);
-            if (b.Encoding > 0)      WriteError($"  Encoding errors:          {b.Encoding,8:N0}", color);
-            if (b.MultilineSkipped > 0) WriteError($"  Multiline size/timeout:   {b.MultilineSkipped,8:N0}", color);
-            if (b.Other > 0)         WriteError($"  Other:                    {b.Other,8:N0}", color);
+            // Mirrors the GUI status-bar breakdown (UI/CLI parity). The counted rows plus
+            // "Unclassified" partition FilesSkipped exactly; discovery filters removed paths before the
+            // scan set existed, so they are reported under their own heading and are not in that total.
+            if (s.FilesSkipped > 0)
+            {
+                WriteError("Skipped breakdown:", color);
+                WriteSkipRow("Excluded by glob", b.GlobOnlyExcluded, color);
+                WriteSkipRow("Yagu OCR cache", b.OcrCacheExcluded, color);
+                WriteSkipRow("Binary files", b.Binary, color);
+                WriteSkipRow("Extension skips", b.ByExtension, color);
+                WriteSkipRow("Too large", b.TooLarge, color);
+                WriteSkipRow("Below minimum size", b.TooSmall, color);
+                WriteSkipRow("Outside date range", b.DateFiltered, color);
+                WriteSkipRow("Access denied", b.AccessDenied, color);
+                WriteSkipRow("Inaccessible folders", b.Directories, color);
+                WriteSkipRow("I/O errors", b.IOError, color);
+                WriteSkipRow("I/O timeouts", b.IoTimeout, color);
+                WriteSkipRow("Not found", b.NotFound, color);
+                WriteSkipRow("Encoding errors", b.Encoding, color);
+                WriteSkipRow("Cloud-only placeholders", b.CloudOnlyDuringScan, color);
+                WriteSkipRow("Multiline size/timeout", b.MultilineSkipped, color);
+                WriteSkipRow("Other", b.Other, color);
+                WriteSkipRow("Unclassified", b.Unclassified(s.FilesSkipped), color);
+                WriteSkipRow("Total skipped", s.FilesSkipped, color, force: true);
+            }
+
+            if (b.DiscoveryFilteredTotal > 0)
+            {
+                WriteError("Filtered during discovery (not counted above):", color);
+                WriteSkipRow(".gitignore rules", b.GitignoreExcluded, color);
+                WriteSkipRow("Excluded extensions", b.ExtensionExcludedAtDiscovery, color);
+                WriteSkipRow("Cloud-only placeholders", b.CloudOnlyAtDiscovery, color);
+            }
         }
         // CLI exits immediately after the completion summary. Flush structured diagnostics synchronously so
         // the last pruning/search metrics are not lost between async logger timer ticks.
         LogService.Instance.Flush();
+    }
+
+    /// <summary>Emits one aligned "  label:   count" breakdown row, skipping empty categories.</summary>
+    private static void WriteSkipRow(string label, int count, bool color, bool force = false)
+    {
+        if (count <= 0 && !force)
+            return;
+        WriteError($"  {(label + ':').PadRight(26)}{count,8:N0}", color);
     }
 
     private static void WriteError(string msg, bool color = false)

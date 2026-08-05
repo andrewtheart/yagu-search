@@ -219,7 +219,7 @@ public sealed class AppSettings
     public const int MinimumIndexMaxJournalCatchupMB = 1;
     public const int MaximumIndexMaxJournalCatchupMB = 4096;
 
-    public const int DefaultIndexMaxJournalCatchupRecords = 500_000;
+    public const int DefaultIndexMaxJournalCatchupRecords = 2_000_000;
     public const int FirstRunDriveIndexMaxJournalCatchupRecords = 8_000_000;
     public const int MinimumIndexMaxJournalCatchupRecords = 1000;
     public const int MaximumIndexMaxJournalCatchupRecords = 100_000_000;
@@ -496,6 +496,11 @@ public sealed class AppSettings
     public bool PinStartupDirectory { get; set; }
     /// <summary>The directory restored into the box at launch when <see cref="PinStartupDirectory"/> is on.</summary>
     public string? PinnedStartupDirectory { get; set; }
+    /// <summary>Order of the Advanced Options tab column, as stable tab keys (see
+    /// <c>MainWindow.AdvancedOptions.cs</c>), after the user drag-reorders it. Empty (the default)
+    /// means "use the shipped order". Unknown keys are ignored and tabs missing from the list fall
+    /// back to their shipped position, so the setting survives tabs being added or renamed.</summary>
+    public List<string> AdvancedOptionsTabOrder { get; set; } = [];
     public List<string> RecentDirectories { get; set; } = [];
     public List<string> SearchHistory { get; set; } = [];
     /// <summary>Separate autocomplete history for the Semantic (natural-language) query mode, kept
@@ -876,7 +881,7 @@ public sealed class AppSettings
     /// <summary>Foreground journal catch-up budget (MB). Default 64. Exceeding it bypasses the search
     /// while low-priority catch-up continues (plan §6.1).</summary>
     public int IndexMaxJournalCatchupMB { get; set; } = DefaultIndexMaxJournalCatchupMB;
-    /// <summary>Foreground journal catch-up record budget. Default 500,000 (plan §6.1).</summary>
+    /// <summary>Foreground journal catch-up record budget. Default 2,000,000 (plan §6.1).</summary>
     public int IndexMaxJournalCatchupRecords { get; set; } = DefaultIndexMaxJournalCatchupRecords;
     /// <summary>After a full build, automatically apply an incremental delta before publication when the
     /// journal contains more than this many changes since the build started. Zero catches up any non-empty

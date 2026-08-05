@@ -708,6 +708,8 @@ public sealed class SearchService
         int skipNotFound = 0, skipEncoding = 0, skipOther = 0, skipByExtension = 0, skipDirectories = 0;
         int skipGlobExcluded = 0;
         int skipSizeFiltered = 0;
+        int skipTooSmall = 0;      // below --min-size (discovery filter + ContentSearcher SkipTooSmall)
+        int skipDateFiltered = 0;  // outside a created/modified date filter
         int skipCloudOnly = 0;
         int skipOcrCache = 0;
         int skipMultiline = 0; // multiline over-cap + per-file timeout + unsupported-surface skips
@@ -730,8 +732,41 @@ public sealed class SearchService
         int CurrentAccessDeniedSkips() => Volatile.Read(ref skipAccessDenied) + _fileLister.AccessDeniedDirectories;
         int CurrentEarlySkips() => _fileLister.EarlySkippedFiles;
         int CurrentEarlyTooLargeSkips() => _fileLister.EarlySkippedTooLargeFiles;
+        int CurrentEarlyTooSmallSkips() => _fileLister.EarlySkippedTooSmallFiles;
+        int CurrentEarlyDateSkips() => _fileLister.EarlySkippedByDateFiles;
         int CurrentCloudOnlySkips() => Volatile.Read(ref skipCloudOnly) + _fileLister.CloudOnlySkippedFiles;
         int CurrentFilesSkipped() => Volatile.Read(ref filesSkipped) + CurrentDirectorySkips() + CurrentEarlySkips();
+
+        // Single classification point for a negative ContentSearcher skip code. Every managed scan
+        // surface (ordinary files and archive entries) routes through here so no skip can increment the
+        // headline count without also landing in a status-bar bucket.
+        void TallyContentSkipReason(int code, string file)
+        {
+            switch (code)
+            {
+                case ContentSearcher.SkipBinary: Interlocked.Increment(ref skipBinary); break;
+                case ContentSearcher.SkipAccessDenied:
+                    Interlocked.Increment(ref skipAccessDenied);
+                    YaguLog.For("ContentSearcher").LogDebug("Access denied: {File}", file);
+                    break;
+                case ContentSearcher.SkipIOError: Interlocked.Increment(ref skipIOError); break;
+                case ContentSearcher.SkipIoTimeout: Interlocked.Increment(ref skipIoTimeout); break;
+                case ContentSearcher.SkipTooLarge: Interlocked.Increment(ref skipTooLarge); break;
+                case ContentSearcher.SkipTooSmall:
+                    Interlocked.Increment(ref skipSizeFiltered);
+                    Interlocked.Increment(ref skipTooSmall);
+                    break;
+                case ContentSearcher.SkipNotFound: Interlocked.Increment(ref skipNotFound); break;
+                case ContentSearcher.SkipEncoding: Interlocked.Increment(ref skipEncoding); break;
+                case ContentSearcher.SkipByExtension: Interlocked.Increment(ref skipByExtension); break;
+                case ContentSearcher.SkipCloudOnly: Interlocked.Increment(ref skipCloudOnly); break;
+                case ContentSearcher.SkipMultilineTooLarge:
+                case ContentSearcher.SkipMultilineTimeout:
+                    Interlocked.Increment(ref skipMultiline);
+                    break;
+                default: Interlocked.Increment(ref skipOther); break;
+            }
+        }
         // Total files processed (content-scanned + early-filtered + discovery-filtered)
         // so the progress bar increments for every file that has been "dealt with".
         int CurrentFilesScanned()
@@ -773,7 +808,12 @@ public sealed class SearchService
                 _fileLister.GitignoreSkipped,
                 CurrentCloudOnlySkips(),
                 Volatile.Read(ref skipMultiline),
-                Volatile.Read(ref skipIoTimeout));
+                Volatile.Read(ref skipIoTimeout),
+                Volatile.Read(ref skipTooSmall) + CurrentEarlyTooSmallSkips(),
+                Volatile.Read(ref skipDateFiltered) + CurrentEarlyDateSkips(),
+                Volatile.Read(ref skipOcrCache),
+                _fileLister.EarlyExcludedByExtensionFiles,
+                _fileLister.CloudOnlySkippedFiles);
             int currentTotalMatches;
             int currentFilesWithMatches;
             unsafe
@@ -834,7 +874,12 @@ public sealed class SearchService
                 _fileLister.GitignoreSkipped,
                 CurrentCloudOnlySkips(),
                 skipMultiline,
-                skipIoTimeout);
+                skipIoTimeout,
+                skipTooSmall + CurrentEarlyTooSmallSkips(),
+                skipDateFiltered + CurrentEarlyDateSkips(),
+                Volatile.Read(ref skipOcrCache),
+                _fileLister.EarlyExcludedByExtensionFiles,
+                _fileLister.CloudOnlySkippedFiles);
             return new SearchSummary(
                 TotalFiles: totalFiles,                FilesScanned: CurrentFilesProcessed(),
                 FilesSkipped: totalSkipped,
@@ -1186,15 +1231,20 @@ public sealed class SearchService
                         continue;
                     }
 
-                        if (ShouldSkipByFileMetadata(path, options, out bool tooLarge,
+                        var metadataSkip = ClassifyMetadataSkip(path, options,
                             checkSize: !fileListerAlreadyCheckedMetadata,
-                            checkDates: !fileListerAlreadyCheckedMetadata))
+                            checkDates: !fileListerAlreadyCheckedMetadata);
+                        if (metadataSkip != MetadataSkipReason.None)
                     {
                         Interlocked.Increment(ref filesScanned);
                         Interlocked.Increment(ref filesSkipped);
                         Interlocked.Increment(ref skipSizeFiltered);
-                        if (tooLarge)
-                            Interlocked.Increment(ref skipTooLarge);
+                        switch (metadataSkip)
+                        {
+                            case MetadataSkipReason.TooLarge: Interlocked.Increment(ref skipTooLarge); break;
+                            case MetadataSkipReason.TooSmall: Interlocked.Increment(ref skipTooSmall); break;
+                            default: Interlocked.Increment(ref skipDateFiltered); break;
+                        }
                         continue;
                     }
 
@@ -1570,6 +1620,7 @@ public sealed class SearchService
                                         if (produced < 0)
                                         {
                                             Interlocked.Increment(ref filesSkipped);
+                                            TallyContentSkipReason(produced, zipFile);
                                         }
                                         else
                                         {
@@ -1798,6 +1849,7 @@ public sealed class SearchService
                                                 Interlocked.Add(ref skipAccessDenied, directSink.SkipAccessDenied);
                                                 Interlocked.Add(ref skipTooLarge, directSink.SkipTooLarge);
                                                 Interlocked.Add(ref skipNotFound, directSink.SkipNotFound);
+                                                Interlocked.Add(ref skipIoTimeout, directSink.SkipIoTimeout);
                                                 Interlocked.Add(ref skipOther, directSink.SkipOther);
                                                 if (directSink.Truncated)
                                                     Volatile.Write(ref truncated, 1);
@@ -1975,27 +2027,7 @@ public sealed class SearchService
                             if (produced < 0)
                             {
                                 Interlocked.Increment(ref filesSkipped);
-                                switch (produced)
-                                {
-                                    case ContentSearcher.SkipBinary: Interlocked.Increment(ref skipBinary); break;
-                                    case ContentSearcher.SkipAccessDenied:
-                                        Interlocked.Increment(ref skipAccessDenied);
-                                        YaguLog.For("ContentSearcher").LogDebug("Access denied: {File}", file);
-                                        break;
-                                    case ContentSearcher.SkipIOError: Interlocked.Increment(ref skipIOError); break;
-                                    case ContentSearcher.SkipIoTimeout: Interlocked.Increment(ref skipIoTimeout); break;
-                                    case ContentSearcher.SkipTooLarge: Interlocked.Increment(ref skipTooLarge); break;
-                                    case ContentSearcher.SkipTooSmall: Interlocked.Increment(ref skipSizeFiltered); break;
-                                    case ContentSearcher.SkipNotFound: Interlocked.Increment(ref skipNotFound); break;
-                                    case ContentSearcher.SkipEncoding: Interlocked.Increment(ref skipEncoding); break;
-                                    case ContentSearcher.SkipByExtension: Interlocked.Increment(ref skipByExtension); break;
-                                    case ContentSearcher.SkipCloudOnly: Interlocked.Increment(ref skipCloudOnly); break;
-                                    case ContentSearcher.SkipMultilineTooLarge:
-                                    case ContentSearcher.SkipMultilineTimeout:
-                                        Interlocked.Increment(ref skipMultiline);
-                                        break;
-                                    default: Interlocked.Increment(ref skipOther); break;
-                                }
+                                TallyContentSkipReason(produced, file);
                             }
                             else
                             {
@@ -2508,6 +2540,22 @@ public sealed class SearchService
         }
     }
 
+    /// <summary>
+    /// Why <see cref="ClassifyMetadataSkip"/> rejected a file. Mirrors the user-facing skip categories so
+    /// the status-bar breakdown can report min-size and date filters separately from the size ceiling.
+    /// </summary>
+    internal enum MetadataSkipReason
+    {
+        None = 0,
+        TooLarge,
+        TooSmall,
+        DateRange,
+    }
+
+    /// <summary>
+    /// Back-compat wrapper over <see cref="ClassifyMetadataSkip"/>. Kept with this exact signature
+    /// because tests reach it by reflection.
+    /// </summary>
     internal static bool ShouldSkipByFileMetadata(
         string path,
         SearchOptions options,
@@ -2515,7 +2563,17 @@ public sealed class SearchService
         bool checkSize = true,
         bool checkDates = true)
     {
-        tooLarge = false;
+        var reason = ClassifyMetadataSkip(path, options, checkSize, checkDates);
+        tooLarge = reason == MetadataSkipReason.TooLarge;
+        return reason != MetadataSkipReason.None;
+    }
+
+    internal static MetadataSkipReason ClassifyMetadataSkip(
+        string path,
+        SearchOptions options,
+        bool checkSize = true,
+        bool checkDates = true)
+    {
         long minBytes = Math.Max(0, options.MinFileSizeBytes);
         long maxBytes = Math.Max(0, options.MaxFileSizeBytes);
         bool hasSizeFilter = checkSize && (minBytes > 0 || maxBytes > 0);
@@ -2526,7 +2584,7 @@ public sealed class SearchService
         // Always apply the content-search ceiling even when checkSize is false (unless ceiling is 0 = disabled).
         bool hasCeiling = (maxBytes == 0) && FileLister.ContentSearchFileSizeCeiling > 0;
         if (!hasSizeFilter && !hasDateFilter && !hasCeiling)
-            return false;
+            return MetadataSkipReason.None;
 
         // A size/date FILTER requires accurate metadata, so stat on a cache miss. The content-size
         // CEILING does NOT justify a stat here: every enumeration backend already enforces it
@@ -2548,10 +2606,10 @@ public sealed class SearchService
             catch (Exception ex)
             {
                 YaguLog.For("SearchService").LogDebug(ex, "Cannot stat file for size filter: {Path}", path);
-                return false;
+                return MetadataSkipReason.None;
             }
             if (!fileInfo.Exists)
-                return false;
+                return MetadataSkipReason.None;
 
             metadata = new FileMetadata(fileInfo.Length, fileInfo.LastWriteTime, fileInfo.CreationTime);
             FileMetadataCache.Set(path, metadata);
@@ -2559,32 +2617,26 @@ public sealed class SearchService
         else
         {
             // Ceiling-only check with no cached size: the backend already excluded oversized files.
-            return false;
+            return MetadataSkipReason.None;
         }
 
         if (checkSize && minBytes > 0 && metadata.Length < minBytes)
-            return true;
+            return MetadataSkipReason.TooSmall;
 
         if (checkSize && maxBytes > 0 && metadata.Length > maxBytes)
-        {
-            tooLarge = true;
-            return true;
-        }
+            return MetadataSkipReason.TooLarge;
 
         // Built-in ceiling: skip files > 100MB when no explicit max is set.
         if (hasCeiling && metadata.Length > FileLister.ContentSearchFileSizeCeiling)
-        {
-            tooLarge = true;
-            return true;
-        }
+            return MetadataSkipReason.TooLarge;
 
         if (checkDates && FileLister.IsOutsideDateRange(metadata.Created, options.CreatedAfterDate, options.CreatedBeforeDate))
-            return true;
+            return MetadataSkipReason.DateRange;
 
         if (checkDates && FileLister.IsOutsideDateRange(metadata.LastModified, options.ModifiedAfterDate, options.ModifiedBeforeDate))
-            return true;
+            return MetadataSkipReason.DateRange;
 
-        return false;
+        return MetadataSkipReason.None;
     }
 
     /// <summary>

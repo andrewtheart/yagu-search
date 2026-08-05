@@ -34,25 +34,30 @@ public sealed class AdvancedOptionsTests
     public void TabSelectionChanged_GuardsNullFields()
     {
         string method = ExtractMethodWindow("OnAdvancedOptionsTabSelectionChanged", 400);
-        Assert.Contains("if (AdvancedOptionsSearchTabContent is null)", method);
+        // Also guards mid-reorder: moving items raises SelectionChanged with a transient empty
+        // selection that must not snap the drawer back to another tab.
+        Assert.Contains("if (AdvancedOptionsSearchTabContent is null || _reorderingAdvancedOptionsTabs)", method);
         Assert.Contains("return;", method);
     }
 
     [Fact]
-    public void TabSelectionChanged_ClampsInvalidIndex()
+    public void TabSelectionChanged_ResolvesTabByIdentityNotIndex()
     {
-        string method = ExtractMethodWindow("OnAdvancedOptionsTabSelectionChanged", 600);
+        // The tab column is drag-reorderable, so a tab's list position says nothing about which
+        // content pane it owns. Selection must resolve through the item's stable key.
+        string method = ExtractMethodWindow("OnAdvancedOptionsTabSelectionChanged", 900);
         AssertContainsInOrder(method,
-            "int selectedIndex = AdvancedOptionsTabList.SelectedIndex;",
-            "if (selectedIndex < 0 || selectedIndex > 5)",
-            "AdvancedOptionsTabList.SelectedIndex = 0;",
-            "selectedIndex = 0;");
+            "string? tabKey = AdvancedOptionsTabKeyOf(AdvancedOptionsTabList.SelectedItem);",
+            "if (tabKey is null)",
+            "SelectAdvancedOptionsTab(AdvancedOptionsSearchTabKey);",
+            "SetAdvancedOptionsTab(tabKey);");
+        Assert.DoesNotContain("SelectedIndex", method);
     }
 
     [Fact]
     public void SetAdvancedOptionsTab_TogglesVisibilityForSixTabs()
     {
-        string method = ExtractMethodWindow("SetAdvancedOptionsTab", 700);
+        string method = ExtractMethodWindow("ResolveAdvancedOptionsTabContent", 700);
         Assert.Contains("AdvancedOptionsSearchTabContent", method);
         Assert.Contains("AdvancedOptionsQuickSearchesTabContent", method);
         Assert.Contains("AdvancedOptionsFiltersTabContent", method);
@@ -76,17 +81,93 @@ public sealed class AdvancedOptionsTests
     }
 
     // ══════════════════════════════════════════════════════════════════
+    // Drag-reorderable tab column
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void TabColumn_IsBoundAsItemsSourceSoWinUiCanReorderIt()
+    {
+        // WinUI's built-in reorder rewrites the bound collection and silently does nothing for
+        // inline ListViewItem containers, so the tabs MUST stay data-bound.
+        string list = ExtractXamlElement("x:Name=\"AdvancedOptionsTabList\"", 2600);
+        Assert.Contains("ItemsSource=\"{x:Bind AdvancedOptionsTabs}\"", list);
+        Assert.Contains("CanDragItems=\"True\"", list);
+        Assert.Contains("CanReorderItems=\"True\"", list);
+        Assert.Contains("AllowDrop=\"True\"", list);
+        Assert.Contains("DragItemsCompleted=\"OnAdvancedOptionsTabsReordered\"", list);
+        Assert.Contains("x:DataType=\"models:AdvancedOptionsTabItem\"", list);
+
+        // A hard-coded SelectedIndex would fight the restored order; selection is set in code.
+        Assert.DoesNotContain("SelectedIndex=", list);
+        Assert.DoesNotContain("<ListViewItem", list);
+    }
+
+    [Fact]
+    public void TabColumn_NavIsWideEnoughForTheLongestLabel()
+    {
+        // A 132px column clipped "Quick searches" to "Quick search".
+        string column = ExtractXamlElement("Wide enough for the longest tab label", 400);
+        Assert.Contains("<ColumnDefinition Width=\"160\" />", column);
+    }
+
+    [Fact]
+    public void TabItems_CarryStableKeysInShippedOrder()
+    {
+        Assert.Contains("[\"search\", \"quick\", \"filters\", \"size\", \"dates\", \"advanced\"]", AdvancedOptionsSource);
+        foreach (string key in new[] { "search", "quick", "filters", "size", "dates", "advanced" })
+            Assert.Contains($"new(\"{key}\",", AdvancedOptionsSource);
+    }
+
+    [Fact]
+    public void TabReorder_PersistsTheNewOrder()
+    {
+        string method = ExtractMethodWindow("OnAdvancedOptionsTabsReordered", 900);
+        // Ignore non-move drops so a cancelled drag never rewrites the setting.
+        Assert.Contains("if (args.DropResult != DataPackageOperation.Move)", method);
+        AssertContainsInOrder(method,
+            "ViewModel.AdvancedOptionsTabOrder = order;",
+            "SetAdvancedOptionsTab(selectedKey);",
+            "await ViewModel.PersistSettingsAsync();");
+    }
+
+    [Fact]
+    public void TabOrder_IsRestoredLazilyAndNeverDropsATab()
+    {
+        string method = ExtractMethodWindow("private void ApplySavedAdvancedOptionsTabOrder()", 1800);
+        // Applied once, on first drawer open, to keep it off the startup path.
+        Assert.Contains("if (_advancedOptionsTabOrderApplied)", method);
+        // Unknown keys are ignored and unmentioned tabs keep their shipped position.
+        Assert.Contains("if (desired.Count != AdvancedOptionsTabs.Count)", method);
+        Assert.Contains("return; // defensive: never drop a tab", method);
+        // Reorder must be suppressed from the selection handler.
+        Assert.Contains("_reorderingAdvancedOptionsTabs = true;", method);
+        Assert.Contains("_reorderingAdvancedOptionsTabs = false;", method);
+    }
+
+    [Fact]
+    public void TabOrder_IsPersistedAndReloadedThroughSettings()
+    {
+        string settings = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "Services", "SettingsService.cs"));
+        Assert.Contains("public List<string> AdvancedOptionsTabOrder { get; set; } = [];", settings);
+        Assert.Contains("AdvancedOptionsTabOrder = _settings.AdvancedOptionsTabOrder ?? [];", MainViewModelSource);
+        Assert.Contains("_settings.AdvancedOptionsTabOrder = AdvancedOptionsTabOrder;", MainViewModelSource);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
     // Quick searches tab (developer one-click presets)
     // ══════════════════════════════════════════════════════════════════
 
     [Fact]
     public void QuickSearchesTab_IsListedSecondInTheNav()
     {
-        int search = MainWindowXaml.IndexOf("Text=\"Search\" VerticalAlignment=\"Center\"", StringComparison.Ordinal);
-        int quick = MainWindowXaml.IndexOf("Text=\"Quick searches\" VerticalAlignment=\"Center\"", StringComparison.Ordinal);
-        int filters = MainWindowXaml.IndexOf("Text=\"Filters\" VerticalAlignment=\"Center\"", StringComparison.Ordinal);
+        // The nav is data-driven (drag-reorderable), so the shipped order lives in the
+        // AdvancedOptionsTabs collection initializer rather than in XAML.
+        int search = AdvancedOptionsSource.IndexOf("new(\"search\",", StringComparison.Ordinal);
+        int quick = AdvancedOptionsSource.IndexOf("new(\"quick\",", StringComparison.Ordinal);
+        int filters = AdvancedOptionsSource.IndexOf("new(\"filters\",", StringComparison.Ordinal);
         Assert.True(search >= 0 && quick > search && filters > quick,
             "The Quick searches nav item must sit between Search and Filters.");
+        Assert.Contains("\"Quick searches\"", AdvancedOptionsSource);
     }
 
     [Fact]

@@ -91,6 +91,14 @@ public interface IFileLister
     /// <summary>Files skipped early during listing because they exceeded the configured size limit.</summary>
     int EarlySkippedTooLargeFiles { get; }
 
+    /// <summary>Subset of <see cref="EarlySkippedFiles"/> skipped for being under the configured minimum
+    /// size. Default 0 so alternative listers need not track the split.</summary>
+    int EarlySkippedTooSmallFiles => 0;
+
+    /// <summary>Subset of <see cref="EarlySkippedFiles"/> skipped for falling outside a created/modified
+    /// date filter. Default 0 so alternative listers need not track the split.</summary>
+    int EarlySkippedByDateFiles => 0;
+
     /// <summary>Files excluded early by extension; these are deliberately not included in skip counts.</summary>
     int EarlyExcludedByExtensionFiles { get; }
 
@@ -148,6 +156,8 @@ public sealed class FileLister : IFileLister
     private int _knownTotalFiles;
     private int _earlySkippedFiles;
     private int _earlySkippedTooLargeFiles;
+    private int _earlySkippedTooSmallFiles;
+    private int _earlySkippedByDateFiles;
     private int _earlyExcludedByExtensionFiles;
     private int _cloudOnlySkippedFiles;
     public string? FallbackReason { get; private set; }
@@ -156,6 +166,8 @@ public sealed class FileLister : IFileLister
     public int KnownTotalFiles => Volatile.Read(ref _knownTotalFiles);
     public int EarlySkippedFiles => Volatile.Read(ref _earlySkippedFiles);
     public int EarlySkippedTooLargeFiles => Volatile.Read(ref _earlySkippedTooLargeFiles);
+    public int EarlySkippedTooSmallFiles => Volatile.Read(ref _earlySkippedTooSmallFiles);
+    public int EarlySkippedByDateFiles => Volatile.Read(ref _earlySkippedByDateFiles);
     public int EarlyExcludedByExtensionFiles => Volatile.Read(ref _earlyExcludedByExtensionFiles);
     public int CloudOnlySkippedFiles => Volatile.Read(ref _cloudOnlySkippedFiles);
     public int GitignoreSkipped => GitignoreMatcher?.Skipped ?? 0;
@@ -416,6 +428,8 @@ public sealed class FileLister : IFileLister
         Volatile.Write(ref _knownTotalFiles, 0);
         Volatile.Write(ref _earlySkippedFiles, 0);
         Volatile.Write(ref _earlySkippedTooLargeFiles, 0);
+        Volatile.Write(ref _earlySkippedTooSmallFiles, 0);
+        Volatile.Write(ref _earlySkippedByDateFiles, 0);
         Volatile.Write(ref _cloudOnlySkippedFiles, 0);
         Volatile.Write(ref _earlyExcludedByExtensionFiles, 0);
         if (string.IsNullOrWhiteSpace(directory)) yield break;
@@ -778,6 +792,7 @@ public sealed class FileLister : IFileLister
                                     else
                                         skippedTooSmall++;
                                     Volatile.Write(ref _earlySkippedTooLargeFiles, skippedTooLarge);
+                                    Volatile.Write(ref _earlySkippedTooSmallFiles, skippedTooSmall);
                                     Volatile.Write(ref _earlySkippedFiles, skippedBySize + skippedByDate);
                                     continue;
                                 }
@@ -791,6 +806,7 @@ public sealed class FileLister : IFileLister
                                     if (IsOutsideDateRange(DateTime.FromFileTime(createdFileTime), EarlyCreatedAfterDate, EarlyCreatedBeforeDate))
                                     {
                                         skippedByDate++;
+                                        Volatile.Write(ref _earlySkippedByDateFiles, skippedByDate);
                                         Volatile.Write(ref _earlySkippedFiles, skippedBySize + skippedByDate);
                                         continue;
                                     }
@@ -810,6 +826,7 @@ public sealed class FileLister : IFileLister
                                     if (filterByModifiedDate && IsOutsideDateRange(modifiedDateFromSdk, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
                                     {
                                         skippedByDate++;
+                                        Volatile.Write(ref _earlySkippedByDateFiles, skippedByDate);
                                         Volatile.Write(ref _earlySkippedFiles, skippedBySize + skippedByDate);
                                         continue;
                                     }
@@ -838,6 +855,7 @@ public sealed class FileLister : IFileLister
                                             EarlyCreatedAfterDate, EarlyCreatedBeforeDate, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
                                     {
                                         skippedByDate++;
+                                        Volatile.Write(ref _earlySkippedByDateFiles, skippedByDate);
                                         Volatile.Write(ref _earlySkippedFiles, skippedBySize + skippedByDate);
                                         continue;
                                     }
@@ -845,6 +863,7 @@ public sealed class FileLister : IFileLister
                                 catch
                                 {
                                     skippedByDate++;
+                                    Volatile.Write(ref _earlySkippedByDateFiles, skippedByDate);
                                     Volatile.Write(ref _earlySkippedFiles, skippedBySize + skippedByDate);
                                     continue;
                                 }
@@ -1714,11 +1733,14 @@ public sealed class FileLister : IFileLister
                                 Interlocked.Increment(ref _earlySkippedFiles);
                                 if (tooLarge)
                                     Interlocked.Increment(ref _earlySkippedTooLargeFiles);
+                                else
+                                    Interlocked.Increment(ref _earlySkippedTooSmallFiles);
                                 continue;
                             }
                             if (IsOutsideEarlyDateRange(fileInfo.CreationTime, fileInfo.LastWriteTime, EarlyCreatedAfterDate, EarlyCreatedBeforeDate, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
                             {
                                 Interlocked.Increment(ref _earlySkippedFiles);
+                                Interlocked.Increment(ref _earlySkippedByDateFiles);
                                 continue;
                             }
                         }

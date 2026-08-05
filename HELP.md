@@ -183,6 +183,8 @@ settings file), and take effect on the next search after the file is saved — n
 
 Click the **Advanced Options** expander below the search bar to reveal a tabbed panel. The left tabs group controls into **Search**, **Quick searches**, **Filters**, **Size**, **Dates**, and **Advanced**. Advanced Options are per-session and reset to defaults on next launch (defaults can be configured in Settings). Changes apply immediately; **Apply** closes the panel, and **Reset** restores the controls to the current settings defaults.
 
+**Reordering the tabs.** Drag any tab up or down the left column to put the ones you use most at the top. The new order is remembered across restarts (it is stored separately from your search defaults, so **Reset** and **Save as Defaults** leave it alone). The panel always reopens on the **Search** tab wherever you have moved it to.
+
 ![Advanced Options drawer with search tabs, path filters, and command generation](docs/images/advanced-options.png)
 
 ### Search Tab
@@ -996,16 +998,56 @@ Yagu enforces single-instance mode. If you launch Yagu when it's already running
 
 ## Skipped Files
 
-During a search, the status bar shows "Skipped: N". Click it to see a categorized breakdown:
+During a search, the status bar shows "Skipped: N". Click it to open a categorized breakdown. The
+rows **partition the headline number exactly** — every counted category is listed, and any skip a
+category doesn't claim shows up under **Unclassified** rather than quietly disappearing, so the
+breakdown always adds up to the total.
 
-- Access denied
-- Too large (exceeded max file size)
-- Binary file
-- Skipped extension
-- Gitignore rule
-- Admin-protected path
-- Archive entry too large
-- Archive nesting too deep
+### Counted toward "Skipped: N"
+
+| Category | Meaning |
+| --- | --- |
+| Excluded by glob | Matched an Advanced Options ▸ Exclude pattern. |
+| Yagu OCR cache | Yagu's own cache of recognized image text, always excluded from results. |
+| Binary files | Detected as binary while binary search was off. |
+| Extension skips | Extension matched the scanner's skip list. |
+| Too large | Exceeded the maximum file size. |
+| Below minimum size | Smaller than the minimum file size. |
+| Outside date range | Outside the modified-date filter. |
+| Access denied | Permission denied (see **Admin Elevation** below). |
+| Inaccessible folders | A directory could not be enumerated. |
+| I/O errors | The read failed. |
+| I/O timeouts | The read exceeded the per-file I/O deadline (`--file-io-timeout`). |
+| Not found | Deleted or renamed between discovery and read. |
+| Encoding errors | Undecodable text encoding. |
+| Cloud-only placeholders | Online-only file that wasn't hydrated during the scan. |
+| Multiline size/timeout | Multiline/regex matching exceeded its size or time budget. |
+| Other | Any remaining scanner-reported reason. |
+| Unclassified | Remainder — the total minus everything above. Normally zero. |
+| **Total skipped** | Always shown; equals the status-bar number. |
+
+### Filtered during discovery (not counted above)
+
+These files never entered the scan set, so they are reported separately and are **not** part of
+"Skipped: N": `.gitignore` rules, excluded extensions (**Settings ▸ Skip extensions**), and
+cloud-only placeholders excluded before scanning. This section only appears when one of them is
+non-zero.
+
+Zero-count rows are hidden to keep the panel short; the total row is always shown. Archive entries
+that are too large or too deeply nested are reported through the scanner categories above.
+
+### Files Yagu cannot count
+
+Some files are removed before Yagu can attribute them to a category, so they appear in neither list:
+include-extension filters, search depth limits, the walker's hidden/system-file rules, and — when the
+Everything backend serves discovery — exclude patterns and size/date filters that Yagu pushes into
+the Everything query itself. In that last case Everything simply never returns the file, so a search
+that filtered files can still legitimately report `Skipped: 0`. Force `--file-lister-backend 3`
+(.NET enumeration) if you need those filters attributed to a category. The overlay states this in a
+footnote.
+
+The `--cli` completion summary prints the same categories, in the same order, whenever any file was
+skipped or filtered during discovery.
 
 ---
 

@@ -58,6 +58,7 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
     public int SkipAccessDenied { get; private set; }
     public int SkipTooLarge { get; private set; }
     public int SkipNotFound { get; private set; }
+    public int SkipIoTimeout { get; private set; }
     public int SkipOther { get; private set; }
 
     public Exception? CapturedException { get; set; }
@@ -294,6 +295,7 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
                 case NativeSearcher.StatusOpenFailed: SkipAccessDenied++; break;
                 case NativeSearcher.StatusTooLarge: SkipTooLarge++; break;
                 case NativeSearcher.StatusInvalidPath: SkipNotFound++; break;
+                case NativeSearcher.StatusIoTimeout: SkipIoTimeout++; break;
                 default: SkipOther++; break;
             }
         }

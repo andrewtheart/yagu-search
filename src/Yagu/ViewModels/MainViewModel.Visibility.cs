@@ -79,6 +79,6 @@ public sealed partial class MainViewModel
     partial void OnShowIndexStatusChanged(bool value) => OnPropertyChanged(nameof(IndexStatusVisibility));
 
     partial void OnShowIndexBuildPercentChanged(bool value) => OnPropertyChanged(nameof(IndexBuildPercentVisibility));
-    partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); OnPropertyChanged(nameof(ProgressTooltip)); }
+    partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); OnPropertyChanged(nameof(ProgressTooltip)); OnPropertyChanged(nameof(SkipTooltip)); }
     partial void OnAccessDeniedCountChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
 }

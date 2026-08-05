@@ -591,7 +591,7 @@ public sealed partial class SettingsWindow
             s => s.IndexMaxJournalCatchupRecords,
             (s, v) => s.IndexMaxJournalCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(v),
             1000, 100000000,
-            "Companion record cap for the catch-up limit above. Default 500,000.");
+            "Companion record cap for the catch-up limit above. Default 2,000,000.");
         AddIndexToggle(resourcesGroup, "Use file-system watcher hints for incremental updates",
             s => s.IndexUseWatcherHints, (s, v) => s.IndexUseWatcherHints = v,
             "Default off. When on, incremental updates use a file-system watcher as a low-latency hint about which folders changed. The change journal remains authoritative, so a watcher failure never affects correctness.");

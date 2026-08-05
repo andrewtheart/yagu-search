@@ -58,35 +58,79 @@ public sealed partial class MainViewModel
     }
 
     private SkipBreakdown? _lastSkipBreakdown;
-    private const string ExtensionExclusionSkipNote = "Files excluded by extension during discovery are filtered before counting and are not included in skipped counts.";
 
-    /// <summary>Formatted tooltip showing a per-category breakdown of skipped files.</summary>
+    private const string SkipFootnote =
+        "Some files are removed before Yagu can count them and appear in neither list: include-extension filters, search depth, the walker's hidden/system-file rules, and — when the Everything backend serves discovery — exclude patterns and size/date filters that are pushed into the Everything query itself.";
+
+    /// <summary>Width the reason labels are padded to so the counts line up in the monospaced overlay.</summary>
+    private const int SkipLabelWidth = 24;
+
+    private static void AppendSkipRow(StringBuilder sb, string glyph, string label, int count, bool force = false)
+    {
+        if (count <= 0 && !force)
+            return;
+        sb.Append("  ").Append(glyph).Append("  ").Append(label.PadRight(SkipLabelWidth))
+          .AppendLine(count.ToString("N0", CultureInfo.InvariantCulture).PadLeft(9));
+    }
+
+    /// <summary>
+    /// Formatted per-category breakdown of skipped files, shown by the status-bar Skipped overlay.
+    /// <para>
+    /// The first block partitions the headline <see cref="FilesSkipped"/> exactly: every counted reason
+    /// plus the <c>Unclassified</c> remainder sums to the total, so a skip path that this breakdown does
+    /// not yet name is still visible instead of quietly disappearing. The second block lists discovery
+    /// filters, which removed paths before the scan set existed and are therefore not part of the total.
+    /// </para>
+    /// </summary>
     public string SkipTooltip
     {
         get
         {
             var b = _lastSkipBreakdown;
-            if (b is null || FilesSkipped == 0)
-                return $"No files skipped{Environment.NewLine}{Environment.NewLine}{ExtensionExclusionSkipNote}";
+            int total = FilesSkipped;
+
+            if (b is null)
+                return $"No files skipped{Environment.NewLine}{Environment.NewLine}{SkipFootnote}";
 
             var lines = new StringBuilder();
-            lines.AppendLine("Skipped files breakdown:");
-            lines.AppendLine(ExtensionExclusionSkipNote);
-            lines.AppendLine();
-            if (b.GlobExcluded > 0)   lines.AppendLine(CultureInfo.InvariantCulture, $"  🚫  Glob exclusions       {b.GlobExcluded,8:N0}");
-            if (b.GitignoreExcluded > 0) lines.AppendLine(CultureInfo.InvariantCulture, $"  🙈  .gitignore excluded   {b.GitignoreExcluded,8:N0}");
-            if (b.CloudOnly > 0)      lines.AppendLine(CultureInfo.InvariantCulture, $"  ☁️  Cloud-only skipped    {b.CloudOnly,8:N0}");
-            if (b.Binary > 0)         lines.AppendLine(CultureInfo.InvariantCulture, $"  🔒  Binary files          {b.Binary,8:N0}");
-            if (b.ByExtension > 0)    lines.AppendLine(CultureInfo.InvariantCulture, $"  📄  Scanner extension skips {b.ByExtension,8:N0}");
-            if (b.TooLarge > 0)       lines.AppendLine(CultureInfo.InvariantCulture, $"  📏  Too large             {b.TooLarge,8:N0}");
-            if (b.AccessDenied > 0)   lines.AppendLine(CultureInfo.InvariantCulture, $"  🔐  Access denied         {b.AccessDenied,8:N0}");
-            if (b.Directories > 0)    lines.AppendLine(CultureInfo.InvariantCulture, $"  📁  Inaccessible dirs     {b.Directories,8:N0}");
-            if (b.IOError > 0)        lines.AppendLine(CultureInfo.InvariantCulture, $"  ⚠️  I/O errors            {b.IOError,8:N0}");
-            if (b.IoTimeout > 0)      lines.AppendLine(CultureInfo.InvariantCulture, $"  ⏱️  I/O timeouts          {b.IoTimeout,8:N0}");
-            if (b.NotFound > 0)       lines.AppendLine(CultureInfo.InvariantCulture, $"  ❓  Not found             {b.NotFound,8:N0}");
-            if (b.Encoding > 0)       lines.AppendLine(CultureInfo.InvariantCulture, $"  🔤  Encoding errors       {b.Encoding,8:N0}");
-            if (b.Other > 0)          lines.AppendLine(CultureInfo.InvariantCulture, $"  ❔  Other                 {b.Other,8:N0}");
+            if (total == 0)
+                lines.AppendLine("No files skipped");
+            else
+            {
+                lines.AppendLine("Skipped files breakdown:");
+                lines.AppendLine();
+                AppendSkipRow(lines, "🚫", "Excluded by glob", b.GlobOnlyExcluded);
+                AppendSkipRow(lines, "🗂️", "Yagu OCR cache", b.OcrCacheExcluded);
+                AppendSkipRow(lines, "🔒", "Binary files", b.Binary);
+                AppendSkipRow(lines, "📄", "Extension skips", b.ByExtension);
+                AppendSkipRow(lines, "📏", "Too large", b.TooLarge);
+                AppendSkipRow(lines, "📐", "Below minimum size", b.TooSmall);
+                AppendSkipRow(lines, "📅", "Outside date range", b.DateFiltered);
+                AppendSkipRow(lines, "🔐", "Access denied", b.AccessDenied);
+                AppendSkipRow(lines, "📁", "Inaccessible folders", b.Directories);
+                AppendSkipRow(lines, "⚠️", "I/O errors", b.IOError);
+                AppendSkipRow(lines, "⏱️", "I/O timeouts", b.IoTimeout);
+                AppendSkipRow(lines, "❓", "Not found", b.NotFound);
+                AppendSkipRow(lines, "🔤", "Encoding errors", b.Encoding);
+                AppendSkipRow(lines, "☁️", "Cloud-only placeholders", b.CloudOnlyDuringScan);
+                AppendSkipRow(lines, "🧵", "Multiline size/timeout", b.MultilineSkipped);
+                AppendSkipRow(lines, "❔", "Other", b.Other);
+                AppendSkipRow(lines, "➕", "Unclassified", b.Unclassified(total));
+                AppendSkipRow(lines, "  ", "Total skipped", total, force: true);
+            }
 
+            if (b.DiscoveryFilteredTotal > 0)
+            {
+                lines.AppendLine();
+                lines.AppendLine("Filtered during discovery (not counted above):");
+                lines.AppendLine();
+                AppendSkipRow(lines, "🙈", ".gitignore rules", b.GitignoreExcluded);
+                AppendSkipRow(lines, "📄", "Excluded extensions", b.ExtensionExcludedAtDiscovery);
+                AppendSkipRow(lines, "☁️", "Cloud-only placeholders", b.CloudOnlyAtDiscovery);
+            }
+
+            lines.AppendLine();
+            lines.Append(SkipFootnote);
             return lines.ToString().TrimEnd();
         }
     }

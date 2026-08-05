@@ -394,8 +394,12 @@
                     <Button Content="Restart as Admin" FontSize="12" Padding="6,1" Click="OnRestartAsAdmin" />
                     <Button Content="Don't show again" FontSize="12" Padding="6,1" Click="OnDontShowAdminWarningAgain" />
                 </StackPanel>
-                <!-- Close button -->
+                <!-- Close button. Icon-only, so it needs an explicit automation name to be reachable by
+                     screen readers and UI automation. -->
                 <Button Grid.Column="2" Click="OnAdminBannerCloseClick"
+                        AutomationProperties.AutomationId="AdminBannerCloseButton"
+                        AutomationProperties.Name="Dismiss"
+                        ToolTipService.ToolTip="Dismiss this notice for the current session"
                         Background="Transparent" BorderThickness="0" Padding="6,2"
                         Foreground="{ThemeResource YaguAdminBannerForegroundBrush}"
                         VerticalAlignment="Center">
@@ -812,18 +816,33 @@
 
                                 <Grid Grid.Row="0">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="132" />
+                                        <!-- Wide enough for the longest tab label ("Quick searches"); a
+                                             narrower column silently clips it. -->
+                                        <ColumnDefinition Width="160" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
 
                                     <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                             BorderThickness="0,0,1,0">
+                                        <!-- Tabs are drag-reorderable, so they must be bound as data items:
+                                             WinUI's built-in reorder rewrites the ItemsSource collection and
+                                             does nothing at all for inline ListViewItem containers. Each item
+                                             carries a stable Key so the tab -> content mapping survives
+                                             reordering (never index-based), and the resulting order is
+                                             persisted via AppSettings.AdvancedOptionsTabOrder.
+                                             No SelectedIndex here: selection is set in code once the drawer
+                                             opens, after any saved order has been applied. -->
                                         <ListView x:Name="AdvancedOptionsTabList"
+                                                  ItemsSource="{x:Bind AdvancedOptionsTabs}"
                                                   SelectionMode="Single"
-                                                  SelectedIndex="0"
                                                   Padding="8,8,8,8"
                                                   Background="Transparent"
                                                   BorderThickness="0"
+                                                  CanDragItems="True"
+                                                  CanReorderItems="True"
+                                                  AllowDrop="True"
+                                                  ToolTipService.ToolTip="Drag a tab to reorder the list"
+                                                  DragItemsCompleted="OnAdvancedOptionsTabsReordered"
                                                   SelectionChanged="OnAdvancedOptionsTabSelectionChanged">
                                             <ListView.ItemContainerStyle>
                                                 <Style TargetType="ListViewItem">
@@ -834,42 +853,14 @@
                                                     <Setter Property="MinHeight" Value="34" />
                                                 </Style>
                                             </ListView.ItemContainerStyle>
-                                            <ListViewItem>
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <FontIcon Glyph="&#xE721;" FontSize="12" />
-                                                    <TextBlock Text="Search" VerticalAlignment="Center" />
-                                                </StackPanel>
-                                            </ListViewItem>
-                                            <ListViewItem>
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <FontIcon Glyph="&#xE945;" FontSize="12" />
-                                                    <TextBlock Text="Quick searches" VerticalAlignment="Center" />
-                                                </StackPanel>
-                                            </ListViewItem>
-                                            <ListViewItem>
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <FontIcon Glyph="&#xE71C;" FontSize="12" />
-                                                    <TextBlock Text="Filters" VerticalAlignment="Center" />
-                                                </StackPanel>
-                                            </ListViewItem>
-                                            <ListViewItem>
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <FontIcon Glyph="&#xE8A5;" FontSize="12" />
-                                                    <TextBlock Text="Size" VerticalAlignment="Center" />
-                                                </StackPanel>
-                                            </ListViewItem>
-                                            <ListViewItem>
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <FontIcon Glyph="&#xE787;" FontSize="12" />
-                                                    <TextBlock Text="Dates" VerticalAlignment="Center" />
-                                                </StackPanel>
-                                            </ListViewItem>
-                                            <ListViewItem>
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <FontIcon Glyph="&#xE713;" FontSize="12" />
-                                                    <TextBlock Text="Advanced" VerticalAlignment="Center" />
-                                                </StackPanel>
-                                            </ListViewItem>
+                                            <ListView.ItemTemplate>
+                                                <DataTemplate x:DataType="models:AdvancedOptionsTabItem">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <FontIcon Glyph="{x:Bind Glyph}" FontSize="12" />
+                                                        <TextBlock Text="{x:Bind Label}" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListView.ItemTemplate>
                                         </ListView>
                                     </Border>
 

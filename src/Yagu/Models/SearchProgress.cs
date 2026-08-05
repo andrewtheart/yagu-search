@@ -2,6 +2,20 @@ namespace Yagu.Models;
 
 /// <summary>
 /// Breakdown of why files were skipped during a search.
+/// <para>
+/// Two disjoint families live here. Most members are <b>counted</b> reasons: every one of them is
+/// also part of <see cref="SearchSummary.FilesSkipped"/> / <see cref="SearchProgress.FilesSkipped"/>,
+/// and together with <see cref="Unclassified"/> they partition that headline total exactly (see
+/// <see cref="CountedTotal"/>). <see cref="GitignoreExcluded"/>,
+/// <see cref="ExtensionExcludedAtDiscovery"/> and <see cref="CloudOnlyAtDiscovery"/> are
+/// <b>discovery filters</b>: those paths never entered the scan set, so they are deliberately NOT
+/// part of the headline total and must be reported separately.
+/// </para>
+/// <para>
+/// New members are appended as optional positional parameters so existing positional construction
+/// keeps compiling. Nothing here is on a hot path: each counter is incremented only on a branch
+/// that is already skipping a file.
+/// </para>
 /// </summary>
 public sealed record SkipBreakdown(
     int Binary,
@@ -18,10 +32,42 @@ public sealed record SkipBreakdown(
     int GitignoreExcluded = 0,
     int CloudOnly = 0,
     int MultilineSkipped = 0,
-    int IoTimeout = 0)
+    int IoTimeout = 0,
+    int TooSmall = 0,
+    int DateFiltered = 0,
+    int OcrCacheExcluded = 0,
+    int ExtensionExcludedAtDiscovery = 0,
+    int CloudOnlyAtDiscovery = 0)
 {
+    /// <summary>Cloud-only placeholders skipped by the content scanner. <see cref="CloudOnly"/> is the
+    /// combined figure (scan-time + discovery-time); only this part is inside the headline skipped total.</summary>
+    public int CloudOnlyDuringScan => Math.Max(0, CloudOnly - CloudOnlyAtDiscovery);
+
+    /// <summary>Files excluded by an <c>--exclude</c> glob only. <see cref="GlobExcluded"/> historically also
+    /// carried Yagu's own OCR-cache directory, which is now reported separately as <see cref="OcrCacheExcluded"/>.</summary>
+    public int GlobOnlyExcluded => Math.Max(0, GlobExcluded - OcrCacheExcluded);
+
+    /// <summary>Sum of every reason that is also part of the headline skipped total. Discovery filters
+    /// (gitignore / extension / cloud-only-at-discovery) are excluded because those files never entered
+    /// the scan set. <see cref="EarlyFiltered"/> is an aggregate parent of the size/date reasons and is
+    /// likewise excluded so nothing is counted twice.</summary>
+    public int CountedTotal =>
+        Binary + AccessDenied + IOError + IoTimeout + TooLarge + TooSmall + DateFiltered
+        + NotFound + Encoding + Other + ByExtension + Directories
+        + GlobOnlyExcluded + OcrCacheExcluded + CloudOnlyDuringScan + MultilineSkipped;
+
+    /// <summary>Files inside <paramref name="filesSkipped"/> that no category claimed. Normally 0; a
+    /// non-zero value means a skip path exists that this breakdown does not yet classify, and the UI
+    /// surfaces it rather than silently under-reporting.</summary>
+    public int Unclassified(int filesSkipped) => Math.Max(0, filesSkipped - CountedTotal);
+
+    /// <summary>Files removed by a discovery-time filter. These are intentionally absent from the
+    /// headline skipped total — they were filtered before the scan set was formed.</summary>
+    public int DiscoveryFilteredTotal =>
+        GitignoreExcluded + ExtensionExcludedAtDiscovery + CloudOnlyAtDiscovery;
+
     public override string ToString() =>
-        $"binary={Binary}, accessDenied={AccessDenied}, ioError={IOError}, ioTimeout={IoTimeout}, tooLarge={TooLarge}, notFound={NotFound}, encoding={Encoding}, other={Other}, byExtension={ByExtension}, directories={Directories}, earlyFiltered={EarlyFiltered}, globExcluded={GlobExcluded}, gitignoreExcluded={GitignoreExcluded}, cloudOnly={CloudOnly}, multilineSkipped={MultilineSkipped}";
+        $"binary={Binary}, accessDenied={AccessDenied}, ioError={IOError}, ioTimeout={IoTimeout}, tooLarge={TooLarge}, tooSmall={TooSmall}, dateFiltered={DateFiltered}, notFound={NotFound}, encoding={Encoding}, other={Other}, byExtension={ByExtension}, directories={Directories}, earlyFiltered={EarlyFiltered}, globExcluded={GlobExcluded}, ocrCacheExcluded={OcrCacheExcluded}, gitignoreExcluded={GitignoreExcluded}, extExcludedAtDiscovery={ExtensionExcludedAtDiscovery}, cloudOnly={CloudOnly}, cloudOnlyAtDiscovery={CloudOnlyAtDiscovery}, multilineSkipped={MultilineSkipped}";
 }
 
 /// <summary>

@@ -1185,11 +1185,14 @@ public sealed class PreviewCoreRegressionTests
             "AdvancedOptionsExpandGlyph.Glyph = \"\\uE70E\";",
             "SyncAdvancedOptionsDrawerWidth();",
             "UpdateAdvancedOptionsDrawerMaxHeight();");
-        // The drawer always reopens on the Search tab (the last-selected tab is not persisted).
+        // The drawer always reopens on the Search tab (the last-selected tab is not persisted), and
+        // reapplies the user's saved column order first. Selection is by tab identity, never by index,
+        // so a drag-reordered column still opens on Search wherever Search now sits.
         Assert.Contains("ResetAdvancedOptionsToSearchTab();", opened);
         string resetTab = ExtractMethodWindow(MainWindowSource, "ResetAdvancedOptionsToSearchTab", 600);
-        Assert.Contains("AdvancedOptionsTabList.SelectedIndex = 0;", resetTab);
-        Assert.Contains("SetAdvancedOptionsTab(0);", resetTab);
+        Assert.Contains("ApplySavedAdvancedOptionsTabOrder();", resetTab);
+        Assert.Contains("SelectAdvancedOptionsTab(AdvancedOptionsSearchTabKey);", resetTab);
+        Assert.DoesNotContain("SelectedIndex", resetTab);
         string closed = ExtractMethodWindow(MainWindowSource, "OnAdvancedOptionsFlyoutClosed", 300);
         Assert.Contains("AdvancedOptionsExpandGlyph.Glyph = \"\\uE70D\";", closed);
 

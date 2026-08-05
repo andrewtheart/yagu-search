@@ -12,6 +12,11 @@ namespace Yagu.ViewModels;
 /// </summary>
 public sealed partial class MainViewModel
 {
+    /// <summary>User's drag-reordered order for the Advanced Options tab column, as stable tab keys.
+    /// Empty means "shipped order". Plain (non-observable) state: nothing binds to it — the drawer
+    /// reads it once when it first opens and writes it back after a drag completes.</summary>
+    public List<string> AdvancedOptionsTabOrder { get; set; } = [];
+
     /// <summary>Resolves the directory the box should show at launch. Honors a pinned startup
     /// directory when the user has enabled the pin and a path was captured; otherwise starts empty so
     /// the search defaults to all drives. The legacy LastDirectory value is intentionally not restored
@@ -229,6 +234,9 @@ public sealed partial class MainViewModel
         _settings.BinaryExtensions = d is null ? SettingsBinaryExtensions : d.SettingsBinaryExtensions;
         _settings.SuppressAdminWarning = SuppressAdminWarning;
         _settings.SuppressEverythingNotRunningPrompt = SuppressEverythingNotRunningPrompt;
+        // Tab order is a drawer-layout preference, not a search option, so it is persisted directly
+        // and deliberately left out of the Advanced Options "save as defaults" / "reset" snapshot.
+        _settings.AdvancedOptionsTabOrder = AdvancedOptionsTabOrder;
         _settings.SuppressEverythingIndexCoverageWarning = SuppressEverythingIndexCoverageWarning;
         _settings.SuppressExcludedExtensionWarnings = SuppressExcludedExtensionWarnings;
         _settings.IncludeExcludedExtensionByDefault = IncludeExcludedExtensionByDefault;
