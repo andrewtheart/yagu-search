@@ -61,9 +61,16 @@ internal sealed record YaguDialogOptions
     public Windows.UI.Color? TitleGlyphColor { get; init; }
 }
 
+internal sealed record YaguStartupProgress(int Step, int Total)
+{
+    public int Percentage => (int)Math.Round(Step * 100d / Total);
+}
+
 internal sealed class YaguDialog : Window
 {
     private static readonly HashSet<YaguDialog> OpenWindows = new();
+    private static readonly object StartupProgressLock = new();
+    private static readonly Dictionary<IntPtr, YaguStartupProgress> StartupProgressByOwner = new();
 
     /// <summary>
     /// Raised on the UI thread just before an owned modal dialog is activated. The argument is the
@@ -130,6 +137,54 @@ internal sealed class YaguDialog : Window
         }
 
         return false;
+    }
+
+    internal static IDisposable BeginStartupProgress(IntPtr ownerHwnd, int step, int total)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(step, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(total, step);
+
+        var current = new YaguStartupProgress(step, total);
+        YaguStartupProgress? previous;
+        lock (StartupProgressLock)
+        {
+            StartupProgressByOwner.TryGetValue(ownerHwnd, out previous);
+            StartupProgressByOwner[ownerHwnd] = current;
+        }
+
+        return new StartupProgressScope(ownerHwnd, current, previous);
+    }
+
+    internal static YaguStartupProgress? GetStartupProgress(IntPtr ownerHwnd)
+    {
+        lock (StartupProgressLock)
+            return StartupProgressByOwner.TryGetValue(ownerHwnd, out var progress) ? progress : null;
+    }
+
+    internal static FrameworkElement CreateStartupProgressElement(YaguStartupProgress progress)
+    {
+        var panel = new StackPanel
+        {
+            Spacing = 5,
+            Width = 180,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"Step {progress.Step} of {progress.Total} - {progress.Percentage}% complete",
+            FontSize = 11,
+            Opacity = 0.72,
+        });
+        panel.Children.Add(new ProgressBar
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Value = progress.Percentage,
+            IsIndeterminate = false,
+            Height = 4,
+        });
+        return panel;
     }
 
     public void AcceptPrimary() => Complete(YaguDialogResult.Primary);
@@ -282,16 +337,32 @@ internal sealed class YaguDialog : Window
         Grid.SetRow(bodyContent, 1);
         root.Children.Add(bodyContent);
 
-        var footer = new StackPanel
+        var footer = new Grid
+        {
+            ColumnSpacing = 20,
+        };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        if (GetStartupProgress(_ownerHwnd) is { } startupProgress)
+        {
+            FrameworkElement progress = CreateStartupProgressElement(startupProgress);
+            Grid.SetColumn(progress, 0);
+            footer.Children.Add(progress);
+        }
+
+        var footerButtons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
             Spacing = 10,
         };
+        Grid.SetColumn(footerButtons, 1);
+        footer.Children.Add(footerButtons);
 
-        Button? secondaryButton = AddFooterButton(footer, options.SecondaryButtonText, YaguDialogResult.Secondary, accent: false);
-        Button? closeButton = AddFooterButton(footer, options.CloseButtonText, YaguDialogResult.Close, accent: false);
-        Button? primaryButton = AddFooterButton(footer, options.PrimaryButtonText, YaguDialogResult.Primary, accent: true);
+        Button? secondaryButton = AddFooterButton(footerButtons, options.SecondaryButtonText, YaguDialogResult.Secondary, accent: false);
+        Button? closeButton = AddFooterButton(footerButtons, options.CloseButtonText, YaguDialogResult.Close, accent: false);
+        Button? primaryButton = AddFooterButton(footerButtons, options.PrimaryButtonText, YaguDialogResult.Primary, accent: true);
 
         root.Loaded += (_, _) =>
         {
@@ -491,6 +562,35 @@ internal sealed class YaguDialog : Window
         }
 
         _completion.TrySetResult(_result);
+    }
+
+    private sealed class StartupProgressScope(
+        IntPtr ownerHwnd,
+        YaguStartupProgress current,
+        YaguStartupProgress? previous) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+
+            lock (StartupProgressLock)
+            {
+                if (!StartupProgressByOwner.TryGetValue(ownerHwnd, out var active) ||
+                    !ReferenceEquals(active, current))
+                {
+                    return;
+                }
+
+                if (previous is null)
+                    StartupProgressByOwner.Remove(ownerHwnd);
+                else
+                    StartupProgressByOwner[ownerHwnd] = previous;
+            }
+        }
     }
 
     [DllImport("user32.dll")]

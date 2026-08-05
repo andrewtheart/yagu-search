@@ -757,6 +757,13 @@ line to preview it.</li>
 <li>Use Open, Edit, Copy, or Export actions to work with the
 results.</li>
 </ol>
+<p>On first launch, Yagu predicts which guarded setup prompts apply to
+the current machine before showing them. When two or more setup steps
+are expected, each startup modal shows <strong>Step x of y</strong>, a
+percentage, and a progress bar in its footer. Follow-up dialogs caused
+by a choice (for example, confirming an indexing folder) remain part of
+the same setup step, so the total does not jump while you work through
+onboarding.</p>
 <p>The status bar shows progress during a search. When the search
 finishes or is canceled, it shows elapsed time. Enable <strong>Show
 resource usage in status bar</strong> in Settings -&gt; Developer
@@ -3567,7 +3574,9 @@ values can be slow to open (default: 100 MB).</td>
 <tr>
 <td>Start in compact launcher mode</td>
 <td>Launches as a small search bar when enabled, or as a traditional
-window when disabled.</td>
+window when disabled. On the very first launch, Yagu initially shows the
+traditional window so it matches the default selection in the
+window-style prompt.</td>
 </tr>
 <tr>
 <td>Launcher focus-loss behavior</td>
@@ -4710,9 +4719,13 @@ startup and applies as a minimum file log level on every run:</p>
 <p>It works with silent installs too
 (<code>YaguSetup-&lt;version&gt;-&lt;arch&gt;.exe /VERYSILENT /VERBOSELOG</code>).
 Interactive setup displays Yagu’s GPLv3 license on Inno Setup’s standard
-agreement page and displays the consolidated third-party notices after
-installation, matching the MultiTerm installer flow. The override stays
-in effect until you reinstall normally (without
+agreement page, then shows the consolidated third-party notices on the
+page immediately after it, followed by the privacy policy before you
+pick components and tasks — so every notice is in front of you before
+anything is installed. The optional <strong>desktop icon</strong> and
+<strong>Add Yagu to the system PATH</strong> tasks are selected by
+default on that task page; clear them there if you don’t want them. The
+override stays in effect until you reinstall normally (without
 <code>/VERBOSELOG</code>, which clears it) or uninstall Yagu.</p>
 <hr />
 <h2 id="troubleshooting">Troubleshooting</h2>

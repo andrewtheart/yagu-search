@@ -36,10 +36,14 @@ public class TelemetryConsentStartupSequencingTests
 
         // OnContentLoaded awaits the consent as part of the sequential first-run chain, BEFORE the
         // result-store temp-location prompt, so the two can never overlap.
-        int consent = startup.IndexOf("await ShowTelemetryConsentIfNeededAsync();", StringComparison.Ordinal);
-        int resultStore = startup.IndexOf("await CheckFirstRunResultStoreTempLocationAsync();", StringComparison.Ordinal);
-        Assert.True(consent >= 0, "OnContentLoaded must await ShowTelemetryConsentIfNeededAsync().");
-        Assert.True(resultStore >= 0, "OnContentLoaded must await CheckFirstRunResultStoreTempLocationAsync().");
+        int consent = startup.IndexOf(
+            "await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.TelemetryConsent, ShowTelemetryConsentIfNeededAsync);",
+            StringComparison.Ordinal);
+        int resultStore = startup.IndexOf(
+            "await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.ResultTempLocation, CheckFirstRunResultStoreTempLocationAsync);",
+            StringComparison.Ordinal);
+        Assert.True(consent >= 0, "OnContentLoaded must await the telemetry-consent startup step.");
+        Assert.True(resultStore >= 0, "OnContentLoaded must await the result-temp-location startup step.");
         Assert.True(consent < resultStore, "Telemetry consent must be sequenced before the result-store temp-location prompt.");
     }
 

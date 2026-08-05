@@ -1321,7 +1321,9 @@ public sealed class ContentIndexGuiRegressionTests
 
     [Fact]
     public void Startup_RunsFirstRunIndexOnboardingInAwaitedChain()
-        => Assert.Contains("await CheckFirstRunIndexOnboardingAsync();", StartupChecksSource);
+        => Assert.Contains(
+            "StartupDialogStep.IndexOnboarding, CheckFirstRunIndexOnboardingAsync",
+            StartupChecksSource);
 
     [Fact]
     public void IndexOnboarding_ParksInputSuggestionsAroundPickerAndDialogs()

@@ -7,6 +7,11 @@ public sealed record ResultStoreTempDriveOption(
     long AvailableFreeBytes,
     bool IsLaunchDrive);
 
+public sealed record ResultStoreTempLocationProbe(
+    bool CurrentDirectoryIsUsable,
+    string? LaunchDriveRoot,
+    IReadOnlyList<ResultStoreTempDriveOption> DriveOptions);
+
 public static class ResultStoreTempLocationService
 {
     public const long MinimumFreeBytes = 50L * 1024 * 1024 * 1024;
@@ -48,6 +53,33 @@ public static class ResultStoreTempLocationService
 
         return options;
     }
+
+    public static Task<IReadOnlyList<ResultStoreTempDriveOption>> GetWritableDriveOptionsAsync(
+        string? launchDriveRoot = null,
+        CancellationToken cancellationToken = default) =>
+        Task.Run(() => GetWritableDriveOptions(launchDriveRoot), cancellationToken);
+
+    public static Task<ResultStoreTempLocationProbe> ProbeForStartupAsync(
+        string? currentTempDirectory,
+        bool validateCurrentDirectory,
+        CancellationToken cancellationToken = default) =>
+        Task.Run(() =>
+        {
+            if (validateCurrentDirectory &&
+                IsUsableTempDirectory(currentTempDirectory, requireMinimumFreeSpace: false))
+            {
+                return new ResultStoreTempLocationProbe(
+                    CurrentDirectoryIsUsable: true,
+                    LaunchDriveRoot: null,
+                    DriveOptions: Array.Empty<ResultStoreTempDriveOption>());
+            }
+
+            string? launchDriveRoot = GetLaunchDriveRoot();
+            return new ResultStoreTempLocationProbe(
+                CurrentDirectoryIsUsable: false,
+                LaunchDriveRoot: launchDriveRoot,
+                DriveOptions: GetWritableDriveOptions(launchDriveRoot));
+        }, cancellationToken);
 
     public static ResultStoreTempDriveOption? ChoosePreferredOption(
         IReadOnlyList<ResultStoreTempDriveOption> options,

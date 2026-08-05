@@ -2057,7 +2057,7 @@ public sealed partial class SettingsWindow : Window
 
     private void QueueResultTempDriveLoad(ComboBox picker, TextBlock status, string? launchDrive)
     {
-        _ = Task.Run(() => ResultStoreTempLocationService.GetWritableDriveOptions(launchDrive))
+        _ = ResultStoreTempLocationService.GetWritableDriveOptionsAsync(launchDrive)
             .ContinueWith(task =>
             {
                 DispatcherQueue.TryEnqueue(() =>

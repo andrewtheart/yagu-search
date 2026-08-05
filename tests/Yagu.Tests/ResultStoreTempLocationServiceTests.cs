@@ -124,6 +124,46 @@ public sealed class ResultStoreTempLocationServiceTests : IDisposable
         Assert.EndsWith(Path.DirectorySeparatorChar.ToString(), root);
     }
 
+    [Fact]
+    public async Task ProbeForStartupAsync_UsableCurrentDirectorySkipsDriveEnumeration()
+    {
+        string directory = Path.Combine(_tempRoot, "current");
+
+        ResultStoreTempLocationProbe result = await ResultStoreTempLocationService.ProbeForStartupAsync(
+            directory,
+            validateCurrentDirectory: true);
+
+        Assert.True(result.CurrentDirectoryIsUsable);
+        Assert.Null(result.LaunchDriveRoot);
+        Assert.Empty(result.DriveOptions);
+    }
+
+    [Fact]
+    public async Task GetWritableDriveOptionsAsync_ReturnsDiscoveredDrives()
+    {
+        IReadOnlyList<ResultStoreTempDriveOption> result =
+            await ResultStoreTempLocationService.GetWritableDriveOptionsAsync();
+
+        Assert.NotNull(result);
+        Assert.All(result, option => Assert.EndsWith(
+            Path.DirectorySeparatorChar.ToString(),
+            option.DriveRoot));
+    }
+
+    [Fact]
+    public async Task ProbeForStartupAsync_DisabledValidationReturnsDriveSnapshot()
+    {
+        string directory = Path.Combine(_tempRoot, "current");
+
+        ResultStoreTempLocationProbe result = await ResultStoreTempLocationService.ProbeForStartupAsync(
+            directory,
+            validateCurrentDirectory: false);
+
+        Assert.False(result.CurrentDirectoryIsUsable);
+        Assert.False(string.IsNullOrWhiteSpace(result.LaunchDriveRoot));
+        Assert.NotNull(result.DriveOptions);
+    }
+
     private static ResultStoreTempDriveOption Option(string driveRoot, bool isLaunchDrive) =>
         new(
             driveRoot,
@@ -362,5 +402,99 @@ public sealed class ResultStoreTempLocationServiceBranchTests
         string result = ResultStoreTempLocationService.BuildTempDirectory(@"D:");
         Assert.Contains("Temp", result);
         Assert.Contains("Yagu", result);
+    }
+}
+
+public sealed class ResultStoreTempLocationStartupTests
+{
+    [Fact]
+    public void StartupDriveAndDirectoryProbes_AreAwaitedOffTheUiThread()
+    {
+        string root = FindRepoRoot();
+        string startup = ReadMainWindowSources(root);
+        string method = ExtractMethod(
+            startup,
+            "private async Task CheckFirstRunResultStoreTempLocationAsync()",
+            "// FILE:");
+        string service = File.ReadAllText(Path.Combine(
+            root, "src", "Yagu", "Services", "ResultStoreTempLocationService.cs"));
+
+        int probe = method.IndexOf(
+            "await ResultStoreTempLocationService.ProbeForStartupAsync(",
+            StringComparison.Ordinal);
+        int dialog = method.IndexOf(
+            "await ResultStoreTempLocationWindow.ShowAsync(",
+            StringComparison.Ordinal);
+
+        Assert.True(probe >= 0, "Startup must await the background temp-location probe.");
+        Assert.True(dialog > probe, "The completed drive snapshot must be passed to the dialog.");
+        Assert.DoesNotContain("ResultStoreTempLocationService.IsUsableTempDirectory(", method);
+        Assert.DoesNotContain("ResultStoreTempLocationService.GetWritableDriveOptions(", method);
+        Assert.Contains("Task.Run(() =>", service);
+        Assert.Contains("GetWritableDriveOptions(launchDriveRoot), cancellationToken", service);
+    }
+
+    [Fact]
+    public void StartupEverythingDetection_DoesNotScanPathRegistryOrProcessesOnTheUiThread()
+    {
+        string root = FindRepoRoot();
+        string startup = ReadMainWindowSources(root);
+        string method = ExtractMethod(
+            startup,
+            "private async Task CheckEverythingAsync()",
+            "private async Task<bool> DownloadEverythingInstallerAsync(");
+
+        Assert.Contains(
+            "if (_preparedEverythingStartupDetection is { } preparedDetection)",
+            method);
+        Assert.Contains(
+            "detection = await Task.Run(DetectEverythingStartupState);",
+            method);
+        Assert.DoesNotContain("FileLister.FindEsExe()", method);
+        Assert.DoesNotContain("Process.GetProcessesByName(", method);
+        Assert.Contains("private static EverythingStartupDetection DetectEverythingStartupState()", startup);
+        Assert.Contains("EverythingStartupDetection installedDetection = await Task.Run(DetectEverythingStartupState);", method);
+    }
+
+    [Fact]
+    public void SettingsDrivePicker_UsesSharedBackgroundDriveDiscovery()
+    {
+        string root = FindRepoRoot();
+        string settings = File.ReadAllText(Path.Combine(
+            root, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+
+        Assert.Contains(
+            "_ = ResultStoreTempLocationService.GetWritableDriveOptionsAsync(launchDrive)",
+            settings);
+        Assert.DoesNotContain(
+            "Task.Run(() => ResultStoreTempLocationService.GetWritableDriveOptions(launchDrive))",
+            settings);
+    }
+
+    private static string ExtractMethod(string source, string startMarker, string endMarker)
+    {
+        source = source.Replace("\r\n", "\n", StringComparison.Ordinal);
+        int start = source.IndexOf(startMarker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Missing source marker: {startMarker}");
+        int end = source.IndexOf(endMarker, start + startMarker.Length, StringComparison.Ordinal);
+        Assert.True(end > start, $"Missing source marker after method: {endMarker}");
+        return source[start..end];
+    }
+
+    private static string ReadMainWindowSources(string root)
+    {
+        string directory = Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow");
+        return string.Concat(
+            Directory.GetFiles(directory, "MainWindow*.cs")
+                .OrderBy(static path => path, StringComparer.OrdinalIgnoreCase)
+                .Select(path => $"\n// FILE: {Path.GetFileName(path)}\n{File.ReadAllText(path)}"));
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
+            dir = dir.Parent;
+        return dir?.FullName ?? Directory.GetCurrentDirectory();
     }
 }

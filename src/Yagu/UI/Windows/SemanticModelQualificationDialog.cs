@@ -189,14 +189,30 @@ internal sealed class SemanticModelQualificationDialog : Window
         Grid.SetRow(_bodyHost, 1);
         _root.Children.Add(_bodyHost);
 
+        var footerRow = new Grid
+        {
+            ColumnSpacing = 20,
+        };
+        footerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        if (YaguDialog.GetStartupProgress(_ownerHwnd) is { } startupProgress)
+        {
+            FrameworkElement progress = YaguDialog.CreateStartupProgressElement(startupProgress);
+            Grid.SetColumn(progress, 0);
+            footerRow.Children.Add(progress);
+        }
+
         _footer = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
             Spacing = 10,
         };
-        Grid.SetRow(_footer, 2);
-        _root.Children.Add(_footer);
+        Grid.SetColumn(_footer, 1);
+        footerRow.Children.Add(_footer);
+        Grid.SetRow(footerRow, 2);
+        _root.Children.Add(footerRow);
 
         _root.KeyDown += (_, args) =>
         {

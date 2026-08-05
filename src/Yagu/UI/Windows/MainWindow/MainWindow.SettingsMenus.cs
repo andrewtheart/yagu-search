@@ -23,7 +23,7 @@ public sealed partial class MainWindow
         await ViewModel.PersistSettingsAsync();
 
         // If context menu is already registered, nothing to do
-        if (IsContextMenuRegistered())
+        if (_preparedContextMenuRegistered ?? IsContextMenuRegistered())
             return;
 
         if (await YaguDialog.ShowAsync(

@@ -67,20 +67,21 @@ public sealed partial class MainWindow
         // checks off the UI thread after showing "Indexing: preparing..." and makes the load cancellable
         // so a user-started search can pause it instead of competing for memory and disk.
         ViewModel.StartContentIndexWarmup(ViewModel.Directory);
-        await ShowTelemetryConsentIfNeededAsync();
-        await CheckFirstRunWindowModeAsync();
-        await CheckFirstRunResultStoreTempLocationAsync();
-        await CheckEverythingAsync();
-        await CheckFirstRunContextMenuAsync();
-        await CheckFirstRunIndexOnboardingAsync();
-        await ShowFontContrastWarningIfNeededAsync();
-        await ShowCpuSemanticWarningIfNeededAsync();
-        await OfferSemanticModelQualificationIfNeededAsync();
+        StartupDialogPlan startupDialogPlan = await PrepareStartupDialogPlanAsync();
+        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.TelemetryConsent, ShowTelemetryConsentIfNeededAsync);
+        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.WindowMode, CheckFirstRunWindowModeAsync);
+        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.ResultTempLocation, CheckFirstRunResultStoreTempLocationAsync);
+        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.Everything, CheckEverythingAsync);
+        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.ContextMenu, CheckFirstRunContextMenuAsync);
+        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.IndexOnboarding, CheckFirstRunIndexOnboardingAsync);
+        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.FontContrast, ShowFontContrastWarningIfNeededAsync);
+        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.CpuSemanticWarning, ShowCpuSemanticWarningIfNeededAsync);
+        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.SemanticQualification, OfferSemanticModelQualificationIfNeededAsync);
         // Update checks: the one-time consent prompt (only on a fresh install / undecided user) stays in
         // the awaited startup-modal chain so it never races or stacks with first-run, telemetry, indexing,
         // or semantic dialogs. The Automatic-mode background check is fire-and-forget and only ever
         // surfaces a non-modal banner (never a launch modal), so it can't delay startup.
-        await MaybeShowAppUpdateConsentPromptAsync();
+        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.AppUpdateConsent, MaybeShowAppUpdateConsentPromptAsync);
         _ = MaybeRunAutomaticAppUpdateCheckAsync();
 
         if (_autoSearchOnLoad)
@@ -816,8 +817,13 @@ public sealed partial class MainWindow
 
     private async Task CheckEverythingAsync()
     {
-        var esPath = FileLister.FindEsExe();
-        bool everythingRunning = Process.GetProcessesByName("Everything").Length > 0;
+        EverythingStartupDetection detection;
+        if (_preparedEverythingStartupDetection is { } preparedDetection)
+            detection = preparedDetection;
+        else
+            detection = await Task.Run(DetectEverythingStartupState);
+        string? esPath = detection.EsPath;
+        bool everythingRunning = detection.EverythingRunning;
         YaguLog.For("MainWindow").LogInformation("CheckEverythingAsync: esPath={EsPath}, everythingRunning={EverythingRunning}", esPath ?? "(null)", everythingRunning);
 
         // Everything is running — SDK will work regardless of es.exe presence
@@ -830,7 +836,7 @@ public sealed partial class MainWindow
         // es.exe found but Everything service not running — offer to start it
         if (esPath != null)
         {
-            var everythingExe = FindEverythingExe(esPath);
+            string? everythingExe = detection.EverythingExePath;
             YaguLog.For("MainWindow").LogInformation("CheckEverythingAsync: es.exe found at '{EsPath}', Everything.exe resolve={EverythingExe}", esPath, everythingExe ?? "(null)");
             if (everythingExe != null)
             {
@@ -881,7 +887,7 @@ public sealed partial class MainWindow
         }
 
         // Check if Everything.exe exists in standard locations even without es.exe
-        var everythingExeStandalone = FindEverythingExeStandalone();
+        string? everythingExeStandalone = detection.EverythingExePath;
         if (everythingExeStandalone != null)
         {
             YaguLog.For("MainWindow").LogInformation("CheckEverythingAsync: Everything.exe found at '{EverythingExeStandalone}' (no es.exe), offering to start", everythingExeStandalone);
@@ -1011,17 +1017,15 @@ public sealed partial class MainWindow
             // Everything's own setup does NOT ship es.exe (the ES command-line tool is a separate
             // voidtools download), so keying post-install detection on es.exe made every successful
             // install look like a failure. Fall back to locating Everything.exe itself.
-            var installedEsPath = FileLister.FindEsExe();
-            var installedEverythingExe = installedEsPath is not null
-                ? FindEverythingExe(installedEsPath)
-                : FindEverythingExeStandalone();
+            EverythingStartupDetection installedDetection = await Task.Run(DetectEverythingStartupState);
+            string? installedEverythingExe = installedDetection.EverythingExePath;
             if (installedEverythingExe is null)
             {
                 ViewModel.StatusText = "Installer completed. Restart Yagu if Everything was installed to a custom location.";
                 return;
             }
 
-            if (Process.GetProcessesByName("Everything").Length == 0)
+            if (!installedDetection.EverythingRunning)
             {
                 try
                 {
@@ -1269,6 +1273,35 @@ public sealed partial class MainWindow
         return true;
     }
 
+    private sealed record EverythingStartupDetection(
+        string? EsPath,
+        bool EverythingRunning,
+        string? EverythingExePath);
+
+    private static EverythingStartupDetection DetectEverythingStartupState()
+    {
+        string? esPath = FileLister.FindEsExe();
+        bool everythingRunning = IsEverythingProcessRunning();
+        string? everythingExePath = esPath is not null ? FindEverythingExe(esPath) : null;
+        everythingExePath ??= FindEverythingExeStandalone();
+
+        return new EverythingStartupDetection(esPath, everythingRunning, everythingExePath);
+    }
+
+    private static bool IsEverythingProcessRunning()
+    {
+        Process[] processes = Process.GetProcessesByName("Everything");
+        try
+        {
+            return processes.Length > 0;
+        }
+        finally
+        {
+            foreach (Process process in processes)
+                process.Dispose();
+        }
+    }
+
     private static string? FindEverythingExe(string esPath)
     {
         // Everything.exe is typically in the same directory as es.exe
@@ -1332,14 +1365,22 @@ public sealed partial class MainWindow
 
     private async Task CheckFirstRunResultStoreTempLocationAsync()
     {
-        if (ViewModel.HasChosenSearchResultTempDirectory &&
-            ResultStoreTempLocationService.IsUsableTempDirectory(ViewModel.SearchResultTempDirectory, requireMinimumFreeSpace: false))
-        {
-            return;
-        }
+        var probeTimer = Stopwatch.StartNew();
+        ResultStoreTempLocationProbe probe = _preparedResultStoreTempLocationProbe
+            ?? await ResultStoreTempLocationService.ProbeForStartupAsync(
+                ViewModel.SearchResultTempDirectory,
+                ViewModel.HasChosenSearchResultTempDirectory);
+        probeTimer.Stop();
+        YaguLog.For("MainWindow").LogInformation(
+            "Search-result temp-location probe completed off the UI thread in {ElapsedMilliseconds} ms with {DriveCount} eligible drive(s).",
+            probeTimer.ElapsedMilliseconds,
+            probe.DriveOptions.Count);
 
-        string? launchDrive = ResultStoreTempLocationService.GetLaunchDriveRoot();
-        var options = ResultStoreTempLocationService.GetWritableDriveOptions(launchDrive);
+        if (probe.CurrentDirectoryIsUsable)
+            return;
+
+        string? launchDrive = probe.LaunchDriveRoot;
+        IReadOnlyList<ResultStoreTempDriveOption> options = probe.DriveOptions;
 
         ResultStoreTempLocationWindowResult result;
         _ownedModalWindowDepth++;

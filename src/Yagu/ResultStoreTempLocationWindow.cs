@@ -215,9 +215,23 @@ internal sealed class ResultStoreTempLocationWindow : Window
         Opacity = 0.75,
     };
 
-    private static void AddFooter(Grid root, string buttonText, Action onClick)
+    private void AddFooter(Grid root, string buttonText, Action onClick)
     {
-        var footer = new StackPanel
+        var footer = new Grid
+        {
+            ColumnSpacing = 20,
+        };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        if (YaguDialog.GetStartupProgress(_ownerHwnd) is { } startupProgress)
+        {
+            FrameworkElement progress = YaguDialog.CreateStartupProgressElement(startupProgress);
+            Grid.SetColumn(progress, 0);
+            footer.Children.Add(progress);
+        }
+
+        var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
@@ -233,7 +247,9 @@ internal sealed class ResultStoreTempLocationWindow : Window
             button.Style = accentStyle;
 
         button.Click += (_, _) => onClick();
-        footer.Children.Add(button);
+        buttons.Children.Add(button);
+        Grid.SetColumn(buttons, 1);
+        footer.Children.Add(buttons);
 
         Grid.SetRow(footer, 2);
         root.Children.Add(footer);

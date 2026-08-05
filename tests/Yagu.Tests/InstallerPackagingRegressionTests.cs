@@ -73,31 +73,33 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
-    public void Installer_MatchesMultiTermLicenseAndPostInstallNoticesFlow()
+    public void Installer_ShowsLicenseNoticesAndPrivacyBeforeInstallation()
     {
         string root = FindRepoRoot();
         string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
         string help = File.ReadAllText(Path.Combine(root, "HELP.md"));
 
-        // This is the same standard Inno flow used by D:\multiTerm\installer\MultiTerm.iss:
-        // GPL agreement during setup, then consolidated notices on the post-install information page.
-        // Yagu adds a privacy-policy information page DURING setup (InfoBeforeFile), shown after the
-        // license and before component/task selection, so the user learns how their data is handled
-        // before installing.
+        // The GPL agreement is followed immediately by a custom third-party notices page. The privacy
+        // policy remains an InfoBefore page so all three documents are shown before installation.
         Assert.Contains("#define RepoRoot \"..\"", inno);
         Assert.Contains(@"LicenseFile={#RepoRoot}\LICENSE", inno);
         Assert.Contains(@"InfoBeforeFile={#RepoRoot}\PRIVACY.md", inno);
-        Assert.Contains(@"InfoAfterFile={#RepoRoot}\THIRD-PARTY-NOTICES.txt", inno);
-        Assert.True(
-            inno.IndexOf("LicenseFile=", StringComparison.Ordinal) < inno.IndexOf("InfoAfterFile=", StringComparison.Ordinal),
-            "The license agreement must precede the post-install notices, matching MultiTerm.");
-        // The privacy page is shown during setup: after the license, before the post-install notices.
-        Assert.True(
-            inno.IndexOf("LicenseFile=", StringComparison.Ordinal) < inno.IndexOf("InfoBeforeFile=", StringComparison.Ordinal)
-                && inno.IndexOf("InfoBeforeFile=", StringComparison.Ordinal) < inno.IndexOf("InfoAfterFile=", StringComparison.Ordinal),
-            "The privacy policy (InfoBeforeFile) must appear during setup, after the license and before the post-install notices.");
+        Assert.DoesNotContain("InfoAfterFile=", inno);
+        Assert.Contains(@"Source: ""{#RepoRoot}\THIRD-PARTY-NOTICES.txt""; Flags: dontcopy noencryption", inno);
+        Assert.Contains("ExtractTemporaryFile('THIRD-PARTY-NOTICES.txt');", inno);
+        Assert.Contains("LoadStringsFromFile(", inno);
+        Assert.Contains("ThirdPartyNoticesPage := CreateCustomPage(", inno);
+        Assert.Contains(
+            "wpLicense,\n    'Third-party notices',".ReplaceLineEndings(),
+            inno);
+        Assert.Contains("ThirdPartyNoticesViewer.Lines.Add(NoticesLines[I]);", inno);
         Assert.DoesNotContain("ACCEPTLICENSE", inno);
         Assert.DoesNotContain("ACCEPTLICENSE", help);
+        // HELP.md must describe the current page order. The notices used to be an InfoAfterFile page
+        // shown post-install; leaving that sentence behind is silent doc drift.
+        Assert.DoesNotContain("third-party notices after installation", help);
+        Assert.DoesNotContain("MultiTerm installer flow", help);
+        Assert.Contains("third-party notices on the page immediately after it", help);
         Assert.Contains("/VERYSILENT /VERBOSELOG", inno);
         Assert.Contains("/VERYSILENT /VERBOSELOG", help);
     }
@@ -655,14 +657,20 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
-    public void Installer_OffersOptionalAddToSystemPathTask()
+    public void Installer_DefaultsDesktopIconAndSystemPathTasksToSelected()
     {
         string root = FindRepoRoot();
-        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+        string installerPath = Path.Combine(root, "installer", "yagu-installer.iss");
+        string inno = File.ReadAllText(installerPath);
+        string desktopIconTask = File.ReadLines(installerPath)
+            .Single(line => line.StartsWith(@"Name: ""desktopicon"";", StringComparison.Ordinal));
+        string addToPathTask = File.ReadLines(installerPath)
+            .Single(line => line.StartsWith(@"Name: ""addtopath"";", StringComparison.Ordinal));
 
-        // An opt-in (unchecked) task on the "Select Additional Tasks" page asks the user whether to add
-        // the install folder to the system PATH.
-        Assert.Contains(@"Name: ""addtopath""; Description: ""Add Yagu to the system PATH (run 'yagu' from any terminal)""; GroupDescription: ""Command-line access:""; Flags: unchecked", inno);
+        Assert.Contains(@"{cm:CreateDesktopIcon}", desktopIconTask);
+        Assert.DoesNotContain("Flags: unchecked", desktopIconTask);
+        Assert.Contains(@"Add Yagu to the system PATH (run 'yagu' from any terminal)", addToPathTask);
+        Assert.DoesNotContain("Flags: unchecked", addToPathTask);
 
         // Editing the system Path env var requires broadcasting WM_SETTINGCHANGE so open apps see it.
         Assert.Contains("ChangesEnvironment=yes", inno);

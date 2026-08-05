@@ -12,8 +12,13 @@ public sealed class EverythingSearchDialogRegressionTests
         // voidtools ships the ES command-line tool separately, so gating post-install detection on
         // es.exe made every successful install report "Restart Yagu if Everything was installed to a
         // custom location" and never launched Everything.
-        Assert.Contains("var installedEverythingExe = installedEsPath is not null", startupChecks);
-        Assert.Contains(": FindEverythingExeStandalone();", startupChecks);
+        Assert.Contains(
+            "EverythingStartupDetection installedDetection = await Task.Run(DetectEverythingStartupState);",
+            startupChecks);
+        Assert.Contains(
+            "string? installedEverythingExe = installedDetection.EverythingExePath;",
+            startupChecks);
+        Assert.Contains("everythingExePath ??= FindEverythingExeStandalone();", startupChecks);
         Assert.Contains("if (installedEverythingExe is null)", startupChecks);
         Assert.DoesNotContain("if (installedEsPath is null)", startupChecks);
 

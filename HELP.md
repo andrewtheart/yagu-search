@@ -21,6 +21,8 @@ Yagu is a fast Windows search app for finding text, regex matches, or file names
 6. Results stream in while the search runs. Click a result or match line to preview it.
 7. Use Open, Edit, Copy, or Export actions to work with the results.
 
+On first launch, Yagu predicts which guarded setup prompts apply to the current machine before showing them. When two or more setup steps are expected, each startup modal shows **Step x of y**, a percentage, and a progress bar in its footer. Follow-up dialogs caused by a choice (for example, confirming an indexing folder) remain part of the same setup step, so the total does not jump while you work through onboarding.
+
 The status bar shows progress during a search. When the search finishes or is canceled, it shows elapsed time. Enable **Show resource usage in status bar** in Settings -> Developer Options to add Yagu's current result-temp usage, total content-index storage, and RAM used by Yagu plus its worker processes; these metrics are hidden by default, and each has a detailed hover tooltip. Enable **Stats for nerds** separately to show files processed per second and a real-time throughput sparkline.
 
 ## Main Screen
@@ -761,7 +763,7 @@ The CLI exposes the same lifecycle through `--build-index`, `--rebuild-index`, `
 
 | Setting | What It Controls |
 | --- | --- |
-| Start in compact launcher mode | Launches as a small search bar when enabled, or as a traditional window when disabled. |
+| Start in compact launcher mode | Launches as a small search bar when enabled, or as a traditional window when disabled. On the very first launch, Yagu initially shows the traditional window so it matches the default selection in the window-style prompt. |
 | Launcher focus-loss behavior | Minimize to tray, Stay open, or Always on top when the window loses focus. Applies in both the compact launcher and the traditional window. |
 | Close to tray | Closing the window minimizes to tray instead of exiting (on by default). |
 | Maximize window on startup | Starts the main window maximized instead of at the default size. |
@@ -1210,7 +1212,7 @@ Log levels: None → Critical → Warning → Info → Verbose. Use Info for nor
 YaguSetup-<version>-<arch>.exe /VERBOSELOG
 ```
 
-It works with silent installs too (`YaguSetup-<version>-<arch>.exe /VERYSILENT /VERBOSELOG`). Interactive setup displays Yagu's GPLv3 license on Inno Setup's standard agreement page and displays the consolidated third-party notices after installation, matching the MultiTerm installer flow. The override stays in effect until you reinstall normally (without `/VERBOSELOG`, which clears it) or uninstall Yagu.
+It works with silent installs too (`YaguSetup-<version>-<arch>.exe /VERYSILENT /VERBOSELOG`). Interactive setup displays Yagu's GPLv3 license on Inno Setup's standard agreement page, then shows the consolidated third-party notices on the page immediately after it, followed by the privacy policy before you pick components and tasks — so every notice is in front of you before anything is installed. The optional **desktop icon** and **Add Yagu to the system PATH** tasks are selected by default on that task page; clear them there if you don't want them. The override stays in effect until you reinstall normally (without `/VERBOSELOG`, which clears it) or uninstall Yagu.
 
 ---
 

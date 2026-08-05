@@ -626,7 +626,9 @@ public sealed class AppUpdateWiringRegressionTests
         Assert.DoesNotContain("BeginAppUpdateCheckAsync", startup);
         // One-time consent stays in the awaited startup chain; the automatic check is fire-and-forget so
         // it never becomes a launch modal (the every-launch prompt is gone).
-        Assert.Contains("await MaybeShowAppUpdateConsentPromptAsync();", startup);
+        Assert.Contains(
+            "StartupDialogStep.AppUpdateConsent, MaybeShowAppUpdateConsentPromptAsync",
+            startup);
         Assert.Contains("_ = MaybeRunAutomaticAppUpdateCheckAsync();", startup);
         Assert.DoesNotContain("PromptForAppUpdateCheckOnLaunchAsync", startup);
 

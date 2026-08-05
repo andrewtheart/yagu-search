@@ -15,6 +15,8 @@ public sealed class WindowModeOnboardingRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.WindowModeOnboarding.cs"));
     private static readonly string StartupChecksSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+    private static readonly string MainWindowSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
     private static readonly string SettingsServiceSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "Services", "SettingsService.cs"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
@@ -103,6 +105,27 @@ public sealed class WindowModeOnboardingRegressionTests
     }
 
     [Fact]
+    public void FirstEverLaunch_UsesTraditionalBackingWindowUnlessCliOverridesIt()
+    {
+        Assert.Contains("bool useTraditionalFirstRunWindow =", MainWindowSource);
+        Assert.Contains("!startupWindowFocusBehavior.HasValue &&", MainWindowSource);
+        Assert.Contains("!ViewModel.HasCompletedFirstRun &&", MainWindowSource);
+        Assert.Contains("!ViewModel.Settings.HasPromptedWindowMode;", MainWindowSource);
+        Assert.Contains("!useTraditionalFirstRunWindow)", MainWindowSource);
+
+        // The setting must be flipped too, not just the live chrome. StartInLauncherMode defaults to
+        // true, so leaving it would persist "compact launcher" on the prompt's Skip path — the user
+        // sees the traditional window with Traditional preselected, skips, and silently gets the
+        // launcher next launch.
+        int predicate = MainWindowSource.IndexOf("bool useTraditionalFirstRunWindow =", StringComparison.Ordinal);
+        int apply = MainWindowSource.IndexOf("if (useTraditionalFirstRunWindow)", StringComparison.Ordinal);
+        Assert.True(predicate >= 0 && apply > predicate, "The traditional first-run branch must follow the predicate.");
+        string branch = MainWindowSource.Substring(apply, Math.Min(400, MainWindowSource.Length - apply));
+        Assert.Contains("ViewModel.StartInLauncherMode = false;", branch);
+        Assert.Contains("ViewModel.WindowFocusBehavior = 1;", branch);
+    }
+
+    [Fact]
     public void Onboarding_MapsThreeModesToSettingsAndLivePinState()
     {
         // Compact launcher (hides to tray)
@@ -124,9 +147,13 @@ public sealed class WindowModeOnboardingRegressionTests
     [Fact]
     public void Onboarding_IsWiredIntoStartupChainAfterTelemetryConsent()
     {
-        Assert.Contains("await CheckFirstRunWindowModeAsync();", StartupChecksSource);
-        int telemetry = StartupChecksSource.IndexOf("await ShowTelemetryConsentIfNeededAsync();", StringComparison.Ordinal);
-        int windowMode = StartupChecksSource.IndexOf("await CheckFirstRunWindowModeAsync();", StringComparison.Ordinal);
+        const string telemetryCall =
+            "await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.TelemetryConsent, ShowTelemetryConsentIfNeededAsync);";
+        const string windowModeCall =
+            "await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.WindowMode, CheckFirstRunWindowModeAsync);";
+        Assert.Contains(windowModeCall, StartupChecksSource);
+        int telemetry = StartupChecksSource.IndexOf(telemetryCall, StringComparison.Ordinal);
+        int windowMode = StartupChecksSource.IndexOf(windowModeCall, StringComparison.Ordinal);
         Assert.True(telemetry >= 0 && windowMode > telemetry, "Window-mode prompt should follow telemetry consent in the startup chain.");
     }
 

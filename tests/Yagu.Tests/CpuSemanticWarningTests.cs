@@ -64,7 +64,7 @@ public sealed class CpuSemanticWarningTests
             Path.Combine(Root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
 
         // Wired into the awaited first-run startup sequence.
-        Assert.Contains("await ShowCpuSemanticWarningIfNeededAsync();", src);
+        Assert.Contains("StartupDialogStep.CpuSemanticWarning, ShowCpuSemanticWarningIfNeededAsync", src);
         Assert.Contains("if (!ViewModel.ShouldShowCpuSemanticWarning)", src);
         // Don't stack on another startup prompt.
         Assert.Contains("YaguDialog.HasOpenOwnedWindow(_hwnd)", src);

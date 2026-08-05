@@ -18,8 +18,12 @@ public sealed class SemanticModelQualificationFlowTests
     {
         string src = ReadAppFile(Path.Combine("UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
 
-        int cpu = src.IndexOf("ShowCpuSemanticWarningIfNeededAsync()", StringComparison.Ordinal);
-        int qual = src.IndexOf("OfferSemanticModelQualificationIfNeededAsync()", StringComparison.Ordinal);
+        int cpu = src.IndexOf(
+            "StartupDialogStep.CpuSemanticWarning, ShowCpuSemanticWarningIfNeededAsync",
+            StringComparison.Ordinal);
+        int qual = src.IndexOf(
+            "StartupDialogStep.SemanticQualification, OfferSemanticModelQualificationIfNeededAsync",
+            StringComparison.Ordinal);
         Assert.True(cpu >= 0, "CPU warning step should be present in the startup chain.");
         Assert.True(qual > cpu, "Qualification offer should be sequenced after the CPU warning.");
     }

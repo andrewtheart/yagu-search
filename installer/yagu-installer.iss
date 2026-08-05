@@ -88,23 +88,23 @@ RestartApplications=no
 ; The optional "Add Yagu to the system PATH" task modifies the system Path environment variable, so
 ; broadcast WM_SETTINGCHANGE after install/uninstall to let already-open apps pick up the change.
 ChangesEnvironment=yes
-; Match MultiTerm's installer flow: show the standard GPLv3 agreement page during setup, then show
-; consolidated third-party notices on Inno's post-install information page. In addition, Yagu shows
-; its privacy policy on an information page DURING setup (InfoBeforeFile, after the license page and
-; before component/task selection) so the user is told how their data is handled before installing.
+; Show the standard GPLv3 agreement page first, followed immediately by a custom page containing the
+; consolidated third-party notices. Yagu also shows its privacy policy on an information page during
+; setup (InfoBeforeFile, before component/task selection) so the user is told how their data is
+; handled before installing.
 LicenseFile={#RepoRoot}\LICENSE
 InfoBeforeFile={#RepoRoot}\PRIVACY.md
-InfoAfterFile={#RepoRoot}\THIRD-PARTY-NOTICES.txt
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "contextmenu"; Description: "Add 'Search with Yagu' to Explorer context menu"; GroupDescription: "Windows Explorer integration:"
-Name: "addtopath"; Description: "Add Yagu to the system PATH (run 'yagu' from any terminal)"; GroupDescription: "Command-line access:"; Flags: unchecked
+Name: "addtopath"; Description: "Add Yagu to the system PATH (run 'yagu' from any terminal)"; GroupDescription: "Command-line access:"
 
 [Files]
+Source: "{#RepoRoot}\THIRD-PARTY-NOTICES.txt"; Flags: dontcopy noencryption
 Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
@@ -147,6 +147,8 @@ Type: filesandordirs; Name: "{app}"
 
 var
   PreservedCustomIndexRoot: String;
+  ThirdPartyNoticesPage: TWizardPage;
+  ThirdPartyNoticesViewer: TRichEditViewer;
   ExistingDataPage: TWizardPage;
   ExistingSummaryViewer: TRichEditViewer;
   ExistingContinueCheckBox: TNewCheckBox;
@@ -685,8 +687,33 @@ end;
 procedure InitializeWizard();
 var
   Rtf: String;
+  NoticesLines: TArrayOfString;
+  I: Integer;
   OptionCount, OptionTop: Integer;
 begin
+  ExtractTemporaryFile('THIRD-PARTY-NOTICES.txt');
+  if not LoadStringsFromFile(
+    ExpandConstant('{tmp}\THIRD-PARTY-NOTICES.txt'), NoticesLines) then
+    RaiseException('Setup could not load the bundled third-party notices.');
+
+  ThirdPartyNoticesPage := CreateCustomPage(
+    wpLicense,
+    'Third-party notices',
+    'Review the licenses and attribution notices for components included with Yagu');
+  ThirdPartyNoticesViewer := TRichEditViewer.Create(ThirdPartyNoticesPage);
+  ThirdPartyNoticesViewer.Parent := ThirdPartyNoticesPage.Surface;
+  ThirdPartyNoticesViewer.Left := 0;
+  ThirdPartyNoticesViewer.Top := 0;
+  ThirdPartyNoticesViewer.Width := ThirdPartyNoticesPage.SurfaceWidth;
+  ThirdPartyNoticesViewer.Height := ThirdPartyNoticesPage.SurfaceHeight;
+  ThirdPartyNoticesViewer.BevelKind := bkFlat;
+  ThirdPartyNoticesViewer.BorderStyle := bsNone;
+  ThirdPartyNoticesViewer.ReadOnly := True;
+  ThirdPartyNoticesViewer.ScrollBars := ssVertical;
+  ThirdPartyNoticesViewer.UseRichEdit := True;
+  for I := 0 to GetArrayLength(NoticesLines) - 1 do
+    ThirdPartyNoticesViewer.Lines.Add(NoticesLines[I]);
+
   DetectExistingYaguState();
   if (ExistingInstallLocations = '') and not ExistingSettingsFound and not ExistingIndexesFound then
     exit;

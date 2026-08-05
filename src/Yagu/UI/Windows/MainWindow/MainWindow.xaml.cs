@@ -402,10 +402,33 @@ public sealed partial class MainWindow : Window, IDisposable
 
         ((FrameworkElement)Content).Loaded += OnContentLoaded;
 
-        // Start in compact "launcher" mode unless we have a query to auto-run or the user has
+        // A genuine first launch starts in the traditional window so the backing window matches the
+        // onboarding dialog's default selection and gives the user an accurate live preview. Re-showing
+        // the prompt later preserves the user's established startup mode.
+        bool useTraditionalFirstRunWindow =
+            !startupWindowFocusBehavior.HasValue &&
+            !ViewModel.HasCompletedFirstRun &&
+            !ViewModel.Settings.HasPromptedWindowMode;
+
+        // Keep the SETTING in step with the live window. StartInLauncherMode defaults to true, so
+        // leaving it alone here would persist "compact launcher" the moment anything calls
+        // PersistSettingsAsync() — including the prompt's own "Skip" path, which deliberately does not
+        // apply a card. The user would then see the traditional window with "Traditional window"
+        // preselected, skip, and silently get the launcher on the next launch. Mirror the settings half
+        // of ApplyWindowModeChoice(0) so the live window, the preselected card, and the persisted
+        // default all agree; picking a launcher card in the prompt overwrites this.
+        if (useTraditionalFirstRunWindow)
+        {
+            ViewModel.StartInLauncherMode = false;
+            ViewModel.WindowFocusBehavior = 1;
+        }
+
+        // Otherwise start in compact "launcher" mode unless we have a query to auto-run or the user has
         // opted out via Settings \u2192 Window \u2192 "Start in compact launcher mode".
         // A CLI window-mode override is explicit, so apply it even for auto-search launches.
-        if ((!_autoSearchOnLoad || startupWindowFocusBehavior.HasValue) && ViewModel.StartInLauncherMode)
+        if ((!_autoSearchOnLoad || startupWindowFocusBehavior.HasValue) &&
+            ViewModel.StartInLauncherMode &&
+            !useTraditionalFirstRunWindow)
         {
             EnterLauncherMode();
         }
