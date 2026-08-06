@@ -4,6 +4,7 @@ using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
@@ -57,6 +58,13 @@ public sealed partial class SettingsWindow : Window
     private bool _settingsClosePromptOpen;
     private bool _searchableEntriesExtracted;
     private ContentIndexSettingsSnapshot? _cleanContentIndexSettings;
+    private readonly Dictionary<UIElement, string> _settingDescriptionCache = new();
+    private DispatcherTimer? _settingHelpHoverTimer;
+    private DispatcherTimer? _settingHelpHideTimer;
+    private bool _settingHelpPointerOverFlyout;
+    private UIElement? _pendingSettingHelpTarget;
+    private UIElement? _settingHelpFlyoutTarget;
+    private Flyout? _settingHelpFlyout;
 
     private static readonly Windows.UI.Color ContrastReadableGreen = Windows.UI.Color.FromArgb(0xFF, 0x2E, 0xA0, 0x43);
     private static readonly Windows.UI.Color ContrastUnreadableRed = Windows.UI.Color.FromArgb(0xFF, 0xD1, 0x34, 0x38);
@@ -503,6 +511,8 @@ public sealed partial class SettingsWindow : Window
     {
         _suppressOwnerHideToTray?.Invoke();
         StopDeferredSettingsContentBuildTimer();
+        _settingHelpHoverTimer?.Stop();
+        _settingHelpFlyout?.Hide();
         RestoreUnsavedSettingsIfNeeded();
         _appWindow.Closing -= OnSettingsAppWindowClosing;
         _fontContrastCheckTimer?.Stop();
@@ -569,6 +579,214 @@ public sealed partial class SettingsWindow : Window
         SettingsContentScrollViewer.DispatcherQueue.TryEnqueue(
             Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
             MarkSettingsDirtyIfCurrentValuesChanged);
+    }
+
+    private void OnSettingsContentPointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        UIElement? target = e.OriginalSource is DependencyObject source
+            ? FindSettingHelpTarget(source)
+            : null;
+        if (ReferenceEquals(target, _pendingSettingHelpTarget))
+            return;
+
+        _settingHelpHoverTimer?.Stop();
+        _pendingSettingHelpTarget = target;
+
+        if (_settingHelpFlyoutTarget is not null && ReferenceEquals(target, _settingHelpFlyoutTarget))
+        {
+            CancelSettingHelpHide();
+            return;
+        }
+
+        // The pointer left the label this flyout describes, so start dismissing it.
+        if (_settingHelpFlyout is not null)
+            ScheduleSettingHelpHide();
+
+        if (target is null)
+            return;
+
+        _settingHelpHoverTimer ??= CreateSettingHelpHoverTimer();
+        _settingHelpHoverTimer.Start();
+    }
+
+    private void OnSettingsContentPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        _settingHelpHoverTimer?.Stop();
+        _pendingSettingHelpTarget = null;
+        if (_settingHelpFlyout is not null)
+            ScheduleSettingHelpHide();
+    }
+
+    /// <summary>
+    /// Starts the dismiss grace period. It is short but non-zero so the pointer can cross the gap from
+    /// the label into the flyout to read it, select text, or reach Close.
+    /// </summary>
+    private void ScheduleSettingHelpHide()
+    {
+        if (_settingHelpFlyout is null)
+            return;
+
+        _settingHelpHideTimer ??= CreateSettingHelpHideTimer();
+        _settingHelpHideTimer.Stop();
+        _settingHelpHideTimer.Start();
+    }
+
+    private void CancelSettingHelpHide() => _settingHelpHideTimer?.Stop();
+
+    private DispatcherTimer CreateSettingHelpHideTimer()
+    {
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(280) };
+        timer.Tick += (_, _) =>
+        {
+            _settingHelpHideTimer?.Stop();
+            if (_settingHelpPointerOverFlyout)
+                return;
+            if (_settingHelpFlyoutTarget is not null
+                && ReferenceEquals(_pendingSettingHelpTarget, _settingHelpFlyoutTarget))
+                return;
+
+            _settingHelpFlyout?.Hide();
+        };
+        return timer;
+    }
+
+    private DispatcherTimer CreateSettingHelpHoverTimer()
+    {
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+        timer.Tick += OnSettingHelpHoverTimerTick;
+        return timer;
+    }
+
+    private void OnSettingHelpHoverTimerTick(object? sender, object e)
+    {
+        _settingHelpHoverTimer?.Stop();
+        if (_pendingSettingHelpTarget is not { } target)
+            return;
+
+        EnsureSearchableEntriesExtracted();
+        SettingEntry? entry = _settingEntries.FirstOrDefault(candidate => ReferenceEquals(candidate.TargetElement, target));
+        if (entry?.Description is null || string.IsNullOrWhiteSpace(entry.Description))
+            return;
+
+        ShowSettingHelpFlyout(target, entry);
+    }
+
+    private void ShowSettingHelpFlyout(UIElement target, SettingEntry entry)
+    {
+        if (target is not FrameworkElement placementTarget)
+            return;
+
+        if (!_settingDescriptionCache.TryGetValue(target, out string? description))
+        {
+            description = entry.Description!.Trim();
+            _settingDescriptionCache[target] = description;
+        }
+
+        _settingHelpFlyout?.Hide();
+
+        var header = new TextBlock
+        {
+            Text = entry.Label.Trim().TrimEnd(':'),
+            FontSize = 15,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var close = new Button
+        {
+            Content = new FontIcon { Glyph = "\uE711", FontSize = 10 },
+            Width = 22,
+            Height = 22,
+            MinWidth = 0,
+            MinHeight = 0,
+            Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+        };
+        ToolTipService.SetToolTip(close, "Close setting help");
+
+        var headerRow = new Grid { ColumnSpacing = 12 };
+        headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        headerRow.Children.Add(header);
+        Grid.SetColumn(close, 1);
+        headerRow.Children.Add(close);
+
+        var content = new StackPanel
+        {
+            Width = 390,
+            Spacing = 10,
+            Padding = new Thickness(4),
+        };
+        content.Children.Add(headerRow);
+        content.Children.Add(new TextBlock
+        {
+            Text = description,
+            TextWrapping = TextWrapping.WrapWholeWords,
+            MaxWidth = 390,
+        });
+
+        var flyout = new Flyout
+        {
+            Content = content,
+            Placement = FlyoutPlacementMode.BottomEdgeAlignedLeft,
+            LightDismissOverlayMode = LightDismissOverlayMode.Auto,
+        };
+        close.Click += (_, _) => flyout.Hide();
+        content.PointerEntered += (_, _) =>
+        {
+            _settingHelpPointerOverFlyout = true;
+            CancelSettingHelpHide();
+        };
+        content.PointerExited += (_, _) =>
+        {
+            _settingHelpPointerOverFlyout = false;
+            ScheduleSettingHelpHide();
+        };
+        content.KeyDown += (_, args) =>
+        {
+            if (args.Key != VirtualKey.Escape) return;
+
+            args.Handled = true;
+            flyout.Hide();
+        };
+        flyout.Opened += (_, _) => close.Focus(FocusState.Programmatic);
+        flyout.Closed += (_, _) =>
+        {
+            if (!ReferenceEquals(_settingHelpFlyout, flyout)) return;
+
+            CancelSettingHelpHide();
+            _settingHelpPointerOverFlyout = false;
+            _settingHelpFlyout = null;
+            _settingHelpFlyoutTarget = null;
+        };
+
+        _settingHelpPointerOverFlyout = false;
+        _settingHelpFlyout = flyout;
+        _settingHelpFlyoutTarget = target;
+        flyout.ShowAt(placementTarget);
+    }
+
+    private UIElement? FindSettingHelpTarget(DependencyObject source)
+    {
+        UIElement? nearestLabel = null;
+        for (DependencyObject? current = source; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, SettingsContent))
+                break;
+
+            if (current is ToggleSwitch or CheckBox && current is UIElement settingControl && IsLabelElement(settingControl))
+                return settingControl;
+
+            if (nearestLabel is null && current is UIElement element && IsLabelElement(element))
+            {
+                nearestLabel = element;
+                if (current is TextBlock && VisualTreeHelper.GetParent(current) is StackPanel parent && IsLabelElement(parent))
+                    nearestLabel = parent;
+            }
+        }
+        return nearestLabel;
     }
 
     private static bool IsInsideSettingEditor(DependencyObject source)
@@ -1212,6 +1430,14 @@ public sealed partial class SettingsWindow : Window
     {
         if (element is TextBlock tb && tb.FontSize >= 13 && tb.Opacity >= 0.9)
             return true;
+        if (element is CheckBox checkBox && !string.IsNullOrWhiteSpace(ExtractContentText(checkBox.Content)))
+            return true;
+        if (element is ToggleSwitch toggleSwitch
+            && (!string.IsNullOrWhiteSpace(ExtractContentText(toggleSwitch.OnContent))
+                || !string.IsNullOrWhiteSpace(ExtractContentText(toggleSwitch.OffContent))))
+        {
+            return true;
+        }
         if (element is StackPanel sp && sp.Orientation == Orientation.Horizontal)
         {
             // NextSearchLabel pattern: horizontal StackPanel with TextBlock + icon.
@@ -2006,6 +2232,7 @@ public sealed partial class SettingsWindow : Window
         "Editor" => "\uE70F",
         "Window" => "\uE737",
         "Interaction" => "\uE7C4",
+        "Notifications" => "\uE7ED",
         "Terminal Emulator" => "\uE756",
         "Developer Options" => "\uE713",
         "Shortcuts & History" => "\uE765",
@@ -4218,24 +4445,6 @@ public sealed partial class SettingsWindow : Window
                 TextWrapping = TextWrapping.Wrap,
             });
 
-            var modelAlerts = new CheckBox
-            {
-                Content = "Alert me when new on-device models are available",
-                IsChecked = _viewModel.FoundryModelUpdateAlertsEnabled,
-                Margin = new Thickness(0, 4, 0, 0),
-            };
-            modelAlerts.Checked += (_, _) => { _viewModel.FoundryModelUpdateAlertsEnabled = true; MarkSettingsDirty(requireValueChanges: false); };
-            modelAlerts.Unchecked += (_, _) => { _viewModel.FoundryModelUpdateAlertsEnabled = false; MarkSettingsDirty(requireValueChanges: false); };
-            aiGroup.Children.Add(modelAlerts);
-            aiGroup.Children.Add(new TextBlock
-            {
-                Text = "About once a day, Yagu checks Foundry Local for new, updated, or variant on-device models and shows a one-time alert. Only runs after you've used AI search at least once.",
-                FontSize = 11,
-                Opacity = 0.6,
-                TextWrapping = TextWrapping.Wrap,
-            });
-            dependentControls.Add(modelAlerts);
-
             // ── Model ──
             modelGroup.Children.Add(NextSearchLabel("Current model:"));
             var modelValue = new TextBlock
@@ -4518,6 +4727,84 @@ public sealed partial class SettingsWindow : Window
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,
             });
+        }
+
+        // ── Notifications ──
+        {
+            var g = AddTab("Notifications");
+            var masterGroup = AddSettingsGroupBox(g, "Notification Delivery");
+            var categoriesGroup = AddSettingsGroupBox(g, "Notification Categories");
+
+            var master = new ToggleSwitch
+            {
+                IsOn = _viewModel.Settings.NotificationsEnabled,
+                OnContent = "Enable Windows notifications and in-app alerts",
+                OffContent = "Enable Windows notifications and in-app alerts",
+            };
+            masterGroup.Children.Add(master);
+            masterGroup.Children.Add(new TextBlock
+            {
+                Text = "Master switch for background notifications. Search completion uses native Windows 11 notifications; update categories use Yagu's existing in-app alerts. Windows Focus Assist and notification permissions still apply.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            CheckBox AddNotificationCategory(string label, string description, bool isChecked, Action<bool> setValue)
+            {
+                var category = new CheckBox
+                {
+                    Content = label,
+                    IsChecked = isChecked,
+                    Margin = new Thickness(0, 2, 0, 0),
+                };
+                category.Checked += (_, _) => setValue(true);
+                category.Unchecked += (_, _) => setValue(false);
+                categoriesGroup.Children.Add(category);
+                categoriesGroup.Children.Add(new TextBlock
+                {
+                    Text = description,
+                    FontSize = 11,
+                    Opacity = 0.6,
+                    TextWrapping = TextWrapping.Wrap,
+                });
+                return category;
+            }
+
+            var completedSearches = AddNotificationCategory(
+                "Completed searches",
+                "Shows a native Windows notification with match, file, skipped-file, and elapsed-time totals after a search finishes.",
+                _viewModel.Settings.NotifySearchCompleted,
+                value => _viewModel.Settings.NotifySearchCompleted = value);
+            var cancelledSearches = AddNotificationCategory(
+                "Canceled searches",
+                "Shows a native Windows notification with the partial totals when you cancel an active search. Low-disk termination keeps its actionable in-app warning instead.",
+                _viewModel.Settings.NotifySearchCancelled,
+                value => _viewModel.Settings.NotifySearchCancelled = value);
+            var applicationUpdates = AddNotificationCategory(
+                "Application updates",
+                "Allows the automatic update checker to show its non-modal notice when a newer verified Yagu release is available. Manual checks always remain available.",
+                _viewModel.Settings.NotifyApplicationUpdates,
+                value => _viewModel.Settings.NotifyApplicationUpdates = value);
+            var notifySemanticModels = AddNotificationCategory(
+                "New AI models",
+                "About once a day, Yagu checks Foundry Local for new or updated on-device models and shows a one-time alert after you have used AI search at least once.",
+                _viewModel.FoundryModelUpdateAlertsEnabled,
+                value => _viewModel.FoundryModelUpdateAlertsEnabled = value);
+
+            var categories = new[] { completedSearches, cancelledSearches, applicationUpdates, notifySemanticModels };
+            void UpdateCategoryAvailability()
+            {
+                foreach (var category in categories)
+                    category.IsEnabled = master.IsOn;
+            }
+
+            master.Toggled += (_, _) =>
+            {
+                _viewModel.Settings.NotificationsEnabled = master.IsOn;
+                UpdateCategoryAvailability();
+            };
+            UpdateCategoryAvailability();
         }
 
         BuildIndexingTab();

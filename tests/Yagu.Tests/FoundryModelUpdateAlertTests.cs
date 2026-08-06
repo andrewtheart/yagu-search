@@ -65,16 +65,14 @@ public sealed class FoundryModelUpdateAlertTests
     }
 
     [Fact]
-    public void SettingsAiTab_HasModelAlertToggle()
+    public void SettingsNotificationsTab_HasModelAlertToggle()
     {
         string src = File.ReadAllText(
             Path.Combine(Root, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
 
-        Assert.Contains("Alert me when new on-device models are available", src);
-        Assert.Contains("_viewModel.FoundryModelUpdateAlertsEnabled = true;", src);
-        Assert.Contains("_viewModel.FoundryModelUpdateAlertsEnabled = false;", src);
-        // Greys out with the rest of the AI controls when semantic search is disabled.
-        Assert.Contains("dependentControls.Add(modelAlerts);", src);
+        Assert.Contains("var g = AddTab(\"Notifications\");", src);
+        Assert.Contains("New AI models", src);
+        Assert.Contains("value => _viewModel.FoundryModelUpdateAlertsEnabled = value", src);
     }
 
     private static string Root => FindRepoRoot();

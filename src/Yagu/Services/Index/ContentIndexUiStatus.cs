@@ -86,7 +86,9 @@ public readonly record struct IndexRootHealthEntry(
     string? RepairRoot = null,
     string? IncrementalRoot = null,
     string? MaintainRoot = null,
-    string? DeleteRoot = null)
+    string? DeleteRoot = null,
+    string? AddRoot = null,
+    string? BuildRoot = null)
 {
     public bool NeedsAttention => Kind is IndexRootHealthKind.RebuildRequired
         or IndexRootHealthKind.FreshnessUnavailable
@@ -118,6 +120,15 @@ public readonly record struct IndexRootHealthEntry(
 
     /// <summary>Whether this row identifies exact unmaintained scope data that can be deleted.</summary>
     public bool CanDeleteStoredIndex => !string.IsNullOrWhiteSpace(DeleteRoot);
+
+    /// <summary>Whether this row is an eligible-but-unindexed root that can be opted in from the status
+    /// flyout. Only an unregistered root with no stored index qualifies — leftover data is enrolled via
+    /// <see cref="CanMaintain"/> instead, so the two opt-in affordances can never both appear on one row.</summary>
+    public bool CanAddToIndex => !string.IsNullOrWhiteSpace(AddRoot);
+
+    /// <summary>Whether this row is already a maintained root whose index has never been built, so the only
+    /// missing step is running that first build.</summary>
+    public bool CanBuildNow => !string.IsNullOrWhiteSpace(BuildRoot);
 }
 
 /// <summary>
@@ -204,6 +215,34 @@ public static class ContentIndexUiStatus
     /// glyph amber, so producers must use this exact value rather than repeating the code point.</summary>
     public const string StatusWarningGlyph = "\uE7BA";
 
+    // ── Full-success status labels ────────────────────────────────────────────────────────────────
+    // These four are the ONLY statuses that report unqualified success: nothing needs attention, nothing
+    // is pending, and nothing degraded to a live scan. They are named constants (rather than literals at
+    // each producer) because IsFullSuccessLabel matches them exactly to decide whether the status bar
+    // paints its green check, so a reworded label must not be able to silently switch that check off.
+
+    /// <summary>Every maintained index is healthy and up to date.</summary>
+    public const string AllHealthyLabel = "Indexes: all healthy";
+
+    /// <summary>The index is accelerating every root of the search that is running right now.</summary>
+    public const string AcceleratingLabel = "Index: accelerating";
+
+    /// <summary>The finished search was accelerated for every root it requested.</summary>
+    public const string FullyAcceleratedLabel = "Index: fully accelerated";
+
+    /// <summary>The index finished building/warming and is available for the next search.</summary>
+    public const string ReadyLabel = "Index: ready";
+
+    /// <summary>
+    /// Whether <paramref name="label"/> is one of the statuses above, meaning the indicator can show its
+    /// green check. Matching is exact and deliberately narrow: qualified variants such as
+    /// "Index: accelerating (1 of 4 needs attention)", "Index: 3/4 drives healthy", or
+    /// "Index: partially accelerating" all still have an outstanding problem or an unaccelerated root, so
+    /// none of them may claim success.
+    /// </summary>
+    public static bool IsFullSuccessLabel(string? label) => label is
+        AllHealthyLabel or AcceleratingLabel or FullyAcceleratedLabel or ReadyLabel;
+
     /// <summary>Characters the fixed-width status-bar index label can render before the layout has to
     /// ellipsize it (Consolas 12 in a 210px slot).</summary>
     public const int StatusLabelMaxLength = 31;
@@ -237,7 +276,8 @@ public static class ContentIndexUiStatus
             : new IndexRootHealthEntry(
                 root,
                 IndexRootHealthKind.NotIndexed,
-                "not indexed — not maintained; excluded from overall health");
+                "not indexed — not maintained; excluded from overall health",
+                AddRoot: root);
     }
 
     /// <summary>Concise status-bar label for the launch-time all-drive health snapshot. A specific
@@ -287,7 +327,7 @@ public static class ContentIndexUiStatus
 
         int healthy = roots.Count(static root => root.IsHealthy);
         if (healthy == healthRootCount)
-            return "Indexes: all healthy";
+            return AllHealthyLabel;
         if (healthy == 0)
             return "Index: no maintained indexes";
         return $"Index: {healthy}/{healthRootCount} drives healthy";
@@ -361,11 +401,15 @@ public static class ContentIndexUiStatus
         return "Leftover unmaintained index data is informational and excluded from overall health totals and warnings; searches verify it before use or scan live.";
     }
 
-    /// <summary>A short status label for the main window.</summary>
+    /// <summary>A short status label for the main window. The Full/Partial wording is the past-tense
+    /// counterpart of the in-flight "Index: accelerating" / "Index: partially accelerating" labels.
+    /// Full deliberately does NOT read "Index: full": that is indistinguishable at a glance from the
+    /// "Index: disk full" storage warning, so the one label meaning everything worked was being read as
+    /// the one meaning the drive ran out of room.</summary>
     public static string CoverageLabel(IndexSearchCoverage coverage) => coverage switch
     {
-        IndexSearchCoverage.Full => "Index: full",
-        IndexSearchCoverage.Partial => "Index: partial coverage",
+        IndexSearchCoverage.Full => FullyAcceleratedLabel,
+        IndexSearchCoverage.Partial => "Index: partially accelerated",
         IndexSearchCoverage.Bypassed => "Index: bypassed",
         _ => "Index: off",
     };

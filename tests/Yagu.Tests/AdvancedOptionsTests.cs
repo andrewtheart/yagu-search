@@ -171,7 +171,7 @@ public sealed class AdvancedOptionsTests
     }
 
     [Fact]
-    public void QuickSearchesTab_HostsCodeAnnotationAndPresetButtons()
+    public void QuickSearchesTab_HostsCodeAnnotationButtonAndTheUserManagedList()
     {
         // Slice exactly the Quick searches panel (from its anchor to the next tab's anchor).
         int panelStart = MainWindowXaml.IndexOf("x:Name=\"AdvancedOptionsQuickSearchesTabContent\"", StringComparison.Ordinal);
@@ -179,13 +179,25 @@ public sealed class AdvancedOptionsTests
         Assert.True(panelStart >= 0 && panelEnd > panelStart, "Quick searches panel must precede the Filters panel.");
         string panel = MainWindowXaml[panelStart..panelEnd];
 
-        // The canonical code-annotation button moved here, keeping its identity + CLI-linked handler.
+        // The canonical code-annotation button stays a fixed action (it is the GUI twin of CLI --todos).
         Assert.Contains("x:Name=\"FindCodeAnnotationsButton\"", panel);
         Assert.Contains("Click=\"OnFindCodeAnnotations\"", panel);
 
-        // The additional developer presets are wired by Tag + the shared OnQuickSearch handler.
+        // The remaining presets became a user-managed list: rows are built in code so they can be
+        // added, inline-edited, reordered and deleted, so they are no longer static XAML buttons.
+        Assert.Contains("x:Name=\"UserQuickSearchesPanel\"", panel);
+        Assert.Contains("x:Name=\"AddQuickSearchButton\"", panel);
+        Assert.Contains("Click=\"OnAddQuickSearch\"", panel);
+        // "Save current options" turns the live drawer into a quick search that restores all of it later.
+        Assert.Contains("x:Name=\"SaveCurrentOptionsAsQuickSearchButton\"", panel);
+        Assert.Contains("Click=\"OnSaveCurrentOptionsAsQuickSearch\"", panel);
         foreach (string key in new[] { "merge-conflicts", "debug-output", "secrets", "urls", "emails", "empty-catch", "deprecated", "guids" })
-            Assert.Contains($"Tag=\"{key}\" Click=\"OnQuickSearch\"", panel);
+            Assert.DoesNotContain($"Tag=\"{key}\" Click=\"OnQuickSearch\"", panel);
+
+        // Those keys still ship as the seeded defaults, so nothing was dropped from the catalog.
+        var defaults = Yagu.Helpers.QuickSearchCatalog.Defaults().Select(i => i.Id).ToList();
+        foreach (string key in new[] { "merge-conflicts", "debug-output", "secrets", "urls", "emails", "empty-catch", "deprecated", "guids" })
+            Assert.Contains(key, defaults);
     }
 
     [Fact]

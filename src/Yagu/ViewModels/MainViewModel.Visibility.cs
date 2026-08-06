@@ -23,14 +23,29 @@ public sealed partial class MainViewModel
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
+    public Microsoft.UI.Xaml.Visibility SkippedInfoVisibility =>
+        FilesSkipped > 0
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    public Microsoft.UI.Xaml.Visibility ResultFilterAreaVisibility =>
+        _resultCollection.AllGroups.Count > 0 || FilesSkipped > 0
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
     private static readonly System.ComponentModel.PropertyChangedEventArgs s_resultFileFilterVisibilityChangedArgs =
         new(nameof(ResultFileFilterVisibility));
+    private static readonly System.ComponentModel.PropertyChangedEventArgs s_resultFilterAreaVisibilityChangedArgs =
+        new(nameof(ResultFilterAreaVisibility));
 
     protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
     {
         base.OnPropertyChanged(e);
         if (e.PropertyName == nameof(HasResults))
+        {
             base.OnPropertyChanged(s_resultFileFilterVisibilityChangedArgs);
+            base.OnPropertyChanged(s_resultFilterAreaVisibilityChangedArgs);
+        }
     }
 
     public Microsoft.UI.Xaml.Visibility StatsForNerdsVisibility =>
@@ -40,11 +55,6 @@ public sealed partial class MainViewModel
 
     public Microsoft.UI.Xaml.Visibility ResourceUsageStatusVisibility =>
         ShowResourceUsageInStatusBar
-            ? Microsoft.UI.Xaml.Visibility.Visible
-            : Microsoft.UI.Xaml.Visibility.Collapsed;
-
-    public Microsoft.UI.Xaml.Visibility SkippedCountVisibility =>
-        HasPerformedSearch
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
@@ -75,10 +85,9 @@ public sealed partial class MainViewModel
     partial void OnShowStatsForNerdsChanged(bool value) => OnPropertyChanged(nameof(StatsForNerdsVisibility));
     partial void OnShowResourceUsageInStatusBarChanged(bool value) => OnPropertyChanged(nameof(ResourceUsageStatusVisibility));
     partial void OnShowAutoScrollResultsCheckboxChanged(bool value) => OnPropertyChanged(nameof(AutoScrollResultsCheckboxVisibility));
-    partial void OnHasPerformedSearchChanged(bool value) => OnPropertyChanged(nameof(SkippedCountVisibility));
     partial void OnShowIndexStatusChanged(bool value) => OnPropertyChanged(nameof(IndexStatusVisibility));
 
     partial void OnShowIndexBuildPercentChanged(bool value) => OnPropertyChanged(nameof(IndexBuildPercentVisibility));
-    partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); OnPropertyChanged(nameof(ProgressTooltip)); OnPropertyChanged(nameof(SkipTooltip)); }
+    partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); OnPropertyChanged(nameof(ProgressTooltip)); OnPropertyChanged(nameof(SkipBreakdownDetails)); OnPropertyChanged(nameof(SkipTotalCount)); OnPropertyChanged(nameof(SkipTooltip)); OnPropertyChanged(nameof(SkippedInfoVisibility)); OnPropertyChanged(nameof(ResultFilterAreaVisibility)); }
     partial void OnAccessDeniedCountChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
 }

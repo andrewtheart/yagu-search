@@ -2155,7 +2155,9 @@ public sealed class PreviewCoreRegressionTests
         Assert.DoesNotContain("Background=\"#202020\"", toolbar);
         Assert.DoesNotContain("BorderBrush=\"#404040\"", toolbar);
         Assert.Contains("ToolTipService.ToolTip=\"Results options\"", toolbar);
-        Assert.Contains("<Flyout x:Name=\"ResultsOptionsFlyout\" Placement=\"BottomEdgeAlignedRight\" Opened=\"OnResultsOptionsFlyoutOpened\">", toolbar);
+        Assert.Contains("<Flyout x:Name=\"ResultsOptionsFlyout\" Placement=\"Bottom\" Opened=\"OnResultsOptionsFlyoutOpened\">", toolbar);
+        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"0\" />", toolbar);
+        Assert.Contains("<StackPanel MinWidth=\"150\" Spacing=\"6\" Padding=\"2\">", toolbar);
 
         AssertContainsInOrder(toolbar,
             "x:Name=\"ResultsOptionsButton\"",
@@ -2276,9 +2278,8 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("Width=\"24\" Height=\"24\" MinWidth=\"0\" MinHeight=\"0\" Padding=\"0\"", selectAllFiles);
         Assert.Contains("HorizontalAlignment=\"Center\" VerticalAlignment=\"Center\"", selectAllFiles);
 
-        // Layout: the select-all checkbox and the expander now sit inline in the results toolbar,
-        // and the "Filter files…" box moved to the top-right (Grid.Column=2). The old dedicated
-        // second row (38px select-all column + full-width filter box) was removed.
+        // Layout: the select-all checkbox and the expander sit inline in the results toolbar. The
+        // skipped-files indicator and "Filter files…" box share the top-right slot (Grid.Column=2).
         Assert.DoesNotContain("<Grid Width=\"38\" VerticalAlignment=\"Center\">", MainWindowXaml);
         Assert.DoesNotContain("<Grid Grid.Row=\"1\" Margin=\"22,6,34,6\" ColumnSpacing=\"6\">", MainWindowXaml);
         AssertContainsInOrder(MainWindowXaml,
@@ -2286,10 +2287,14 @@ public sealed class PreviewCoreRegressionTests
             "ToolTipService.ToolTip=\"Sort results\"",
             "ToolTipService.ToolTip=\"Filter results\"",
             "x:Name=\"ExpandResultsButton\"",
-            "<Grid Grid.Column=\"2\" MinWidth=\"200\" VerticalAlignment=\"Center\"",
+            "<Grid Grid.Column=\"2\" VerticalAlignment=\"Center\" Margin=\"0,0,4,0\"",
+            "Visibility=\"{x:Bind ViewModel.ResultFilterAreaVisibility, Mode=OneWay}\"",
+            "x:Name=\"SkippedInfoButton\"",
+            "Visibility=\"{x:Bind ViewModel.SkippedInfoVisibility, Mode=OneWay}\"",
+            "Text=\"{x:Bind ViewModel.FilesSkipped, Mode=OneWay}\"",
+            "<Grid Grid.Column=\"1\" MinWidth=\"200\"",
             // 4px right margin so the filter box's right edge lines up with the result
             // drawer (Expander) card edge below it, instead of overhanging it slightly.
-            "Margin=\"0,0,4,0\"",
             "Visibility=\"{x:Bind ViewModel.ResultFileFilterVisibility, Mode=OneWay}\"",
             "AutomationProperties.AutomationId=\"ResultFileFilterBox\"");
 
@@ -2303,6 +2308,11 @@ public sealed class PreviewCoreRegressionTests
             "protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)",
             "if (e.PropertyName == nameof(HasResults))",
             "base.OnPropertyChanged(s_resultFileFilterVisibilityChangedArgs);");
+        AssertContainsInOrder(viewModelSource,
+            "public Microsoft.UI.Xaml.Visibility SkippedInfoVisibility =>",
+            "FilesSkipped > 0",
+            "public Microsoft.UI.Xaml.Visibility ResultFilterAreaVisibility =>",
+            "_resultCollection.AllGroups.Count > 0 || FilesSkipped > 0");
 
         string extensionMenu = ExtractMethodWindow(MainWindowSource, "PopulateExtensionFilterList", window: 3200);
         AssertContainsInOrder(extensionMenu,

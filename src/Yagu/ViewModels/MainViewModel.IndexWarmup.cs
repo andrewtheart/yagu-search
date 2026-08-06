@@ -12,6 +12,8 @@ namespace Yagu.ViewModels;
 /// </summary>
 public sealed partial class MainViewModel
 {
+    private Task? _indexWarmTask;
+
     /// <summary>
     /// Starts loading the current root's immutable query index immediately. A cold open runs off the UI
     /// thread and is cooperatively cancellable; there is deliberately no fixed wait before it starts.
@@ -24,7 +26,7 @@ public sealed partial class MainViewModel
             _dispatcher.TryEnqueue(() => StartContentIndexWarmup(folder));
             return;
         }
-        if (_disposed || !_settings.EnableContentIndex || !UseContentIndex || string.IsNullOrWhiteSpace(folder))
+        if (_disposed || _shutdownRequested || !_settings.EnableContentIndex || !UseContentIndex || string.IsNullOrWhiteSpace(folder))
             return;
 
         // Stage-6 (plan §5.8): the worker PRUNING path needs no in-process warm. The worker memory-maps the
@@ -86,7 +88,7 @@ public sealed partial class MainViewModel
         YaguLog.For("ContentIndex").LogInformation(
             "Index warm-up starting immediately for {Root} (no startup delay).", root);
 
-        _ = RunContentIndexWarmupAsync(
+        _indexWarmTask = RunContentIndexWarmupAsync(
             generation,
             root,
             pathProvider,
@@ -207,7 +209,7 @@ public sealed partial class MainViewModel
             _dispatcher.TryEnqueue(ResumeContentIndexWarmupAfterSearch);
             return;
         }
-        if (IsSearching || string.IsNullOrWhiteSpace(_resumeIndexWarmFolder))
+        if (_shutdownRequested || IsSearching || string.IsNullOrWhiteSpace(_resumeIndexWarmFolder))
             return;
 
         string root = _resumeIndexWarmFolder;
@@ -247,7 +249,7 @@ public sealed partial class MainViewModel
         if (!_settings.ShowIndexStatusInMainWindow || IsIndexBuildActive)
             return;
         IndexStatusGlyph = ContentIndexUiStatus.AvailabilityGlyph(IndexAvailability.Available);
-        IndexStatusText = "Index: ready";
+        IndexStatusText = ContentIndexUiStatus.ReadyLabel;
         IndexStatusTooltip = $"The content index for {root} is warmed and ready for accelerated searches."
             + BuildIndexDateDetails();
         ShowIndexBuildPercent = false;

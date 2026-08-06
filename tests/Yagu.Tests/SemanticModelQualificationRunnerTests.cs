@@ -29,8 +29,23 @@ public sealed class SemanticModelQualificationRunnerTests
     private static SemanticProbe RequiresPngGlob(string query = "find things") =>
         new() { Query = query, Complexity = SemanticProbeComplexity.Simple, ExpectedIncludeGlob = "*.png" };
 
-    private static SemanticModelOption Option(string alias, bool recommended = false, bool preferred = false, long sizeBytes = 0) =>
-        new() { Alias = alias, DisplayName = alias, IsRecommended = recommended, IsPreferredFamily = preferred, SizeBytes = sizeBytes == 0 ? null : sizeBytes };
+    private static SemanticModelOption Option(
+        string alias,
+        bool recommended = false,
+        bool preferred = false,
+        long sizeBytes = 0,
+        bool likelyIncompatible = false,
+        bool exceedsMemory = false) =>
+        new()
+        {
+            Alias = alias,
+            DisplayName = alias,
+            IsRecommended = recommended,
+            IsPreferredFamily = preferred,
+            SizeBytes = sizeBytes == 0 ? null : sizeBytes,
+            IsLikelyIncompatible = likelyIncompatible,
+            ExceedsAvailableMemory = exceedsMemory,
+        };
 
     private static SemanticTranslationResult PngPlan() =>
         SemanticTranslationResult.Ok(new SemanticSearchPlan { IncludeGlobs = new List<string> { "*.png" } });
@@ -101,6 +116,111 @@ public sealed class SemanticModelQualificationRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_DefaultExcludesModelsLikelyIncompatibleWithMachine()
+    {
+        var translator = new FakeTranslator
+        {
+            Options =
+            {
+                Option("cpu-compatible", recommended: true),
+                Option("gpu-only", likelyIncompatible: true),
+                Option("too-large", exceedsMemory: true),
+            },
+            TranslateBehavior = (_, _) => EmptyPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+
+        var result = await runner.RunAsync(new[] { PassAnything() }, Thresholds, progress: null, CancellationToken.None);
+
+        Assert.Equal(new[] { "cpu-compatible" }, result.Reports.Select(r => r.ModelAlias).ToArray());
+        Assert.False(translator.IncludeLikelyIncompatibleRequested);
+    }
+
+    [Fact]
+    public async Task RunAsync_ExplicitOverrideIncludesLikelyIncompatibleModels()
+    {
+        var translator = new FakeTranslator
+        {
+            Options =
+            {
+                Option("cpu-compatible", recommended: true),
+                Option("gpu-only", likelyIncompatible: true),
+                Option("too-large", exceedsMemory: true),
+            },
+            TranslateBehavior = (_, _) => EmptyPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+        var thresholds = Thresholds with { ProbeLikelyIncompatibleModels = true };
+
+        var result = await runner.RunAsync(new[] { PassAnything() }, thresholds, progress: null, CancellationToken.None);
+
+        Assert.Equal(new[] { "cpu-compatible", "gpu-only", "too-large" }, result.Reports.Select(r => r.ModelAlias).ToArray());
+        Assert.True(translator.IncludeLikelyIncompatibleRequested);
+    }
+
+    [Fact]
+    public async Task RunAsync_TranslatorWithoutQualificationProvider_FallsBackToTheNormalModelListing()
+    {
+        // ISemanticQualificationCandidateProvider is an OPTIONAL capability. A translator that does not
+        // implement it must still enumerate candidates (via ListModelOptionsAsync) rather than sweep zero
+        // models — and the hardware screen still applies, because plain listing cannot honor the override.
+        var inner = new FakeTranslator
+        {
+            Options =
+            {
+                Option("cpu-compatible", recommended: true),
+                Option("gpu-only", likelyIncompatible: true),
+            },
+            TranslateBehavior = (_, _) => EmptyPlan(),
+        };
+        var translator = new CapabilitylessTranslator(inner);
+        var runner = new SemanticModelQualificationRunner(translator);
+
+        var result = await runner.RunAsync(new[] { PassAnything() }, Thresholds, progress: null, CancellationToken.None);
+
+        Assert.Equal(new[] { "cpu-compatible" }, result.Reports.Select(r => r.ModelAlias).ToArray());
+        Assert.False(inner.IncludeLikelyIncompatibleRequested);
+        Assert.Equal(1, translator.ListModelOptionsCalls);
+    }
+
+    [Fact]
+    public async Task RunAsync_ModelListingFails_ReportsNoCandidatesInsteadOfPropagating()
+    {
+        // Enumeration talks to Foundry Local; a catalog/host failure there must degrade to "no candidates"
+        // so the first-run dialog can say so, not tear down the sweep with an unhandled exception.
+        var translator = new CapabilitylessTranslator(new FakeTranslator())
+        {
+            ListThrows = () => new InvalidOperationException("catalog unavailable"),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+
+        var result = await runner.RunAsync(new[] { PassAnything() }, Thresholds, progress: null, CancellationToken.None);
+
+        Assert.Empty(result.Reports);
+        Assert.False(result.AnyQualified);
+    }
+
+    [Fact]
+    public async Task RunAsync_ModelListingCancelled_PropagatesTheCancellation()
+    {
+        // A cancelled sweep must surface as OperationCanceledException, not be swallowed by the
+        // listing-failure guard and silently reported as "no compatible models".
+        using var cts = new CancellationTokenSource();
+        var translator = new CapabilitylessTranslator(new FakeTranslator())
+        {
+            ListThrows = () =>
+            {
+                cts.Cancel();
+                return new OperationCanceledException(cts.Token);
+            },
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            runner.RunAsync(new[] { PassAnything() }, Thresholds, progress: null, cts.Token));
+    }
+
+    [Fact]
     public void IsReasoningAlias_MatchesReasoningModelsCaseInsensitively()
     {
         Assert.True(SemanticModelQualificationRunner.IsReasoningAlias("phi-4-mini-reasoning"));
@@ -108,6 +228,96 @@ public sealed class SemanticModelQualificationRunnerTests
         Assert.False(SemanticModelQualificationRunner.IsReasoningAlias("phi-4-mini"));
         Assert.False(SemanticModelQualificationRunner.IsReasoningAlias("phi-3.5-mini"));
         Assert.False(SemanticModelQualificationRunner.IsReasoningAlias(null));
+    }
+
+    [Fact]
+    public void Progress_Message_DescribesEveryStage()
+    {
+        Assert.Equal(
+            "Finding models that fit this machine…",
+            new SemanticQualificationProgress { Stage = SemanticQualificationStage.EnumeratingCandidates }.Message);
+
+        Assert.Equal(
+            "Preparing phi-4 (2/3)…",
+            new SemanticQualificationProgress
+            {
+                Stage = SemanticQualificationStage.PreparingCandidate,
+                CandidateAlias = "phi-4",
+                CandidateIndex = 2,
+                CandidateCount = 3,
+            }.Message);
+
+        Assert.Equal(
+            "Testing phi-4 — query 1/4…",
+            new SemanticQualificationProgress
+            {
+                Stage = SemanticQualificationStage.Probing,
+                CandidateAlias = "phi-4",
+                ProbeIndex = 1,
+                ProbeCount = 4,
+            }.Message);
+
+        Assert.Equal(
+            "Testing phi-4…",
+            new SemanticQualificationProgress
+            {
+                Stage = SemanticQualificationStage.ProbeToken,
+                CandidateAlias = "phi-4",
+            }.Message);
+
+        Assert.Equal("Model check complete.", new SemanticQualificationProgress { Stage = SemanticQualificationStage.Done }.Message);
+        Assert.Equal("Working…", new SemanticQualificationProgress { Stage = (SemanticQualificationStage)999 }.Message);
+    }
+
+    [Fact]
+    public void Progress_Message_OmitsTotalsThatAreNotKnownYet()
+    {
+        // Before the ladder/probe list is sized, a "(1/0)" or "query 1/0" would be nonsense, so the
+        // message drops the total instead of rendering a zero.
+        Assert.Equal(
+            "Preparing phi-4…",
+            new SemanticQualificationProgress
+            {
+                Stage = SemanticQualificationStage.PreparingCandidate,
+                CandidateAlias = "phi-4",
+                CandidateIndex = 1,
+            }.Message);
+
+        Assert.Equal(
+            "Testing phi-4…",
+            new SemanticQualificationProgress
+            {
+                Stage = SemanticQualificationStage.Probing,
+                CandidateAlias = "phi-4",
+                ProbeIndex = 1,
+            }.Message);
+    }
+
+    [Fact]
+    public void Progress_Message_StampsProbeVerdict()
+    {
+        Assert.Equal(
+            "phi-4 answered query 2/3 correctly.",
+            new SemanticQualificationProgress
+            {
+                Stage = SemanticQualificationStage.ProbeCompleted,
+                CandidateAlias = "phi-4",
+                ProbeIndex = 2,
+                ProbeCount = 3,
+                ProbePassed = true,
+            }.Message);
+
+        Assert.Equal(
+            "phi-4 failed query 2/3.",
+            new SemanticQualificationProgress
+            {
+                Stage = SemanticQualificationStage.ProbeCompleted,
+                CandidateAlias = "phi-4",
+                ProbeIndex = 2,
+                ProbeCount = 3,
+                ProbePassed = false,
+                FailureReason = SemanticProbeFailureReason.TooSlow,
+            }.Message);
     }
 
     [Fact]
@@ -164,6 +374,9 @@ public sealed class SemanticModelQualificationRunnerTests
     [InlineData("phi-4", "phi-3.5-mini", false)]
     [InlineData("phi-4-mini", "phi-3.5-mini", false)]
     [InlineData("qwen2.5-0.5b", "qwen2.5-1.5b", false)] // same length, neither is a prefix of the other
+    [InlineData("", "phi-4", false)]                    // a blank alias belongs to no family
+    [InlineData("phi-4", "", false)]
+    [InlineData("", "", false)]
     public void AreSameFamily_DetectsHyphenDelimitedPrefixVariants(string a, string b, bool expected)
     {
         Assert.Equal(expected, SemanticModelQualificationRunner.AreSameFamily(a, b));
@@ -558,6 +771,72 @@ public sealed class SemanticModelQualificationRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_WarmupWedgesIgnoringCancellation_IsAbandonedAndProbingStillRuns()
+    {
+        // A wedged native warmup ignores its linked token, so only the hard Task.Delay backstop can cut it
+        // loose. The sweep must stop waiting on it and go straight to timed probing rather than hanging.
+        var translator = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true) },
+            WarmupDelay = TimeSpan.FromSeconds(10),
+            TranslateBehavior = (_, _) => PngPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+        // 50ms load budget + the runner's 500ms backstop grace: the warmup is abandoned in well under a
+        // second even though the fake warmup would run for ten.
+        var thresholds = Thresholds with { ModelLoadMaxMs = 50 };
+
+        var result = await runner.RunAsync(new[] { RequiresPngGlob() }, thresholds, progress: null, CancellationToken.None);
+
+        Assert.Equal("A", result.QualifiedModelAlias);
+        Assert.Equal(new[] { "A" }, translator.Warmed);
+        Assert.Equal(1, translator.TranslateCallsByAlias.GetValueOrDefault("A"));
+    }
+
+    [Fact]
+    public async Task RunAsync_SlowButInBudgetWarmup_IsAwaitedRatherThanAbandoned()
+    {
+        // A warmup that is slow yet finishes inside the load budget must be awaited to completion — that
+        // is the whole point of warming, since abandoning it would push the cold-start cost into probe 1.
+        var translator = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true) },
+            WarmupDelay = TimeSpan.FromMilliseconds(150),
+            TranslateBehavior = (_, _) => PngPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+
+        var result = await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, progress: null, CancellationToken.None);
+
+        Assert.Equal("A", result.QualifiedModelAlias);
+        Assert.Equal(new[] { "A" }, translator.Warmed);
+    }
+
+    [Fact]
+    public void Constructor_RequiresATranslatorAndClampsNegativeTuning()
+    {
+        Assert.Throws<ArgumentNullException>(() => new SemanticModelQualificationRunner(null!));
+
+        // Negative values are meaningless; they must clamp to the "unset" sentinel rather than making the
+        // ladder cap or the failed-probe hold behave erratically.
+        var runner = new SemanticModelQualificationRunner(
+            new FakeTranslator(), maxCandidates: -5, failedProbeHoldMs: -1);
+        Assert.NotNull(runner);
+    }
+
+    [Fact]
+    public async Task RunAsync_EmptyCatalog_StillReportsDoneSoTheDialogStopsSpinning()
+    {
+        var runner = new SemanticModelQualificationRunner(new FakeTranslator());
+        var progress = new SyncProgress<SemanticQualificationProgress>();
+
+        var result = await runner.RunAsync(new[] { PassAnything() }, Thresholds, progress, CancellationToken.None);
+
+        Assert.Empty(result.Reports);
+        Assert.Contains(progress.Items, p => p.Stage == SemanticQualificationStage.Done);
+    }
+
+    [Fact]
     public async Task RunAsync_ReservesLastSlotForNovelModel_WhenCapIsAllPreferredFamilies()
     {
         // The cap is filled by known preferred families with a novel family just below the cut. The sweep
@@ -823,9 +1102,10 @@ public sealed class SemanticModelQualificationRunnerTests
         }
     }
 
-    private sealed class FakeTranslator : ISemanticQueryTranslator, ISemanticHostController
+    private sealed class FakeTranslator : ISemanticQueryTranslator, ISemanticHostController, ISemanticQualificationCandidateProvider
     {
         public List<SemanticModelOption> Options { get; } = new();
+        public bool IncludeLikelyIncompatibleRequested { get; private set; }
         public List<string> Prepared { get; } = new();
 
         /// <summary>Aliases explicitly evicted between candidates via <see cref="UnloadCurrentModelAsync"/>,
@@ -864,6 +1144,10 @@ public sealed class SemanticModelQualificationRunnerTests
         /// handling (a warmup failure must not abandon the candidate).</summary>
         public bool WarmupThrows { get; init; }
 
+        /// <summary>Artificial warmup delay that IGNORES cancellation, modelling a wedged native warmup
+        /// that must be cut off by the runner's hard backstop rather than by its linked token.</summary>
+        public TimeSpan WarmupDelay { get; init; }
+
         /// <summary>Optional per-alias artificial load delay that observes the cancellation token, so a
         /// small model-load limit trips the runner's load-timeout path for a specific candidate.</summary>
         public Func<string, TimeSpan>? PrepareDelayProvider { get; init; }
@@ -895,6 +1179,15 @@ public sealed class SemanticModelQualificationRunnerTests
             return Task.FromResult<IReadOnlyList<SemanticModelOption>>(Options);
         }
 
+        public Task<IReadOnlyList<SemanticModelOption>> ListQualificationModelOptionsAsync(
+            bool includeLikelyIncompatible,
+            IProgress<SemanticTranslationProgress>? progress,
+            CancellationToken cancellationToken)
+        {
+            IncludeLikelyIncompatibleRequested = includeLikelyIncompatible;
+            return ListModelOptionsAsync(progress, cancellationToken);
+        }
+
         public async Task PrepareModelAsync(
             string? modelAlias, IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
         {
@@ -922,6 +1215,8 @@ public sealed class SemanticModelQualificationRunnerTests
                 Warmed.Add(alias);
                 if (WarmupThrows)
                     throw new InvalidOperationException("warmup boom");
+                if (WarmupDelay > TimeSpan.Zero)
+                    await Task.Delay(WarmupDelay, CancellationToken.None).ConfigureAwait(false);
                 return EmptyPlanResult();
             }
 
@@ -1012,5 +1307,58 @@ public sealed class SemanticModelQualificationRunnerTests
         }
 
         public void RefreshCatalog() { }
+    }
+
+    /// <summary>
+    /// A translator that implements ONLY <see cref="ISemanticQueryTranslator"/> — no
+    /// <see cref="ISemanticQualificationCandidateProvider"/> and no <see cref="ISemanticHostController"/>.
+    /// Models an in-process/older translator so the runner's optional-capability fallbacks are exercised.
+    /// Everything is delegated to a wrapped <see cref="FakeTranslator"/>.
+    /// </summary>
+    private sealed class CapabilitylessTranslator(FakeTranslator inner) : ISemanticQueryTranslator
+    {
+        /// <summary>When set, catalog enumeration fails with the returned exception.</summary>
+        public Func<Exception>? ListThrows { get; init; }
+
+        public int ListModelOptionsCalls { get; private set; }
+
+        public bool IsAvailable => inner.IsAvailable;
+        public string? CurrentModelKey => inner.CurrentModelKey;
+
+        public Task<IReadOnlyList<SemanticModelOption>> ListModelOptionsAsync(
+            IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
+        {
+            ListModelOptionsCalls++;
+            if (ListThrows is not null)
+                throw ListThrows();
+            return inner.ListModelOptionsAsync(progress, cancellationToken);
+        }
+
+        public Task PrepareModelAsync(
+            string? modelAlias, IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
+            => inner.PrepareModelAsync(modelAlias, progress, cancellationToken);
+
+        public Task<SemanticTranslationResult> TranslateAsync(
+            string naturalLanguageQuery, SemanticTranslationContext context,
+            IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
+            => inner.TranslateAsync(naturalLanguageQuery, context, progress, cancellationToken);
+
+        public Task<SemanticTranslationResult> TranslateStreamingAsync(
+            string naturalLanguageQuery, SemanticTranslationContext context,
+            Action<string>? onToken, CancellationToken cancellationToken)
+            => inner.TranslateStreamingAsync(naturalLanguageQuery, context, onToken, cancellationToken);
+
+        public Task UnloadCurrentModelAsync(CancellationToken cancellationToken)
+            => inner.UnloadCurrentModelAsync(cancellationToken);
+
+        public void SetModelOverride(string? modelAlias) => inner.SetModelOverride(modelAlias);
+        public void SetModelGenerationOverrides(IReadOnlyDictionary<string, SemanticModelGenerationOverride>? overrides)
+            => inner.SetModelGenerationOverrides(overrides);
+        public void SetEnabled(bool enabled) => inner.SetEnabled(enabled);
+        public void SetDevicePreferenceOrder(string? order) => inner.SetDevicePreferenceOrder(order);
+        public void SetAvailableAccelerators(bool hasGpu, bool hasNpu) => inner.SetAvailableAccelerators(hasGpu, hasNpu);
+        public void SetGpuMemoryBytes(long dedicatedVideoMemoryBytes) => inner.SetGpuMemoryBytes(dedicatedVideoMemoryBytes);
+        public void SetUnloadAfterUse(bool unloadAfterUse) => inner.SetUnloadAfterUse(unloadAfterUse);
+        public void RefreshCatalog() => inner.RefreshCatalog();
     }
 }

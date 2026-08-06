@@ -18,6 +18,8 @@ public sealed partial class MainViewModel
     /// </summary>
     public async Task SubmitSearchAsync(Func<Task<bool>>? postTranslationGate = null)
     {
+        if (_shutdownRequested) return;
+
         // Re-entrancy guard: a second submit (Enter in the query box, F5, a double-click on the
         // Search button) while a semantic translation is already in flight would start a concurrent
         // model inference on the same chat client and corrupt its output ("the model did not return
@@ -93,6 +95,9 @@ public sealed partial class MainViewModel
     /// multi-second gate work. Returns a token that <see cref="CancelSearchPreparation"/> cancels.</summary>
     public CancellationToken BeginSearchPreparation()
     {
+        if (_shutdownRequested)
+            return new CancellationToken(canceled: true);
+
         _searchPrepareCts?.Dispose();
         _searchPrepareCts = new CancellationTokenSource();
         IsPreparingSearch = true;

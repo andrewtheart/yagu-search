@@ -501,6 +501,14 @@ public sealed class AppSettings
     /// means "use the shipped order". Unknown keys are ignored and tabs missing from the list fall
     /// back to their shipped position, so the setting survives tabs being added or renamed.</summary>
     public List<string> AdvancedOptionsTabOrder { get; set; } = [];
+    /// <summary>The user-editable one-click searches shown on the Advanced Options ▸ Quick searches tab,
+    /// in display order. Seeded from the built-in catalog on first run (see
+    /// <see cref="QuickSearchesInitialized"/>); afterwards the list is entirely user-owned, so an empty
+    /// list means "the user deleted them all" and is preserved rather than re-seeded.</summary>
+    public List<Yagu.Helpers.QuickSearchItem> QuickSearches { get; set; } = [];
+    /// <summary>False until the built-in quick searches have been seeded into <see cref="QuickSearches"/>.
+    /// Distinguishes a fresh profile from one where the user emptied the list.</summary>
+    public bool QuickSearchesInitialized { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
     public List<string> SearchHistory { get; set; } = [];
     /// <summary>Separate autocomplete history for the Semantic (natural-language) query mode, kept
@@ -933,12 +941,33 @@ public sealed class AppSettings
     /// de-duplicated on load by <see cref="Yagu.Services.Index.IndexedRootsPolicy"/>; managed from the
     /// Indexing tab and the CLI root commands. Empty by default.</summary>
     public List<string> IndexedRoots { get; set; } = [];
+    /// <summary>Unregistered search roots whose "not indexed" pre-search warning the user dismissed.
+    /// Searches still scan these locations live; only the warning is suppressed. Registered roots and
+    /// stale/broken indexes always remain actionable and are never suppressed by this list.</summary>
+    public List<string> ContentIndexLiveScanWarningDismissedRoots { get; set; } = [];
     /// <summary>Optional per-folder build-time glob overrides for the registered <see cref="IndexedRoots"/>
     /// (plan §6.1). Each entry layers on top of <see cref="IndexExcludedGlobs"/>: the root's exclude globs
     /// add more excludes and its include globs re-admit paths a broader exclude would drop (so, e.g.,
     /// <c>node_modules</c> can be excluded globally but indexed under one specific folder). Canonicalized on
     /// load by <see cref="Yagu.Services.Index.IndexedRootFilterPolicy"/>. Empty by default.</summary>
     public List<Yagu.Services.Index.IndexedRootFilter> IndexedRootFilters { get; set; } = [];
+
+    public static List<string> NormalizeContentIndexLiveScanWarningDismissedRoots(IEnumerable<string>? roots)
+    {
+        var normalized = new List<string>();
+        if (roots is null)
+            return normalized;
+
+        foreach (string? root in roots)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+                continue;
+            string path = Yagu.Services.Index.IndexScopeIdentity.NormalizePath(root);
+            if (path.Length > 0 && !normalized.Contains(path, StringComparer.OrdinalIgnoreCase))
+                normalized.Add(path);
+        }
+        return normalized;
+    }
     /// <summary>Effective query memory budget (MB) after normalization and architecture default.</summary>
     [JsonIgnore] public int EffectiveIndexQueryMemoryBudgetMB => NormalizeIndexQueryMemoryBudgetMB(IndexQueryMemoryBudgetMB);
     /// <summary>Effective disk quota (MB) after normalization and architecture default.</summary>
@@ -1284,6 +1313,16 @@ public sealed class AppSettings
     public DateTimeOffset? LastAppUpdateCheckUtc { get; set; }
     /// <summary>Release version the user last skipped/acknowledged, so automatic checks don't renotify it.</summary>
     public string LastAppUpdateAlertedVersion { get; set; } = string.Empty;
+
+    // ── Notifications ──
+    /// <summary>Master switch for user-facing notifications. Default true.</summary>
+    public bool NotificationsEnabled { get; set; } = true;
+    /// <summary>Show a native Windows notification after a successful search. Default true.</summary>
+    public bool NotifySearchCompleted { get; set; } = true;
+    /// <summary>Show a native Windows notification after the user cancels a search. Default true.</summary>
+    public bool NotifySearchCancelled { get; set; } = true;
+    /// <summary>Surface automatic application-update notices. Manual checks are unaffected. Default true.</summary>
+    public bool NotifyApplicationUpdates { get; set; } = true;
 
     // ── Foundry model update alerts ──
     /// <summary>When true (default), Yagu checks the Foundry Local catalog about once a day and shows a
@@ -1635,6 +1674,9 @@ public sealed class SettingsService
         settings.IndexExcludedGlobs ??= string.Empty;
         settings.IndexExcludedExtensions ??= string.Empty;
         settings.IndexedRoots = Yagu.Services.Index.IndexedRootsPolicy.Normalize(settings.IndexedRoots);
+        settings.ContentIndexLiveScanWarningDismissedRoots =
+            AppSettings.NormalizeContentIndexLiveScanWarningDismissedRoots(
+                settings.ContentIndexLiveScanWarningDismissedRoots);
         settings.IndexedRootFilters = Yagu.Services.Index.IndexedRootFilterPolicy.Normalize(settings.IndexedRootFilters);
     }
 

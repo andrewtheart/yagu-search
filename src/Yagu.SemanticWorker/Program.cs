@@ -209,8 +209,10 @@ internal static class Program
 
     private static async Task HandleListModelsAsync(WorkerRequest req, CancellationToken ct)
     {
-        IReadOnlyList<SemanticModelOption> options =
-            await _translator.ListModelOptionsAsync(new MessageProgress(req.Id), ct).ConfigureAwait(false);
+        var progress = new MessageProgress(req.Id);
+        IReadOnlyList<SemanticModelOption> options = _translator is ISemanticQualificationCandidateProvider provider
+            ? await provider.ListQualificationModelOptionsAsync(req.BoolValue, progress, ct).ConfigureAwait(false)
+            : await _translator.ListModelOptionsAsync(progress, ct).ConfigureAwait(false);
 
         string optionsJson = JsonSerializer.Serialize(
             new List<SemanticModelOption>(options), SemanticWorkerJsonContext.Default.ListSemanticModelOption);

@@ -2,6 +2,7 @@ using Yagu.Services;
 
 namespace Yagu.Tests;
 
+[Collection("SystemMemoryProvider")]
 public sealed class SearchServiceGateTests
 {
     [Fact]

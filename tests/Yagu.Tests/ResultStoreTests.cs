@@ -419,8 +419,11 @@ public class ResultStoreAppCloseRegressionTests
         string mainWindowDispose = ExtractMethodWindow(mainWindowSource, "Dispose", 1600);
         Assert.Contains("ViewModel.Dispose();", mainWindowDispose);
 
-        string viewModelDispose = ExtractMethodWindow(viewModelSource, "Dispose", 1200);
+        string viewModelDispose = ExtractMethodWindow(viewModelSource, "Dispose", 1800);
+        Assert.Contains("if (_preserveLiveResourcesForProcessExit)", viewModelDispose);
         Assert.Contains("_resultStore?.Dispose();", viewModelDispose);
+        Assert.Contains("if (searchStopped && _resultStore is { } oldStore)", viewModelSource);
+        Assert.Contains("Task.Run(oldStore.Dispose)", viewModelSource);
 
         string resultStoreDispose = ExtractMethodWindow(resultStoreSource, "Dispose", 1200);
         Assert.Contains("DeleteTempFile(_path);", resultStoreDispose);

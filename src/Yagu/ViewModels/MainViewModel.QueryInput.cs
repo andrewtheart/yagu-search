@@ -107,4 +107,109 @@ public sealed partial class MainViewModel
         CaseSensitive = preset.CaseSensitive;
         Query = preset.Pattern;
     }
+
+    /// <summary>Loads a saved, user-editable quick search, restoring every option it captured (including
+    /// Semantic vs Traditional mode, and the full Advanced Options snapshot when the item carries one).
+    /// The caller submits the search afterwards.</summary>
+    public void ApplyQuickSearchItem(Yagu.Helpers.QuickSearchItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+
+        // Advanced Options first: the inline toggles below are the authoritative ones for this item, so
+        // they must land last and win over anything the snapshot set.
+        if (item.Options is { } options)
+            ApplyAdvancedOptions(options);
+
+        // An empty saved directory means "every drive from its root", which is what an empty box does.
+        Directory = (item.Directory ?? string.Empty).Trim();
+
+        IsSemanticQueryMode = item.Semantic;
+        if (!item.Semantic)
+        {
+            // Multiline is regex-only in the search box, so honor the same coupling here.
+            UseRegex = item.UseRegex || item.Multiline;
+            CaseSensitive = item.CaseSensitive;
+            Multiline = item.Multiline;
+            ExactMatch = item.ExactMatch;
+        }
+        Query = item.Pattern;
+    }
+
+    /// <summary>
+    /// Snapshots every Advanced Option exactly as the drawer shows it right now, for "Save current options"
+    /// on the Quick searches tab. Reads live view-model state, never the settings file, so unsaved drawer
+    /// changes are captured too.
+    /// </summary>
+    public Yagu.Helpers.QuickSearchOptions CaptureAdvancedOptions() => new()
+    {
+        SearchModeIndex = SearchModeIndex,
+        MultilineDotAll = MultilineDotAll,
+        IncludeFilterModeIndex = IncludeFilterModeIndex,
+        IncludeGlobs = IncludeGlobs ?? string.Empty,
+        ExcludeFilterModeIndex = ExcludeFilterModeIndex,
+        ExcludeGlobs = ExcludeGlobs ?? string.Empty,
+        ObeyGitignore = ObeyGitignore,
+        SkipExtensions = SkipExtensions ?? string.Empty,
+        SearchBinary = SearchBinary,
+        BinaryExtensions = BinaryExtensions ?? string.Empty,
+        SearchInsideArchives = SearchInsideArchives,
+        ArchiveExtensions = ArchiveExtensions ?? string.Empty,
+        SearchOnlineOnlyFiles = SearchOnlineOnlyFiles,
+        SearchHiddenFiles = SearchHiddenFiles,
+        SearchImageText = SearchImageText,
+        ImageOcrEngine = ImageOcrEngine ?? string.Empty,
+        SearchPdfText = SearchPdfText,
+        UseContentIndex = UseContentIndex,
+        MinFileSizeBytes = MinFileSizeBytes,
+        MaxFileSizeBytes = MaxFileSizeBytes,
+        CreatedAfterDate = CreatedAfterDate,
+        CreatedBeforeDate = CreatedBeforeDate,
+        ModifiedAfterDate = ModifiedAfterDate,
+        ModifiedBeforeDate = ModifiedBeforeDate,
+        MaxSearchDepth = double.IsNaN(MaxSearchDepth) ? null : MaxSearchDepth,
+    };
+
+    /// <summary>Replays a captured snapshot back onto the drawer. The inverse of
+    /// <see cref="CaptureAdvancedOptions"/>; keep the two field lists in step.</summary>
+    public void ApplyAdvancedOptions(Yagu.Helpers.QuickSearchOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        SearchModeIndex = options.SearchModeIndex;
+        MultilineDotAll = options.MultilineDotAll;
+        IncludeFilterModeIndex = options.IncludeFilterModeIndex;
+        IncludeGlobs = options.IncludeGlobs ?? string.Empty;
+        ExcludeFilterModeIndex = options.ExcludeFilterModeIndex;
+        ExcludeGlobs = options.ExcludeGlobs ?? string.Empty;
+
+        ObeyGitignore = options.ObeyGitignore;
+        SkipExtensions = options.SkipExtensions ?? string.Empty;
+        // SearchBinary rewrites BinaryExtensions from the settings mirror, so restore the captured list after.
+        SearchBinary = options.SearchBinary;
+        BinaryExtensions = options.BinaryExtensions ?? string.Empty;
+        SearchInsideArchives = options.SearchInsideArchives;
+        ArchiveExtensions = options.ArchiveExtensions ?? string.Empty;
+        SearchOnlineOnlyFiles = options.SearchOnlineOnlyFiles;
+        SearchHiddenFiles = options.SearchHiddenFiles;
+        SearchImageText = options.SearchImageText;
+        if (!string.IsNullOrWhiteSpace(options.ImageOcrEngine))
+            ImageOcrEngine = options.ImageOcrEngine;
+        SearchPdfText = options.SearchPdfText;
+        UseContentIndex = options.UseContentIndex;
+
+        MinFileSizeBytes = options.MinFileSizeBytes;
+        MaxFileSizeBytes = options.MaxFileSizeBytes;
+        CreatedAfterDate = options.CreatedAfterDate;
+        CreatedBeforeDate = options.CreatedBeforeDate;
+        ModifiedAfterDate = options.ModifiedAfterDate;
+        ModifiedBeforeDate = options.ModifiedBeforeDate;
+        MaxSearchDepth = options.MaxSearchDepth ?? double.NaN;
+
+        SyncSkipExtensionItems();
+        SyncBinaryExtensionItems();
+        SyncArchiveExtensionItems();
+
+        // The drawer no longer shows the saved defaults, so let the post-search reset restore them.
+        _advancedOptionsTransientlyChanged = true;
+    }
 }

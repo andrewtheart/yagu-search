@@ -215,23 +215,243 @@ public sealed partial class MainWindow
         catch { }
     }
 
-    private void OnSkipCountTapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+    /// <summary>Grace period so the pointer can cross the gap from the icon into the overlay.</summary>
+    private const int SkipBreakdownHoverHideDelayMs = 220;
+
+    private bool _skipBreakdownPinned;
+    private bool _skipBreakdownPointerOverIcon;
+    private bool _skipBreakdownPointerOverPanel;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _skipBreakdownHoverHideTimer;
+
+    private void OnSkipInfoClicked(object sender, RoutedEventArgs e)
     {
-        SkipBreakdownOverlay.Visibility =
-            SkipBreakdownOverlay.Visibility == Visibility.Visible
-                ? Visibility.Collapsed
-                : Visibility.Visible;
+        _skipBreakdownPinned = !_skipBreakdownPinned;
+        if (_skipBreakdownPinned)
+            ShowSkipBreakdownOverlay();
+        else
+            HideSkipBreakdownOverlay();
     }
 
-    private void OnSkipCountPointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    private void OnSkipInfoPointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
-        if (sender is TextBlock tb)
-            tb.TextDecorations = Windows.UI.Text.TextDecorations.Underline;
+        _skipBreakdownPointerOverIcon = true;
+        CancelSkipBreakdownHoverHide();
+        ShowSkipBreakdownOverlay();
     }
 
-    private void OnSkipCountPointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    private void OnSkipInfoPointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
-        if (sender is TextBlock tb)
-            tb.TextDecorations = Windows.UI.Text.TextDecorations.None;
+        _skipBreakdownPointerOverIcon = false;
+        ScheduleSkipBreakdownHoverHide();
+    }
+
+    private void OnSkipBreakdownOverlayPointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        _skipBreakdownPointerOverPanel = true;
+        CancelSkipBreakdownHoverHide();
+    }
+
+    private void OnSkipBreakdownOverlayPointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        _skipBreakdownPointerOverPanel = false;
+        ScheduleSkipBreakdownHoverHide();
+    }
+
+    private void OnSkipBreakdownCloseClicked(object sender, RoutedEventArgs e) => HideSkipBreakdownOverlay();
+
+    private void ShowSkipBreakdownOverlay()
+    {
+        RenderSkipBreakdown();
+        SkipBreakdownOverlay.Visibility = Visibility.Visible;
+        PositionSkipBreakdownOverlay();
+    }
+
+    /// <summary>
+    /// Rebuilds the breakdown table. Every category shares one Grid's columns so the glyph, label and
+    /// count line up exactly — a monospaced font cannot do that here because the category emoji (several
+    /// carrying a variation selector) render at different advance widths. The headline total is a
+    /// separate summary section below a divider, sharing the same columns so it stays aligned.
+    /// </summary>
+    private void RenderSkipBreakdown()
+    {
+        if (SkipBreakdownContent is null)
+            return;
+
+        SkipBreakdownContent.Children.Clear();
+        var entries = ViewModel.SkipBreakdownEntries;
+        int total = ViewModel.SkipTotalCount;
+
+        if (total == 0)
+        {
+            SkipBreakdownContent.Children.Add(new TextBlock { Text = "No files skipped", FontSize = 12 });
+        }
+        else
+        {
+            SkipBreakdownContent.Children.Add(new TextBlock
+            {
+                Text = "Skipped files breakdown",
+                FontSize = 12,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            SkipBreakdownContent.Children.Add(BuildSkipTable(entries, total, SkipBreakdownOverlay.BorderBrush));
+        }
+
+        var discovery = ViewModel.SkipDiscoveryEntries;
+        if (discovery.Count > 0)
+        {
+            SkipBreakdownContent.Children.Add(new TextBlock
+            {
+                Text = "Filtered during discovery (not counted above)",
+                FontSize = 12,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Margin = new Thickness(0, 4, 0, 0),
+            });
+            SkipBreakdownContent.Children.Add(BuildSkipTable(discovery, total: null, SkipBreakdownOverlay.BorderBrush));
+        }
+    }
+
+    /// <summary>Builds one aligned table; a non-null <paramref name="total"/> appends the summary section.</summary>
+    private static Grid BuildSkipTable(
+        IReadOnlyList<ViewModels.MainViewModel.SkipBreakdownEntry> entries,
+        int? total,
+        Microsoft.UI.Xaml.Media.Brush? dividerBrush)
+    {
+        var grid = new Grid { ColumnSpacing = 10, RowSpacing = 2 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        int row = 0;
+        foreach (var entry in entries)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            AddSkipCells(grid, row++, entry.Glyph, entry.Label, entry.Count, emphasized: false);
+        }
+
+        if (total is not { } totalCount)
+            return grid;
+
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var divider = new Border
+        {
+            Height = 1,
+            Margin = new Thickness(0, 8, 0, 8),
+            Background = dividerBrush,
+        };
+        Grid.SetRow(divider, row);
+        Grid.SetColumnSpan(divider, 3);
+        grid.Children.Add(divider);
+        row++;
+
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        AddSkipCells(grid, row, glyph: string.Empty, label: "Total skipped", count: totalCount, emphasized: true);
+        return grid;
+    }
+
+    private static void AddSkipCells(Grid grid, int row, string glyph, string label, int count, bool emphasized)
+    {
+        var weight = emphasized ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal;
+
+        if (!string.IsNullOrEmpty(glyph))
+        {
+            var glyphText = new TextBlock { Text = glyph, FontSize = 12, TextAlignment = TextAlignment.Center };
+            Grid.SetRow(glyphText, row);
+            grid.Children.Add(glyphText);
+        }
+
+        var labelText = new TextBlock
+        {
+            Text = label,
+            FontSize = 12,
+            FontWeight = weight,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        Grid.SetRow(labelText, row);
+        Grid.SetColumn(labelText, 1);
+        grid.Children.Add(labelText);
+
+        var countText = new TextBlock
+        {
+            Text = count.ToString("N0", System.Globalization.CultureInfo.CurrentCulture),
+            FontSize = 12,
+            FontWeight = weight,
+            // Tabular digits keep the right-aligned counts on a common decimal grid.
+            FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
+            TextAlignment = TextAlignment.Right,
+        };
+        Grid.SetRow(countText, row);
+        Grid.SetColumn(countText, 2);
+        grid.Children.Add(countText);
+    }
+
+    private void HideSkipBreakdownOverlay()
+    {
+        CancelSkipBreakdownHoverHide();
+        _skipBreakdownPinned = false;
+        _skipBreakdownPointerOverIcon = false;
+        _skipBreakdownPointerOverPanel = false;
+        SkipBreakdownOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Centers the overlay directly beneath the skipped-files icon. The overlay spans every row, so its
+    /// margin is measured from the window's top-left corner and is clamped to keep it fully on-screen.
+    /// </summary>
+    private void PositionSkipBreakdownOverlay()
+    {
+        if (SkippedInfoButton.Visibility != Visibility.Visible || SkippedInfoButton.ActualWidth <= 0)
+            return;
+
+        // The overlay was just shown, so measure it before reading its width for the centering math.
+        SkipBreakdownOverlay.UpdateLayout();
+        double overlayWidth = SkipBreakdownOverlay.ActualWidth > 0
+            ? SkipBreakdownOverlay.ActualWidth
+            : SkipBreakdownOverlay.DesiredSize.Width;
+        if (overlayWidth <= 0)
+        {
+            // Layout has not produced a width yet; retry once the pass completes so the first show is
+            // still anchored instead of landing at a stale position.
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (SkipBreakdownOverlay.Visibility == Visibility.Visible)
+                    PositionSkipBreakdownOverlay();
+            });
+            return;
+        }
+
+        var anchor = SkippedInfoButton.TransformToVisual(RootGrid).TransformPoint(new Windows.Foundation.Point(0, 0));
+        double left = anchor.X + (SkippedInfoButton.ActualWidth / 2) - (overlayWidth / 2);
+        double top = anchor.Y + SkippedInfoButton.ActualHeight + 6;
+        double maxLeft = Math.Max(8, RootGrid.ActualWidth - overlayWidth - 8);
+        SkipBreakdownOverlay.Margin = new Thickness(Math.Clamp(left, 8, maxLeft), top, 0, 0);
+    }
+
+    private void ScheduleSkipBreakdownHoverHide()
+    {
+        if (_skipBreakdownPinned)
+            return;
+
+        CancelSkipBreakdownHoverHide();
+        var timer = DispatcherQueue.CreateTimer();
+        _skipBreakdownHoverHideTimer = timer;
+        timer.Interval = TimeSpan.FromMilliseconds(SkipBreakdownHoverHideDelayMs);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            // Ignore a stale queued tick from an older pointer transition.
+            if (!ReferenceEquals(_skipBreakdownHoverHideTimer, timer))
+                return;
+            _skipBreakdownHoverHideTimer = null;
+            if (!_skipBreakdownPinned && !_skipBreakdownPointerOverIcon && !_skipBreakdownPointerOverPanel)
+                SkipBreakdownOverlay.Visibility = Visibility.Collapsed;
+        };
+        timer.Start();
+    }
+
+    private void CancelSkipBreakdownHoverHide()
+    {
+        _skipBreakdownHoverHideTimer?.Stop();
+        _skipBreakdownHoverHideTimer = null;
     }
 }

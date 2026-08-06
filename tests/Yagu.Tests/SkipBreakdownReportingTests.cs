@@ -4,7 +4,7 @@ using Yagu.Services;
 namespace Yagu.Tests;
 
 /// <summary>
-/// The status-bar "Skipped: N" overlay (and its CLI twin) must account for every scenario that removes
+/// The skipped-files information overlay (and its CLI twin) must account for every scenario that removes
 /// a file from a search. These tests cover the <see cref="SkipBreakdown"/> arithmetic, the end-to-end
 /// tallies <see cref="SearchService"/> produces, and — because the WinUI view-model and CliRunner are
 /// not compiled into this assembly — source pins for the rendered rows.
@@ -206,6 +206,58 @@ public class SkipBreakdownReportingTests
         // The overlay now prints the total, so a changed count must invalidate the cached tooltip.
         string vis = ReadSource("src", "Yagu", "ViewModels", "MainViewModel.Visibility.cs");
         Assert.Matches(@"OnFilesSkippedChanged\(int value\)\s*\{[^}]*OnPropertyChanged\(nameof\(SkipTooltip\)\)", vis);
+    }
+
+    [Fact]
+    public void SkipBreakdownRows_AreEmptyWhenNothingWasSkipped()
+    {
+        // The overlay renders a visual table from these rows, so "no breakdown yet" and "nothing skipped"
+        // must both yield zero rows rather than a table of zeros.
+        string vm = ReadSource("src", "Yagu", "ViewModels", "MainViewModel.ResultGroups.cs");
+        string counted = Extract(vm, "public IReadOnlyList<SkipBreakdownEntry> SkipBreakdownEntries");
+        string discovery = Extract(vm, "public IReadOnlyList<SkipBreakdownEntry> SkipDiscoveryEntries");
+
+        Assert.Contains("if (b is null || total == 0)", counted);
+        Assert.Contains("return rows;", counted);
+        Assert.Contains("if (b is null || b.DiscoveryFilteredTotal <= 0)", discovery);
+
+        // A zero-count category is dropped, so the table only lists reasons that actually fired.
+        Assert.Contains("if (count > 0)", counted);
+        Assert.Contains("if (count > 0)", discovery);
+    }
+
+    [Fact]
+    public void SkipTotalCount_MirrorsTheHeadlineSkippedCount()
+    {
+        // The summary line must never drift from the status-bar number it summarizes.
+        string vm = ReadSource("src", "Yagu", "ViewModels", "MainViewModel.ResultGroups.cs");
+        Assert.Contains("public int SkipTotalCount => FilesSkipped;", vm);
+
+        string vis = ReadSource("src", "Yagu", "ViewModels", "MainViewModel.Visibility.cs");
+        Assert.Matches(@"OnFilesSkippedChanged\(int value\)\s*\{[^}]*OnPropertyChanged\(nameof\(SkipTotalCount\)\)", vis);
+    }
+
+    [Fact]
+    public void SkipTooltip_IsTheBreakdownPlusTheFootnote()
+    {
+        // The accessible description keeps the footnote the visual overlay renders separately, so a
+        // screen-reader user still hears the caveat about discovery filters.
+        string vm = ReadSource("src", "Yagu", "ViewModels", "MainViewModel.ResultGroups.cs");
+        Assert.Contains("public string SkipTooltip =>", vm);
+        Assert.Contains("{SkipBreakdownDetails}", vm);
+        Assert.Contains("{SkipFootnote}", vm);
+
+        // Both must be re-raised together, or the description and the table disagree.
+        Assert.Contains("OnPropertyChanged(nameof(SkipBreakdownDetails));", vm);
+        Assert.Contains("OnPropertyChanged(nameof(SkipTooltip));", vm);
+    }
+
+    private static string Extract(string source, string signature)
+    {
+        int start = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Expected to find '{signature}' in the view-model source.");
+        int next = source.IndexOf("\n    /// <summary>", start + signature.Length, StringComparison.Ordinal);
+        return next > start ? source[start..next] : source[start..];
     }
 
     // ── CLI parity (source-pinned: CliRunner is not compiled here) ───────

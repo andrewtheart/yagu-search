@@ -79,12 +79,101 @@ public sealed class ContentIndexUiStatusTests
         => Assert.Equal(expected, ContentIndexUiStatus.Coverage(enabled, used, accelerated, live));
 
     [Theory]
-    [InlineData(IndexSearchCoverage.Full, "full")]
-    [InlineData(IndexSearchCoverage.Partial, "partial")]
+    [InlineData(IndexSearchCoverage.Full, "fully accelerated")]
+    [InlineData(IndexSearchCoverage.Partial, "partially accelerated")]
     [InlineData(IndexSearchCoverage.Bypassed, "bypassed")]
     [InlineData(IndexSearchCoverage.Off, "off")]
     public void CoverageLabel_MentionsState(IndexSearchCoverage coverage, string fragment)
         => Assert.Contains(fragment, ContentIndexUiStatus.CoverageLabel(coverage));
+
+    [Fact]
+    public void CoverageLabel_NeverReadsAsTheDiskFullWarning()
+    {
+        // "Index: full" (full coverage — everything worked) sat one word away from "Index: disk full"
+        // (the drive ran out of room), so the success label was read as a storage failure. No coverage
+        // label may end in the standalone word "full" again. ("fully accelerated" is unambiguous.)
+        foreach (IndexSearchCoverage coverage in Enum.GetValues<IndexSearchCoverage>())
+        {
+            string label = ContentIndexUiStatus.CoverageLabel(coverage);
+            Assert.DoesNotContain("full", label.Split(' '), StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    [Theory]
+    [InlineData("Indexes: all healthy")]
+    [InlineData("Index: accelerating")]
+    [InlineData("Index: fully accelerated")]
+    [InlineData("Index: ready")]
+    public void IsFullSuccessLabel_AcceptsEveryUnqualifiedSuccessState(string label)
+        => Assert.True(ContentIndexUiStatus.IsFullSuccessLabel(label));
+
+    [Theory]
+    // Qualified acceleration: a root still needs attention, so the green check must stay off.
+    [InlineData("Index: accelerating (1 of 4 needs attention)")]
+    [InlineData("Index: partially accelerating")]
+    [InlineData("Index: partially accelerated")]
+    [InlineData("Index: 3/4 drives healthy")]
+    [InlineData("Index: available \u00b7 not accelerated")]
+    [InlineData("Index: bypassed")]
+    [InlineData("Index: off")]
+    [InlineData("Index: disk full")]
+    [InlineData("Index: rebuild required")]
+    [InlineData("Index: 1 drive needs build")]
+    [InlineData("Index: freshness unavailable")]
+    [InlineData("Index: no maintained indexes")]
+    [InlineData("Index: not built for this folder")]
+    [InlineData("Index: update needed")]
+    [InlineData("Indexing paused")]
+    [InlineData("Indexing\u2026 42%")]
+    [InlineData("indexes: all healthy")] // case-sensitive by design
+    [InlineData("")]
+    [InlineData(null)]
+    public void IsFullSuccessLabel_RejectsQualifiedAndFailingStates(string? label)
+        => Assert.False(ContentIndexUiStatus.IsFullSuccessLabel(label));
+
+    [Fact]
+    public void FullSuccessLabels_AreShortEnoughToSurviveTheStatusBarClamp()
+    {
+        // The status-bar setter clamps through TrimStatusLabel. A success label long enough to be
+        // ellipsized would no longer match IsFullSuccessLabel, silently dropping the green check.
+        string[] successLabels =
+        [
+            ContentIndexUiStatus.AllHealthyLabel,
+            ContentIndexUiStatus.AcceleratingLabel,
+            ContentIndexUiStatus.FullyAcceleratedLabel,
+            ContentIndexUiStatus.ReadyLabel,
+        ];
+
+        foreach (string label in successLabels)
+        {
+            Assert.True(label.Length <= ContentIndexUiStatus.StatusLabelMaxLength, label);
+            Assert.True(ContentIndexUiStatus.IsFullSuccessLabel(ContentIndexUiStatus.TrimStatusLabel(label)), label);
+        }
+    }
+
+    [Fact]
+    public void FullSuccessLabels_MatchTheProducersThatEmitThem()
+    {
+        Assert.Equal(ContentIndexUiStatus.FullyAcceleratedLabel, ContentIndexUiStatus.CoverageLabel(IndexSearchCoverage.Full));
+        Assert.Equal(
+            ContentIndexUiStatus.AllHealthyLabel,
+            ContentIndexUiStatus.AllDriveHealthLabel([new(@"C:\", IndexRootHealthKind.Healthy, "healthy")]));
+    }
+
+    [Fact]
+    public void AllDriveHealthLabel_QualifiedByAttention_IsNeverAFullSuccessLabel()
+    {
+        IndexRootHealthEntry[] roots =
+        [
+            new(@"C:\", IndexRootHealthKind.Healthy, "healthy"),
+            new(@"D:\", IndexRootHealthKind.RebuildRequired, "attention"),
+        ];
+
+        string label = ContentIndexUiStatus.AllDriveHealthLabel(roots, IndexSearchCoverage.Full);
+
+        Assert.Equal("Index: accelerating (1 of 2 needs attention)", label);
+        Assert.False(ContentIndexUiStatus.IsFullSuccessLabel(label));
+    }
 
     [Theory]
     [InlineData(IndexSearchCoverage.Full)]
@@ -548,6 +637,10 @@ public sealed class ContentIndexUiStatusTests
         Assert.Equal(@"F:\", leftover.MaintainRoot);
         Assert.True(leftover.CanDeleteStoredIndex);
         Assert.Equal(@"F:\", leftover.DeleteRoot);
+        // A leftover root already has an index on disk, so the quick "Add to index" affordance must
+        // stay off — Maintain (adopt the existing index) is the correct, non-destructive action.
+        Assert.False(leftover.CanAddToIndex);
+        Assert.Null(leftover.AddRoot);
         Assert.Equal("Index: no maintained indexes", ContentIndexUiStatus.AllDriveHealthLabel([leftover]));
         Assert.Equal("\uE9F5", ContentIndexUiStatus.AllDriveHealthGlyph([leftover]));
         Assert.Contains("excluded from overall health totals and warnings", ContentIndexUiStatus.AllDriveHealthSummary([leftover]));
@@ -639,6 +732,51 @@ public sealed class ContentIndexUiStatusTests
         Assert.False(root.NeedsAttention);
         Assert.False(root.HasStoredIndex);
         Assert.False(root.IsIncludedInOverallHealth);
+        // An eligible-but-unindexed drive is the one dead end the hover flyout used to leave with no
+        // action at all, so it must carry the quick "Add to index" affordance.
+        Assert.True(root.CanAddToIndex);
+        Assert.Equal(@"F:\", root.AddRoot);
+        // Add and Maintain are mutually exclusive: there is no stored index here to adopt.
+        Assert.False(root.CanMaintain);
+        Assert.False(root.CanDeleteStoredIndex);
+        Assert.False(root.CanBuildNow);
+    }
+
+    [Fact]
+    public void AddToIndexAffordance_IsOffForEveryOtherHealthKind()
+    {
+        foreach (IndexRootHealthKind kind in Enum.GetValues<IndexRootHealthKind>())
+        {
+            var entry = new IndexRootHealthEntry(@"D:\", kind, "status");
+
+            Assert.False(entry.CanAddToIndex);
+            Assert.Null(entry.AddRoot);
+        }
+    }
+
+    [Fact]
+    public void BuildNowAffordance_IsOptInAndSeparateFromAddToIndex()
+    {
+        var buildRequired = new IndexRootHealthEntry(
+            @"D:\", IndexRootHealthKind.BuildRequired, "registered but never built", BuildRoot: @"D:\");
+
+        Assert.True(buildRequired.CanBuildNow);
+        Assert.Equal(@"D:\", buildRequired.BuildRoot);
+        // Already registered, so it must not also offer "Add to index".
+        Assert.False(buildRequired.CanAddToIndex);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void AddAndBuildAffordances_TreatBlankRootsAsAbsent(string? blank)
+    {
+        var entry = new IndexRootHealthEntry(
+            @"D:\", IndexRootHealthKind.NotIndexed, "status", AddRoot: blank, BuildRoot: blank);
+
+        Assert.False(entry.CanAddToIndex);
+        Assert.False(entry.CanBuildNow);
     }
 
     [Theory]

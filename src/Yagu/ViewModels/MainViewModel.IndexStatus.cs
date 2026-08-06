@@ -44,8 +44,14 @@ public sealed partial class MainViewModel
             ? Microsoft.UI.Xaml.Visibility.Collapsed
             : Microsoft.UI.Xaml.Visibility.Visible;
 
+    /// <summary>Shows the green check beside the status glyph whenever the label reports unqualified
+    /// success — every maintained index healthy, the running search fully accelerated, a finished search
+    /// fully accelerated, or the index built/warmed and ready. Driven by the single allow-list in
+    /// <see cref="ContentIndexUiStatus.IsFullSuccessLabel"/> so that adding a success state is one edit
+    /// and a qualified variant (for example "Index: accelerating (1 of 4 needs attention)") can never
+    /// pick up the check.</summary>
     public Microsoft.UI.Xaml.Visibility IndexHealthyCheckVisibility =>
-        string.Equals(IndexStatusText, "Indexes: all healthy", StringComparison.Ordinal)
+        ContentIndexUiStatus.IsFullSuccessLabel(IndexStatusText)
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
     [ObservableProperty]
@@ -231,6 +237,8 @@ public sealed partial class MainViewModel
     {
         get
         {
+            if (_shutdownRequested)
+                return new CancellationToken(canceled: true);
             _indexBuildCancellation ??= new CancellationTokenSource();
             return _indexBuildCancellation.Token;
         }

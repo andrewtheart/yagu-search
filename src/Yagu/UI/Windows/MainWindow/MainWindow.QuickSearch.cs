@@ -13,7 +13,6 @@ namespace Yagu;
 public sealed partial class MainWindow
 {
     private SearchRequestListener? _searchRequestListener;
-    private bool _quickSearchDialogOpen;
 
     /// <summary>Starts listening for forwarded search requests (WM_COPYDATA from a second launch).
     /// Created once the window handle is available so a listener exists before the app docks to tray.</summary>
@@ -86,81 +85,48 @@ public sealed partial class MainWindow
             _ = StartSearchFromUiAsync();
     }
 
-    /// <summary>Shows the tray "Quick search" popup: a small dialog with a search-term box and a
-    /// directory box. Clicking Search (or pressing Enter) runs the search in this running instance.</summary>
-    internal async Task ShowTrayQuickSearchAsync()
+    /// <summary>Shows the Yagu-styled tray context menu at the cursor. Its inline Quick search panel
+    /// expands in place, so scope, query, options and Traditional/Semantic mode are all set from the
+    /// menu itself instead of a separate dialog.</summary>
+    internal void ShowTrayContextMenu(int cursorX, int cursorY)
     {
-        if (_hwnd == IntPtr.Zero) return;
-
-        // Bring the window forward so the dialog has a visible, focused owner.
-        RestoreWindowFromTray();
-
-        // Never stack this popup on top of itself or another owned modal.
-        if (_quickSearchDialogOpen || YaguDialog.HasOpenOwnedWindow(_hwnd)) return;
-
-        var queryBox = new TextBox
-        {
-            PlaceholderText = "e.g. TODO, error, *.cs",
-            Text = ViewModel.Query ?? string.Empty,
-        };
-        var directoryBox = new TextBox
-        {
-            PlaceholderText = "Leave blank to search all drives",
-            Text = ViewModel.Directory ?? string.Empty,
-        };
-
-        var content = new StackPanel { Spacing = 6 };
-        content.Children.Add(new TextBlock { Text = "Search term" });
-        content.Children.Add(queryBox);
-        content.Children.Add(new TextBlock { Text = "Directory", Margin = new Thickness(0, 6, 0, 0) });
-        content.Children.Add(directoryBox);
-
-        _quickSearchDialogOpen = true;
-        try
-        {
-            var result = await YaguDialog.ShowAsync(
-                _hwnd,
-                new YaguDialogOptions
-                {
-                    Title = "Quick search",
-                    TitleGlyph = "\uE721", // Search
-                    Content = content,
-                    PrimaryButtonText = "Search",
-                    CloseButtonText = "Cancel",
-                    DefaultButton = YaguDialogDefaultButton.Primary,
-                    RequestedTheme = RootGrid.ActualTheme,
-                    ShowTitleBar = false,
-                    ShowTopRightCloseButton = true,
-                    Width = 460,
-                    Height = 280,
-                },
-                dialog =>
-                {
-                    // Enter in either field submits the search; focus starts in the search-term box.
-                    void SubmitOnEnter(object _, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
-                    {
-                        if (e.Key == Windows.System.VirtualKey.Enter)
-                        {
-                            e.Handled = true;
-                            dialog.AcceptPrimary();
-                        }
-                    }
-                    queryBox.KeyDown += SubmitOnEnter;
-                    directoryBox.KeyDown += SubmitOnEnter;
-                    queryBox.Loaded += (_, _) => queryBox.Focus(FocusState.Programmatic);
-                });
-
-            if (result == YaguDialogResult.Primary)
+        TrayMenuWindow.ShowAt(
+            cursorX,
+            cursorY,
+            RootGrid.ActualTheme,
+            new TrayMenuActions
             {
-                ApplyExternalSearchRequest(new SearchRequest(
-                    Directory: directoryBox.Text,
-                    Query: queryBox.Text,
-                    RunSearch: true));
-            }
-        }
-        finally
+                OpenReset = () => DispatcherQueue.TryEnqueue(async () => await ResetToLauncherModeAsync()),
+                OpenExisting = () => DispatcherQueue.TryEnqueue(RestoreWindowFromTray),
+                CloseApp = () => RequestApplicationExit(Services.Index.IndexingCloseTrigger.UserExit),
+                ReadCurrentSearch = () => new TrayQuickSearchRequest(
+                    ViewModel.Directory ?? string.Empty,
+                    ViewModel.Query ?? string.Empty,
+                    ViewModel.UseRegex,
+                    ViewModel.CaseSensitive,
+                    ViewModel.Multiline,
+                    ViewModel.ExactMatch,
+                    ViewModel.IsSemanticQueryMode),
+                RunQuickSearch = request => DispatcherQueue.TryEnqueue(() => ApplyTrayQuickSearch(request)),
+            });
+    }
+
+    /// <summary>Applies the tray panel's options to this instance, then runs the search.</summary>
+    private void ApplyTrayQuickSearch(TrayQuickSearchRequest request)
+    {
+        ViewModel.IsSemanticQueryMode = request.Semantic;
+        if (!request.Semantic)
         {
-            _quickSearchDialogOpen = false;
+            // Multiline is regex-only in the search box, so keep the same coupling here.
+            ViewModel.UseRegex = request.UseRegex || request.Multiline;
+            ViewModel.CaseSensitive = request.CaseSensitive;
+            ViewModel.Multiline = request.Multiline;
+            ViewModel.ExactMatch = request.ExactMatch;
         }
+
+        ApplyExternalSearchRequest(new SearchRequest(
+            Directory: request.Directory,
+            Query: request.Query,
+            RunSearch: true));
     }
 }

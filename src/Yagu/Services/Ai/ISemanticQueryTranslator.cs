@@ -144,6 +144,17 @@ public interface ISemanticHostController
     Task ResetHostAsync(CancellationToken cancellationToken);
 }
 
+/// <summary>Optional qualification-only model source. Normal model listing remains hardware-safe;
+/// this capability lets the probe dialog explicitly request variants that capability, context, or
+/// memory checks marked as likely incompatible.</summary>
+public interface ISemanticQualificationCandidateProvider
+{
+    Task<IReadOnlyList<SemanticModelOption>> ListQualificationModelOptionsAsync(
+        bool includeLikelyIncompatible,
+        IProgress<SemanticTranslationProgress>? progress,
+        CancellationToken cancellationToken);
+}
+
 /// <summary>A locally-runnable model the user can choose for semantic translation.</summary>
 public sealed class SemanticModelOption
 {
@@ -186,6 +197,11 @@ public sealed class SemanticModelOption
     /// device memory). The picker warns that such a model will fail to load, but still allows selecting
     /// it as a deliberate override.</summary>
     public bool ExceedsAvailableMemory { get; init; }
+
+    /// <summary>True when the selected variant requires unavailable hardware, has too little context,
+    /// or otherwise failed the normal machine-compatibility screen. Qualification excludes it unless
+    /// the user explicitly opts into probing likely-incompatible models.</summary>
+    public bool IsLikelyIncompatible { get; init; }
 }
 
 /// <summary>Ambient information the model needs to resolve relative dates and defaults.</summary>

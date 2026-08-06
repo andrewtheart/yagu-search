@@ -547,6 +547,7 @@ public sealed class FontContrastRecordTests
 //  Coverage Round 5 — SearchService additional branches
 // ═══════════════════════════════════════════════════════════════════
 
+[Collection("SystemMemoryProvider")]
 public sealed class SearchServiceRound5Tests
 {
     [Fact]
@@ -599,14 +600,18 @@ public sealed class SearchServiceRound5Tests
     }
 
     [Fact]
-    public void IsMemoryPressureRelieved_WithSystemPressurePercent_ReturnsResult()
+    public void IsMemoryPressureRelieved_WithSystemPressurePercent_TakesTheSystemLoadBranch()
     {
-        // Test the branch where pressurePercent > 0 triggers system memory check
-        // Use a very high cap and 100% threshold so only system-wide OOM fails this
+        // Covers the pressurePercent > 0 path through the live system-memory probe. The outcome is pinned
+        // by the process-cap check (a 1-byte cap can never be relieved), so it does not depend on how much
+        // memory the machine happens to have free -- asserting "relieved" here made this test fail whenever
+        // the GPU suite loaded a multi-GB model alongside it. The load comparison itself is covered
+        // deterministically by the IsMemoryPressureRelievedForSnapshot tests in SearchServiceTests.
         bool relieved = SearchService.IsMemoryPressureRelieved(
-            long.MaxValue,
-            100); // 100% threshold → only fails at 100% system load
-        Assert.True(relieved);
+            maxProcessBytes: 1,
+            pressurePercent: 100);
+
+        Assert.False(relieved);
     }
 }
 

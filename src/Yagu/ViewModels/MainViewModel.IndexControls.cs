@@ -44,7 +44,7 @@ public sealed partial class MainViewModel
     private void StartBackgroundIndexBuild(string folder, bool rebuild = false)
     {
         string root = folder.Trim();
-        if (root.Length == 0)
+        if (_shutdownRequested || root.Length == 0)
             return;
 
         IndexBuildOperation operation = IndexBuildOperationFactory.CreateBuild(_settings, root, rebuild);
@@ -504,7 +504,7 @@ public sealed partial class MainViewModel
         else
         {
             IndexStatusGlyph = ContentIndexUiStatus.AvailabilityGlyph(IndexAvailability.Available);
-            IndexStatusText = "Index: ready";
+            IndexStatusText = ContentIndexUiStatus.ReadyLabel;
             IndexStatusTooltip = "The content index finished building. Matching files are always read live from disk. "
                 + BuildIndexDateDetails()
                 + BuildIndexSchedulingDetails();

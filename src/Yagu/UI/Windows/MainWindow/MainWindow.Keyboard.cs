@@ -33,7 +33,11 @@ public sealed partial class MainWindow
         bool ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
         bool shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
-        if (e.Key == Windows.System.VirtualKey.F1)
+        if (e.Key == Windows.System.VirtualKey.Escape && TryDismissOpenOverlayOnEscape())
+        {
+            e.Handled = true;
+        }
+        else if (e.Key == Windows.System.VirtualKey.F1)
         {
             e.Handled = true;
             OpenHelpWindow();
@@ -79,6 +83,34 @@ public sealed partial class MainWindow
         {
             e.Handled = true;
         }
+    }
+
+    /// <summary>
+    /// Closes the topmost open in-tree informational overlay (these are hand-built panels rather than
+    /// WinUI <c>Flyout</c>s, which already light-dismiss on Esc). Returns false when none is open so Esc
+    /// keeps its existing meaning — cancelling a running search or closing the find bar.
+    /// </summary>
+    private bool TryDismissOpenOverlayOnEscape()
+    {
+        if (SkipBreakdownOverlay?.Visibility == Visibility.Visible)
+        {
+            HideSkipBreakdownOverlay();
+            return true;
+        }
+
+        if (IndexStatusHoverOverlay?.Visibility == Visibility.Visible)
+        {
+            HideIndexStatusHoverOverlay();
+            return true;
+        }
+
+        if (PreviewShowMoreTooltipOverlay?.Visibility == Visibility.Visible)
+        {
+            HidePreviewShowMoreTooltip();
+            return true;
+        }
+
+        return false;
     }
 
     private bool TryHandlePreviewMatchEnter(DependencyObject? source, bool shift)

@@ -989,7 +989,7 @@
                                         <StackPanel x:Name="AdvancedOptionsQuickSearchesTabContent" Spacing="10" Visibility="Collapsed">
                                             <TextBlock Text="Quick searches" FontSize="16" FontWeight="SemiBold" />
                                             <TextBlock Opacity="0.75" TextWrapping="Wrap"
-                                                       Text="One-click searches for things developers hunt for across a codebase. Each loads a regex into the box (Traditional mode) and runs immediately over the current directory." />
+                                                       Text="One-click searches for things developers hunt for across a codebase. Each loads its query into the box and runs immediately, in the folder it was saved with — or across every drive from its root when no folder was set." />
                                             <StackPanel x:Name="QuickSearchesPanel" Spacing="6">
                                                 <Button x:Name="FindCodeAnnotationsButton"
                                                         Click="OnFindCodeAnnotations"
@@ -1000,71 +1000,43 @@
                                                         <TextBlock Text="Find code annotations (TODO / FIXME…)" VerticalAlignment="Center" />
                                                     </StackPanel>
                                                 </Button>
-                                                <Button Tag="merge-conflicts" Click="OnQuickSearch"
-                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                        ToolTipService.ToolTip="Find unresolved Git merge-conflict markers left in files after a bad merge.">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <FontIcon Glyph="&#xE8AB;" FontSize="14" />
-                                                        <TextBlock Text="Merge conflict markers" VerticalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                                <Button Tag="debug-output" Click="OnQuickSearch"
-                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                        ToolTipService.ToolTip="Find leftover debug output — console.log, print(), printf, System.out.print, Debug.Write/Log, fmt.Print.">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <FontIcon Glyph="&#xEBE8;" FontSize="14" />
-                                                        <TextBlock Text="Leftover debug output" VerticalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                                <Button Tag="secrets" Click="OnQuickSearch"
-                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                        ToolTipService.ToolTip="First-pass scan for hardcoded credentials — assignments to api key, secret, password, token, access key, or connection string.">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <FontIcon Glyph="&#xE72E;" FontSize="14" />
-                                                        <TextBlock Text="Possible secrets / credentials" VerticalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                                <Button Tag="urls" Click="OnQuickSearch"
-                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                        ToolTipService.ToolTip="Find every http(s) URL — handy for auditing endpoints and links.">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <FontIcon Glyph="&#xE71B;" FontSize="14" />
-                                                        <TextBlock Text="URLs / links" VerticalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                                <Button Tag="emails" Click="OnQuickSearch"
-                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                        ToolTipService.ToolTip="Find email addresses in the files.">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <FontIcon Glyph="&#xE715;" FontSize="14" />
-                                                        <TextBlock Text="Email addresses" VerticalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                                <Button Tag="empty-catch" Click="OnQuickSearch"
-                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                        ToolTipService.ToolTip="Find empty catch blocks that silently swallow exceptions.">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <FontIcon Glyph="&#xE7BA;" FontSize="14" />
-                                                        <TextBlock Text="Empty catch blocks" VerticalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                                <Button Tag="deprecated" Click="OnQuickSearch"
-                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                        ToolTipService.ToolTip="Find APIs marked deprecated or obsolete — @deprecated, [Obsolete], @Deprecated.">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <FontIcon Glyph="&#xE81C;" FontSize="14" />
-                                                        <TextBlock Text="Deprecated / obsolete markers" VerticalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                                <Button Tag="guids" Click="OnQuickSearch"
-                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                        ToolTipService.ToolTip="Find GUIDs / UUIDs in the files.">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <FontIcon Glyph="&#xE8AC;" FontSize="14" />
-                                                        <TextBlock Text="GUIDs / UUIDs" VerticalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
                                             </StackPanel>
+
+                                            <!-- User-managed quick searches: rows are built in
+                                                 MainWindow.QuickSearchEditor.cs so they can be added,
+                                                 inline-edited, reordered and deleted, then persisted. -->
+                                            <Grid Margin="0,6,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="My quick searches" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                                                    <Button x:Name="SaveCurrentOptionsAsQuickSearchButton"
+                                                            Click="OnSaveCurrentOptionsAsQuickSearch"
+                                                            Padding="8,4" MinWidth="0"
+                                                            ToolTipService.ToolTip="Create a quick search from the current query and every Advanced Option as they are right now. Running it later restores all of them.">
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <FontIcon Glyph="&#xE74E;" FontSize="12" />
+                                                            <TextBlock Text="Save current options" FontSize="12" VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                    <Button x:Name="AddQuickSearchButton"
+                                                            Click="OnAddQuickSearch"
+                                                            Padding="8,4" MinWidth="0"
+                                                            ToolTipService.ToolTip="Add a new quick search">
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <FontIcon Glyph="&#xE710;" FontSize="12" />
+                                                            <TextBlock Text="Add" FontSize="12" VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                </StackPanel>
+                                            </Grid>
+                                            <TextBlock x:Name="QuickSearchesEmptyText"
+                                                       Text="No saved quick searches yet — choose Add to create one."
+                                                       Opacity="0.7" FontSize="12" TextWrapping="Wrap"
+                                                       Visibility="Collapsed" />
+                                            <StackPanel x:Name="UserQuickSearchesPanel" Spacing="4" />
                                         </StackPanel>
 
                                         <!-- Filters tab -->
@@ -1854,8 +1826,13 @@
                                 VerticalAlignment="Center" ToolTipService.ToolTip="Results options">
                             <FontIcon Glyph="&#xE700;" FontSize="12" />
                             <Button.Flyout>
-                                <Flyout x:Name="ResultsOptionsFlyout" Placement="BottomEdgeAlignedRight" Opened="OnResultsOptionsFlyoutOpened">
-                                    <StackPanel MinWidth="170" Spacing="6" Padding="2">
+                                <Flyout x:Name="ResultsOptionsFlyout" Placement="Bottom" Opened="OnResultsOptionsFlyoutOpened">
+                                    <Flyout.FlyoutPresenterStyle>
+                                        <Style TargetType="FlyoutPresenter">
+                                            <Setter Property="MinWidth" Value="0" />
+                                        </Style>
+                                    </Flyout.FlyoutPresenterStyle>
+                                    <StackPanel MinWidth="150" Spacing="6" Padding="2">
                                         <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                             <TextBlock Text="Context:" VerticalAlignment="Center" FontSize="12" Opacity="0.8" />
                                             <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"
@@ -1908,16 +1885,49 @@
                                    Visibility="{x:Bind ViewModel.MemoryPressureWarningVisibility, Mode=OneWay}"
                                    HorizontalAlignment="Right" VerticalAlignment="Center"
                                    FontSize="12" Foreground="DarkOrange" Opacity="0.9" Margin="8,0,8,0" />
-                        <Grid Grid.Column="2" MinWidth="200" VerticalAlignment="Center"
-                              Margin="0,0,4,0"
-                              Visibility="{x:Bind ViewModel.ResultFileFilterVisibility, Mode=OneWay}">
-                            <TextBox AutomationProperties.AutomationId="ResultFileFilterBox"
-                                     PlaceholderText="Filter files…"
-                                     Text="{x:Bind ViewModel.FileNameFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                     Padding="30,4,8,4" FontSize="12" />
-                            <FontIcon Glyph="&#xE71C;" FontSize="12" Opacity="0.65"
-                                      HorizontalAlignment="Left" VerticalAlignment="Center"
-                                      Margin="10,0,0,0" IsHitTestVisible="False" />
+                        <Grid Grid.Column="2" VerticalAlignment="Center" Margin="0,0,4,0"
+                              Visibility="{x:Bind ViewModel.ResultFilterAreaVisibility, Mode=OneWay}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="SkippedInfoButton"
+                                    Height="28" MinWidth="0" MinHeight="0"
+                                    Margin="0,0,6,0" Padding="0"
+                                    Background="Transparent" BorderThickness="0"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind ViewModel.SkippedInfoVisibility, Mode=OneWay}"
+                                    AutomationProperties.Name="Skipped files information"
+                                    AutomationProperties.HelpText="{x:Bind ViewModel.SkipTooltip, Mode=OneWay}"
+                                    Click="OnSkipInfoClicked"
+                                    PointerEntered="OnSkipInfoPointerEntered"
+                                    PointerExited="OnSkipInfoPointerExited">
+                                <Grid MinWidth="32" Height="26">
+                                    <FontIcon Glyph="&#xE946;" FontSize="18"
+                                              Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                              HorizontalAlignment="Left" VerticalAlignment="Center"
+                                              Margin="2,0,0,0" />
+                                    <Border MinWidth="15" Height="15" Padding="3,0"
+                                            HorizontalAlignment="Left" VerticalAlignment="Top"
+                                            Margin="17,0,0,0"
+                                            Background="{ThemeResource SystemFillColorCautionBrush}"
+                                            CornerRadius="8">
+                                        <TextBlock Text="{x:Bind ViewModel.FilesSkipped, Mode=OneWay}"
+                                                   Foreground="#1F1F1F" FontSize="9" FontWeight="SemiBold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                </Grid>
+                            </Button>
+                            <Grid Grid.Column="1" MinWidth="200"
+                                  Visibility="{x:Bind ViewModel.ResultFileFilterVisibility, Mode=OneWay}">
+                                <TextBox AutomationProperties.AutomationId="ResultFileFilterBox"
+                                         PlaceholderText="Filter files…"
+                                         Text="{x:Bind ViewModel.FileNameFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                         Padding="30,4,8,4" FontSize="12" />
+                                <FontIcon Glyph="&#xE71C;" FontSize="12" Opacity="0.65"
+                                          HorizontalAlignment="Left" VerticalAlignment="Center"
+                                          Margin="10,0,0,0" IsHitTestVisible="False" />
+                            </Grid>
                         </Grid>
                     </Grid>
 
@@ -2639,10 +2649,9 @@
                 <TextBlock x:Name="DiskGaugeLabel" VerticalAlignment="Center" HorizontalAlignment="Right"
                            Style="{StaticResource StatusBarTextStyle}" Opacity="0.75" Margin="0,0,6,0" />
             </Grid>
-            <!-- Right-aligned status cluster: resource usage, then the content-index status (+ a truncated
-                 warning), then the skipped-count — in that order, flush to the right edge. Each item hides
-                 independently, so the cluster adapts to whatever is present; the search stats stay far left
-                 and the stretch column between keeps this group pinned to the right. -->
+              <!-- Right-aligned status cluster: resource usage, then the content-index status and a truncated
+                  warning. Each item hides independently, so the cluster adapts to whatever is present; the
+                  search stats stay far left and the stretch column keeps this group pinned to the right. -->
             <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
                 <!-- Yagu resource stats (disk temp + cached index storage + Yagu/worker RAM).
                      Measurement is off-thread; index size refreshes at most once per minute and never
@@ -2698,9 +2707,8 @@
                             KeyDown="OnIndexStatusKeyDown"
                             PointerEntered="OnIndexStatusPointerEntered"
                             PointerExited="OnIndexStatusPointerExited">
-                    <!-- Keep a stable slot so changing status/percent text cannot move the neighboring
-                        resource and Skipped labels. The content is left-anchored so different status
-                        lengths do not visibly drift within the slot. -->
+                    <!-- Keep a stable slot so changing status/percent text cannot move neighboring status
+                        content. The content is left-anchored so different lengths do not visibly drift. -->
                     <Grid Width="230" VerticalAlignment="Center">
                         <StackPanel Orientation="Horizontal" Spacing="4"
                                  HorizontalAlignment="Left" VerticalAlignment="Center">
@@ -2742,15 +2750,6 @@
                            MaxWidth="190" TextTrimming="CharacterEllipsis"
                            Visibility="{x:Bind ViewModel.Truncated, Mode=OneWay}"
                            Text="Results truncated — refine your query" />
-                <TextBlock x:Name="SkipCountBlock" Width="88"
-                           Style="{StaticResource StatusBarMutedTextStyle}" Opacity="0.6"
-                           TextAlignment="Right" TextTrimming="CharacterEllipsis"
-                           Visibility="{x:Bind ViewModel.SkippedCountVisibility, Mode=OneWay}"
-                           Tapped="OnSkipCountTapped" PointerEntered="OnSkipCountPointerEntered"
-                           PointerExited="OnSkipCountPointerExited">
-                    <Run Text="Skipped: " />
-                    <Run Text="{x:Bind ViewModel.FilesSkipped, Mode=OneWay}" />
-                </TextBlock>
             </StackPanel>
         </Grid>
 
@@ -2759,7 +2758,7 @@
              frequently; keeping the surface in the main visual tree prevents WinUI from dismissing and
              recreating a separate popup as its placement target is remeasured. -->
         <Border x:Name="IndexStatusHoverOverlay"
-                Grid.Row="4"
+            Grid.Row="0" Grid.RowSpan="7"
                 Visibility="Collapsed"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Bottom"
@@ -2856,26 +2855,50 @@
             </StackPanel>
         </Border>
 
-        <!-- Skip breakdown overlay — floats above status bar, toggled by skip-count click -->
+        <!-- Skip breakdown overlay - shown by hovering the skipped-files info icon and pinned by click.
+             It spans every row so PositionSkipBreakdownOverlay can center it directly beneath that icon;
+             the close button or Esc dismisses it. -->
         <Border x:Name="SkipBreakdownOverlay"
-                Grid.Row="4"
+                Grid.Row="0" Grid.RowSpan="7"
                 Visibility="Collapsed"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Bottom"
-                Margin="0,0,20,8"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                MaxWidth="420"
                 Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 CornerRadius="8"
                 Padding="16,12"
                 Canvas.ZIndex="100"
-                Translation="0,0,32">
+                Translation="0,0,32"
+                PointerEntered="OnSkipBreakdownOverlayPointerEntered"
+                PointerExited="OnSkipBreakdownOverlayPointerExited">
             <Border.Shadow>
                 <ThemeShadow />
             </Border.Shadow>
-            <TextBlock Text="{x:Bind ViewModel.SkipTooltip, Mode=OneWay}"
-                       FontFamily="Consolas" FontSize="12"
-                       IsTextSelectionEnabled="True" />
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <!-- Right margin keeps the aligned table clear of the close button. Rows are rendered in
+                     MainWindow.SettingsMenus.cs so the glyph/label/count columns line up regardless of
+                     the per-emoji advance width a monospaced font cannot equalize. -->
+                <StackPanel x:Name="SkipBreakdownContent" Margin="0,0,28,0" Spacing="8" />
+                <TextBlock Grid.Row="1" Text="{x:Bind ViewModel.SkipFootnoteText}"
+                           Margin="0,10,0,0"
+                           TextWrapping="Wrap" FontSize="11" Opacity="0.75"
+                           IsTextSelectionEnabled="True" />
+                <Button x:Name="SkipBreakdownCloseButton"
+                        HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Width="24" Height="24" MinWidth="0" MinHeight="0" Padding="0"
+                        Background="Transparent" BorderThickness="0"
+                        Click="OnSkipBreakdownCloseClicked"
+                        AutomationProperties.Name="Close skipped files breakdown"
+                        ToolTipService.ToolTip="Close (Esc)">
+                    <FontIcon Glyph="&#xE8BB;" FontSize="11" />
+                </Button>
+            </Grid>
         </Border>
 
         <!-- Embedded terminal panel (ConPTY + xterm.js in WebView2) -->

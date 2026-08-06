@@ -16,7 +16,7 @@ namespace Yagu.Services.Ai;
 /// model entirely on-device (no HTTP server, no network egress of the user's query). The execution
 /// provider and model are downloaded lazily on first use; subsequent calls reuse the loaded model.
 /// </summary>
-public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslator, IAsyncDisposable
+public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslator, ISemanticQualificationCandidateProvider, IAsyncDisposable
 {
     private const string PromptResourceName = "Yagu.Services.Ai.Prompts.SemanticSearchSystemPrompt.prompt.md";
     private const string SmallPromptResourceName = "Yagu.Services.Ai.Prompts.SemanticSearchSystemPromptSmall.prompt.md";
@@ -1034,8 +1034,20 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         return _catalog;
     }
 
-    public async Task<IReadOnlyList<SemanticModelOption>> ListModelOptionsAsync(
+    public Task<IReadOnlyList<SemanticModelOption>> ListModelOptionsAsync(
         IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
+        => ListModelOptionsCoreAsync(includeLikelyIncompatible: false, progress, cancellationToken);
+
+    public Task<IReadOnlyList<SemanticModelOption>> ListQualificationModelOptionsAsync(
+        bool includeLikelyIncompatible,
+        IProgress<SemanticTranslationProgress>? progress,
+        CancellationToken cancellationToken)
+        => ListModelOptionsCoreAsync(includeLikelyIncompatible, progress, cancellationToken);
+
+    private async Task<IReadOnlyList<SemanticModelOption>> ListModelOptionsCoreAsync(
+        bool includeLikelyIncompatible,
+        IProgress<SemanticTranslationProgress>? progress,
+        CancellationToken cancellationToken)
     {
         if (!_enabled) return Array.Empty<SemanticModelOption>();
 
@@ -1070,12 +1082,19 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             // variant. CPU is always available, so this rarely drops any. The picker then shows the
             // device/build Yagu will actually load (not Foundry's GPU default).
             var availableDevices = AvailableDevices();
-            var resolved = new List<(IModel Family, IModel Variant)>(usable.Count);
+            var resolved = new List<(IModel Family, IModel Variant, bool IsLikelyIncompatible)>(usable.Count);
             foreach (var m in usable)
             {
                 IModel family = await catalog.GetModelAsync(AliasOf(m), cancellationToken).ConfigureAwait(false) ?? m;
                 IModel? variant = FoundryModelSelector.BestRunnableVariant(family, _deviceOrder, availableDevices);
-                if (variant is null) continue;
+                bool likelyIncompatible = false;
+                if (variant is null)
+                {
+                    if (!includeLikelyIncompatible) continue;
+                    variant = FoundryModelSelector.BestRunnableVariant(family, _deviceOrder, availableDevices: null)
+                        ?? family;
+                    likelyIncompatible = true;
+                }
 
                 // Exclude a downloaded variant whose context window is too small to hold the system prompt
                 // + query + plan (e.g. a 4224-token OpenVINO-NPU build): it would load but fail every
@@ -1084,21 +1103,30 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 int? ctx = VariantContextLength(variant);
                 if (!ModelContextBudget.Fits(ctx))
                 {
+                    if (includeLikelyIncompatible)
+                    {
+                        likelyIncompatible = true;
+                        resolved.Add((family, variant, likelyIncompatible));
+                        continue;
+                    }
                     log.LogInformation(
                         "Excluding '{FamilyAlias}' [{VariantId}] from options: context window {ContextWindow} < {RequiredContextTokens}.",
                         AliasOf(family), variant.Id, ctx, ModelContextBudget.RequiredContextTokens);
                     continue;
                 }
-                resolved.Add((family, variant));
+                resolved.Add((family, variant, likelyIncompatible));
             }
             if (resolved.Count == 0)
             {
-                log.LogWarning("No model variant matches the detected devices; listing families as a fallback.");
-                resolved = usable.Select(m => (m, m)).ToList();
+                log.LogWarning("No model variant matches the detected devices and compatibility limits.");
+                return Array.Empty<SemanticModelOption>();
             }
 
-            string? recommendedAlias = FoundryModelSelector.SelectAlias(
-                resolved.Select(p => new FoundryModelSelector.ModelCandidate(
+            var compatible = resolved.Where(p => !p.IsLikelyIncompatible).ToList();
+            string? recommendedAlias = compatible.Count == 0
+                ? null
+                : FoundryModelSelector.SelectAlias(
+                compatible.Select(p => new FoundryModelSelector.ModelCandidate(
                     Alias: AliasOf(p.Family),
                     FileSizeMb: p.Variant.Info?.FileSizeMb,
                     Task: p.Variant.Info?.Task,
@@ -1108,7 +1136,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             // accurate model (e.g. phi-4) when this machine has plenty of VRAM AND that family is in the
             // resolved list. Keeps the "recommended" pill consistent with what auto-select actually loads.
             if (HighAccuracyModelPolicy.UpgradeAliasFor(AvailableVramBudgetMb()) is { } upgradeAlias
-                && resolved.Any(p => string.Equals(AliasOf(p.Family), upgradeAlias, StringComparison.OrdinalIgnoreCase)))
+                && compatible.Any(p => string.Equals(AliasOf(p.Family), upgradeAlias, StringComparison.OrdinalIgnoreCase)))
             {
                 recommendedAlias = upgradeAlias;
             }
@@ -1120,7 +1148,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             int? memBudgetMb = AvailableMemoryBudgetMb();
 
             var options = new List<SemanticModelOption>(resolved.Count);
-            foreach ((IModel family, IModel variant) in resolved)
+            foreach ((IModel family, IModel variant, bool likelyIncompatible) in resolved)
             {
                 string alias = AliasOf(family);
                 bool isRecommended = recommendedAlias is not null &&
@@ -1128,6 +1156,9 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 int rank = FoundryModelSelector.RankOf(alias);
                 bool isCached = await variant.IsCachedAsync(cancellationToken).ConfigureAwait(false);
                 int? sizeMb = variant.Info?.FileSizeMb;
+                bool exceedsAvailableMemory = memBudgetMb is { } budget
+                    && sizeMb is { } sz
+                    && !ModelMemoryBudget.Fits(sz, budget);
 
                 options.Add(new SemanticModelOption
                 {
@@ -1140,13 +1171,15 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                     IsPreferredFamily = rank != int.MaxValue,
                     IsCached = isCached,
                     DeviceLabel = DeviceLabelOf(FoundryModelSelector.ResolveVariantDevice(variant)),
-                    ExceedsAvailableMemory = memBudgetMb is { } budget && sizeMb is { } sz && !ModelMemoryBudget.Fits(sz, budget),
+                    ExceedsAvailableMemory = exceedsAvailableMemory,
+                    IsLikelyIncompatible = likelyIncompatible || exceedsAvailableMemory,
                 });
             }
 
             // Recommended first, then better-ranked models, then the rest; cached/smaller as tiebreakers.
             var ordered = options
                 .OrderByDescending(o => o.IsRecommended)
+                .ThenBy(o => o.IsLikelyIncompatible)
                 .ThenBy(o => FoundryModelSelector.RankOf(o.Alias))
                 .ThenByDescending(o => o.IsCached)
                 .ThenBy(o => o.SizeBytes ?? long.MaxValue)

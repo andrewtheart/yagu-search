@@ -19,6 +19,9 @@ public sealed partial class MainViewModel
     [RelayCommand]
     public async Task StartSearchAsync()
     {
+        if (_shutdownRequested)
+            return;
+
         // A complete file path typed into the Traditional search box (and nothing else) is a request
         // to show exactly that file, regardless of the Directory box. Detect and short-circuit here,
         // before any directory validation, so the Directory box never affects this lookup.
@@ -107,7 +110,7 @@ public sealed partial class MainViewModel
         Task? lowDiskMonitorTask = null;
         try
         {
-            if (runId != Volatile.Read(ref _searchRunId))
+            if (_shutdownRequested || runId != Volatile.Read(ref _searchRunId))
                 return;
 
             ResetStateForNewSearch();
@@ -640,6 +643,7 @@ public sealed partial class MainViewModel
                 {
                     StatusText = BuildCancelledStatus(cancelledElapsed);
                     YaguLog.For("Search").LogInformation("Search #{RunId} cancelled", runId);
+                    ShowSearchCancelledToast(cancelledElapsed);
                 }
                 DegradedNoticeText = string.Empty;
             }
@@ -717,7 +721,7 @@ public sealed partial class MainViewModel
         CancellationTokenSource? cts = null;
         try
         {
-            if (runId != Volatile.Read(ref _searchRunId))
+            if (_shutdownRequested || runId != Volatile.Read(ref _searchRunId))
                 return;
 
             ResetStateForNewSearch();

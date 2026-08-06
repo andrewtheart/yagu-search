@@ -1,12 +1,19 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml.Controls;
 using Yagu.Services.Index;
+using Yagu.Services.Logging;
 
 namespace Yagu;
 
 public sealed partial class MainWindow
 {
     private const uint WmQueryEndSession = 0x0011;
+    private static readonly TimeSpan ApplicationExitGracePeriod = TimeSpan.FromSeconds(5);
     private bool _indexingCloseWarningOpen;
+    private bool _applicationExitInProgress;
+    private bool IsIndexOperationActive => ViewModel.IsIndexBuildActive || ViewModel.IsIndexRebuildBlocking;
+    private bool IsOwnedOperationActive => IsIndexOperationActive || ViewModel.IsSearchActive
+        || ViewModel.IsTranslatingSemanticQuery || ViewModel.IsIndexWarmActive;
 
     private void RequestApplicationExit(
         IndexingCloseTrigger trigger,
@@ -17,18 +24,47 @@ public sealed partial class MainWindow
         IndexingCloseTrigger trigger,
         IndexingCloseWarningContent? capturedWarning)
     {
+        if (_applicationExitInProgress)
+            return;
         if (!await ConfirmExitWhileIndexingAsync(trigger, capturedWarning))
             return;
 
-        _forceClose = true;
-        Close();
+        await CompleteApplicationExitAsync();
+    }
+
+    private async Task CompleteApplicationExitAsync()
+    {
+        if (_applicationExitInProgress)
+            return;
+
+        _applicationExitInProgress = true;
+        ViewModel.StatusText = "Closing Yagu…";
+        try
+        {
+            bool graceful = await ViewModel.PrepareForShutdownAsync(ApplicationExitGracePeriod).ConfigureAwait(true);
+            if (!graceful)
+            {
+                YaguLog.For("MainWindow").LogWarning(
+                    "Application shutdown grace period elapsed; forcing final process-backed cleanup.");
+            }
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("MainWindow").LogWarning(ex,
+                "Application shutdown cleanup failed; forcing final process-backed cleanup.");
+        }
+        finally
+        {
+            _forceClose = true;
+            Close();
+        }
     }
 
     private async Task<bool> ConfirmExitWhileIndexingAsync(
         IndexingCloseTrigger trigger,
         IndexingCloseWarningContent? capturedWarning = null)
     {
-        if (capturedWarning is null && !ViewModel.IsIndexBuildActive)
+        if (capturedWarning is null && !IsIndexOperationActive)
             return true;
         if (_indexingCloseWarningOpen)
         {
@@ -84,13 +120,20 @@ public sealed partial class MainWindow
 
     private bool TryBlockWindowsSessionEnd()
     {
-        if (_forceClose || !ViewModel.IsIndexBuildActive)
+        if (_forceClose || !IsOwnedOperationActive)
             return false;
 
-        IndexingCloseWarningContent warning = IndexingCloseWarning.Build(
-            IndexingCloseTrigger.WindowsSessionEnding,
-            ViewModel.IsActiveIndexBuildIncremental,
-            ViewModel.ActiveIndexBuildFolder);
+        IndexingCloseWarningContent warning = IsIndexOperationActive
+            ? IndexingCloseWarning.Build(
+                IndexingCloseTrigger.WindowsSessionEnding,
+                ViewModel.IsActiveIndexBuildIncremental,
+                ViewModel.ActiveIndexBuildFolder)
+            : new IndexingCloseWarningContent(
+                "Windows requested shutdown while Yagu is busy",
+                "Windows requested a restart, shutdown, or sign-out. Yagu stopped that request so it can cancel active work and clean up temporary files safely. "
+                    + "Choose Exit Yagu, then retry the Windows operation after Yagu closes.",
+                "Keep Yagu open",
+                "Exit Yagu");
         RequestApplicationExit(IndexingCloseTrigger.WindowsSessionEnding, warning);
         return true;
     }

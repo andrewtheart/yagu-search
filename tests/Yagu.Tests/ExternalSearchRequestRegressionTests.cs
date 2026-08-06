@@ -64,23 +64,31 @@ public sealed class ExternalSearchRequestRegressionTests
         Assert.Contains("SMTO_ABORTIFHUNG, 3000", sender);
     }
 
-    // ---- Task 2: Tray quick-search menu item + event ----
+    // ---- Task 2: Tray context menu + inline quick search ----
 
     [Fact]
-    public void TrayIcon_ExposesQuickSearchMenuItemAndEvent()
+    public void TrayIcon_RaisesContextMenuRequestedInsteadOfBuildingAWin32Menu()
     {
-        Assert.Contains("public event Action? QuickSearchRequested;", TrayIconSource);
-        Assert.Contains("CMD_QUICK_SEARCH = 4", TrayIconSource);
-        Assert.Contains("case CMD_QUICK_SEARCH: QuickSearchRequested?.Invoke(); break;", TrayIconSource);
-        Assert.Contains("AppendMenuW(hMenu, MF_STRING, CMD_QUICK_SEARCH, \"Quick search", TrayIconSource);
+        Assert.Contains("public event Action<int, int>? ContextMenuRequested;", TrayIconSource);
+        Assert.Contains("ContextMenuRequested?.Invoke(pt.x, pt.y);", TrayIconSource);
+        // Foreground first, so the themed menu window can take activation and dismiss when it loses it.
+        AssertContainsInOrder(TrayIconSource,
+            "SetForegroundWindow(_hwnd);",
+            "GetCursorPos(out POINT pt);",
+            "ContextMenuRequested?.Invoke(pt.x, pt.y);");
+
+        // The Win32 popup menu is gone, so none of its plumbing may linger.
+        Assert.DoesNotContain("TrackPopupMenuEx", TrayIconSource);
+        Assert.DoesNotContain("AppendMenuW", TrayIconSource);
+        Assert.DoesNotContain("CMD_QUICK_SEARCH", TrayIconSource);
     }
 
     [Fact]
-    public void Launcher_WiresQuickSearchRequestedToDialog()
+    public void Launcher_WiresContextMenuRequestedToTheThemedMenu()
     {
         AssertContainsInOrder(LauncherSource,
-            "_trayIcon.QuickSearchRequested += () =>",
-            "DispatcherQueue.TryEnqueue(async () => await ShowTrayQuickSearchAsync());");
+            "_trayIcon.ContextMenuRequested += (x, y) =>",
+            "DispatcherQueue.TryEnqueue(() => ShowTrayContextMenu(x, y));");
     }
 
     // ---- Shared apply path ----
@@ -103,18 +111,42 @@ public sealed class ExternalSearchRequestRegressionTests
     }
 
     [Fact]
-    public void QuickSearchDialog_IsTitleBarLessAndSubmitsOnEnter()
+    public void TrayQuickSearch_IsInlineInTheMenuAndCarriesEveryOption()
     {
-        string dialog = ExtractWindow(QuickSearchSource,
-            "internal async Task ShowTrayQuickSearchAsync", 3400);
+        string menu = Read("src", "Yagu", "UI", "Windows", "TrayMenuWindow.cs");
 
-        AssertContainsInOrder(dialog,
-            "YaguDialog.HasOpenOwnedWindow(_hwnd)",        // never stacks on another modal
-            "PrimaryButtonText = \"Search\"",
-            "ShowTitleBar = false,",                       // modal-no-title-bar rule
-            "Windows.System.VirtualKey.Enter",             // Enter submits
-            "dialog.AcceptPrimary();",
-            "YaguDialogResult.Primary",
+        // Choosing Quick search expands the panel in place; the menu is not dismissed.
+        string toggle = ExtractWindow(menu, "private void ToggleQuickSearchPanel()", 400);
+        Assert.Contains("_quickSearchPanel.Visibility = opening ? Visibility.Visible : Visibility.Collapsed;", toggle);
+        Assert.DoesNotContain("CloseMenu();", toggle);
+
+        // Scope, query, all four search-box toggles, and the Traditional/Semantic switch.
+        Assert.Contains("Text = \"Directory\"", menu);
+        Assert.Contains("Text = \"Pattern\"", menu);
+        Assert.Contains("Content = \"Traditional\"", menu);
+        Assert.Contains("Content = \"Semantic\"", menu);
+        foreach (string option in new[] { "Regex", "Case", "Multiline", "Exact" })
+            Assert.Contains($"Content = \"{option}\"", menu);
+
+        // Title-bar-less per the modal convention, and dismissed by deactivation or Esc.
+        Assert.Contains("ExtendsContentIntoTitleBar = true;", menu);
+        Assert.Contains("presenter.SetBorderAndTitleBar(hasBorder: false, hasTitleBar: false);", menu);
+        Assert.Contains("WindowActivationState.Deactivated", menu);
+        Assert.Contains("Windows.System.VirtualKey.Escape", menu);
+
+        // Borderless: a stroked root grid drew a visible light outline around the menu.
+        string root = ExtractWindow(menu, "private Grid BuildRoot(ElementTheme theme)", 1200);
+        Assert.DoesNotContain("BorderThickness", root);
+        Assert.DoesNotContain("BorderBrush", root);
+
+        // The applied search restores every option before running.
+        string apply = ExtractWindow(QuickSearchSource, "private void ApplyTrayQuickSearch", 900);
+        AssertContainsInOrder(apply,
+            "ViewModel.IsSemanticQueryMode = request.Semantic;",
+            "ViewModel.UseRegex = request.UseRegex || request.Multiline;",
+            "ViewModel.CaseSensitive = request.CaseSensitive;",
+            "ViewModel.Multiline = request.Multiline;",
+            "ViewModel.ExactMatch = request.ExactMatch;",
             "ApplyExternalSearchRequest(new SearchRequest(");
     }
 

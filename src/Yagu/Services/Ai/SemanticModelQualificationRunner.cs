@@ -272,7 +272,7 @@ public sealed class SemanticModelQualificationRunner
             Stage = SemanticQualificationStage.EnumeratingCandidates,
         });
 
-        IReadOnlyList<string> candidates = await EnumerateCandidatesAsync(progress, cancellationToken)
+        IReadOnlyList<string> candidates = await EnumerateCandidatesAsync(thresholds, progress, cancellationToken)
             .ConfigureAwait(false);
 
         if (candidates.Count == 0)
@@ -815,13 +815,17 @@ public sealed class SemanticModelQualificationRunner
     /// <c>maxCandidates</c>, then reordered so a family's smaller/faster variant is tried before its
     /// larger sibling. Returns empty when the translator lists no runnable models.</summary>
     private async Task<IReadOnlyList<string>> EnumerateCandidatesAsync(
+        ModelQualificationThresholds thresholds,
         IProgress<SemanticQualificationProgress>? progress,
         CancellationToken cancellationToken)
     {
         IReadOnlyList<SemanticModelOption> options;
         try
         {
-            options = await _translator.ListModelOptionsAsync(null, cancellationToken).ConfigureAwait(false);
+            options = _translator is ISemanticQualificationCandidateProvider provider
+                ? await provider.ListQualificationModelOptionsAsync(
+                    thresholds.ProbeLikelyIncompatibleModels, null, cancellationToken).ConfigureAwait(false)
+                : await _translator.ListModelOptionsAsync(null, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -842,6 +846,11 @@ public sealed class SemanticModelQualificationRunner
         {
             if (string.IsNullOrWhiteSpace(option.Alias))
                 return;
+            if (!thresholds.ProbeLikelyIncompatibleModels
+                && (option.IsLikelyIncompatible || option.ExceedsAvailableMemory))
+            {
+                return;
+            }
             // Reasoning / chain-of-thought models can NEVER be auto-selected (their <think> traces break
             // the strict-JSON contract — see FoundryModelSelector.IsAutoSelectable), so probing them is pure
             // wasted time: every probe blows the per-query limit and then WEDGES (the native inference keeps

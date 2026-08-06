@@ -624,6 +624,32 @@ public sealed partial class SettingsWindow
             s => s.ShowIndexProvenanceInResults, (s, v) => s.ShowIndexProvenanceInResults = v,
             "Show a small glyph on each result and the preview header indicating how the file was reached (index-accelerated / live-scanned / extracted). It is candidacy provenance only — match content is always read live from the file. Only shown when the index participated. Default on.");
 
+        var dismissedWarningSummary = Description(string.Empty);
+        var restoreLiveScanWarnings = new Button
+        {
+            Content = "Restore live-scan warnings",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Padding = new Thickness(10, 4, 10, 4),
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        void UpdateDismissedWarningSummary()
+        {
+            int count = _viewModel.Settings.ContentIndexLiveScanWarningDismissedRoots.Count;
+            dismissedWarningSummary.Text = count == 0
+                ? "No location-specific live-scan warnings are dismissed."
+                : $"Warnings are dismissed for {count:N0} unindexed location{(count == 1 ? string.Empty : "s")}.";
+            restoreLiveScanWarnings.IsEnabled = count > 0;
+        }
+        restoreLiveScanWarnings.Click += async (_, _) =>
+        {
+            await _viewModel.RestoreContentIndexLiveScanWarningsAsync();
+            UpdateDismissedWarningSummary();
+            SetIndexStatus("Live-scan warnings restored.");
+        };
+        presentationGroup.Children.Add(restoreLiveScanWarnings);
+        presentationGroup.Children.Add(dismissedWarningSummary);
+        UpdateDismissedWarningSummary();
+
         // ── Manage Indexes ──
         BuildIndexManagementSection(manageGroup);
 
@@ -658,6 +684,7 @@ public sealed partial class SettingsWindow
                 apply();
             UpdateMasterSummary();
             UpdateDependentEnabled();
+            UpdateDismissedWarningSummary();
             MarkSettingsDirty(requireValueChanges: false);
             SetIndexStatus("Indexing settings restored to defaults. Click Save to apply.");
         };

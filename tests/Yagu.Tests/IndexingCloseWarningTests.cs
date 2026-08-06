@@ -8,6 +8,9 @@ public sealed class IndexingCloseWarningTests
     private static readonly string MainWindowSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.IndexingCloseWarning.cs");
     private static readonly string LauncherSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Launcher.cs");
     private static readonly string AppUpdateSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AppUpdate.cs");
+    private static readonly string SearchInputSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs");
+    private static readonly string StartupChecksSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs");
+    private static readonly string ProgramSource = Read("src", "Yagu", "Program.cs");
     private static readonly string ViewModelSource = MainViewModelPartials.Text;
 
     [Fact]
@@ -74,7 +77,9 @@ public sealed class IndexingCloseWarningTests
     public void MainWindow_GatesEveryRealExitAndWindowsSessionEnd()
     {
         Assert.Contains("private const uint WmQueryEndSession = 0x0011;", MainWindowSource);
-        Assert.Contains("if (_forceClose || !ViewModel.IsIndexBuildActive)", MainWindowSource);
+        Assert.Contains("IsIndexOperationActive => ViewModel.IsIndexBuildActive || ViewModel.IsIndexRebuildBlocking", MainWindowSource);
+        Assert.Contains("IsOwnedOperationActive => IsIndexOperationActive || ViewModel.IsSearchActive", MainWindowSource);
+        Assert.Contains("if (_forceClose || !IsOwnedOperationActive)", MainWindowSource);
         Assert.Contains("ShowTitleBar = false", MainWindowSource);
         Assert.Contains("DefaultButton = YaguDialogDefaultButton.Primary", MainWindowSource);
         Assert.Contains("if (message == WmQueryEndSession && TryBlockWindowsSessionEnd())", LauncherSource);
@@ -83,17 +88,21 @@ public sealed class IndexingCloseWarningTests
             "RequestApplicationExit(IndexingCloseTrigger.WindowsSessionEnding, warning);",
             MainWindowSource);
         Assert.Contains(
-            "capturedWarning is null && !ViewModel.IsIndexBuildActive",
+            "capturedWarning is null && !IsIndexOperationActive",
             MainWindowSource);
         Assert.Contains(
             "capturedWarning ?? IndexingCloseWarning.Build(",
             MainWindowSource);
         Assert.True(
             LauncherSource.IndexOf("if (ViewModel.CloseToTray)", StringComparison.Ordinal)
-                < LauncherSource.IndexOf("if (ViewModel.IsIndexBuildActive)", StringComparison.Ordinal),
+                < LauncherSource.IndexOf("RequestApplicationExit(IndexingCloseTrigger.UserExit);", StringComparison.Ordinal),
             "Close-to-tray must remain a safe non-exit path that does not show the interruption warning.");
+        // Tray Exit now lives with the themed tray menu, so the guarded-exit count spans both partials.
+        string trayMenuSource = Read("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.QuickSearch.cs");
+        Assert.Contains("CloseApp = () => RequestApplicationExit(", trayMenuSource);
         Assert.True(
-            CountOccurrences(LauncherSource, "RequestApplicationExit(IndexingCloseTrigger.UserExit);") >= 3,
+            CountOccurrences(LauncherSource, "IndexingCloseTrigger.UserExit")
+                + CountOccurrences(trayMenuSource, "IndexingCloseTrigger.UserExit") >= 3,
             "Direct close, first tray-mode exit, and tray Exit must all use the guarded exit path.");
 
         int offerInstaller = AppUpdateSource.IndexOf(
@@ -123,6 +132,43 @@ public sealed class IndexingCloseWarningTests
             "public void BeginIndexBuildActivity(string? folder = null, bool isIncremental = false)",
             ViewModelSource);
         Assert.Contains("_activeIndexBuildIsIncremental = isIncremental;", ViewModelSource);
+    }
+
+    [Fact]
+    public void ConfirmedExit_CancelsAndAwaitsTrackedWorkBeforeClosing()
+    {
+        Assert.Contains("ApplicationExitGracePeriod = TimeSpan.FromSeconds(5)", MainWindowSource);
+        Assert.Contains("await ViewModel.PrepareForShutdownAsync(ApplicationExitGracePeriod)", MainWindowSource);
+        Assert.Contains("_forceClose = true;", MainWindowSource);
+
+        Assert.Contains("public async Task<bool> PrepareForShutdownAsync(TimeSpan gracePeriod)", ViewModelSource);
+        Assert.Contains("CancelSearchPreparation();", ViewModelSource);
+        Assert.Contains("_semanticCts?.Cancel();", ViewModelSource);
+        Assert.Contains("_cts?.Cancel();", ViewModelSource);
+        Assert.Contains("_indexBuildCancellation?.Cancel();", ViewModelSource);
+        Assert.Contains("_indexRebuildCancellation?.Cancel();", ViewModelSource);
+        Assert.Contains("_indexWarmCancellation?.Cancel();", ViewModelSource);
+        Assert.Contains("await _searchLifecycleGate.WaitAsync(cancellation.Token)", ViewModelSource);
+        Assert.Contains("!IsIndexBuildActive && !IsIndexRebuildBlocking", ViewModelSource);
+        Assert.Contains("if (searchStopped && _resultStore is { } oldStore)", ViewModelSource);
+        Assert.Contains("Task.Run(oldStore.Dispose)", ViewModelSource);
+        Assert.Contains("_preserveLiveResourcesForProcessExit = !graceful;", ViewModelSource);
+        Assert.Contains("if (_preserveLiveResourcesForProcessExit)", ViewModelSource);
+        Assert.Contains("if (_shutdownRequested || runId != Volatile.Read(ref _searchRunId))", ViewModelSource);
+
+        Assert.Contains("args.Cancel = true;", LauncherSource);
+        Assert.Contains("RequestApplicationExit(IndexingCloseTrigger.UserExit);", LauncherSource);
+        Assert.Contains("await CompleteApplicationExitAsync();", AppUpdateSource);
+        Assert.Contains("await ConfirmExitWhileIndexingAsync(IndexingCloseTrigger.UserExit)", SearchInputSource);
+        Assert.Contains("await CompleteApplicationExitAsync();", SearchInputSource);
+        Assert.DoesNotContain("Application.Current.Exit();", SearchInputSource);
+        Assert.DoesNotContain("App.InstanceMutex?.ReleaseMutex();", SearchInputSource);
+        Assert.Contains("proc.WaitForExit(15000);", ProgramSource);
+
+        Assert.Contains("if (ViewModel.IsIndexingPaused || ViewModel.IsShutdownRequested)", StartupChecksSource);
+        Assert.Contains("activityStarted = TryBeginWatcherIndexActivity(changedRoot, incremental);", StartupChecksSource);
+        Assert.Contains("ViewModel.IndexBuildCancellationToken", StartupChecksSource);
+        Assert.Contains("DispatcherQueue.TryEnqueue(ViewModel.EndIndexBuildActivity);", StartupChecksSource);
     }
 
     private static int CountOccurrences(string text, string value)

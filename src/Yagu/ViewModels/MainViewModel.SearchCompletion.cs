@@ -214,16 +214,38 @@ public sealed partial class MainViewModel
         foreach (var q in _settings.SemanticSearchHistory) SemanticSearchHistory.Add(q);
     }
 
-    private static void ShowSearchCompleteToast(SearchSummary s, TimeSpan elapsed)
+    private void ShowSearchCompleteToast(SearchSummary s, TimeSpan elapsed)
+    {
+        if (s.Cancelled)
+        {
+            if (!(_settings.NotificationsEnabled && _settings.NotifySearchCancelled)) return;
+        }
+        else if (!(_settings.NotificationsEnabled && _settings.NotifySearchCompleted))
+        {
+            return;
+        }
+
+        var title = s.Cancelled ? "Search Cancelled" : "Search Complete";
+        var body = $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files";
+        if (s.FilesSkipped > 0)
+            body += $" - {s.FilesSkipped:N0} skipped";
+        body += $" ({elapsed.TotalSeconds:F1}s)";
+        ShowNativeNotification(title, body);
+    }
+
+    private void ShowSearchCancelledToast(TimeSpan elapsed)
+    {
+        if (!(_settings.NotificationsEnabled && _settings.NotifySearchCancelled)) return;
+
+        ShowNativeNotification(
+            "Search Cancelled",
+            $"{MatchesFound:N0} matches in {_resultCollection.AllGroups.Count:N0} files ({elapsed.TotalSeconds:F1}s)");
+    }
+
+    private static void ShowNativeNotification(string title, string body)
     {
         try
         {
-            var title = s.Cancelled ? "Search Cancelled" : "Search Complete";
-            var body = $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files";
-            if (s.FilesSkipped > 0)
-                body += $" — {s.FilesSkipped:N0} skipped";
-            body += $" ({elapsed.TotalSeconds:F1}s)";
-
             var xml = $"""
                 <toast>
                   <visual>

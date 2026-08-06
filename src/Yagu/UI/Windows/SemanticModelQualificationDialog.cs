@@ -58,8 +58,10 @@ internal sealed class SemanticModelQualificationDialog : Window
         ModelQualificationThresholds thresholds,
         IProgress<SemanticQualificationProgress>? progress, CancellationToken cancellationToken);
 
-    private const int DialogWidth = 760;
-    private const int DialogHeight = 720;
+    private const int ConfigDialogWidth = 620;
+    private const int ConfigDialogHeight = 560;
+    private const int RunningDialogWidth = 760;
+    private const int RunningDialogHeight = 720;
 
     private static readonly HashSet<SemanticModelQualificationDialog> OpenWindows = new();
 
@@ -69,6 +71,7 @@ internal sealed class SemanticModelQualificationDialog : Window
     private readonly ElementTheme _theme;
     private readonly RunDelegate _run;
     private readonly CancellationTokenSource _cts = new();
+    private readonly AppWindow _appWindow;
 
     private Grid _root = null!;
     private TextBlock _titleText = null!;
@@ -84,6 +87,7 @@ internal sealed class SemanticModelQualificationDialog : Window
     private NumberBox? _modelLoadBox;
     private NumberBox? _simpleQueryBox;
     private NumberBox? _complexQueryBox;
+    private CheckBox? _probeLikelyIncompatibleCheckBox;
 
     private bool _accepted;
     private bool _declined;
@@ -92,10 +96,10 @@ internal sealed class SemanticModelQualificationDialog : Window
     private bool _openAiSettings;
     private bool _completed;
 
-    /// <summary><see cref="Environment.TickCount64"/> before which a <see cref="Cancel"/> click is ignored,
+    /// <summary><see cref="Environment.TickCount64"/> before which a running-state <see cref="Skip"/> click is ignored,
     /// so the second click of an accidental double-click that STARTED the sweep can't immediately cancel
-    /// it (the primary button is replaced by "Cancel" at the same spot). 0 = no suppression.</summary>
-    private long _suppressCancelUntilTick;
+    /// it (the primary button is replaced by "Skip" at the same spot). 0 = no suppression.</summary>
+    private long _suppressFooterActionUntilTick;
 
     private SemanticModelQualificationDialog(IntPtr ownerHwnd, ElementTheme theme, RunDelegate run)
     {
@@ -114,8 +118,10 @@ internal sealed class SemanticModelQualificationDialog : Window
 
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
+        _appWindow = appWindow;
         appWindow.Title = Title;
-        WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, DialogWidth, DialogHeight, minHeight: 340);
+        WindowForegroundHelper.CenterWindowOverOwner(
+            appWindow, _ownerHwnd, ConfigDialogWidth, ConfigDialogHeight, minHeight: 340);
         TryConfigurePresenter(appWindow);
         TrySetIcon(appWindow);
     }
@@ -254,7 +260,8 @@ internal sealed class SemanticModelQualificationDialog : Window
             "the check. Yagu tests the models that fit this PC with a few sample searches and recommends the " +
             "fastest one that answers accurately. Everything runs on your PC.";
 
-        var panel = new StackPanel { Spacing = 20 };
+        _bodyHost.VerticalAlignment = VerticalAlignment.Top;
+        var panel = new StackPanel { Spacing = 14 };
         _modelLoadBox = BuildThresholdInput(
             panel, "Max time to load a model (seconds)",
             ModelQualificationThresholds.DefaultModelLoadMaxMs / 1000);
@@ -265,6 +272,22 @@ internal sealed class SemanticModelQualificationDialog : Window
             panel, "Max time for a complex query (seconds)",
             ModelQualificationThresholds.DefaultComplexQueryMaxMs / 1000);
 
+        _probeLikelyIncompatibleCheckBox = new CheckBox
+        {
+            Content = "Probe models detected as likely incompatible with this machine",
+            IsChecked = false,
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+        panel.Children.Add(_probeLikelyIncompatibleCheckBox);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Off by default. Turn this on only to deliberately try models that require unavailable GPU/NPU hardware, exceed available memory, or have an insufficient context window; they may fail to load or run.",
+            FontSize = 11,
+            Opacity = 0.65,
+            TextWrapping = TextWrapping.WrapWholeWords,
+            Margin = new Thickness(28, -8, 0, 0),
+        });
+
         _bodyHost.Child = new ScrollViewer
         {
             Content = panel,
@@ -273,7 +296,7 @@ internal sealed class SemanticModelQualificationDialog : Window
         };
 
         _footer.Children.Clear();
-        AddFooterButton("Cancel", accent: false, Cancel);
+        AddFooterButton("Skip", accent: false, Skip);
         AddFooterButton("Run", accent: true, StartSweepFromConfig);
     }
 
@@ -303,6 +326,7 @@ internal sealed class SemanticModelQualificationDialog : Window
             ModelLoadMaxMs = SecondsToMs(_modelLoadBox, ModelQualificationThresholds.DefaultModelLoadMaxMs),
             SimpleQueryMaxMs = SecondsToMs(_simpleQueryBox, ModelQualificationThresholds.DefaultSimpleQueryMaxMs),
             ComplexQueryMaxMs = SecondsToMs(_complexQueryBox, ModelQualificationThresholds.DefaultComplexQueryMaxMs),
+            ProbeLikelyIncompatibleModels = _probeLikelyIncompatibleCheckBox?.IsChecked == true,
         };
         StartSweepGuarded();
     }
@@ -312,14 +336,13 @@ internal sealed class SemanticModelQualificationDialog : Window
 
     /// <summary>Starts (or restarts) the sweep from a footer button while guarding against an accidental
     /// double-click. Starting the sweep replaces the clicked primary button ("Run"/"Try again") with a
-    /// "Cancel" button at the same spot, so the second click of a double-click would otherwise land on
-    /// "Cancel" and close the dialog. We suppress <see cref="Cancel"/> for the system double-click
-    /// interval after starting, which reliably swallows that second click regardless of dispatcher
-    /// timing (a deliberate cancel a moment later still works).</summary>
+    /// "Skip" button at the same spot, so the second click of a double-click would otherwise land on
+    /// "Skip" and close the dialog. We suppress <see cref="Skip"/> for the system double-click interval
+    /// after starting, which reliably swallows that second click regardless of dispatcher timing.</summary>
     private void StartSweepGuarded()
     {
         uint doubleClickMs = GetDoubleClickTime();
-        _suppressCancelUntilTick = Environment.TickCount64 + (doubleClickMs > 0 ? doubleClickMs : 500);
+        _suppressFooterActionUntilTick = Environment.TickCount64 + (doubleClickMs > 0 ? doubleClickMs : 500);
         _ = RunSweepAsync();
     }
 
@@ -332,6 +355,8 @@ internal sealed class SemanticModelQualificationDialog : Window
 
     private void ShowRunningState(string message)
     {
+        ResizeForRunningState();
+        _bodyHost.VerticalAlignment = VerticalAlignment.Stretch;
         _titleText.Text = "Checking AI models";
         _subtitleText.Text = "Yagu is asking each AI model that fits this PC a few sample searches and watching how " +
             "it answers, to pick the fastest one that's accurate. Everything runs on your PC.";
@@ -368,8 +393,12 @@ internal sealed class SemanticModelQualificationDialog : Window
             AddSystemMessage(message);
 
         _footer.Children.Clear();
-        AddFooterButton("Cancel", accent: false, Cancel);
+        AddFooterButton("Skip", accent: false, Skip);
     }
+
+    private void ResizeForRunningState()
+        => WindowForegroundHelper.CenterWindowOverOwner(
+            _appWindow, _ownerHwnd, RunningDialogWidth, RunningDialogHeight, minHeight: 340);
 
     // ── Chat transcript ───────────────────────────────────────────────────────────────────────
 
@@ -917,6 +946,8 @@ internal sealed class SemanticModelQualificationDialog : Window
 
     private void Skip()
     {
+        if (_result is null && Environment.TickCount64 < _suppressFooterActionUntilTick)
+            return;
         _declined = true;
         Complete();
     }
@@ -931,10 +962,6 @@ internal sealed class SemanticModelQualificationDialog : Window
 
     private void Cancel()
     {
-        // Swallow the second click of an accidental double-click that just started the sweep, so it does
-        // not close the dialog (the primary button was replaced by this "Cancel"; see StartSweepGuarded).
-        if (Environment.TickCount64 < _suppressCancelUntilTick)
-            return;
         _cancelled = true;
         Complete();
     }

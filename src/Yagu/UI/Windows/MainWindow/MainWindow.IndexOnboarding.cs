@@ -182,7 +182,25 @@ public sealed partial class MainWindow
                 Spacing = 4,
                 VerticalAlignment = VerticalAlignment.Center,
             };
-            if (entry.CanMaintain && entry.MaintainRoot is { } maintainRoot)
+            if (entry.CanAddToIndex && entry.AddRoot is { } addRoot)
+            {
+                Button add = CreateIndexStatusHealthActionButton(
+                    "Add to index",
+                    $"Add {addRoot} to the content index and choose when it is kept up to date",
+                    mutationActionsEnabled);
+                add.Click += async (_, _) => await RunIndexStatusAddToIndexActionAsync(addRoot);
+                actions.Children.Add(add);
+            }
+            else if (entry.CanBuildNow && entry.BuildRoot is { } buildRoot)
+            {
+                Button build = CreateIndexStatusHealthActionButton(
+                    "Build now",
+                    $"Build the content index for the already-maintained folder {buildRoot}",
+                    mutationActionsEnabled);
+                build.Click += async (_, _) => await RunIndexStatusBuildNowActionAsync(buildRoot);
+                actions.Children.Add(build);
+            }
+            else if (entry.CanMaintain && entry.MaintainRoot is { } maintainRoot)
             {
                 Button maintain = CreateIndexStatusHealthActionButton(
                     "Maintain",
@@ -274,6 +292,39 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             YaguLog.For("ContentIndex").LogWarning(ex, "Index-status health action failed for '{Root}'.", root);
+        }
+    }
+
+    /// <summary>Runs the first build for an already-registered root whose index has never been built.
+    /// Separate from <see cref="RunIndexStatusHealthActionAsync"/> so the blocking overlay and its cancel
+    /// button report a build, not a rebuild of an index that does not exist yet.</summary>
+    private async Task RunIndexStatusBuildNowActionAsync(string root)
+    {
+        HideIndexStatusHoverOverlay();
+        try
+        {
+            await ViewModel.BuildRegisteredIndexBlockingAsync(root);
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Building the index for '{Root}' from the status flyout failed.", root);
+        }
+    }
+
+    /// <summary>Opts an eligible-but-unindexed drive in straight from the status flyout. It reuses the
+    /// standard add-folder modal rather than a bespoke one, so the same row also lets the user choose the
+    /// build trigger(s) and update mode, narrow the scope to a subfolder, and get the large-root warning
+    /// before an unattended whole-drive build starts.</summary>
+    private async Task RunIndexStatusAddToIndexActionAsync(string root)
+    {
+        HideIndexStatusHoverOverlay();
+        try
+        {
+            await ShowAddFolderToIndexDialogAsync(root);
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Adding '{Root}' to the index from the status flyout failed.", root);
         }
     }
 
@@ -878,8 +929,9 @@ public sealed partial class MainWindow
             panel.Children.Add(triggerColumn);
             panel.Children.Add(new TextBlock
             {
-                Text = "With none selected, indexing is Manual and only runs when you ask. You can change this "
-                     + "anytime in Settings \u25B8 Indexing.",
+                Text = "With none selected, indexing is Manual and only runs when you ask. The schedule and "
+                     + "update mode below apply to every indexed folder, not just this one. You can change "
+                     + "them anytime in Settings \u25B8 Indexing.",
                 Opacity = 0.75,
                 FontSize = 12,
                 TextWrapping = TextWrapping.Wrap,

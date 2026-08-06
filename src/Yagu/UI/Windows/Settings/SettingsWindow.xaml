@@ -74,7 +74,11 @@
                           Background="Transparent"
                           Padding="0"
                           PointerPressed="OnSettingsContentPointerPressed">
-                <StackPanel x:Name="SettingsContent" Spacing="10" Padding="20,12,20,16" />
+                <StackPanel x:Name="SettingsContent"
+                            Spacing="10"
+                            Padding="20,12,20,16"
+                            PointerMoved="OnSettingsContentPointerMoved"
+                            PointerExited="OnSettingsContentPointerExited" />
             </ScrollViewer>
         </Grid>
 

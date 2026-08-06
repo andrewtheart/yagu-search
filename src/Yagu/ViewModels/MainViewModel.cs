@@ -484,25 +484,35 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     {
         if (_disposed) return;
         _disposed = true;
+        _shutdownRequested = true;
 
+        try { _searchPrepareCts?.Cancel(); } catch { }
         try { _cts?.Cancel(); } catch { }
         try { _dirAutoCompleteCts?.Cancel(); } catch { }
         try { _metadataCts.Cancel(); } catch { }
         try { _semanticCts?.Cancel(); } catch { }
         try { _indexWarmCancellation?.Cancel(); } catch { }
+        try { _indexBuildCancellation?.Cancel(); } catch { }
         try { _indexRebuildCancellation?.Cancel(); } catch { }
         StopSearchStatusHeartbeat();
         StopResourceUsageMonitor();
+        if (_preserveLiveResourcesForProcessExit)
+        {
+            GC.SuppressFinalize(this);
+            return;
+        }
         _cts?.Dispose();
         _dirAutoCompleteCts?.Dispose();
         _metadataCts.Dispose();
         _semanticCts?.Dispose();
         _indexWarmCancellation?.Dispose();
+        _indexBuildCancellation?.Dispose();
         if (_semanticTranslator is IAsyncDisposable semanticDisposable)
         {
             try { _ = semanticDisposable.DisposeAsync().AsTask(); } catch { }
         }
-        // Cancellation completes asynchronously; leave the lifecycle gate valid for the search finally.
+        // The graceful exit path already awaited search cleanup. A timed-out search returned above so
+        // its live store remains valid until process teardown; ordinary disposal can delete this file now.
         _resultStore?.Dispose();
         try { _indexWorkerClient?.Dispose(); } catch { }
         GC.SuppressFinalize(this);

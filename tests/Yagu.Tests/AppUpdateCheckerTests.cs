@@ -670,7 +670,8 @@ public sealed class AppUpdateWiringRegressionTests
             "Process.Start(new ProcessStartInfo(installerPath)",
             StringComparison.Ordinal);
         Assert.True(confirmation >= 0 && verification > confirmation && launch > verification);
-        Assert.Contains("_forceClose = true;", update);
+        Assert.Contains("Arguments = $\"/YAGUWAITPID={Environment.ProcessId}\"", installerFlow);
+        Assert.Contains("await CompleteApplicationExitAsync();", installerFlow);
         Assert.Contains("ShowTitleBar = false", update);
         Assert.Contains("the running Yagu build is not Authenticode-signed", verifier);
     }

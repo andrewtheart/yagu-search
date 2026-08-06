@@ -135,6 +135,7 @@ public static class ContentIndexConfigService
         var defaults = new AppSettings();
         foreach (var d in Descriptors)
             d.Apply(settings, d.Get(defaults));
+        settings.ContentIndexLiveScanWarningDismissedRoots.Clear();
     }
 
     private static List<Descriptor> BuildDescriptors()

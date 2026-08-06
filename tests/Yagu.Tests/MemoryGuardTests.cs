@@ -9,6 +9,7 @@ namespace Yagu.Tests;
 /// MainWindow.ResultsSelection.cs and MainWindow.PreviewCommands.cs.
 /// Uses the same source-scraping methodology as PreviewCoreRegressionTests.
 /// </summary>
+[Collection("SystemMemoryProvider")]
 public sealed class MemoryGuardTests
 {
     private static readonly string RepoRoot = Path.GetFullPath(

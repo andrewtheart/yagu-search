@@ -236,7 +236,7 @@ public sealed class OcrEnginePoolTests
         });
 
         Task<OcrResult> ensureTask = pool.EnsureReadyAsync(CancellationToken.None);
-        Task disposeTask = Task.Run(pool.Dispose);
+        ValueTask disposeTask = pool.DisposeAsync();
         primaryReady.TrySetResult(OcrResult.Ok("ready"));
         await disposeTask;
 

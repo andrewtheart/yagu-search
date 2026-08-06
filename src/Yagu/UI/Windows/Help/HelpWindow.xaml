@@ -14,6 +14,7 @@
         <!-- Title-bar-less window (no OS caption): Escape closes it, matching the top-right close button. -->
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="Escape" Invoked="OnCloseAccelerator" />
+            <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="OnFindAccelerator" />
         </Grid.KeyboardAccelerators>
 
         <!--
@@ -64,6 +65,83 @@
                                    TextWrapping="WrapWholeWords" />
                     </StackPanel>
                 </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <Border x:Name="FindPanel"
+                Visibility="Collapsed"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="12,8,48,0"
+                Padding="8"
+                Canvas.ZIndex="90"
+                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="4">
+            <Grid ColumnSpacing="6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="280" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="80" />
+                    <ColumnDefinition Width="36" />
+                    <ColumnDefinition Width="36" />
+                    <ColumnDefinition Width="36" />
+                </Grid.ColumnDefinitions>
+
+                <TextBox x:Name="FindTextBox"
+                         Grid.Column="0"
+                         PlaceholderText="Find in help"
+                         TextChanged="OnFindTextChanged"
+                         KeyDown="OnFindTextBoxKeyDown" />
+
+                <CheckBox x:Name="RegexCheckBox"
+                          Grid.Column="1"
+                          Content="Regex"
+                          IsChecked="False"
+                          VerticalAlignment="Center"
+                          Checked="OnRegexOptionChanged"
+                          Unchecked="OnRegexOptionChanged" />
+
+                <TextBlock x:Name="MatchStatusText"
+                           Grid.Column="2"
+                           Text="No matches"
+                           TextAlignment="Center"
+                           VerticalAlignment="Center" />
+
+                <Button x:Name="PreviousMatchButton"
+                        Grid.Column="3"
+                        Click="OnPreviousMatchClick"
+                        IsEnabled="False"
+                        Width="36"
+                        Height="32"
+                        MinWidth="0"
+                        Padding="0"
+                        ToolTipService.ToolTip="Previous match">
+                    <FontIcon Glyph="&#xE70E;" FontSize="12" />
+                </Button>
+
+                <Button x:Name="NextMatchButton"
+                        Grid.Column="4"
+                        Click="OnNextMatchClick"
+                        IsEnabled="False"
+                        Width="36"
+                        Height="32"
+                        MinWidth="0"
+                        Padding="0"
+                        ToolTipService.ToolTip="Next match">
+                    <FontIcon Glyph="&#xE70D;" FontSize="12" />
+                </Button>
+
+                <Button Grid.Column="5"
+                        Click="OnCloseFindClick"
+                        Width="36"
+                        Height="32"
+                        MinWidth="0"
+                        Padding="0"
+                        ToolTipService.ToolTip="Close find">
+                    <FontIcon Glyph="&#xE711;" FontSize="11" />
+                </Button>
             </Grid>
         </Border>
 

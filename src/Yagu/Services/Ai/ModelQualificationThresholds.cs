@@ -41,7 +41,12 @@ public sealed record ModelQualificationThresholds
     /// (with a warning) instead of failing the candidate.</summary>
     public int LatencyToleranceMs { get; init; } = DefaultLatencyToleranceMs;
 
-    /// <summary>The default limits (20s to load, 20s simple, 25s complex, +5s slow-pass tolerance).</summary>
+    /// <summary>When true, include models that hardware/context/memory checks mark as likely unable to
+    /// run on this machine. False by default; the qualification dialog exposes the explicit override.</summary>
+    public bool ProbeLikelyIncompatibleModels { get; init; }
+
+    /// <summary>The default limits (20s to load, 20s simple, 25s complex, +5s slow-pass tolerance),
+    /// excluding models that are likely incompatible with this machine.</summary>
     public static ModelQualificationThresholds Default { get; } = new();
 
     /// <summary>The per-query ceiling that applies to a probe of the given complexity.</summary>

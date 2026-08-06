@@ -222,7 +222,7 @@ begin
     exit;
   end;
 
-  WizardForm.StatusLabel.Caption := 'Installing Windows App Runtime...';
+  WizardForm.StatusLabel.Caption := 'Installing Windows app runtime (if not installed)...';
   Params := '-NoProfile -ExecutionPolicy Bypass -File "' + RuntimeScript + '"';
   Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   if Result and (ResultCode <> 0) then
@@ -373,6 +373,44 @@ begin
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM Yagu.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Yagu.SemanticWorker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Yagu.OcrWorker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function IsDecimalProcessId(const Value: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := (Length(Value) >= 1) and (Length(Value) <= 10);
+  if not Result then
+    exit;
+
+  for I := 1 to Length(Value) do
+  begin
+    if (Value[I] < '0') or (Value[I] > '9') then
+    begin
+      Result := False;
+      exit;
+    end;
+  end;
+end;
+
+procedure WaitForLaunchingYagu();
+var
+  ResultCode: Integer;
+  WaitPid: String;
+begin
+  WaitPid := ExpandConstant('{param:YAGUWAITPID|}');
+  if not IsDecimalProcessId(WaitPid) then
+    exit;
+
+  { The in-app updater passes its PID after starting this elevated setup process. Give Yagu's
+    graceful search/index shutdown time to finish before the existing forced-close fallback runs. }
+  Exec(
+    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -Command "Wait-Process -Id ' + WaitPid + ' -Timeout 15 -ErrorAction SilentlyContinue"',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode);
 end;
 
 function IsHexCharacter(Value: Char): Boolean;
@@ -915,6 +953,7 @@ end;
   prompt appears. Returning '' proceeds with the install. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
+  WaitForLaunchingYagu();
   KillYaguProcesses();
   { The visible existing-data wizard page captured independent settings/index choices. Apply them
     only now, after the user clicked Install; silent installs preserve all data. Indexes are handled

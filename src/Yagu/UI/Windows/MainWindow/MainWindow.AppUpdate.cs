@@ -88,6 +88,8 @@ public sealed partial class MainWindow
         AppSettings settings = ViewModel.Settings;
         if (settings.AppUpdateCheckMode != AppUpdateCheckMode.Automatic)
             return;
+        if (!settings.NotificationsEnabled || !settings.NotifyApplicationUpdates)
+            return;
         if (!AppUpdateChecker.ShouldAutoCheck(settings.LastAppUpdateCheckUtc, DateTimeOffset.UtcNow, AppUpdateChecker.DefaultAutoCheckInterval))
             return;
 
@@ -363,10 +365,10 @@ public sealed partial class MainWindow
             {
                 UseShellExecute = true,
                 Verb = "runas",
+                Arguments = $"/YAGUWAITPID={Environment.ProcessId}",
             });
             if (installer is null) return;
-            _forceClose = true;
-            Close();
+            await CompleteApplicationExitAsync();
         }
         catch (Exception ex)
         {

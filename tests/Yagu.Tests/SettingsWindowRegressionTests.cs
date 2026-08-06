@@ -15,6 +15,8 @@ public sealed class SettingsWindowRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Launcher.cs"));
     private static readonly string MainWindowStartupChecksSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+    private static readonly string MainWindowAppUpdateSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AppUpdate.cs"));
     private static readonly string MainWindowTerminalSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
     private static readonly string MainWindowWindowSource = File.ReadAllText(
@@ -612,6 +614,7 @@ public sealed class SettingsWindowRegressionTests
     [Theory]
     [InlineData("Search Defaults")]
     [InlineData("Search Limits")]
+    [InlineData("Notifications")]
     [InlineData("OCR")]
     [InlineData("Performance")]
     [InlineData("Display")]
@@ -1270,10 +1273,33 @@ public sealed class SettingsWindowRegressionTests
     [Fact]
     public void MainWindow_SettingsHelperCanOpenPerformanceAndDisplayTabs()
     {
-        // Tabs are sorted alphabetically at build time, so Display=2 and Performance=6.
-        Assert.Contains("private const int SettingsPerformanceTabIndex = 6;", MainWindowSource);
+        // Tabs are sorted alphabetically at build time, so Display=2 and Performance=7.
+        Assert.Contains("private const int SettingsPerformanceTabIndex = 7;", MainWindowSource);
         Assert.Contains("private const int SettingsDisplayTabIndex = 2;", MainWindowSource);
         Assert.Contains("OpenSettingsTab(SettingsPerformanceTabIndex);", MainWindowSource);
+    }
+
+    [Fact]
+    public void NotificationsTab_GatesPersistedNotificationCategories()
+    {
+        Assert.Contains("var g = AddTab(\"Notifications\");", SettingsWindowSource);
+        Assert.Contains("Enable Windows notifications", SettingsWindowSource);
+        Assert.Contains("Completed searches", SettingsWindowSource);
+        Assert.Contains("Canceled searches", SettingsWindowSource);
+        Assert.Contains("Application updates", SettingsWindowSource);
+        Assert.Contains("New AI models", SettingsWindowSource);
+
+        Assert.Contains("public bool NotificationsEnabled { get; set; } = true;", SettingsServiceSource);
+        Assert.Contains("public bool NotifySearchCompleted { get; set; } = true;", SettingsServiceSource);
+        Assert.Contains("public bool NotifySearchCancelled { get; set; } = true;", SettingsServiceSource);
+        Assert.Contains("public bool NotifyApplicationUpdates { get; set; } = true;", SettingsServiceSource);
+        Assert.Contains("public bool FoundryModelUpdateAlertsEnabled { get; set; } = true;", SettingsServiceSource);
+
+        Assert.Contains("_settings.NotificationsEnabled && _settings.NotifySearchCompleted", MainViewModelSource);
+        Assert.Contains("_settings.NotificationsEnabled && _settings.NotifySearchCancelled", MainViewModelSource);
+        Assert.Contains("ShowSearchCancelledToast(cancelledElapsed);", MainViewModelSource);
+        Assert.Contains("!settings.NotificationsEnabled || !settings.NotifyApplicationUpdates", MainWindowAppUpdateSource);
+        Assert.Contains("!ViewModel.Settings.NotificationsEnabled || !ViewModel.FoundryModelUpdateAlertsEnabled", MainWindowStartupChecksSource);
     }
 
     [Fact]
@@ -1399,6 +1425,59 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("_appTitle = appTitle;", HelpWindowSource);
         Assert.Contains("getElementById('TOC')", HelpWindowSource);
         Assert.Contains("'toc-brand'", HelpWindowSource);
+    }
+
+    [Fact]
+    public void HelpWindow_CtrlFSearchesAndNavigatesHighlightedMatches()
+    {
+        Assert.Contains("Key=\"F\"", HelpWindowXaml);
+        Assert.Contains("Modifiers=\"Control\"", HelpWindowXaml);
+        Assert.Contains("Invoked=\"OnFindAccelerator\"", HelpWindowXaml);
+        Assert.Contains("x:Name=\"FindPanel\"", HelpWindowXaml);
+        Assert.Contains("x:Name=\"FindTextBox\"", HelpWindowXaml);
+        Assert.Contains("x:Name=\"RegexCheckBox\"", HelpWindowXaml);
+        Assert.Contains("IsChecked=\"False\"", HelpWindowXaml);
+        Assert.Contains("Click=\"OnPreviousMatchClick\"", HelpWindowXaml);
+        Assert.Contains("Click=\"OnNextMatchClick\"", HelpWindowXaml);
+
+        Assert.Contains("window.yaguHelpFind", HelpWindowSource);
+        Assert.Contains("document.createElement('mark')", HelpWindowSource);
+        Assert.Contains("scrollIntoView", HelpWindowSource);
+        Assert.Contains("private async Task RunFindAsync()", HelpWindowSource);
+        Assert.Contains("private async Task MoveFindAsync(int delta)", HelpWindowSource);
+    }
+
+    [Fact]
+    public void SettingsLabels_ShowLazyCachedHelpFlyouts()
+    {
+        Assert.Contains("PointerMoved=\"OnSettingsContentPointerMoved\"", SettingsWindowXaml);
+        Assert.Contains("Dictionary<UIElement, string> _settingDescriptionCache", SettingsWindowSource);
+        Assert.Contains("EnsureSearchableEntriesExtracted();", SettingsWindowSource);
+        Assert.Contains("private void ShowSettingHelpFlyout(UIElement target, SettingEntry entry)", SettingsWindowSource);
+        Assert.Contains("new Flyout", SettingsWindowSource);
+        Assert.Contains("LightDismissOverlayMode = LightDismissOverlayMode.Auto", SettingsWindowSource);
+        Assert.Contains("close.Click += (_, _) => flyout.Hide();", SettingsWindowSource);
+        Assert.Contains("VirtualKey.Escape", SettingsWindowSource);
+        Assert.Contains("flyout.Hide();", SettingsWindowSource);
+
+        // The flyout follows the pointer: leaving the label (or the panel) dismisses it, while hovering
+        // the flyout itself cancels the pending dismiss so it stays reachable to read or close.
+        Assert.Contains("PointerExited=\"OnSettingsContentPointerExited\"", SettingsWindowXaml);
+        Assert.Contains("private void ScheduleSettingHelpHide()", SettingsWindowSource);
+        Assert.Contains("private void CancelSettingHelpHide() => _settingHelpHideTimer?.Stop();", SettingsWindowSource);
+        Assert.Contains("if (_settingHelpPointerOverFlyout)", SettingsWindowSource);
+        Assert.Contains("_settingHelpPointerOverFlyout = true;", SettingsWindowSource);
+        Assert.Contains("_settingHelpPointerOverFlyout = false;", SettingsWindowSource);
+
+        // The close affordance is a small glyph button with no resting chrome.
+        int closeStart = SettingsWindowSource.IndexOf("var close = new Button", StringComparison.Ordinal);
+        Assert.True(closeStart >= 0, "The setting-help flyout must build a close button.");
+        string closeButton = SettingsWindowSource.Substring(
+            closeStart, Math.Min(700, SettingsWindowSource.Length - closeStart));
+        Assert.Contains("Width = 22", closeButton);
+        Assert.Contains("Height = 22", closeButton);
+        Assert.Contains("BorderThickness = new Thickness(0)", closeButton);
+        Assert.Contains("Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent)", closeButton);
     }
 
     [Fact]

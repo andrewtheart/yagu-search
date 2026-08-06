@@ -109,7 +109,7 @@ public sealed class ContentIndexGuiRegressionTests
     }
 
     [Fact]
-    public void PreSearchGate_WarnsAboutMissingOrStaleIndexesWithDirectActions()
+    public void PreSearchGate_ExplainsLiveScanAndOffersOneRecommendedActionPerRoot()
     {
         Assert.Contains("string normalizedDirectory = DriveEnumerator.NormalizeSearchRoot(Directory);", MainViewModelSource);
         Assert.Contains("return [normalizedDirectory];", MainViewModelSource);
@@ -117,18 +117,25 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("ContentIndexReadinessChecker.CheckRoot(", SearchInputSource);
         Assert.Contains("Title = \"Content index needs attention\"", SearchInputSource);
         Assert.Contains("PrimaryButtonText = \"Search live\"", SearchInputSource);
-        Assert.Contains("AddAction(\"Index & wait\", \"add-wait\")", SearchInputSource);
-        Assert.Contains("AddAction(\"Index & search now\", \"add-search\")", SearchInputSource);
-        Assert.Contains("AddAction(\"Build & search now\", \"build-search\")", SearchInputSource);
+        Assert.Contains("Your search results will still be complete.", SearchInputSource);
+        Assert.Contains("The content index only makes searches faster.", SearchInputSource);
+        Assert.Contains("actionLabel = issue.CanRebuild ? \"Build in background\" : issue.CanAdd ? \"Index in background\" : null;", SearchInputSource);
+        Assert.DoesNotContain("Index & wait", SearchInputSource);
+        Assert.DoesNotContain("Index & search now", SearchInputSource);
+        Assert.DoesNotContain("Build & wait", SearchInputSource);
+        Assert.Contains("Always search this location live without warning", SearchInputSource);
+        Assert.Contains("CloseButtonText = null", SearchInputSource);
+        Assert.Contains("DefaultButton = YaguDialogDefaultButton.Primary", SearchInputSource);
+        Assert.Contains("result == YaguDialogResult.Primary && permanentlyDismissedRoots.Count > 0", SearchInputSource);
         Assert.Contains("CanAttemptIncrementalIndexRefresh(issue)", SearchInputSource);
-        Assert.Contains("AddAction(\"Rebuild index\", \"rebuild\")", SearchInputSource);
+        Assert.Contains("actionLabel = \"Rebuild index\";", SearchInputSource);
         Assert.Contains("await ViewModel.RebuildCurrentIndexBlockingAsync(new[] { actionIssue.IndexRoot });", SearchInputSource);
-        Assert.Contains("await ViewModel.AddFolderToIndexAndBuildBlockingAsync(actionIssue.SearchRoot);", SearchInputSource);
         Assert.Contains("return true; // continue the pending search; live scan remains authoritative if repair did not complete", SearchInputSource);
         Assert.DoesNotContain("search again after it completes", SearchInputSource);
         Assert.Contains("await ViewModel.AddFolderToIndexAndBuildAsync(actionIssue.SearchRoot);", SearchInputSource);
         Assert.Contains("return true; // the background build runs while this search uses the authoritative live path", SearchInputSource);
         Assert.Contains("ViewModel.RebuildRegisteredIndexNow(actionIssue.IndexRoot);", SearchInputSource);
+        Assert.Contains("await ViewModel.PersistSettingsAsync();", SearchInputSource);
         Assert.Contains("_contentIndexReadinessWarningsAcknowledged.Add(issue.WarningKey);", SearchInputSource);
         Assert.Contains("acknowledgedWarnings.Contains($\"{ContentIndexReadinessIssueKind.RefreshRequired}|{warningRoot}\"", SearchInputSource);
         Assert.Contains("freshness inputs unreadable", SearchInputSource);
@@ -137,6 +144,20 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("CheckpointAhead", SearchInputSource);
         Assert.Contains("JournalUnavailable", SearchInputSource);
         Assert.Contains("ShowTitleBar = false", SearchInputSource);
+    }
+
+    [Fact]
+    public void PreSearchGate_PermanentDismissalAppliesOnlyToUnregisteredMissingRoots()
+    {
+        Assert.Contains("public List<string> ContentIndexLiveScanWarningDismissedRoots", SettingsServiceSource);
+        Assert.Contains("dismissedLiveScanWarnings.Contains(issue.SearchRoot, StringComparer.OrdinalIgnoreCase)", SearchInputSource);
+        Assert.Contains("CanPermanentlyDismissContentIndexWarning(issue)", SearchInputSource);
+        Assert.Contains(
+            "issue.Kind == ContentIndexReadinessIssueKind.Missing && !issue.Registered",
+            SearchInputSource);
+        Assert.DoesNotContain(
+            "ContentIndexReadinessIssueKind.RefreshRequired && !issue.Registered",
+            SearchInputSource);
     }
 
     [Fact]
@@ -332,7 +353,7 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("tooltip += BuildIndexDateDetails();", MainViewModelSource); // availability
         Assert.Contains("+ BuildIndexRootStatusDetails(acceleratedRoots, postSearch: false)\r\n                + BuildIndexDateDetails();", MainViewModelSource); // live acceleration/bypass
         Assert.Contains("+ BuildIndexRootStatusDetails(accelerated, postSearch: true)\r\n            + BuildIndexDateDetails()", MainViewModelSource); // completed coverage: full/partial/bypassed
-        Assert.Contains("IndexStatusText = \"Index: ready\";", MainViewModelSource);
+        Assert.Contains("IndexStatusText = ContentIndexUiStatus.ReadyLabel;", MainViewModelSource);
         Assert.Contains("+ BuildIndexDateDetails();", MainViewModelSource); // ready/warm states
         Assert.Contains("IndexStatusTooltip += BuildIndexDateDetails();", MainViewModelSource); // active full/incremental build
         Assert.Contains("diskFull + BuildIndexDateDetails()", MainViewModelSource); // paused disk-full build
@@ -882,12 +903,11 @@ public sealed class ContentIndexGuiRegressionTests
     }
 
     [Fact]
-    public void MainWindowXaml_IndexStatusHasStableLeftAnchoredSlotBetweenResourcesAndSkippedCount()
+    public void MainWindowXaml_IndexStatusHasStableLeftAnchoredSlotAfterResources()
     {
         Assert.True(MainWindowXaml.IndexOf("x:Name=\"RamUsageBlock\"", StringComparison.Ordinal)
             < MainWindowXaml.IndexOf("x:Name=\"IndexStatusIndicator\"", StringComparison.Ordinal));
-        Assert.True(MainWindowXaml.IndexOf("x:Name=\"IndexStatusIndicator\"", StringComparison.Ordinal)
-            < MainWindowXaml.IndexOf("x:Name=\"SkipCountBlock\"", StringComparison.Ordinal));
+        Assert.DoesNotContain("x:Name=\"SkipCountBlock\"", MainWindowXaml);
 
         string indicator = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusIndicator\"", 4500);
         Assert.Contains("<Grid Width=\"230\" VerticalAlignment=\"Center\">", indicator);
@@ -900,7 +920,7 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("Visibility=\"{x:Bind ViewModel.IndexHealthyCheckVisibility, Mode=OneWay}\"", indicator);
         Assert.DoesNotContain("HorizontalAlignment=\"Right\"", indicator);
         Assert.Contains("MaxWidth=\"210\" TextTrimming=\"CharacterEllipsis\"", indicator);
-        Assert.Contains("string.Equals(IndexStatusText, \"Indexes: all healthy\", StringComparison.Ordinal)", MainViewModelSource);
+        Assert.Contains("ContentIndexUiStatus.IsFullSuccessLabel(IndexStatusText)", MainViewModelSource);
     }
 
     [Fact]
@@ -927,6 +947,7 @@ public sealed class ContentIndexGuiRegressionTests
     {
         string hover = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusIndicator\"", 12000);
         Assert.Contains("x:Name=\"IndexStatusHoverOverlay\"", hover);
+        Assert.Contains("Grid.Row=\"0\" Grid.RowSpan=\"7\"", hover);
         Assert.Contains("Background=\"{ThemeResource AcrylicBackgroundFillColorDefaultBrush}\"", hover);
         Assert.Contains("x:Name=\"IndexStatusRepairButton\"", hover);
         Assert.Contains("Click=\"OnIndexStatusRepairClick\"", hover);
@@ -1008,6 +1029,56 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("private string BuildIndexSchedulingDetails()", MainViewModelSource);
         Assert.Contains("=> Environment.NewLine + Environment.NewLine", MainViewModelSource);
         Assert.Contains("+ BuildIndexDateDetails()\r\n                + BuildIndexSchedulingDetails();", MainViewModelSource);
+    }
+
+    [Fact]
+    public void IndexStatusHover_EligibleUnindexedDrive_OffersQuickAddThroughTheTriggerAwareDialog()
+    {
+        // An eligible-but-unindexed ready local drive used to be a dead end in the hover flyout: it
+        // reported "not indexed" with no action at all. It now offers an inline quick-add that reuses
+        // the existing add-folder modal, so the user also gets the build trigger and update mode.
+        string rows = ExtractFrom(IndexOnboardingSource, "private void RebuildIndexStatusHealthRows()", 6000);
+        Assert.Contains("entry.CanAddToIndex && entry.AddRoot is { } addRoot", rows);
+        Assert.Contains("\"Add to index\"", rows);
+        Assert.Contains("await RunIndexStatusAddToIndexActionAsync(addRoot)", rows);
+        Assert.Contains("entry.CanBuildNow && entry.BuildRoot is { } buildRoot", rows);
+        Assert.Contains("\"Build now\"", rows);
+        Assert.Contains("await RunIndexStatusBuildNowActionAsync(buildRoot)", rows);
+        // Starting a build is a mutation, so both share the build-active/paused gate.
+        Assert.Contains("mutationActionsEnabled", rows);
+
+        // A never-built root has nothing to rebuild, so the blocking overlay must say "Building".
+        string buildNow = ExtractFrom(
+            IndexOnboardingSource,
+            "private async Task RunIndexStatusBuildNowActionAsync(string root)",
+            900);
+        Assert.Contains("HideIndexStatusHoverOverlay();", buildNow);
+        Assert.Contains("await ViewModel.BuildRegisteredIndexBlockingAsync(root);", buildNow);
+        Assert.Contains("RunCurrentIndexBlockingAsync(new[] { root }, rebuild: false)", MainViewModelSource);
+
+        // The overlay is hidden before the modal opens, matching the delete action, so the hover
+        // panel cannot linger above (or steal pointer events from) the dialog.
+        string add = ExtractFrom(
+            IndexOnboardingSource,
+            "private async Task RunIndexStatusAddToIndexActionAsync(string root)",
+            900);
+        Assert.Contains("HideIndexStatusHoverOverlay();", add);
+        Assert.Contains("await ShowAddFolderToIndexDialogAsync(root);", add);
+
+        // Producer for the registered-but-never-built row. (The unregistered NotIndexed producer lives
+        // in ContentIndexUiStatus, which Yagu.Tests compiles in directly — see ContentIndexUiStatusTests.)
+        Assert.Contains("BuildRoot: indexRoot", MainViewModelSource);
+
+        // Registering a root must repaint the flyout immediately; otherwise the row would keep
+        // claiming "not indexed" (with a disabled Add button) for the whole build.
+        Assert.Contains("RefreshAllDriveIndexStatus();", ExtractFrom(
+            MainViewModelSource,
+            "public async Task AddFoldersToIndexAndBuildAsync(",
+            3500));
+        Assert.Contains("RefreshAllDriveIndexStatus();", ExtractFrom(
+            MainViewModelSource,
+            "public async Task AddFolderToIndexAndBuildAsync(string folder)",
+            600));
     }
 
     [Fact]
@@ -1581,17 +1652,30 @@ public sealed class ContentIndexGuiRegressionTests
     }
 
     [Fact]
-    public void ReadinessDialog_OffersIncrementalUpdateAndCatchupLimitIncreaseBeforeRebuild()
+    public void ReadinessDialog_OffersTheRecommendedIncrementalUpdateWithoutACompetingRebuild()
     {
         Assert.Contains("CanAttemptIncrementalIndexRefresh(issue)", SearchInputSource);
-        Assert.Contains("Increase limit & update", SearchInputSource);
-        Assert.Contains("AddAction(\"Rebuild index\", \"rebuild\")", SearchInputSource);
+        Assert.Contains("Increase limit and update", SearchInputSource);
+        Assert.Contains("actionKind = \"incremental\";", SearchInputSource);
+        Assert.DoesNotContain("AddAction(", SearchInputSource);
         Assert.Contains("ComputeRaisedJournalCatchupLimit", SearchInputSource);
         Assert.Contains("RefreshCurrentIndexIncrementallyAsync(actionIssue.IndexRoot, increasedLimit)", SearchInputSource);
         Assert.Contains("operation.AllowFullRebuildFallback = false;", MainViewModelSource);
         Assert.Contains("operation.AllowCompatibilityRebuild = false;", MainViewModelSource);
         Assert.Contains("operation.ForceRefresh = true;", MainViewModelSource);
         Assert.Contains("the existing index was kept unchanged", MainViewModelSource);
+    }
+
+    [Fact]
+    public void ReadinessWarningDismissals_CanBeRestoredFromIndexingSettings()
+    {
+        Assert.Contains("Restore live-scan warnings", SettingsIndexingSource);
+        Assert.Contains("await _viewModel.RestoreContentIndexLiveScanWarningsAsync();", SettingsIndexingSource);
+        Assert.Contains("public async Task RestoreContentIndexLiveScanWarningsAsync()", MainViewModelSource);
+        Assert.Contains("AppSettings persisted = await _settingsService.LoadAsync()", MainViewModelSource);
+        Assert.Contains("persisted.ContentIndexLiveScanWarningDismissedRoots.Clear();", MainViewModelSource);
+        Assert.Contains("await _settingsService.SaveAsync(persisted)", MainViewModelSource);
+        Assert.Contains("Live-scan warnings restored.", SettingsIndexingSource);
     }
 
     // ── Right-click "Pause indexing" / "Resume indexing" on the status-bar indicator ──
@@ -1716,10 +1800,10 @@ public sealed class ContentIndexGuiRegressionTests
     [Fact]
     public void IndexStatusMenu_HasDisableIndexSubmenu_WithPauseThisRunAndPersistentOptions()
     {
-        // Right-clicking ANY index label (Index: full, Index: accelerating, …) offers an "Options"
-        // submenu (an inert MenuFlyoutSubItem that only expands on hover/click) with Pause indexing /
-        // Disable index (this run) / Disable indexing (persistent). The old early-return that hid the menu
-        // for a built/idle index is gone so the menu shows on every index label.
+        // Right-clicking ANY index label (Index: fully accelerated, Index: accelerating, …) offers an
+        // "Options" submenu (an inert MenuFlyoutSubItem that only expands on hover/click) with Pause
+        // indexing / Disable index (this run) / Disable indexing (persistent). The old early-return that
+        // hid the menu for a built/idle index is gone so the menu shows on every index label.
         Assert.DoesNotContain("return; // no command applies to this status", IndexOnboardingSource);
         Assert.Contains("var disableSubMenu = new MenuFlyoutSubItem", IndexOnboardingSource);
         Assert.Contains("Text = \"Options\",", IndexOnboardingSource);

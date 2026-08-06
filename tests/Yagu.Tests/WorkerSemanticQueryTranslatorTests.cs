@@ -32,7 +32,7 @@ public sealed class WorkerSemanticQueryTranslatorTests
     public void Proxy_ImplementsTranslatorInterfaceAndIsAsyncDisposable()
     {
         string src = Proxy();
-        Assert.Contains("public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, ISemanticHostController, IAsyncDisposable", src);
+        Assert.Contains("public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, ISemanticHostController, ISemanticQualificationCandidateProvider, IAsyncDisposable", src);
         // Same 3-arg ctor shape as the in-process translator, so MainViewModel wiring is a drop-in swap.
         Assert.Contains("public WorkerSemanticQueryTranslator(bool enabled, string? modelOverrideAlias = null, string? devicePreferenceOrder = null)", src);
     }

@@ -16,6 +16,7 @@ public sealed class ModelQualificationThresholdsTests
         Assert.Equal(20_000, t.SimpleQueryMaxMs);
         Assert.Equal(25_000, t.ComplexQueryMaxMs);
         Assert.Equal(5_000, t.LatencyToleranceMs);
+        Assert.False(t.ProbeLikelyIncompatibleModels);
     }
 
     [Fact]

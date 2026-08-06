@@ -104,8 +104,7 @@ public sealed class ResourceUsageIndicatorRegressionTests
         Assert.Contains("x:Name=\"RamUsageBlock\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.RamUsageText, Mode=OneWay}\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.RamUsageTooltip, Mode=OneWay}\"", MainWindowXaml);
-        Assert.Contains("x:Name=\"SkipCountBlock\" Width=\"88\"", MainWindowXaml);
-        Assert.Contains("TextAlignment=\"Right\" TextTrimming=\"CharacterEllipsis\"", MainWindowXaml);
+        Assert.DoesNotContain("x:Name=\"SkipCountBlock\"", MainWindowXaml);
     }
 
     [Fact]

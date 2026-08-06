@@ -1,3 +1,5 @@
+using Yagu.Services;
+
 namespace Yagu.ViewModels;
 
 /// <summary>
@@ -137,6 +139,16 @@ public sealed partial class MainViewModel
     {
         SuppressIndexWarmSearchWarning = false;
         await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Restores pre-search warnings for unindexed locations without saving unrelated live
+    /// Settings-window edits that have not been applied yet.</summary>
+    public async Task RestoreContentIndexLiveScanWarningsAsync()
+    {
+        _settings.ContentIndexLiveScanWarningDismissedRoots.Clear();
+        AppSettings persisted = await _settingsService.LoadAsync().ConfigureAwait(true);
+        persisted.ContentIndexLiveScanWarningDismissedRoots.Clear();
+        await _settingsService.SaveAsync(persisted).ConfigureAwait(true);
     }
 
     /// <summary>Re-enables the literal-"\n" multiline suggestion prompt after the user dismissed it

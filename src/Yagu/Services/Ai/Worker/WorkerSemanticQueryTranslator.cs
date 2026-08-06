@@ -24,7 +24,7 @@ public sealed class SemanticWorkerException(string message) : Exception(message)
 /// failure (or an empty model list) and respawns the worker on the next use, replaying the current config.
 /// This type is AOT-safe (source-gen JSON only) so it can live in the Native-AOT main app.
 /// </summary>
-public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, ISemanticHostController, IAsyncDisposable
+public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, ISemanticHostController, ISemanticQualificationCandidateProvider, IAsyncDisposable
 {
     private const string LogSource = "Semantic.WorkerProxy";
     private const string WorkerEnvVar = "YAGU_SEMANTIC_WORKER";
@@ -131,12 +131,23 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IS
 
     public async Task<IReadOnlyList<SemanticModelOption>> ListModelOptionsAsync(
         IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
+        => await ListQualificationModelOptionsAsync(
+            includeLikelyIncompatible: false, progress, cancellationToken).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<SemanticModelOption>> ListQualificationModelOptionsAsync(
+        bool includeLikelyIncompatible,
+        IProgress<SemanticTranslationProgress>? progress,
+        CancellationToken cancellationToken)
     {
         if (!_enabled) return Array.Empty<SemanticModelOption>();
         try
         {
             WorkerMessage msg = await SendRequestAsync(
-                new WorkerRequest { Op = SemanticWorkerProtocol.Ops.ListModels },
+                new WorkerRequest
+                {
+                    Op = SemanticWorkerProtocol.Ops.ListModels,
+                    BoolValue = includeLikelyIncompatible,
+                },
                 progress, onToken: null, cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrEmpty(msg.OptionsJson)) return Array.Empty<SemanticModelOption>();
             return JsonSerializer.Deserialize(msg.OptionsJson, SemanticWorkerJsonContext.Default.ListSemanticModelOption)

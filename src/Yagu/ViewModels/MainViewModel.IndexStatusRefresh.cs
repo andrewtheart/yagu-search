@@ -432,7 +432,8 @@ public sealed partial class MainViewModel
         return new IndexRootHealthEntry(
             root,
             IndexRootHealthKind.BuildRequired,
-            "registered, but the index is not built");
+            "registered, but the index is not built",
+            BuildRoot: indexRoot);
     }
 
     private static string FormatAllDriveIndexDate(IndexMetadataStatus metadata)
@@ -559,7 +560,7 @@ public sealed partial class MainViewModel
         {
             activeSearchCoverage = IndexSearchCoverage.Full;
             IndexStatusGlyph = ContentIndexUiStatus.CoverageGlyph(IndexSearchCoverage.Full);
-            IndexStatusText = "Index: accelerating";
+            IndexStatusText = ContentIndexUiStatus.AcceleratingLabel;
             IndexStatusTooltip = "The content index is actively pruning files for this search. Matching candidates are still verified live."
                 + BuildIndexRootStatusDetails(acceleratedRoots, postSearch: false)
                 + BuildIndexDateDetails();

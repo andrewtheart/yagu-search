@@ -275,6 +275,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
         InitializeGlobalHotkey();
         InitializeSearchRequestListener();
+        InitializeQuickSearches();
 
         ViewModel.SearchTerminatedByLowDiskSpace += message =>
         {
@@ -304,6 +305,14 @@ public sealed partial class MainWindow : Window, IDisposable
             if (e.PropertyName == nameof(ViewModel.ThemeModeIndex))
             {
                 ApplyAppTheme();
+            }
+
+            if (e.PropertyName == nameof(ViewModel.FilesSkipped))
+            {
+                if (ViewModel.FilesSkipped == 0)
+                    HideSkipBreakdownOverlay();
+                else if (SkipBreakdownOverlay.Visibility == Visibility.Visible)
+                    RenderSkipBreakdown();
             }
 
             if (e.PropertyName == nameof(ViewModel.IsCurrentDirectoryPinned))

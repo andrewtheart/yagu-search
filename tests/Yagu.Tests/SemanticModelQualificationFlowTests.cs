@@ -181,6 +181,8 @@ public sealed class SemanticModelQualificationFlowTests
         Assert.Contains("ModelQualificationThresholds.DefaultModelLoadMaxMs / 1000", src);
         Assert.Contains("ModelQualificationThresholds.DefaultSimpleQueryMaxMs / 1000", src);
         Assert.Contains("ModelQualificationThresholds.DefaultComplexQueryMaxMs / 1000", src);
+        Assert.Contains("Probe models detected as likely incompatible with this machine", src);
+        Assert.Contains("ProbeLikelyIncompatibleModels = _probeLikelyIncompatibleCheckBox?.IsChecked == true", src);
         // The Run button builds the thresholds from the inputs and starts the sweep.
         Assert.Contains("AddFooterButton(\"Run\", accent: true, StartSweepFromConfig)", src);
         Assert.Contains("_thresholds = new ModelQualificationThresholds", src);
@@ -196,13 +198,26 @@ public sealed class SemanticModelQualificationFlowTests
         // replaces it. Starting the sweep suppresses Cancel for the system double-click interval, so the
         // buffered second click is swallowed regardless of dispatcher timing.
         Assert.Contains("private void StartSweepGuarded()", src);
-        Assert.Contains("_suppressCancelUntilTick = Environment.TickCount64 + (doubleClickMs > 0 ? doubleClickMs : 500);", src);
+        Assert.Contains("_suppressFooterActionUntilTick = Environment.TickCount64 + (doubleClickMs > 0 ? doubleClickMs : 500);", src);
         Assert.Contains("GetDoubleClickTime()", src);
-        // Cancel honors the suppression window.
-        Assert.Contains("if (Environment.TickCount64 < _suppressCancelUntilTick)", src);
+        // Skip honors the suppression window while the sweep is running.
+        Assert.Contains("if (_result is null && Environment.TickCount64 < _suppressFooterActionUntilTick)", src);
         // Both the config "Run" and the "Try again" buttons route through the guard.
         Assert.Contains("StartSweepGuarded();", src);
         Assert.Contains("{ _result = null; StartSweepGuarded(); }", src);
+    }
+
+    [Fact]
+    public void Dialog_ConfigIsCompactAndConfigRunningFootersUseSkip()
+    {
+        string src = ReadAppFile(Path.Combine("UI", "Windows", "SemanticModelQualificationDialog.cs"));
+
+        Assert.Contains("private const int ConfigDialogWidth = 620;", src);
+        Assert.Contains("private const int ConfigDialogHeight = 560;", src);
+        Assert.Contains("appWindow, _ownerHwnd, ConfigDialogWidth, ConfigDialogHeight, minHeight: 340", src);
+        Assert.Contains("ResizeForRunningState();", src);
+        Assert.Contains("AddFooterButton(\"Skip\", accent: false, Skip);", src);
+        Assert.DoesNotContain("AddFooterButton(\"Cancel\"", src);
     }
 
     [Fact]

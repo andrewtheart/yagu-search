@@ -64,6 +64,9 @@
     <Compile Include="..\..\src\Yagu\Helpers\InlineCalculator.cs" Link="Source\Helpers\InlineCalculator.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\CodeAnnotationQuery.cs" Link="Source\Helpers\CodeAnnotationQuery.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\QuickSearchPresets.cs" Link="Source\Helpers\QuickSearchPresets.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\QuickSearchItem.cs" Link="Source\Helpers\QuickSearchItem.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\QuickSearchOptions.cs" Link="Source\Helpers\QuickSearchOptions.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\QuickSearchCatalog.cs" Link="Source\Helpers\QuickSearchCatalog.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\StartupArgs.cs" Link="Source\Helpers\StartupArgs.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SearchRequestCodec.cs" Link="Source\Helpers\SearchRequestCodec.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SemanticQueryHeuristicDetector.cs" Link="Source\Helpers\SemanticQueryHeuristicDetector.cs" />

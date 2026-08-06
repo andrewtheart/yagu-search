@@ -412,6 +412,7 @@ public sealed partial class MainWindow
         bool skipBinary = ViewModel.SkipBinary;
         string storageDir = ViewModel.Settings.IndexStorageDirectory;
         string[] registeredRoots = ViewModel.Settings.IndexedRoots.ToArray();
+        string[] dismissedLiveScanWarnings = ViewModel.Settings.ContentIndexLiveScanWarningDismissedRoots.ToArray();
         string[] acknowledgedWarnings = _contentIndexReadinessWarningsAcknowledged.ToArray();
         int retained = AppSettings.NormalizeIndexRetainedGenerationCount(ViewModel.Settings.IndexRetainedGenerationCount);
         int maxCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(ViewModel.Settings.IndexMaxJournalCatchupRecords);
@@ -452,8 +453,14 @@ public sealed partial class MainWindow
                     };
                     ContentIndexReadinessIssue? issue = ContentIndexReadinessChecker.CheckRoot(
                         paths, root, registeredRoots, options, retained, reader);
-                    if (issue is not null
-                        && !found.Any(existing => string.Equals(existing.WarningKey, issue.WarningKey, StringComparison.OrdinalIgnoreCase)))
+                    if (issue is null)
+                        continue;
+                    if (CanPermanentlyDismissContentIndexWarning(issue)
+                        && dismissedLiveScanWarnings.Contains(issue.SearchRoot, StringComparer.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    if (!found.Any(existing => string.Equals(existing.WarningKey, issue.WarningKey, StringComparison.OrdinalIgnoreCase)))
                         found.Add(issue);
                 }
                 return found.ToArray();
@@ -479,117 +486,175 @@ public sealed partial class MainWindow
             issues.Length,
             string.Join("; ", issues.Select(issue => $"{issue.SearchRoot}: {issue.Reason}")));
 
-        var panel = new StackPanel { Spacing = 12, MinWidth = 500 };
-        panel.Children.Add(new TextBlock
+        var panel = new StackPanel { Spacing = 18, MinWidth = 540 };
+        var summary = new Grid { ColumnSpacing = 12 };
+        summary.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        summary.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var summaryIcon = new FontIcon
         {
-            Text = issues.Length == 1
-                ? "This search includes a drive or folder whose content index needs attention."
-                : "This search includes drives or folders whose content indexes need attention.",
+            Glyph = "\uE946",
+            FontSize = 20,
+            Foreground = TryGetPreviewBrushResource("AccentTextFillColorPrimaryBrush"),
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 2, 0, 0),
+        };
+        var summaryText = new StackPanel { Spacing = 5 };
+        summaryText.Children.Add(new TextBlock
+        {
+            Text = "Your search results will still be complete.",
+            FontSize = 15,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             TextWrapping = TextWrapping.Wrap,
-            FontSize = 14,
         });
-        panel.Children.Add(new TextBlock
+        summaryText.Children.Add(new TextBlock
         {
-            Text = "Without a usable, fresh index Yagu must scan that root live, which can take much longer. "
-                 + "For a folder that is not indexed yet, you can wait behind the blocking progress overlay, "
-                 + "or let indexing run in the background while this search continues live. You can also search "
-                 + "live without indexing, or cancel.",
-            TextWrapping = TextWrapping.Wrap,
+            Text = "The content index only makes searches faster. For the locations below, Yagu will read files "
+                 + "directly instead. You can search now, or start the recommended index maintenance first.",
             FontSize = 12,
-            Opacity = 0.8,
+            Opacity = 0.75,
+            TextWrapping = TextWrapping.Wrap,
         });
+        Grid.SetColumn(summaryText, 1);
+        summary.Children.Add(summaryIcon);
+        summary.Children.Add(summaryText);
+        panel.Children.Add(summary);
 
         ContentIndexReadinessIssue? requestedAction = null;
         string? requestedActionKind = null;
+        var permanentlyDismissedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         YaguDialog? readinessDialog = null;
         foreach (ContentIndexReadinessIssue issue in issues)
         {
-            var row = new Grid { ColumnSpacing = 12, Padding = new Thickness(8) };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            var details = new StackPanel { Spacing = 3 };
-            details.Children.Add(new TextBlock
+            var card = new StackPanel { Spacing = 10, Padding = new Thickness(14, 12, 14, 12) };
+            var heading = new Grid { ColumnSpacing = 10 };
+            heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            heading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            heading.Children.Add(new FontIcon
+            {
+                Glyph = issue.Kind == ContentIndexReadinessIssueKind.Missing ? "\uE8B7" : "\uE7BA",
+                FontSize = 17,
+                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gold),
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 2, 0, 0),
+            });
+            var headingText = new StackPanel { Spacing = 2 };
+            headingText.Children.Add(new TextBlock
             {
                 Text = issue.SearchRoot,
                 FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
-                FontSize = 14,
+                FontSize = 15,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap,
             });
-            details.Children.Add(new TextBlock
+            headingText.Children.Add(new TextBlock
+            {
+                Text = ContentIndexReadinessStatus(issue),
+                FontSize = 12,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Opacity = 0.8,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            Grid.SetColumn(headingText, 1);
+            heading.Children.Add(headingText);
+            card.Children.Add(heading);
+            card.Children.Add(new TextBlock
             {
                 Text = DescribeContentIndexReadinessIssue(issue),
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 12,
-                Opacity = 0.8,
+                Opacity = 0.72,
             });
-            row.Children.Add(details);
 
-            var actions = new StackPanel { Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
-            void AddAction(string label, string kind)
-            {
-                var action = new Button
-                {
-                    Content = label,
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    MinWidth = 128,
-                };
-                action.Click += (_, _) =>
-                {
-                    requestedAction = issue;
-                    requestedActionKind = kind;
-                    readinessDialog?.AcceptClose();
-                };
-                actions.Children.Add(action);
-            }
-
+            string? actionLabel = null;
+            string? actionKind = null;
             if (issue.Kind == ContentIndexReadinessIssueKind.Missing)
             {
-                if (issue.CanRebuild)
-                {
-                    AddAction("Build & wait", "rebuild");
-                    AddAction("Build & search now", "build-search");
-                }
-                else
-                {
-                    AddAction("Index & wait", "add-wait");
-                    AddAction("Index & search now", "add-search");
-                }
+                actionLabel = issue.CanRebuild ? "Build in background" : issue.CanAdd ? "Index in background" : null;
+                actionKind = issue.CanRebuild ? "build-search" : issue.CanAdd ? "add-search" : null;
             }
-            else if (!issue.Repairable)
+            else if (issue.Repairable && CanAttemptIncrementalIndexRefresh(issue))
             {
-                // The index remains visible in Settings as needing attention, but this volume cannot
-                // provide a supported change journal, so neither update nor rebuild can restore freshness.
+                actionLabel = IsJournalCatchupLimitIssue(issue) ? "Increase limit and update" : "Update index";
+                actionKind = "incremental";
             }
-            else if (CanAttemptIncrementalIndexRefresh(issue))
+            else if (issue.CanRebuild)
             {
-                AddAction(IsJournalCatchupLimitIssue(issue) ? "Increase limit & update" : "Update index", "incremental");
-                AddAction("Rebuild index", "rebuild");
+                actionLabel = "Rebuild index";
+                actionKind = "rebuild";
             }
-            else
+            else if (issue.CanAdd)
             {
-                if (issue.CanRebuild)
-                {
-                    AddAction("Rebuild index", "rebuild");
-                }
-                else
-                {
-                    AddAction("Index & wait", "add-wait");
-                    AddAction("Index & search now", "add-search");
-                }
+                actionLabel = "Index in background";
+                actionKind = "add-search";
             }
-            Grid.SetColumn(actions, 1);
-            row.Children.Add(actions);
+
+            bool canDismiss = CanPermanentlyDismissContentIndexWarning(issue);
+            if (canDismiss || actionLabel is not null)
+            {
+                var footer = new Grid { ColumnSpacing = 12, Margin = new Thickness(0, 2, 0, 0) };
+                footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                if (canDismiss)
+                {
+                    string dismissedRoot = IndexScopeIdentity.NormalizePath(issue.SearchRoot);
+                    var dismiss = new CheckBox
+                    {
+                        Content = new TextBlock
+                        {
+                            Text = "Always search this location live without warning",
+                            TextWrapping = TextWrapping.Wrap,
+                            FontSize = 12,
+                        },
+                        MinWidth = 0,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    };
+                    dismiss.Checked += (_, _) => permanentlyDismissedRoots.Add(dismissedRoot);
+                    dismiss.Unchecked += (_, _) => permanentlyDismissedRoots.Remove(dismissedRoot);
+                    footer.Children.Add(dismiss);
+                }
+
+                if (actionLabel is not null && actionKind is not null)
+                {
+                    string selectedKind = actionKind;
+                    var action = new Button
+                    {
+                        Content = actionLabel,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        MinWidth = 150,
+                        Padding = new Thickness(12, 6, 12, 6),
+                    };
+                    ToolTipService.SetToolTip(action, ContentIndexReadinessActionTooltip(selectedKind));
+                    action.Click += (_, _) =>
+                    {
+                        requestedAction = issue;
+                        requestedActionKind = selectedKind;
+                        readinessDialog?.AcceptClose();
+                    };
+                    Grid.SetColumn(action, 1);
+                    footer.Children.Add(action);
+                }
+
+                card.Children.Add(footer);
+            }
+
             panel.Children.Add(new Border
             {
                 Background = TryGetPreviewBrushResource("CardBackgroundFillColorSecondaryBrush"),
                 BorderBrush = TryGetPreviewBrushResource("CardStrokeColorDefaultBrush"),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(6),
-                Child = row,
+                Child = card,
             });
         }
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Search live starts immediately. Any maintenance you start here affects performance only, never which matches Yagu returns.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11,
+            Opacity = 0.6,
+        });
 
         YaguDialogResult result = await YaguDialog.ShowAsync(
             _hwnd,
@@ -600,16 +665,24 @@ public sealed partial class MainWindow
                 TitleGlyphColor = Microsoft.UI.Colors.Gold,
                 Content = panel,
                 PrimaryButtonText = "Search live",
-                CloseButtonText = "Cancel",
-                DefaultButton = YaguDialogDefaultButton.Close,
+                CloseButtonText = null,
+                DefaultButton = YaguDialogDefaultButton.Primary,
                 RequestedTheme = RootGrid.ActualTheme,
                 ShowTitleBar = false,
                 ShowTopRightCloseButton = true,
-                Width = 680,
-                Height = Math.Min(620, 330 + (issues.Length * 100)),
-                MaxContentHeight = 500,
+                Width = 720,
+                Height = Math.Min(700, 320 + (issues.Length * 155)),
+                MaxContentHeight = 570,
             },
             dialog => readinessDialog = dialog);
+
+        if (result == YaguDialogResult.Primary && permanentlyDismissedRoots.Count > 0)
+        {
+            ViewModel.Settings.ContentIndexLiveScanWarningDismissedRoots =
+                AppSettings.NormalizeContentIndexLiveScanWarningDismissedRoots(
+                    ViewModel.Settings.ContentIndexLiveScanWarningDismissedRoots.Concat(permanentlyDismissedRoots));
+            await ViewModel.PersistSettingsAsync();
+        }
 
         if (requestedAction is { } actionIssue)
         {
@@ -626,15 +699,6 @@ public sealed partial class MainWindow
             else if (requestedActionKind == "rebuild" && actionIssue.CanRebuild)
             {
                 await ViewModel.RebuildCurrentIndexBlockingAsync(new[] { actionIssue.IndexRoot });
-                foreach (ContentIndexReadinessIssue issue in issues)
-                    _contentIndexReadinessWarningsAcknowledged.Add(issue.WarningKey);
-                return true;
-            }
-            else if (requestedActionKind == "add-wait")
-            {
-                if (!await ConfirmLargeFolderIfNeededAsync(actionIssue.SearchRoot))
-                    return false;
-                await ViewModel.AddFolderToIndexAndBuildBlockingAsync(actionIssue.SearchRoot);
                 foreach (ContentIndexReadinessIssue issue in issues)
                     _contentIndexReadinessWarningsAcknowledged.Add(issue.WarningKey);
                 return true;
@@ -667,7 +731,9 @@ public sealed partial class MainWindow
     private static string DescribeContentIndexReadinessIssue(ContentIndexReadinessIssue issue)
     {
         if (issue.Kind == ContentIndexReadinessIssueKind.Missing)
-            return "No usable content index exists for this root. It will be scanned live.";
+            return issue.Registered
+                ? "This location is already set up for indexing, but its first usable index is not ready. Yagu can build it in the background while this search scans files directly."
+                : "This location is not indexed. Yagu will scan its files directly; the search may take longer, but no results are omitted.";
         if (issue.Reason.Contains("Incomplete", StringComparison.OrdinalIgnoreCase))
             return "The bounded change-journal replay reached its record limit. This can happen on a busy drive soon after a rebuild. "
                  + "Increase the limit and try a safe incremental update first; if continuity still cannot be proven, Yagu keeps the existing index unchanged.";
@@ -692,6 +758,29 @@ public sealed partial class MainWindow
             return "The change journal returned an error, so index freshness cannot be proven. Rebuild or search live.";
         return "Index freshness cannot be proven. Rebuild before searching for normal accelerated performance.";
     }
+
+    private static string ContentIndexReadinessStatus(ContentIndexReadinessIssue issue)
+    {
+        if (issue.Kind == ContentIndexReadinessIssueKind.Missing)
+            return issue.Registered ? "Index not built yet" : "Not indexed - live scan required";
+        if (!issue.Repairable)
+            return "Live scan required on this volume";
+        return CanAttemptIncrementalIndexRefresh(issue)
+            ? "Index needs an update"
+            : "Index needs a rebuild";
+    }
+
+    private static string ContentIndexReadinessActionTooltip(string actionKind) => actionKind switch
+    {
+        "add-search" => "Add this location to the content index, build in the background, and start this search live now.",
+        "build-search" => "Build this registered index in the background and start this search live now.",
+        "incremental" => "Update the existing index, then continue the pending search.",
+        "rebuild" => "Build a safe replacement index, then continue the pending search.",
+        _ => "Maintain this content index.",
+    };
+
+    private static bool CanPermanentlyDismissContentIndexWarning(ContentIndexReadinessIssue issue)
+        => issue.Kind == ContentIndexReadinessIssueKind.Missing && !issue.Registered;
 
     private static bool IsJournalCatchupLimitIssue(ContentIndexReadinessIssue issue)
         => issue.Reason.Contains("Incomplete", StringComparison.OrdinalIgnoreCase);
@@ -1474,12 +1563,15 @@ public sealed partial class MainWindow
         return false;
     }
 
-    private void OnRestartAsAdmin(object sender, RoutedEventArgs e)
+    private async void OnRestartAsAdmin(object sender, RoutedEventArgs e)
     {
         try
         {
             var exe = Environment.ProcessPath;
             if (exe is null) return;
+
+            if (!await ConfirmExitWhileIndexingAsync(IndexingCloseTrigger.UserExit))
+                return;
 
             // Strip any pre-existing --wait-for-pid <n> tokens, then append our own
             // pointing at the current process so the elevated instance waits for us
@@ -1497,16 +1589,6 @@ public sealed partial class MainWindow
             existing.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             var args = string.Join(" ", existing.Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
 
-            // Release the single-instance mutex BEFORE starting the elevated process,
-            // so there's no race where the new instance sees the mutex still owned.
-            try
-            {
-                App.InstanceMutex?.ReleaseMutex();
-            }
-            catch (ApplicationException) { /* not owned — ignore */ }
-            App.InstanceMutex?.Dispose();
-            App.InstanceMutex = null;
-
             Process.Start(new ProcessStartInfo
             {
                 FileName = exe,
@@ -1514,17 +1596,11 @@ public sealed partial class MainWindow
                 UseShellExecute = true,
                 Verb = "runas",
             });
-            Application.Current.Exit();
+            await CompleteApplicationExitAsync();
         }
         catch (System.ComponentModel.Win32Exception)
         {
-            // User cancelled the UAC prompt — re-acquire the mutex so this instance
-            // remains the single instance, then do nothing.
-            try
-            {
-                App.InstanceMutex = new Mutex(true, @"Global\YaguSingleInstance", out _);
-            }
-            catch { /* best-effort */ }
+            // User cancelled the UAC prompt. This instance still owns the single-instance mutex.
         }
     }
 

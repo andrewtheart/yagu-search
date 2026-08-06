@@ -216,7 +216,7 @@ internal static class Program
             try
             {
                 using var proc = Process.GetProcessById(pid);
-                proc.WaitForExit(5000);
+                proc.WaitForExit(15000);
             }
             catch
             {

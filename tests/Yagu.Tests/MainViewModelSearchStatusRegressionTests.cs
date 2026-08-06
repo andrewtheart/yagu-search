@@ -83,19 +83,52 @@ public sealed class MainViewModelSearchStatusRegressionTests
     }
 
     [Fact]
-    public void SkippedCount_RemainsHiddenUntilSearchStarts()
+    public void SkippedInfo_AppearsOnlyForPositiveCount_AndReusesBreakdownOverlay()
     {
         string mainWindowXaml = File.ReadAllText(
             Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
-        Assert.Contains("Visibility=\"{x:Bind ViewModel.SkippedCountVisibility, Mode=OneWay}\"", mainWindowXaml);
+        Assert.DoesNotContain("x:Name=\"SkipCountBlock\"", mainWindowXaml);
+        Assert.Contains("x:Name=\"SkippedInfoButton\"", mainWindowXaml);
+        Assert.Contains("<Grid MinWidth=\"32\" Height=\"26\">", mainWindowXaml);
+        Assert.Contains("HorizontalAlignment=\"Left\" VerticalAlignment=\"Top\"", mainWindowXaml);
+        Assert.Contains("Margin=\"17,0,0,0\"", mainWindowXaml);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.SkippedInfoVisibility, Mode=OneWay}\"", mainWindowXaml);
+        Assert.Contains("Text=\"{x:Bind ViewModel.FilesSkipped, Mode=OneWay}\"", mainWindowXaml);
+        Assert.Contains("Foreground=\"{ThemeResource SystemFillColorCautionBrush}\"", mainWindowXaml);
+        Assert.Contains("PointerEntered=\"OnSkipInfoPointerEntered\"", mainWindowXaml);
+        Assert.Contains("PointerExited=\"OnSkipInfoPointerExited\"", mainWindowXaml);
+        Assert.Contains("Click=\"OnSkipInfoClicked\"", mainWindowXaml);
+        Assert.Contains("x:Name=\"SkipBreakdownOverlay\"", mainWindowXaml);
 
-        Assert.Contains("[ObservableProperty] public partial bool HasPerformedSearch { get; set; }", MainViewModelSource);
         AssertContainsInOrder(MainViewModelSource,
-            "SkippedCountVisibility =>",
-            "HasPerformedSearch",
+            "SkippedInfoVisibility =>",
+            "FilesSkipped > 0",
             "Microsoft.UI.Xaml.Visibility.Visible",
             "Microsoft.UI.Xaml.Visibility.Collapsed");
-        Assert.Contains("partial void OnHasPerformedSearchChanged(bool value) => OnPropertyChanged(nameof(SkippedCountVisibility));", MainViewModelSource);
+        Assert.Contains("OnPropertyChanged(nameof(SkippedInfoVisibility))", MainViewModelSource);
+
+        string mainWindowSource = string.Join(Environment.NewLine,
+            Directory.GetFiles(
+                Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow"),
+                "MainWindow*.cs")
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(File.ReadAllText));
+        string pointerEntered = ExtractWindow(mainWindowSource, "private void OnSkipInfoPointerEntered", "private void OnSkipInfoPointerExited");
+        Assert.Contains("ShowSkipBreakdownOverlay();", pointerEntered);
+        string pointerExited = ExtractWindow(mainWindowSource, "private void OnSkipInfoPointerExited", "private void OnSkipBreakdownOverlayPointerEntered");
+        Assert.Contains("ScheduleSkipBreakdownHoverHide();", pointerExited);
+        string clicked = ExtractWindow(mainWindowSource, "private void OnSkipInfoClicked", "private void OnSkipInfoPointerEntered");
+        Assert.Contains("_skipBreakdownPinned = !_skipBreakdownPinned;", clicked);
+        AssertContainsInOrder(clicked,
+            "if (_skipBreakdownPinned)",
+            "ShowSkipBreakdownOverlay();",
+            "HideSkipBreakdownOverlay();");
+
+        // The overlay only auto-hides once the pointer is over neither the icon nor the panel, so the
+        // close button stays reachable across the gap between them.
+        string scheduleHide = ExtractWindow(mainWindowSource, "private void ScheduleSkipBreakdownHoverHide()", "private void CancelSkipBreakdownHoverHide()");
+        Assert.Contains("if (_skipBreakdownPinned)", scheduleHide);
+        Assert.Contains("!_skipBreakdownPointerOverIcon && !_skipBreakdownPointerOverPanel", scheduleHide);
 
         string resetForSearch = ExtractWindow(MainViewModelSource, "private void ResetStateForNewSearch()", "private bool IsCurrentSearch");
         AssertContainsInOrder(resetForSearch,
@@ -114,6 +147,79 @@ public sealed class MainViewModelSearchStatusRegressionTests
             "FilesSkipped = 0;",
             "HasPerformedSearch = false;",
             "AccessDeniedCount = 0;");
+    }
+
+    [Fact]
+    public void SkipBreakdownOverlay_IsCompactAnchoredUnderTheIcon_AndDismissesWithCloseOrEscape()
+    {
+        string repoRoot = FindRepoRoot();
+        string mainWindowXaml = File.ReadAllText(
+            Path.Combine(repoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+        string overlay = ExtractWindow(mainWindowXaml, "x:Name=\"SkipBreakdownOverlay\"", "<!-- Embedded terminal panel");
+
+        // Compact panel: the table is rendered as a real grid (a monospaced font cannot align rows whose
+        // category emoji have different advance widths) while the long footnote wraps in a bounded width.
+        Assert.Contains("MaxWidth=\"420\"", overlay);
+        Assert.Contains("x:Name=\"SkipBreakdownContent\"", overlay);
+        Assert.Contains("Text=\"{x:Bind ViewModel.SkipFootnoteText}\"", overlay);
+        Assert.Contains("TextWrapping=\"Wrap\"", overlay);
+        Assert.DoesNotContain("Text=\"{x:Bind ViewModel.SkipTooltip, Mode=OneWay}\"", overlay);
+
+        // Every category shares one grid's columns, and the headline total is its own summary section
+        // below a divider that spans those columns, so both stay vertically aligned.
+        string settingsMenus = File.ReadAllText(
+            Path.Combine(repoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SettingsMenus.cs"));
+        string table = ExtractWindow(settingsMenus, "private static Grid BuildSkipTable", "private static void AddSkipCells");
+        AssertContainsInOrder(table,
+            "grid.ColumnDefinitions.Add",
+            "AddSkipCells(grid, row++, entry.Glyph, entry.Label, entry.Count, emphasized: false);",
+            "Grid.SetColumnSpan(divider, 3);",
+            "AddSkipCells(grid, row, glyph: string.Empty, label: \"Total skipped\", count: totalCount, emphasized: true);");
+
+        // Anchored in code under the icon, so it spans the rows and is positioned from the window origin.
+        Assert.Contains("Grid.Row=\"0\" Grid.RowSpan=\"7\"", overlay);
+        Assert.Contains("HorizontalAlignment=\"Left\"", overlay);
+        Assert.Contains("VerticalAlignment=\"Top\"", overlay);
+
+        Assert.Contains("x:Name=\"SkipBreakdownCloseButton\"", overlay);
+        Assert.Contains("Click=\"OnSkipBreakdownCloseClicked\"", overlay);
+        Assert.Contains("PointerEntered=\"OnSkipBreakdownOverlayPointerEntered\"", overlay);
+        Assert.Contains("PointerExited=\"OnSkipBreakdownOverlayPointerExited\"", overlay);
+
+        // The footnote is a separate property so it can wrap; SkipTooltip still carries both blocks for
+        // the icon's accessible description.
+        Assert.Contains("public string SkipFootnoteText => SkipFootnote;", MainViewModelSource);
+        Assert.Contains("public string SkipBreakdownDetails", MainViewModelSource);
+        Assert.Contains("public string SkipTooltip =>", MainViewModelSource);
+        Assert.Contains("OnPropertyChanged(nameof(SkipBreakdownDetails));", MainViewModelSource);
+
+        string mainWindowSource = string.Join(Environment.NewLine,
+            Directory.GetFiles(
+                Path.Combine(repoRoot, "src", "Yagu", "UI", "Windows", "MainWindow"),
+                "MainWindow*.cs")
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(File.ReadAllText));
+
+        string position = ExtractWindow(mainWindowSource, "private void PositionSkipBreakdownOverlay()", "private void ScheduleSkipBreakdownHoverHide()");
+        AssertContainsInOrder(position,
+            "SkipBreakdownOverlay.UpdateLayout();",
+            "SkippedInfoButton.TransformToVisual(RootGrid)",
+            "(SkippedInfoButton.ActualWidth / 2) - (overlayWidth / 2)",
+            "anchor.Y + SkippedInfoButton.ActualHeight",
+            "SkipBreakdownOverlay.Margin = new Thickness(Math.Clamp(left, 8, maxLeft), top, 0, 0);");
+
+        // Esc closes the topmost hand-built overlay, and returns false otherwise so it still cancels a
+        // running search / closes the find bar.
+        string escape = ExtractWindow(mainWindowSource, "private bool TryDismissOpenOverlayOnEscape()", "private bool TryHandlePreviewMatchEnter");
+        AssertContainsInOrder(escape,
+            "SkipBreakdownOverlay?.Visibility == Visibility.Visible",
+            "HideSkipBreakdownOverlay();",
+            "IndexStatusHoverOverlay?.Visibility == Visibility.Visible",
+            "HideIndexStatusHoverOverlay();",
+            "PreviewShowMoreTooltipOverlay?.Visibility == Visibility.Visible",
+            "HidePreviewShowMoreTooltip();",
+            "return false;");
+        Assert.Contains("if (e.Key == Windows.System.VirtualKey.Escape && TryDismissOpenOverlayOnEscape())", mainWindowSource);
     }
 
     [Fact]

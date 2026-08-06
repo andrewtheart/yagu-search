@@ -455,7 +455,13 @@ Options</a>
 <ul>
 <li><a href="#search-tab" id="toc-search-tab">Search Tab</a></li>
 <li><a href="#quick-searches-tab" id="toc-quick-searches-tab">Quick
-searches Tab</a></li>
+searches Tab</a>
+<ul>
+<li><a href="#choosing-where-a-quick-search-runs" id="toc-choosing-where-a-quick-search-runs">Choosing where a quick
+search runs</a></li>
+<li><a href="#capturing-the-full-advanced-options" id="toc-capturing-the-full-advanced-options">Capturing the full Advanced
+Options</a></li>
+</ul></li>
 <li><a href="#filters-tab" id="toc-filters-tab">Filters Tab</a></li>
 <li><a href="#size-tab" id="toc-size-tab">Size Tab</a></li>
 <li><a href="#dates-tab" id="toc-dates-tab">Dates Tab</a></li>
@@ -505,6 +511,7 @@ session</a></li>
 Defaults Tab</a></li>
 <li><a href="#search-limits-tab" id="toc-search-limits-tab">Search
 Limits Tab</a></li>
+<li><a href="#notifications-tab" id="toc-notifications-tab">Notifications Tab</a></li>
 <li><a href="#ocr-tab" id="toc-ocr-tab">OCR Tab</a></li>
 <li><a href="#indexing-tab" id="toc-indexing-tab">Indexing Tab</a>
 <ul>
@@ -815,7 +822,8 @@ Advanced Options expander.</td>
 <tr>
 <td>Results pane (left)</td>
 <td>Matching files and lines with sorting, grouping, filtering,
-selection, copy, and export.</td>
+selection, copy, and export. A yellow information icon beside
+<strong>Filter files</strong> appears when files are skipped.</td>
 </tr>
 <tr>
 <td>Preview pane (right)</td>
@@ -825,8 +833,8 @@ and export.</td>
 <tr>
 <td>Status bar</td>
 <td>Search progress/completion, result-temp disk usage, total
-content-index disk usage, Yagu/worker RAM, index health/coverage, and
-skipped-file count.</td>
+content-index disk usage, Yagu/worker RAM, and index
+health/coverage.</td>
 </tr>
 </tbody>
 </table>
@@ -837,7 +845,10 @@ traditional search and streaming result groups</figcaption>
 </figure>
 <ul>
 <li>Click the <strong>?</strong> button or press <strong>F1</strong> to
-open Help.</li>
+open Help. Inside Help, press <strong>Ctrl+F</strong> to search the
+rendered guide. All matches are highlighted; use the up/down buttons to
+move through them, and turn on <strong>Regex</strong> only when the find
+text should be interpreted as a regular expression.</li>
 <li>Click the <strong>gear</strong> to open Settings.</li>
 <li>Click the <strong>pin</strong> button to cycle window modes (Tray /
 Stay open / Always on top / Traditional).</li>
@@ -1094,6 +1105,14 @@ progress bar shows the percentage), or <strong>Not now</strong> to
 cancel — declining switches you back to <strong>Traditional</strong>.
 Already‑cached models are tagged <strong>Downloaded</strong> and start
 instantly. After the first download the prompt is not shown again.</li>
+<li><strong>The model check avoids incompatible variants by
+default.</strong> Before the check starts, you can adjust the model-load
+and query time limits in a compact setup screen. Models that require an
+unavailable GPU/NPU, exceed available memory, or have too little context
+are not probed. For deliberate testing, check <strong>Probe models
+detected as likely incompatible with this machine</strong> to override
+that safety filter. Choose <strong>Skip</strong> to leave the check
+without selecting a model.</li>
 <li><strong>Status while translating.</strong> A progress line appears
 just below the search card (in the status area above the results) while
 the runtime/model loads and the query is being translated, so it never
@@ -1219,10 +1238,98 @@ Include.</td>
 </tbody>
 </table>
 <h3 id="quick-searches-tab">Quick searches Tab</h3>
-<p>One-click regex searches for things developers routinely hunt for
-across a codebase. Each button loads a regex into the search box
-(Traditional regex mode) and runs it immediately over the current
-directory.</p>
+<p>One-click searches for things developers routinely hunt for across a
+codebase. Selecting one loads it into the search box and runs it
+immediately, in the folder that entry was saved with (or across every
+drive when no folder was set).</p>
+<p><strong>Find code annotations (TODO / FIXME…)</strong> is a fixed
+action at the top of the tab — it is the GUI twin of the CLI
+<code>--todos</code> flag.</p>
+<p>Everything under <strong>My quick searches</strong> is yours to
+manage, and every change is saved to disk immediately:</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Action</th>
+<th>How</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Add</td>
+<td>Choose <strong>Add</strong> to open the definition controls in a
+panel beneath the button, fill in the name, pattern, icon, mode, folder
+and options, and choose <strong>Save</strong>.</td>
+</tr>
+<tr>
+<td>Save current options</td>
+<td>Choose <strong>Save current options</strong> to open the same panel
+pre-filled with the query, folder and <em>every</em> Advanced Option
+currently shown in the drawer, then name it and choose
+<strong>Save</strong>.</td>
+</tr>
+<tr>
+<td>Edit</td>
+<td>Hover the entry and choose the pencil icon to edit it in place.</td>
+</tr>
+<tr>
+<td>Reorder</td>
+<td>Hover the entry and use the ▲ / ▼ icons to move it up or down the
+list.</td>
+</tr>
+<tr>
+<td>Delete</td>
+<td>Hover the entry and choose the trash icon.</td>
+</tr>
+</tbody>
+</table>
+<p>The hover icons sit in a fixed lane on the right-hand side of each
+row, so a long name is shortened with an ellipsis rather than pushing
+them out of line. The icon is chosen from a picker rather than
+typed.</p>
+<p>Each saved quick search stores its own <strong>Traditional /
+Semantic</strong> mode plus the four search-box options
+(<strong>Regex</strong>, <strong>Case</strong>,
+<strong>Multiline</strong>, <strong>Exact</strong>), so running it
+restores exactly the search you saved. Deleting every entry is allowed —
+the list stays empty rather than re-seeding.</p>
+<h4 id="choosing-where-a-quick-search-runs">Choosing where a quick
+search runs</h4>
+<p><strong>Search in folder</strong> sets the directory the entry
+searches. <strong>Leave it empty and the search starts at the root of
+every drive</strong> — the same thing an empty directory box does
+anywhere else in Yagu. Hovering a row tells you which of the two it will
+do.</p>
+<p>Choose the folder icon beside the field to open Yagu’s own folder
+browser: a flyout listing your drives, then their subfolders as you
+click down into them, with <strong>↑</strong> to go back up and the path
+box for typing or pasting a location directly (press <kbd>Enter</kbd> to
+jump there). <strong>Use this folder</strong> takes the folder you are
+viewing; <strong>Search all drives</strong> clears the field. Folders
+are listed on a background thread, so a slow network or removable drive
+never freezes the panel.</p>
+<h4 id="capturing-the-full-advanced-options">Capturing the full Advanced
+Options</h4>
+<p><strong>Save current options</strong> captures the <em>live</em>
+drawer — search mode, multiline dot-all, include/exclude filters and
+their Glob/Regex modes, .gitignore handling, the skip / binary / archive
+extension lists, hidden, online-only, archive, image-text (OCR) and
+PDF-text toggles, the content-index toggle, the size range, the
+created/modified date ranges, and max depth — not just the four options
+the tab shows inline. Values you changed but never saved as defaults are
+captured too.</p>
+<p>Running a quick search that carries a snapshot restores all of it
+before the search starts; the drawer reverts to your saved defaults once
+that search finishes. A gear icon on the row marks the entries that
+carry one. Inside the editor, <strong>Capture current</strong> /
+<strong>Recapture</strong> refreshes the snapshot and
+<strong>Clear</strong> removes it, after which running the entry leaves
+Advanced Options untouched.</p>
+<p>The list is seeded on first run with these built-ins:</p>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -1235,14 +1342,6 @@ directory.</p>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td>Find code annotations (TODO / FIXME…)</td>
-<td>Whole-word regex over <code>TODO</code>, <code>FIXME</code>,
-<code>HACK</code>, <code>BUG</code>, <code>XXX</code>,
-<code>NOTE</code>, <code>OPTIMIZE</code>, and <code>REVIEW</code>
-(case-sensitive) — every outstanding annotation. Equivalent to the CLI
-<code>--todos</code> flag.</td>
-</tr>
 <tr>
 <td>Merge conflict markers</td>
 <td>Unresolved Git merge-conflict markers
@@ -2124,7 +2223,10 @@ matches the default. If you close Settings with unsaved changes, Yagu
 asks whether to save, discard, or keep editing.</p>
 <p>Use the search box at the top of Settings to filter settings by tab
 name, setting label, helper text, current value, or available option
-text.</p>
+text. Hover over a setting label to open its detailed description in a
+flyout. Close it with the flyout’s <strong>X</strong>,
+<strong>Esc</strong>, or a click outside it; descriptions are resolved
+and cached only as they are shown.</p>
 <h3 id="search-defaults-tab">Search Defaults Tab</h3>
 <table>
 <colgroup>
@@ -2281,6 +2383,49 @@ Detection still checks file-header magic bytes.</td>
 <td>Max archive entry size (MB)</td>
 <td>Largest individual entry to extract from an archive. 0 = default 64
 MB.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="notifications-tab">Notifications Tab</h3>
+<p>The master switch is on by default. Each category can be enabled or
+disabled independently:</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What It Controls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Enable Windows notifications and in-app alerts</td>
+<td>Master switch for all categories below. Windows Focus Assist and
+notification permissions still apply.</td>
+</tr>
+<tr>
+<td>Completed searches</td>
+<td>Native Windows 11 notification with match, file, skipped-file, and
+elapsed-time totals after a successful search.</td>
+</tr>
+<tr>
+<td>Canceled searches</td>
+<td>Native Windows 11 notification with partial totals after you cancel
+a search. Low-disk termination keeps its actionable in-app warning.</td>
+</tr>
+<tr>
+<td>Application updates</td>
+<td>Allows the automatic updater to show its non-modal notice for a
+newer verified Yagu release. Manual update checks are unaffected.</td>
+</tr>
+<tr>
+<td>New AI models</td>
+<td>Allows the daily Foundry Local catalog check to show a one-time
+alert for new or updated on-device models after AI search has been
+used.</td>
 </tr>
 </tbody>
 </table>
@@ -2619,9 +2764,24 @@ search.</td>
 <td>None. Results still come from live verification.</td>
 </tr>
 <tr>
+<td><strong>Index: fully accelerated</strong></td>
+<td>The finished search was accelerated for every root it requested.
+(This label used to read <strong>Index: full</strong>, which was easily
+misread as the unrelated <strong>Index: disk full</strong>
+warning.)</td>
+<td>None.</td>
+</tr>
+<tr>
 <td><strong>Index: partially accelerating</strong></td>
 <td>Some searched roots/files were accelerated and the rest were scanned
 live.</td>
+<td>Hover the status for the per-root reason if you expected full
+coverage.</td>
+</tr>
+<tr>
+<td><strong>Index: partially accelerated</strong></td>
+<td>The finished search accelerated some requested roots and scanned the
+rest live.</td>
 <td>Hover the status for the per-root reason if you expected full
 coverage.</td>
 </tr>
@@ -2654,12 +2814,11 @@ sessions avoid loading the full index into Yagu.</td>
 </tr>
 <tr>
 <td><strong>Content index needs attention</strong></td>
-<td>Freshness, compatibility, storage, or integrity cannot be proven for
-one or more roots.</td>
-<td>Use the reason-specific <strong>Update</strong>, <strong>Increase
-limit &amp; update</strong>, <strong>Validate</strong>,
-<strong>Repair</strong>, <strong>Rebuild</strong>, or <strong>Search
-live</strong> action.</td>
+<td>One or more searched locations cannot use the index, so Yagu will
+scan their files directly. Results remain complete; only speed may
+change.</td>
+<td>Choose the single recommended maintenance action for a location, or
+<strong>Search live</strong> immediately.</td>
 </tr>
 <tr>
 <td><strong>leftover index — not maintained</strong></td>
@@ -2668,11 +2827,34 @@ automatic maintenance.</td>
 <td>Choose <strong>Maintain</strong> to re-register it or <strong>Delete
 index</strong> to reclaim storage.</td>
 </tr>
+<tr>
+<td><strong>not indexed — not maintained</strong></td>
+<td>A ready local fixed drive is eligible for indexing but has no index
+and is not registered.</td>
+<td>Choose <strong>Add to index</strong> on that row to register it,
+pick when it is kept up to date, and start the build.</td>
+</tr>
+<tr>
+<td><strong>build required</strong></td>
+<td>The folder is registered for maintenance but its index has never
+been built.</td>
+<td>Choose <strong>Build now</strong> on that row to build it behind the
+blocking progress overlay.</td>
+</tr>
 </tbody>
 </table>
 <p>The completed-search summary is the authoritative answer for that
 run. A green overall health label means maintained indexes are healthy;
 it does not claim that every possible query used them.</p>
+<p><strong>Green check on the status indicator.</strong> A green check
+appears beside the status glyph only when the label reports unqualified
+success: <strong>Indexes: all healthy</strong>, <strong>Index:
+accelerating</strong>, <strong>Index: fully accelerated</strong>, or
+<strong>Index: ready</strong>. Any qualified variant — <strong>Index:
+accelerating (1 of 4 needs attention)</strong>, <strong>Index: 3/4
+drives healthy</strong>, <strong>Index: partially accelerating</strong>,
+or anything needing attention — shows no check, so the check never
+implies that an outstanding problem is resolved.</p>
 <p><strong>Uninstall and reinstall.</strong> When interactive Setup
 detects an existing 32-bit or 64-bit Yagu installation, settings file,
 or content index, it shows an <strong>Existing Yagu installation or data
@@ -2884,7 +3066,15 @@ visible — for example, <strong>Index: accelerating (1 of 4 needs
 attention)</strong>. Each affected row has its own recovery buttons. A
 valid <strong>leftover index</strong> offers <strong>Maintain</strong>
 (register it without rebuilding, then let the next maintenance pass
-check or update it) and <strong>Delete index</strong>. Irrecoverable
+check or update it) and <strong>Delete index</strong>. A ready local
+fixed drive that is eligible but has no index offers <strong>Add to
+index</strong>, which opens the same add-folder dialog used by
+onboarding so you can choose the build trigger (manual, continuous, when
+idle, at startup, or on the configured schedule) and the update mode
+before the build starts; the trigger and update mode apply to every
+indexed folder, not only the one being added, and the row updates
+immediately once the drive is registered. A registered root whose index
+has never been built offers <strong>Build now</strong>. Irrecoverable
 freshness failures such as a change-journal gap/reset show
 <strong>Rebuild</strong> beside that root. A catch-up-limit stop shows
 the recommended <strong>Increase limit &amp; update</strong> action plus
@@ -3037,22 +3227,22 @@ index metadata/file identities, and bounded change-journal freshness
 state. If a searched root has no usable index, or its checkpoint is too
 old to prove freshness (for example, a journal gap/reset or the
 configured catch-up-record limit), a titleless <strong>Content index
-needs attention</strong> prompt explains which root would be scanned
-live. For a folder that is not indexed yet, choose <strong>Index &amp;
-wait</strong> to block Yagu behind the full-window progress overlay
-until the build finishes, or <strong>Index &amp; search now</strong> to
-start indexing in the background and immediately continue the current
-search using the authoritative live path. Recoverable stale states offer
-<strong>Update index</strong> before <strong>Rebuild index</strong>. A
-catch-up-limit stop offers <strong>Increase limit &amp; update</strong>,
-which raises the persisted bounded replay limit and retries a safe
-incremental update; if continuity still cannot be proven, Yagu keeps the
-existing index unchanged instead of silently rebuilding it.
-Irrecoverable gaps/resets still offer an explicit rebuild. You can also
-choose <strong>Search live</strong> (the same issue is not repeated
-again during that app session) or cancel. Query-shape/selectivity
-bypasses do not show this warning because rebuilding cannot make those
-queries acceleratable.</p>
+needs attention</strong> prompt explains which root will be scanned live
+and makes clear that results remain complete. Each location offers at
+most one recommended maintenance action: <strong>Index in
+background</strong> or <strong>Build in background</strong> for a
+missing index, <strong>Update index</strong> (or <strong>Increase limit
+and update</strong>) for recoverable journal catch-up, and
+<strong>Rebuild index</strong> for an irrecoverable gap/reset.
+<strong>Search live</strong> is the single primary action and starts
+immediately; closing the prompt cancels the pending search. For an
+unregistered location with no index, <strong>Always search this location
+live without warning</strong> permanently dismisses only that location’s
+missing-index warning. Registered, stale, broken, and incompatible
+indexes still warn. Use Settings ▸ Indexing ▸ Status &amp; Provenance ▸
+<strong>Restore live-scan warnings</strong> to re-enable dismissed
+warnings. Query-shape/selectivity bypasses do not show this warning
+because rebuilding cannot make those queries acceleratable.</p>
 <p><strong>Quick add from the main window.</strong> When a search covers
 a folder that has no index yet, the status-bar index indicator reads
 <strong>Index: none for this folder</strong> — click it to open an
@@ -3069,8 +3259,8 @@ applies.</p>
 interruption, and recovery</h4>
 <p><strong>Turn the index off from the status bar.</strong>
 <strong>Right-click any index label</strong> (for example <strong>Index:
-full</strong> or <strong>Index: accelerating</strong>) for an
-<strong>Options</strong> menu that expands to three choices:
+fully accelerated</strong> or <strong>Index: accelerating</strong>) for
+an <strong>Options</strong> menu that expands to three choices:
 <strong>Pause indexing</strong> (temporarily stops the current
 background build; resume from the same menu), <strong>Disable index
 (this run)</strong> (stops using the index for searches for the rest of
@@ -3235,11 +3425,10 @@ update.</td>
 </tr>
 <tr>
 <td><strong>Content index needs attention</strong></td>
-<td>Read the per-root reason. Use <strong>Update index</strong> for
-recoverable journal catch-up, <strong>Increase limit &amp;
-update</strong> when the bounded record limit was reached, or
-<strong>Rebuild</strong> for a gap/reset or incompatible representation.
-<strong>Search live</strong> remains safe.</td>
+<td>Read the per-location explanation. Use its single recommended
+<strong>Update</strong>, <strong>Increase limit and update</strong>,
+<strong>Rebuild</strong>, or background-build action, or choose
+<strong>Search live</strong> immediately. Results remain complete.</td>
 </tr>
 <tr>
 <td>A build was cancelled, Yagu closed, or the worker stopped</td>
@@ -4239,12 +4428,17 @@ provides:</p>
 <li><strong>Left-click</strong> — Restores the window.</li>
 <li><strong>Right-click menu:</strong>
 <ul>
-<li><strong>Quick search…</strong> — Opens a small popup with a
-<strong>search term</strong> box and a <strong>directory</strong> box.
-Enter a term (and optionally a folder) and click <strong>Search</strong>
-(or press Enter) to run the search in the already-running Yagu window
-without switching to it first. Leave the directory blank to search all
-drives.</li>
+<li><strong>Quick search…</strong> — Expands an inline panel
+<strong>inside the tray menu</strong> (the menu stays open) where you
+can set the <strong>directory</strong>, the <strong>search
+pattern</strong>, the <strong>Traditional / Semantic</strong> mode, and
+the four search-box options (<strong>Regex</strong>,
+<strong>Case</strong>, <strong>Multiline</strong>,
+<strong>Exact</strong>). Choose <strong>Search</strong> or press Enter
+to run it in the already-running Yagu window without switching to it
+first. Leave the directory blank to search all drives. Press
+<strong>Esc</strong> to collapse the panel, and again to close the
+menu.</li>
 <li><strong>Open (reset)</strong> — Restores the window and clears the
 directory.</li>
 <li><strong>Open (existing)</strong> — Restores keeping the current
@@ -4267,10 +4461,15 @@ Command-line arguments (<code>--dir</code>, <code>--query</code>) are
 forwarded to the running instance.</p>
 <hr />
 <h2 id="skipped-files">Skipped Files</h2>
-<p>During a search, the status bar shows “Skipped: N”. Click it to open
-a categorized breakdown. The rows <strong>partition the headline number
-exactly</strong> — every counted category is listed, and any skip a
-category doesn’t claim shows up under <strong>Unclassified</strong>
+<p>When at least one file is skipped, a yellow information icon appears
+immediately to the left of <strong>Filter files</strong>. Its top-right
+badge shows the running skipped-file total and updates as new skips
+arrive. Hover over the icon to open the categorized breakdown, or click
+it to keep the breakdown open. The breakdown opens centered directly
+beneath the icon; close it with its <strong>×</strong> button or by
+pressing <strong>Esc</strong>. The rows <strong>partition the badge
+number exactly</strong> — every counted category is listed, and any skip
+a category doesn’t claim shows up under <strong>Unclassified</strong>
 rather than quietly disappearing, so the breakdown always adds up to the
 total.</p>
 <h3 id="counted-toward-skipped-n">Counted toward “Skipped: N”</h3>
@@ -4358,7 +4557,7 @@ results.</td>
 </tr>
 <tr>
 <td><strong>Total skipped</strong></td>
-<td>Always shown; equals the status-bar number.</td>
+<td>Always shown; equals the information-icon badge number.</td>
 </tr>
 </tbody>
 </table>

@@ -206,7 +206,9 @@ public sealed class CpuOnlyModelSelectionRegressionTests
         // selectable.
         Assert.Contains("bool ExceedsAvailableMemory", contract);
         Assert.Contains("int? memBudgetMb = AvailableMemoryBudgetMb();", translator);
-        Assert.Contains("ExceedsAvailableMemory = memBudgetMb is { } budget && sizeMb is { } sz && !ModelMemoryBudget.Fits(sz, budget)", translator);
+        Assert.Contains("bool exceedsAvailableMemory = memBudgetMb is { } budget", translator);
+        Assert.Contains("ExceedsAvailableMemory = exceedsAvailableMemory", translator);
+        Assert.Contains("IsLikelyIncompatible = likelyIncompatible || exceedsAvailableMemory", translator);
 
         // The picker dialog renders a visible warning on such options.
         Assert.Contains("option.ExceedsAvailableMemory", dialog);

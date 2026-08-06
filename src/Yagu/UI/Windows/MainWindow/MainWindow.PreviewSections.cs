@@ -413,7 +413,7 @@ public sealed partial class MainWindow
         if (!showStatusBar)
         {
             HideIndexStatusHoverOverlay();
-            SkipBreakdownOverlay.Visibility = Visibility.Collapsed;
+            HideSkipBreakdownOverlay();
         }
         UpdateTerminalChevronVisibility();
     }

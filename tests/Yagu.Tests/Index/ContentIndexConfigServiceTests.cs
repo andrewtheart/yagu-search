@@ -208,11 +208,13 @@ public sealed class ContentIndexConfigServiceTests
             EnableContentIndex = false,
             IndexBuildTrigger = "WhenIdle",
             IndexMaxCandidatePercent = 5,
+            ContentIndexLiveScanWarningDismissedRoots = [@"E:\"],
         };
         ContentIndexConfigService.Reset(settings);
         Assert.True(settings.EnableContentIndex);
         Assert.Equal("Manual", settings.IndexBuildTrigger);
         Assert.Equal(AppSettings.DefaultIndexMaxCandidatePercent, settings.IndexMaxCandidatePercent);
+        Assert.Empty(settings.ContentIndexLiveScanWarningDismissedRoots);
     }
 
     [Fact]

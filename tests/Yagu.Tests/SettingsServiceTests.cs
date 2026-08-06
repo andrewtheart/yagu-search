@@ -637,6 +637,62 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void NotificationCategories_DefaultOnAndRoundTripIndependently()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-notifications-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var defaults = new AppSettings();
+            Assert.True(defaults.NotificationsEnabled);
+            Assert.True(defaults.NotifySearchCompleted);
+            Assert.True(defaults.NotifySearchCancelled);
+            Assert.True(defaults.NotifyApplicationUpdates);
+            Assert.True(defaults.FoundryModelUpdateAlertsEnabled);
+
+            var svc = new SettingsService(tmp);
+            svc.Save(new AppSettings
+            {
+                NotificationsEnabled = false,
+                NotifySearchCompleted = false,
+                NotifySearchCancelled = true,
+                NotifyApplicationUpdates = false,
+                FoundryModelUpdateAlertsEnabled = true,
+            });
+
+            var loaded = svc.Load();
+            Assert.False(loaded.NotificationsEnabled);
+            Assert.False(loaded.NotifySearchCompleted);
+            Assert.True(loaded.NotifySearchCancelled);
+            Assert.False(loaded.NotifyApplicationUpdates);
+            Assert.True(loaded.FoundryModelUpdateAlertsEnabled);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void ContentIndexLiveScanWarningDismissals_NormalizeAndRoundTrip()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-index-warning-dismissals-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            svc.Save(new AppSettings
+            {
+                ContentIndexLiveScanWarningDismissedRoots = [@" E:\ ", @"e:\", "  ", @"F:\work\"],
+            });
+
+            var loaded = svc.Load();
+
+            Assert.Equal([@"E:\", @"F:\work"], loaded.ContentIndexLiveScanWarningDismissedRoots);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void ContentIndexLiveScanWarningDismissals_DefaultToEmpty()
+        => Assert.Empty(new AppSettings().ContentIndexLiveScanWarningDismissedRoots);
+
+    [Fact]
     public void SemanticModelQualificationFields_DefaultToNotCompletedEmptyAlias()
     {
         var s = new AppSettings();

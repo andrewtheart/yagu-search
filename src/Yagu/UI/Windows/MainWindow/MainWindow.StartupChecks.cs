@@ -425,13 +425,17 @@ public sealed partial class MainWindow
                     roots,
                     changedRoot =>
                     {
+                        bool activityStarted = false;
                         try
                         {
                             // Honor a user pause (right-click ▸ Pause indexing).
-                            if (ViewModel.IsIndexingPaused)
+                            if (ViewModel.IsIndexingPaused || ViewModel.IsShutdownRequested)
                                 return;
                             string mode = AppSettings.NormalizeIndexUpdateMode(settings.IndexUpdateMode);
                             bool incremental = string.Equals(mode, AppSettings.IndexUpdateModeAutomaticIncremental, StringComparison.Ordinal);
+                            activityStarted = TryBeginWatcherIndexActivity(changedRoot, incremental);
+                            if (!activityStarted)
+                                return;
                             IndexMaintenanceOperation operation = IndexBuildOperationFactory.CreateMaintenance(
                                 settings,
                                 new[] { changedRoot },
@@ -449,9 +453,19 @@ public sealed partial class MainWindow
                             if (r.Built > 0)
                                 YaguLog.For("ContentIndex").LogInformation("Watcher-hinted incremental refresh updated '{ChangedRoot}'.", changedRoot);
                         }
+                        catch (OperationCanceledException)
+                        {
+                            YaguLog.For("ContentIndex").LogInformation(
+                                "Watcher-hinted refresh for '{ChangedRoot}' was cancelled.", changedRoot);
+                        }
                         catch (Exception ex)
                         {
                             YaguLog.For("ContentIndex").LogWarning(ex, "Watcher-hinted refresh failed");
+                        }
+                        finally
+                        {
+                            if (activityStarted)
+                                DispatcherQueue.TryEnqueue(ViewModel.EndIndexBuildActivity);
                         }
                     },
                     excludedStorageRoot: provider.IndexRoot);
@@ -474,6 +488,27 @@ public sealed partial class MainWindow
                 YaguLog.For("ContentIndex").LogWarning(ex, "Failed to start watcher hints");
             }
         });
+    }
+
+    private bool TryBeginWatcherIndexActivity(string root, bool incremental)
+    {
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_disposed || ViewModel.IsShutdownRequested || ViewModel.IsIndexingPaused)
+            {
+                completion.TrySetResult(false);
+                return;
+            }
+
+            ViewModel.BeginIndexBuildActivity(root, isIncremental: incremental);
+            completion.TrySetResult(true);
+        }))
+        {
+            return false;
+        }
+
+        return completion.Task.GetAwaiter().GetResult();
     }
 
     private void QueueIndexWatcherHintsRecreation(string reason)
@@ -644,6 +679,9 @@ public sealed partial class MainWindow
 
     private async Task CheckForNewFoundryModelsAsync()
     {
+        if (!ViewModel.Settings.NotificationsEnabled || !ViewModel.FoundryModelUpdateAlertsEnabled)
+            return;
+
         // Don't stack on top of another startup prompt (Everything, font-contrast, etc.). If one is
         // open we skip entirely this session — the VM has not committed a baseline yet, so the check
         // simply runs again next launch.

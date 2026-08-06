@@ -26,7 +26,7 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("<PackageReference Include=\"Microsoft.Windows.SDK.BuildTools\" Version=\"10.0.28000.2526\" />", textControl);
         Assert.Contains("<PackageReference Include=\"Microsoft.Graphics.Win2D\" Version=\"1.4.0\" />", textControl);
         Assert.Contains("<WindowsSdkPackageVersion>10.0.26100.87</WindowsSdkPackageVersion>", textControl);
-        Assert.Contains("Installing Windows App Runtime...", installer);
+        Assert.Contains("Installing Windows app runtime (if not installed)...", installer);
         Assert.DoesNotContain("Windows App Runtime 1.8", installer);
         Assert.Contains("\"version\": \"10.0.302\"", globalJson);
     }
@@ -297,15 +297,31 @@ public sealed class InstallerPackagingRegressionTests
         // Install path: PrepareToInstall runs before any files are written (and before the Restart
         // Manager scan). Uninstall path: InitializeUninstall runs before any files are removed.
         Assert.Contains("function PrepareToInstall(var NeedsRestart: Boolean): String;", inno);
+        Assert.Contains("function IsDecimalProcessId(const Value: String): Boolean;", inno);
+        Assert.Contains("(Length(Value) >= 1) and (Length(Value) <= 10)", inno);
+        Assert.Contains("(Value[I] < '0') or (Value[I] > '9')", inno);
+        Assert.Contains("procedure WaitForLaunchingYagu();", inno);
+        Assert.Contains("{param:YAGUWAITPID|}", inno);
+        Assert.Contains("if not IsDecimalProcessId(WaitPid) then", inno);
+        Assert.Contains("Wait-Process -Id ", inno);
+        Assert.Contains("WaitForLaunchingYagu();", inno);
         Assert.Contains("function InitializeUninstall(): Boolean;", inno);
 
         // The killer is defined before both hooks (Pascal requires top-down definition) and called by each
         // (definition header + one call per hook => at least three occurrences of "KillYaguProcesses();").
         int killerDef = inno.IndexOf("procedure KillYaguProcesses();", System.StringComparison.Ordinal);
+        int pidValidatorDef = inno.IndexOf("function IsDecimalProcessId(", System.StringComparison.Ordinal);
+        int waiterDef = inno.IndexOf("procedure WaitForLaunchingYagu();", System.StringComparison.Ordinal);
         int prepare = inno.IndexOf("function PrepareToInstall(", System.StringComparison.Ordinal);
         int uninit = inno.IndexOf("function InitializeUninstall(", System.StringComparison.Ordinal);
         Assert.True(killerDef >= 0 && prepare > killerDef && uninit > killerDef,
             "KillYaguProcesses must be defined before the install/uninstall hooks that call it.");
+        Assert.True(pidValidatorDef >= 0 && waiterDef > pidValidatorDef,
+            "The PID syntax validator must run before the installer constructs its PowerShell wait command.");
+        Assert.True(
+            inno.IndexOf("WaitForLaunchingYagu();", prepare, System.StringComparison.Ordinal)
+                < inno.IndexOf("KillYaguProcesses();", prepare, System.StringComparison.Ordinal),
+            "The update installer must wait for graceful Yagu shutdown before its force-close fallback.");
         int occurrences = System.Text.RegularExpressions.Regex.Matches(inno, @"KillYaguProcesses\(\);").Count;
         Assert.True(occurrences >= 3, $"expected KillYaguProcesses called from both hooks, found {occurrences} occurrence(s).");
     }

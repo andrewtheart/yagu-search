@@ -2753,6 +2753,7 @@ public class GetMemoryDiagnosticsTests
 
 // ─── IsMemoryPressureRelieved additional branches ───────────────────────
 
+[Collection("SystemMemoryProvider")]
 public class IsMemoryPressureRelievedTests
 {
     [Fact]
@@ -3423,6 +3424,18 @@ public sealed class SearchServiceFileMetadataTests : IDisposable
     }
 }
 
+/// <summary>
+/// Serializes every class that reads or swaps the static <see cref="SearchService.SystemMemoryProvider"/>.
+/// Without this, xUnit runs those classes in parallel and the stub installed by
+/// <see cref="SearchServiceSystemMemoryTests"/> — including the throwing and unavailable providers — is
+/// visible to any concurrent live-memory assertion, which then fails intermittently.
+/// </summary>
+[CollectionDefinition("SystemMemoryProvider", DisableParallelization = true)]
+public sealed class SystemMemoryProviderCollection
+{
+}
+
+[Collection("SystemMemoryProvider")]
 public sealed class SearchServiceSystemMemoryTests : IDisposable
 {
     private readonly ISystemMemoryProvider _originalProvider = SearchService.SystemMemoryProvider;

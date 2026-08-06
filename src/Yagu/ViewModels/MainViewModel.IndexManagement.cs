@@ -29,6 +29,7 @@ public sealed partial class MainViewModel
             "Onboarding: registered effective root '{EffectiveRoot}' for requested folder '{RequestedRoot}' and starting a background index build.",
             effectiveRoot, folder.Trim());
         StartBackgroundIndexBuild(effectiveRoot);
+        RefreshAllDriveIndexStatus();
     }
 
     /// <summary>
@@ -84,6 +85,12 @@ public sealed partial class MainViewModel
                 effectiveRoot);
             StartBackgroundIndexBuild(effectiveRoot);
         }
+
+        // Re-read the all-drive snapshot so the status flyout's per-root rows immediately stop offering
+        // "Add to index" for a root that is now registered and building. Done after the builds start so the
+        // refresh cannot repaint the indicator over the build state it just entered.
+        RefreshCurrentIndexStatus();
+        RefreshAllDriveIndexStatus();
     }
 
     /// <summary>Registers <paramref name="folder"/> and awaits its initial build behind the same
@@ -319,6 +326,14 @@ public sealed partial class MainViewModel
     public async Task RebuildCurrentIndexBlockingAsync(IReadOnlyList<string> roots)
         => await RunCurrentIndexBlockingAsync(roots, rebuild: true).ConfigureAwait(true);
 
+    /// <summary>Runs the first build for an already-registered root whose index has never been built,
+    /// behind the same full-window blocking overlay. Backs the status flyout's "Build now" row action.
+    /// Unlike <see cref="RebuildCurrentIndexBlockingAsync"/> this reports itself as a build, so the
+    /// overlay and its cancel button never claim to be rebuilding an index that does not exist yet.
+    /// Never throws.</summary>
+    public async Task BuildRegisteredIndexBlockingAsync(string root)
+        => await RunCurrentIndexBlockingAsync(new[] { root }, rebuild: false).ConfigureAwait(true);
+
     private async Task RunCurrentIndexBlockingAsync(IReadOnlyList<string> roots, bool rebuild)
     {
         if (!_dispatcher.HasThreadAccess)
@@ -326,7 +341,7 @@ public sealed partial class MainViewModel
             _dispatcher.TryEnqueue(() => _ = RunCurrentIndexBlockingAsync(roots, rebuild));
             return;
         }
-        if (_disposed || IsIndexRebuildBlocking || IsIndexBuildActive || IsIndexingPaused
+        if (_disposed || _shutdownRequested || IsIndexRebuildBlocking || IsIndexBuildActive || IsIndexingPaused
             || roots is null || roots.Count == 0)
             return;
 
@@ -379,7 +394,7 @@ public sealed partial class MainViewModel
             _dispatcher.TryEnqueue(() => _ = RefreshCurrentIndexIncrementallyAsync(root, increasedCatchupLimit));
             return;
         }
-        if (_disposed || IsIndexBuildActive || IsIndexRebuildBlocking || IsIndexingPaused
+        if (_disposed || _shutdownRequested || IsIndexBuildActive || IsIndexRebuildBlocking || IsIndexingPaused
             || string.IsNullOrWhiteSpace(root))
             return;
 

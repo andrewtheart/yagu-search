@@ -8,15 +8,15 @@ namespace Yagu.Helpers;
 /// </summary>
 internal sealed class TrayIcon : IDisposable
 {
-    public event Action? OpenResetRequested;
     public event Action? OpenExistingRequested;
-    public event Action? QuickSearchRequested;
-    public event Action? CloseRequested;
+
+    /// <summary>Raised with the screen cursor position when the user right-clicks the tray icon. The app
+    /// answers by showing its own themed menu, so no Win32 popup menu is created here.</summary>
+    public event Action<int, int>? ContextMenuRequested;
 
     private const int WM_USER = 0x0400;
     private const int WM_TRAYICON = WM_USER + 1;
     private const int WM_DESTROY = 0x0002;
-    private const int WM_COMMAND = 0x0111;
     private const int NIM_ADD = 0x00000000;
     private const int NIM_DELETE = 0x00000002;
     private const int NIM_MODIFY = 0x00000001;
@@ -27,11 +27,6 @@ internal sealed class TrayIcon : IDisposable
     private const int WM_LBUTTONDBLCLK = 0x0203;
     private const int WM_RBUTTONUP = 0x0205;
     private const int NIIF_INFO = 0x00000001;
-
-    private const int CMD_OPEN_RESET = 1;
-    private const int CMD_OPEN_EXISTING = 2;
-    private const int CMD_CLOSE = 3;
-    private const int CMD_QUICK_SEARCH = 4;
 
     private IntPtr _hwnd;
     private bool _added;
@@ -141,19 +136,6 @@ internal sealed class TrayIcon : IDisposable
             }
         }
 
-        if (msg == WM_COMMAND)
-        {
-            int cmd = checked((int)wParam) & 0xFFFF;
-            switch (cmd)
-            {
-                case CMD_OPEN_RESET: OpenResetRequested?.Invoke(); break;
-                case CMD_OPEN_EXISTING: OpenExistingRequested?.Invoke(); break;
-                case CMD_QUICK_SEARCH: QuickSearchRequested?.Invoke(); break;
-                case CMD_CLOSE: CloseRequested?.Invoke(); break;
-            }
-            return IntPtr.Zero;
-        }
-
         if (msg == WM_DESTROY)
         {
             return IntPtr.Zero;
@@ -164,32 +146,10 @@ internal sealed class TrayIcon : IDisposable
 
     private void ShowContextMenu()
     {
-        const int MF_STRING = 0x0000;
-        const int MF_SEPARATOR = 0x0800;
-        const int TPM_RIGHTBUTTON = 0x0002;
-        const int TPM_BOTTOMALIGN = 0x0020;
-
-        IntPtr hMenu = CreatePopupMenu();
-        if (hMenu == IntPtr.Zero) return;
-
-        try
-        {
-            AppendMenuW(hMenu, MF_STRING, CMD_QUICK_SEARCH, "Quick search\u2026");
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, null);
-            AppendMenuW(hMenu, MF_STRING, CMD_OPEN_RESET, "Open (reset search)");
-            AppendMenuW(hMenu, MF_STRING, CMD_OPEN_EXISTING, "Open (existing search)");
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, null);
-            AppendMenuW(hMenu, MF_STRING, CMD_CLOSE, "Close");
-
-            // Required so the menu dismisses when clicking outside it.
-            SetForegroundWindow(_hwnd);
-            GetCursorPos(out POINT pt);
-            TrackPopupMenuEx(hMenu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, _hwnd, IntPtr.Zero);
-        }
-        finally
-        {
-            DestroyMenu(hMenu);
-        }
+        // Foreground first so the themed menu window can take activation and dismiss when it loses it.
+        SetForegroundWindow(_hwnd);
+        GetCursorPos(out POINT pt);
+        ContextMenuRequested?.Invoke(pt.x, pt.y);
     }
 
     private IntPtr CreateMessageWindow()
@@ -243,18 +203,6 @@ internal sealed class TrayIcon : IDisposable
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr LoadImageW(IntPtr hInst, string name, uint type,
         int cx, int cy, uint fuLoad);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr CreatePopupMenu();
-
-    [DllImport("user32.dll")]
-    private static extern bool DestroyMenu(IntPtr hMenu);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool AppendMenuW(IntPtr hMenu, int uFlags, int uIDNewItem, string? lpNewItem);
-
-    [DllImport("user32.dll")]
-    private static extern bool TrackPopupMenuEx(IntPtr hMenu, uint fuFlags, int x, int y, IntPtr hwnd, IntPtr lptpm);
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);

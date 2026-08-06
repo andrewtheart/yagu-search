@@ -73,16 +73,86 @@ public sealed partial class MainViewModel
           .AppendLine(count.ToString("N0", CultureInfo.InvariantCulture).PadLeft(9));
     }
 
+    /// <summary>Prose footnote rendered as a wrapped paragraph beneath the aligned breakdown table.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "x:Bind resolves overlay bindings against the ViewModel instance.")]
+    public string SkipFootnoteText => SkipFootnote;
+
+    /// <summary>One rendered row of the skipped-files breakdown.</summary>
+    public readonly record struct SkipBreakdownEntry(string Glyph, string Label, int Count);
+
+    /// <summary>Headline skipped total, shown as the breakdown's summary line.</summary>
+    public int SkipTotalCount => FilesSkipped;
+
     /// <summary>
-    /// Formatted per-category breakdown of skipped files, shown by the status-bar Skipped overlay.
-    /// <para>
-    /// The first block partitions the headline <see cref="FilesSkipped"/> exactly: every counted reason
-    /// plus the <c>Unclassified</c> remainder sums to the total, so a skip path that this breakdown does
-    /// not yet name is still visible instead of quietly disappearing. The second block lists discovery
-    /// filters, which removed paths before the scan set existed and are therefore not part of the total.
-    /// </para>
+    /// The counted categories, omitting zero rows. Together with <c>Unclassified</c> these partition
+    /// <see cref="SkipTotalCount"/> exactly, so a skip path no category claims stays visible.
     /// </summary>
-    public string SkipTooltip
+    public IReadOnlyList<SkipBreakdownEntry> SkipBreakdownEntries
+    {
+        get
+        {
+            var b = _lastSkipBreakdown;
+            int total = FilesSkipped;
+            var rows = new List<SkipBreakdownEntry>();
+            if (b is null || total == 0)
+                return rows;
+
+            void Add(string glyph, string label, int count)
+            {
+                if (count > 0)
+                    rows.Add(new SkipBreakdownEntry(glyph, label, count));
+            }
+
+            Add("🚫", "Excluded by glob", b.GlobOnlyExcluded);
+            Add("🗂️", "Yagu OCR cache", b.OcrCacheExcluded);
+            Add("🔒", "Binary files", b.Binary);
+            Add("📄", "Extension skips", b.ByExtension);
+            Add("📏", "Too large", b.TooLarge);
+            Add("📐", "Below minimum size", b.TooSmall);
+            Add("📅", "Outside date range", b.DateFiltered);
+            Add("🔐", "Access denied", b.AccessDenied);
+            Add("📁", "Inaccessible folders", b.Directories);
+            Add("⚠️", "I/O errors", b.IOError);
+            Add("⏱️", "I/O timeouts", b.IoTimeout);
+            Add("❓", "Not found", b.NotFound);
+            Add("🔤", "Encoding errors", b.Encoding);
+            Add("☁️", "Cloud-only placeholders", b.CloudOnlyDuringScan);
+            Add("🧵", "Multiline size/timeout", b.MultilineSkipped);
+            Add("❔", "Other", b.Other);
+            Add("➕", "Unclassified", b.Unclassified(total));
+            return rows;
+        }
+    }
+
+    /// <summary>Discovery-time filters, reported separately because they never entered the scan set.</summary>
+    public IReadOnlyList<SkipBreakdownEntry> SkipDiscoveryEntries
+    {
+        get
+        {
+            var b = _lastSkipBreakdown;
+            var rows = new List<SkipBreakdownEntry>();
+            if (b is null || b.DiscoveryFilteredTotal <= 0)
+                return rows;
+
+            void Add(string glyph, string label, int count)
+            {
+                if (count > 0)
+                    rows.Add(new SkipBreakdownEntry(glyph, label, count));
+            }
+
+            Add("🙈", ".gitignore rules", b.GitignoreExcluded);
+            Add("📄", "Excluded extensions", b.ExtensionExcludedAtDiscovery);
+            Add("☁️", "Cloud-only placeholders", b.CloudOnlyAtDiscovery);
+            return rows;
+        }
+    }
+
+    /// <summary>
+    /// Formatted per-category breakdown WITHOUT the trailing footnote. The overlay renders the visual
+    /// table from <see cref="SkipBreakdownEntries"/> instead; this text backs the indicator's accessible
+    /// description, where the padded columns are read as plain text.
+    /// </summary>
+    public string SkipBreakdownDetails
     {
         get
         {
@@ -90,7 +160,7 @@ public sealed partial class MainViewModel
             int total = FilesSkipped;
 
             if (b is null)
-                return $"No files skipped{Environment.NewLine}{Environment.NewLine}{SkipFootnote}";
+                return "No files skipped";
 
             var lines = new StringBuilder();
             if (total == 0)
@@ -99,23 +169,9 @@ public sealed partial class MainViewModel
             {
                 lines.AppendLine("Skipped files breakdown:");
                 lines.AppendLine();
-                AppendSkipRow(lines, "🚫", "Excluded by glob", b.GlobOnlyExcluded);
-                AppendSkipRow(lines, "🗂️", "Yagu OCR cache", b.OcrCacheExcluded);
-                AppendSkipRow(lines, "🔒", "Binary files", b.Binary);
-                AppendSkipRow(lines, "📄", "Extension skips", b.ByExtension);
-                AppendSkipRow(lines, "📏", "Too large", b.TooLarge);
-                AppendSkipRow(lines, "📐", "Below minimum size", b.TooSmall);
-                AppendSkipRow(lines, "📅", "Outside date range", b.DateFiltered);
-                AppendSkipRow(lines, "🔐", "Access denied", b.AccessDenied);
-                AppendSkipRow(lines, "📁", "Inaccessible folders", b.Directories);
-                AppendSkipRow(lines, "⚠️", "I/O errors", b.IOError);
-                AppendSkipRow(lines, "⏱️", "I/O timeouts", b.IoTimeout);
-                AppendSkipRow(lines, "❓", "Not found", b.NotFound);
-                AppendSkipRow(lines, "🔤", "Encoding errors", b.Encoding);
-                AppendSkipRow(lines, "☁️", "Cloud-only placeholders", b.CloudOnlyDuringScan);
-                AppendSkipRow(lines, "🧵", "Multiline size/timeout", b.MultilineSkipped);
-                AppendSkipRow(lines, "❔", "Other", b.Other);
-                AppendSkipRow(lines, "➕", "Unclassified", b.Unclassified(total));
+                foreach (var entry in SkipBreakdownEntries)
+                    AppendSkipRow(lines, entry.Glyph, entry.Label, entry.Count);
+                lines.AppendLine();
                 AppendSkipRow(lines, "  ", "Total skipped", total, force: true);
             }
 
@@ -124,20 +180,22 @@ public sealed partial class MainViewModel
                 lines.AppendLine();
                 lines.AppendLine("Filtered during discovery (not counted above):");
                 lines.AppendLine();
-                AppendSkipRow(lines, "🙈", ".gitignore rules", b.GitignoreExcluded);
-                AppendSkipRow(lines, "📄", "Excluded extensions", b.ExtensionExcludedAtDiscovery);
-                AppendSkipRow(lines, "☁️", "Cloud-only placeholders", b.CloudOnlyAtDiscovery);
+                foreach (var entry in SkipDiscoveryEntries)
+                    AppendSkipRow(lines, entry.Glyph, entry.Label, entry.Count);
             }
 
-            lines.AppendLine();
-            lines.Append(SkipFootnote);
             return lines.ToString().TrimEnd();
         }
     }
 
+    /// <summary>Breakdown plus footnote as one string, used for the indicator's accessible description.</summary>
+    public string SkipTooltip =>
+        $"{SkipBreakdownDetails}{Environment.NewLine}{Environment.NewLine}{SkipFootnote}";
+
     private void UpdateSkipBreakdown(SkipBreakdown? breakdown)
     {
         _lastSkipBreakdown = breakdown;
+        OnPropertyChanged(nameof(SkipBreakdownDetails));
         OnPropertyChanged(nameof(SkipTooltip));
     }
 }

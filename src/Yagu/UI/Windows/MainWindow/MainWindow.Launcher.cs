@@ -615,11 +615,8 @@ public sealed partial class MainWindow
             return;
         }
 
-        if (ViewModel.IsIndexBuildActive)
-        {
-            args.Cancel = true;
-            RequestApplicationExit(IndexingCloseTrigger.UserExit);
-        }
+        args.Cancel = true;
+        RequestApplicationExit(IndexingCloseTrigger.UserExit);
     }
 
     /// <summary>
@@ -713,21 +710,17 @@ public sealed partial class MainWindow
         {
             var icoPath = Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
             _trayIcon = new Helpers.TrayIcon("Yagu", icoPath);
-            _trayIcon.OpenResetRequested += () =>
-            {
-                DispatcherQueue.TryEnqueue(async () => await ResetToLauncherModeAsync());
-            };
             _trayIcon.OpenExistingRequested += () =>
             {
                 DispatcherQueue.TryEnqueue(() => RestoreWindowFromTray());
             };
-            _trayIcon.QuickSearchRequested += () =>
+            _trayIcon.ContextMenuRequested += (x, y) =>
             {
-                DispatcherQueue.TryEnqueue(async () => await ShowTrayQuickSearchAsync());
+                DispatcherQueue.TryEnqueue(() => ShowTrayContextMenu(x, y));
             };
-            _trayIcon.CloseRequested += () =>
+            _trayIcon.ContextMenuRequested += (x, y) =>
             {
-                RequestApplicationExit(IndexingCloseTrigger.UserExit);
+                DispatcherQueue.TryEnqueue(() => ShowTrayContextMenu(x, y));
             };
             firstDock = !HasShownTrayNotification();
         }
