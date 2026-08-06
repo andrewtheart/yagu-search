@@ -25,6 +25,15 @@ public class YaguInput {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr dwExtraInfo);
+    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+    public const uint PW_RENDERFULLCONTENT = 2;
     public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     public const uint MOUSEEVENTF_LEFTUP = 0x0004;
     public const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
@@ -41,7 +50,28 @@ public class YaguInput {
         System.Threading.Thread.Sleep(50);
         keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
     }
-    public static void Activate(IntPtr hWnd) { ShowWindow(hWnd, 5); BringWindowToTop(hWnd); SetForegroundWindow(hWnd); }
+    // Windows blocks SetForegroundWindow from a process that does not own the foreground, so a bare call
+    // silently no-ops and every mouse_event click below then lands on whatever window really is focused
+    // (e.g. the terminal that launched this harness). Attaching to the foreground thread's input queue
+    // first is the supported way to make the activation take effect.
+    public static bool Activate(IntPtr hWnd) {
+        ShowWindow(hWnd, 5);
+        IntPtr fg = GetForegroundWindow();
+        if (fg == hWnd) return true;
+        uint fgThread = GetWindowThreadProcessId(fg, IntPtr.Zero);
+        uint thisThread = GetCurrentThreadId();
+        bool attached = false;
+        try {
+            if (fgThread != 0 && fgThread != thisThread) {
+                attached = AttachThreadInput(thisThread, fgThread, true);
+            }
+            BringWindowToTop(hWnd);
+            SetForegroundWindow(hWnd);
+        } finally {
+            if (attached) AttachThreadInput(thisThread, fgThread, false);
+        }
+        return GetForegroundWindow() == hWnd;
+    }
     public static void Maximize(IntPtr hWnd) { ShowWindow(hWnd, 3); }
     public static long LastProgressTicks = DateTime.UtcNow.Ticks;
     public static void Progress() { LastProgressTicks = DateTime.UtcNow.Ticks; }
@@ -84,14 +114,28 @@ $StallSeconds = 90
     (Join-Path $ScreenshotDir "watchdog.log"))
 
 function Activate-YaguWindow {
-    if ($script:yaguWindow) {
-        try {
-            $h = [IntPtr]$script:yaguWindow.Current.NativeWindowHandle
-            if ($h -ne [IntPtr]::Zero) {
-                [YaguInput]::Activate($h)
-                Start-Sleep -Milliseconds 300
-            }
-        } catch { }
+    if (-not $script:yaguWindow) { return }
+    try {
+        $h = [IntPtr]$script:yaguWindow.Current.NativeWindowHandle
+        if ($h -eq [IntPtr]::Zero) { return }
+
+        # Synthetic mouse input goes to the real foreground window, so a failed activation would send
+        # every click to whichever app owns the foreground instead of Yagu. Retry, then say so loudly.
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $ok = [YaguInput]::Activate($h)
+            Start-Sleep -Milliseconds 300
+            if ($ok) { return }
+        }
+        Write-Host "  WARNING: could not bring the Yagu window to the foreground; clicks may go elsewhere."
+    } catch { }
+}
+
+function Get-YaguWindowHandle {
+    if (-not $script:yaguWindow) { return [IntPtr]::Zero }
+    try {
+        return [IntPtr]$script:yaguWindow.Current.NativeWindowHandle
+    } catch {
+        return [IntPtr]::Zero
     }
 }
 
@@ -100,16 +144,48 @@ function Take-Screenshot([string]$Name, [switch]$Fast) {
         Activate-YaguWindow
         Start-Sleep -Milliseconds 200
     }
+
+    $path = Join-Path $ScreenshotDir "$Name.png"
+
+    # Capture the Yagu window itself, not the screen. SetForegroundWindow is blocked by the Windows
+    # foreground lock when the harness runs from a background process, so a CopyFromScreen grab silently
+    # captured whichever window was actually on top (VS Code) and the pixel assertions then measured the
+    # wrong app. PrintWindow with PW_RENDERFULLCONTENT reads the target window even when it is occluded.
+    $h = Get-YaguWindowHandle
+    if ($h -ne [IntPtr]::Zero) {
+        $rect = New-Object YaguInput+RECT
+        if ([YaguInput]::GetWindowRect($h, [ref]$rect)) {
+            $w = $rect.Right - $rect.Left
+            $ht = $rect.Bottom - $rect.Top
+            if ($w -gt 0 -and $ht -gt 0) {
+                $bmp = [System.Drawing.Bitmap]::new($w, $ht)
+                $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+                $hdc = $graphics.GetHdc()
+                $ok = [YaguInput]::PrintWindow($h, $hdc, [YaguInput]::PW_RENDERFULLCONTENT)
+                $graphics.ReleaseHdc($hdc)
+                $graphics.Dispose()
+                if ($ok) {
+                    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+                    $bmp.Dispose()
+                    [YaguInput]::Progress()
+                    if (-not $Fast) { Write-Host "  Screenshot saved: $path" }
+                    return
+                }
+                $bmp.Dispose()
+            }
+        }
+    }
+
+    # Fallback: whole screen, only when the window handle or PrintWindow is unavailable.
     $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
     $bmp = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
     $graphics = [System.Drawing.Graphics]::FromImage($bmp)
     $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
     $graphics.Dispose()
-    $path = Join-Path $ScreenshotDir "$Name.png"
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $bmp.Dispose()
     [YaguInput]::Progress()
-    if (-not $Fast) { Write-Host "  Screenshot saved: $path" }
+    if (-not $Fast) { Write-Host "  Screenshot saved (screen fallback): $path" }
 }
 
 # --- UI Automation health watchdog ------------------------------------------
@@ -281,24 +357,28 @@ function Click-Element([System.Windows.Automation.AutomationElement]$Element) {
     $rect = $Element.Current.BoundingRectangle
     $x = [int]($rect.X + $rect.Width / 2)
     $y = [int]($rect.Y + $rect.Height / 2)
+    Activate-YaguWindow
     [System.Windows.Forms.Cursor]::Position = [System.Drawing.Point]::new($x, $y)
     Start-Sleep -Milliseconds 100
     [YaguInput]::LeftClick()
 }
 
 function RightClick-At([int]$X, [int]$Y) {
+    Activate-YaguWindow
     [System.Windows.Forms.Cursor]::Position = [System.Drawing.Point]::new($X, $Y)
     Start-Sleep -Milliseconds 200
     [YaguInput]::RightClick()
 }
 
 function LeftClick-At([int]$X, [int]$Y) {
+    Activate-YaguWindow
     [System.Windows.Forms.Cursor]::Position = [System.Drawing.Point]::new($X, $Y)
     Start-Sleep -Milliseconds 100
     [YaguInput]::LeftClick()
 }
 
 function ShiftLeftClick-At([int]$X, [int]$Y) {
+    Activate-YaguWindow
     [System.Windows.Forms.Cursor]::Position = [System.Drawing.Point]::new($X, $Y)
     Start-Sleep -Milliseconds 100
     [YaguInput]::ShiftLeftClick()
@@ -667,6 +747,33 @@ $preStats = Count-CheckedFileCheckboxes -listElement $resultsList
 Write-Host ("  Pre-right-click checkbox state: total={0}, checked={1}, onscreen={2}, checkedOnscreen={3}" -f `
     $preStats.Total, $preStats.Checked, $preStats.Onscreen, $preStats.CheckedOnscreen)
 
+# "Preview all selected (N)" stays Collapsed unless MORE THAN ONE file is checked, so a selection that
+# nets 0 or 1 leaves the menu item out of the UIA tree entirely and step 6 cannot open the preview.
+# The coordinate range-select above does exactly that on a small corpus: when the first and last visible
+# checkbox are the same element, the plain click checks it and the Shift+click unchecks it again.
+# Fall back to toggling each checkbox directly, which is deterministic and needs no pointer input.
+if ($preStats.Checked -le 1 -and $resultsList) {
+    Write-Host "  Selection netted $($preStats.Checked) file(s); toggling checkboxes via UI Automation instead..."
+    $cond = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::AutomationIdProperty, "FileGroupCheckBox")
+    $all = $resultsList.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
+    $toggled = 0
+    foreach ($el in $all) {
+        if ($toggled -ge $MaxFiles) { break }
+        try {
+            $tp = $el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+            if ($tp.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) {
+                $tp.Toggle()
+                Start-Sleep -Milliseconds 60
+            }
+            $toggled++
+        } catch { }
+    }
+    [YaguInput]::Progress()
+    $preStats = Count-CheckedFileCheckboxes -listElement $resultsList
+    Write-Host ("  After UIA toggle: total={0}, checked={1}" -f $preStats.Total, $preStats.Checked)
+}
+
 Start-Sleep -Seconds 1
 
 # 6. Right-click on a file group header to open the "Preview selected" context menu.
@@ -725,7 +832,8 @@ if ($clickTarget) {
     while ((Get-Date) -lt $deadline2) {
         $allMenuItems = Find-AllElements -Parent $root -ControlType ([System.Windows.Automation.ControlType]::MenuItem)
         foreach ($mi in $allMenuItems) {
-            if ($mi.Current.Name -match "Preview selected") {
+            # The item renders as "Preview all selected (N)", so an exact "Preview selected" match never hit.
+            if ($mi.Current.Name -match 'Preview all selected') {
                 $previewMenuItem = $mi
                 break
             }

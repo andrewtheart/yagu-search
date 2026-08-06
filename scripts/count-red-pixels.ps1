@@ -89,17 +89,23 @@ public static class RedPixelScanner
                 byte[] buf = new byte[byteCount];
                 Marshal.Copy(data.Scan0, buf, 0, byteCount);
                 int count = 0;
-                // BGRA in memory: B=+0 G=+1 R=+2 A=+3. Step 2 pixels (8 bytes) per col, 2 rows per row.
-                for (int y = 0; y < h; y += 2)
+                // BGRA in memory: B=+0 G=+1 R=+2 A=+3.
+                // Scan EVERY pixel: the highlight border is ~1px, so the old "every 2nd row and column"
+                // sampling discarded three quarters of it and could report 0 for a clearly visible box.
+                // The predicate also has to span the whole highlight palette -- the active match renders
+                // both OrangeRed (255,69,0) and a darker (192,51,0) variant, and the old r>200 test
+                // silently dropped the darker one. Match "strongly red/orange relative to G and B" instead
+                // of one exact shade; a frame with no highlight still scores ~3.
+                for (int y = 0; y < h; y++)
                 {
                     int rowStart = y * stride;
                     int rowEnd = rowStart + (w * 4);
-                    for (int i = rowStart; i < rowEnd; i += 8)
+                    for (int i = rowStart; i < rowEnd; i += 4)
                     {
                         byte b = buf[i];
                         byte g2 = buf[i + 1];
                         byte r = buf[i + 2];
-                        if (r > 200 && g2 < 100 && b < 50 && (r - g2) > 100)
+                        if (r > 150 && (r - g2) > 40 && (r - b) > 90)
                             count++;
                     }
                 }
