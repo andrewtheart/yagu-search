@@ -2,13 +2,12 @@
   Yagu — Copyright (C) 2025-2026 the Yagu author (github.com/andrewtheart)
   Licensed under the GNU General Public License, Version 3 (full text below).
 
-  !!  LICENSE & ENFORCEMENT NOTICE  (WARNING)  !!
+  --  LICENSE NOTICE  --
 
-  I am fortunate enough to have a lawyer, and I 100% plan on suing and taking
-  legal action against any individuals who attempt to rebrand and sell this
-  software without providing the source and distributing it under the exact
-  same license, as required by the GNU General Public License v3. Violations
-  are actively monitored and scanned for.
+  Yagu is free software distributed under the GNU General Public License v3.
+  If you redistribute it, in original or modified form, the GPL v3 requires
+  that you provide the corresponding source and distribute it under this same
+  license.
 
   This project-specific notice is provided ABOVE the license for clarity and
   does not modify the license. The full, unmodified text of the GNU General
