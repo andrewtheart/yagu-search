@@ -78,6 +78,52 @@ public sealed class OcrEnginePoolTests
         public void Dispose() => Interlocked.Increment(ref DisposeCalls);
     }
 
+    private sealed class DescribingEngine(OcrAssetRequirement requirement) : IOcrEngine
+    {
+        public string Id => "fake";
+        public string DisplayName => "Describing";
+
+        public OcrAssetRequirement DescribeAssetRequirement() => requirement;
+
+        public Task<OcrResult> EnsureReadyAsync(CancellationToken cancellationToken)
+            => Task.FromResult(OcrResult.Ok(string.Empty));
+
+        public Task<OcrResult> RecognizeAsync(string imagePath, CancellationToken cancellationToken)
+            => Task.FromResult(OcrResult.Ok(imagePath));
+    }
+
+    [Fact]
+    public void DescribeAssetRequirement_DefaultInterfaceAnswerNeedsNoDownload()
+    {
+        IOcrEngine engine = new FakeEngine(displayName: "Built in");
+
+        OcrAssetRequirement requirement = engine.DescribeAssetRequirement();
+
+        Assert.Equal("Built in", requirement.EngineDisplayName);
+        Assert.False(requirement.DownloadNeeded);
+        Assert.Equal(0, requirement.ApproxBytes);
+        Assert.Empty(requirement.MissingComponents);
+    }
+
+    [Fact]
+    public void DescribeAssetRequirement_DelegatesToPrimaryEngine()
+    {
+        var expected = new OcrAssetRequirement
+        {
+            EngineDisplayName = "Primary",
+            DownloadNeeded = true,
+            ApproxBytes = 123,
+            MissingComponents = ["model"],
+        };
+        using var pool = new OcrEnginePool(new IOcrEngine[]
+        {
+            new DescribingEngine(expected),
+            new DescribingEngine(expected),
+        });
+
+        Assert.Same(expected, pool.DescribeAssetRequirement());
+    }
+
     [Fact]
     public void Pool_ExposesPrimaryIdentityAndWorkerCount()
     {

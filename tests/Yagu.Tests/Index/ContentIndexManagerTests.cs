@@ -101,6 +101,19 @@ public sealed class ContentIndexManagerTests : IDisposable
     }
 
     [Fact]
+    public void GetActiveIndexBytesForRoot_ReportsBuiltLayersAndZeroWithoutAnIndex()
+    {
+        var manager = new ContentIndexManager(_paths);
+        Assert.Equal(0, manager.GetActiveIndexBytesForRoot(string.Empty));
+        Assert.Equal(0, manager.GetActiveIndexBytesForRoot(_corpus));
+
+        Write("a.txt", "the planner produces trigram queries");
+        manager.BuildScope(_corpus, Policy());
+
+        Assert.True(manager.GetActiveIndexBytesForRoot(_corpus) > 0);
+    }
+
+    [Fact]
     public void BuildScope_WithV3Enabled_ProducesQueryStructuresInTheLiveGeneration()
     {
         Write("a.txt", "the planner produces trigram queries");

@@ -108,9 +108,9 @@ public sealed class WorkerOcrEngineTests
     [Fact]
     public void Paddle_DescribeAssetRequirement_ReportsPaddleEngine()
     {
-        var engine = new PaddleOcrEngine("EnglishV4");
+        IOcrEngine engine = new PaddleOcrEngine("EnglishV4");
 
-        OcrAssetRequirement requirement = engine.DescribeAssetRequirementForTest();
+        OcrAssetRequirement requirement = engine.DescribeAssetRequirement();
 
         Assert.Equal("PaddleSharp", requirement.EngineDisplayName);
         // DownloadNeeded depends on what's installed on this machine; the invariant is that any

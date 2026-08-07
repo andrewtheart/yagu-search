@@ -46,6 +46,18 @@ public sealed class InlineCalculatorTests
     }
 
     [Theory]
+    [InlineData("sin(90)", "1")]
+    [InlineData("cos(180)", "-1")]
+    [InlineData("tan(45)", "1")]
+    public void Evaluate_TrigonometricFunctions_UseDegrees(string input, string expected)
+    {
+        InlineCalcResult? result = InlineCalculator.Evaluate(input);
+
+        Assert.NotNull(result);
+        Assert.Equal(expected, result!.Value);
+    }
+
+    [Theory]
     [InlineData("15% of 340", "51")]
     [InlineData("50% of 10", "5")]
     [InlineData("10% of 250", "25")]

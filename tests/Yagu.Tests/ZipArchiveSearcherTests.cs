@@ -139,6 +139,22 @@ public sealed class ZipArchiveSearcherTests : IDisposable
     }
 
     [Fact]
+    public async Task ExtractToMemoryAsync_SevenZipEntry_ReturnsStream()
+    {
+        string sevenZipPath = CreateTestSevenZip("preview.7z", new Dictionary<string, string>
+        {
+            ["nested/data.txt"] = "Seven zip preview data",
+        });
+
+        using MemoryStream stream = await ZipArchiveSearcher.ExtractToMemoryAsync(
+            $"{sevenZipPath}?/nested/data.txt");
+
+        Assert.Equal(0, stream.Position);
+        using var reader = new StreamReader(stream);
+        Assert.Equal("Seven zip preview data", reader.ReadToEnd());
+    }
+
+    [Fact]
     public async Task ExtractToMemoryAsync_InvalidPath_Throws()
     {
         await Assert.ThrowsAsync<ArgumentException>(() =>

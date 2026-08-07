@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Yagu.Models;
 using Yagu.Services.Ai;
 using Xunit;
@@ -382,6 +383,22 @@ public sealed class SemanticPlanJsonExtractorTests
         Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out _));
         Assert.Equal(new[] { "*.png", "*.jpg" }, plan!.IncludeGlobs!);
         Assert.Equal(new[] { "node_modules" }, plan.ExcludeGlobs!);
+    }
+
+    [Fact]
+    public void TolerantStringListConverter_Write_EmitsArrayAndNullShapes()
+    {
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(new TolerantStringListConverter());
+
+        string arrayJson = JsonSerializer.Serialize<List<string>?>(["*.png", "*.jpg"], options);
+        string nullJson = JsonSerializer.Serialize<List<string>?>(null, options);
+
+        Assert.Equal("[\"*.png\",\"*.jpg\"]", arrayJson);
+        Assert.Equal("null", nullJson);
+        Assert.Equal(
+            new[] { "*.png", "*.jpg" },
+            JsonSerializer.Deserialize<List<string>?>(arrayJson, options));
     }
 
     [Fact]
