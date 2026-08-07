@@ -219,6 +219,15 @@ public sealed partial class MainWindow
                     actions.Children.Add(delete);
                 }
             }
+            else if (entry.SizeBudgetRoot is { } budgetRoot)
+            {
+                Button fix = CreateIndexStatusHealthActionButton(
+                    "Fix…",
+                    $"Explain why {budgetRoot} stopped updating and choose how to fix it",
+                    settingsActionsEnabled);
+                fix.Click += async (_, _) => await ShowIndexSizeBudgetDialogAsync(budgetRoot, fromUserAction: true);
+                actions.Children.Add(fix);
+            }
             else if (entry.CanIncrementallyRefresh && entry.IncrementalRoot is { } incrementalRoot)
             {
                 Button update = CreateIndexStatusHealthActionButton(
@@ -509,9 +518,14 @@ public sealed partial class MainWindow
     /// Shift+F10 key on the focused indicator): a registered-but-unbuilt root offers an immediate rebuild,
     /// and every index label offers an "Options" submenu (pause / disable this run / disable
     /// persistently) — which toggles to the matching enable commands once the index has been turned off.
-    /// Using <c>ContextRequested</c> (not <c>RightTapped</c>) makes every command keyboard-accessible.</summary>
+    /// Using <c>ContextRequested</c> (not <c>RightTapped</c>) makes every command keyboard-accessible.
+    /// The hover overlay is drawn over the indicator and shares this handler, so hovering (which shows the
+    /// overlay) never costs the user the right-click menu.</summary>
     private void OnIndexStatusContextRequested(UIElement sender, ContextRequestedEventArgs e)
     {
+        // Anchor on the indicator, not the sender: the request may come from the overlay we hide below.
+        FrameworkElement anchor = IndexStatusIndicator ?? (FrameworkElement)sender;
+        bool hasPosition = e.TryGetPosition(anchor, out Windows.Foundation.Point pos);
         HideIndexStatusHoverOverlay();
         var menu = new MenuFlyout();
 
@@ -631,10 +645,10 @@ public sealed partial class MainWindow
         }
 
         // Pointer request carries a position; a keyboard request does not — anchor to the element instead.
-        if (e.TryGetPosition(sender, out Windows.Foundation.Point pos))
-            menu.ShowAt((FrameworkElement)sender, pos);
+        if (hasPosition)
+            menu.ShowAt(anchor, pos);
         else
-            menu.ShowAt((FrameworkElement)sender);
+            menu.ShowAt(anchor);
         e.Handled = true;
     }
 

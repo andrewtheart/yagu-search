@@ -147,6 +147,27 @@ public sealed class ContentIndexGuiRegressionTests
     }
 
     [Fact]
+    public void PreSearchGate_OffersNoMaintenanceActionWhileAPassIsAlreadyRunning()
+    {
+        // One cross-process writer lease serializes index mutation, so a second build cannot start while
+        // one is running. The card must explain that instead of offering a build Yagu will not perform.
+        Assert.Contains(
+            "bool maintenanceAlreadyRunning = ViewModel.IsIndexBuildActive || ViewModel.IsIndexRebuildBlocking;",
+            SearchInputSource);
+        Assert.Contains(
+            "ContentIndexUiStatus.MaintenanceAlreadyRunningNote(ViewModel.ActiveIndexBuildFolder)",
+            SearchInputSource);
+
+        // The action chain must be gated by that flag, not merely reworded.
+        string card = ExtractFrom(SearchInputSource, "bool maintenanceAlreadyRunning =", 1400);
+        Assert.Contains("if (maintenanceAlreadyRunning)", card);
+        Assert.True(
+            card.IndexOf("if (maintenanceAlreadyRunning)", StringComparison.Ordinal)
+            < card.IndexOf("actionLabel = issue.CanRebuild ?", StringComparison.Ordinal),
+            "The already-running check must short-circuit before any action label is chosen.");
+    }
+
+    [Fact]
     public void PreSearchGate_PermanentDismissalAppliesOnlyToUnregisteredMissingRoots()
     {
         Assert.Contains("public List<string> ContentIndexLiveScanWarningDismissedRoots", SettingsServiceSource);
@@ -1735,7 +1756,30 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("ViewModel.PauseIndexing()", IndexOnboardingSource);
         Assert.Contains("ViewModel.ResumeIndexing()", IndexOnboardingSource);
         // Keyboard-opened requests carry no position; anchor to the element instead.
-        Assert.Contains("e.TryGetPosition(sender, out Windows.Foundation.Point pos)", IndexOnboardingSource);
+        Assert.Contains("e.TryGetPosition(anchor, out Windows.Foundation.Point pos)", IndexOnboardingSource);
+    }
+
+    [Fact]
+    public void IndexStatusHoverOverlay_KeepsTheRightClickMenuReachable()
+    {
+        // The overlay is drawn over the indicator it describes, so without its own handler a right-click
+        // after hovering lands on the overlay and silently does nothing.
+        string hover = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusHoverOverlay\"", 1200);
+        Assert.Contains("ContextRequested=\"OnIndexStatusContextRequested\"", hover);
+
+        // The menu must anchor on the indicator, which survives hiding the overlay that raised the request.
+        Assert.Contains("FrameworkElement anchor = IndexStatusIndicator ?? (FrameworkElement)sender;", IndexOnboardingSource);
+        Assert.Contains("bool hasPosition = e.TryGetPosition(anchor, out Windows.Foundation.Point pos);", IndexOnboardingSource);
+        Assert.Contains("menu.ShowAt(anchor, pos);", IndexOnboardingSource);
+        Assert.Contains("menu.ShowAt(anchor);", IndexOnboardingSource);
+        Assert.DoesNotContain("menu.ShowAt((FrameworkElement)sender", IndexOnboardingSource);
+
+        // Position must be captured before the overlay is hidden, or a collapsed anchor loses the point.
+        string handler = ExtractFrom(IndexOnboardingSource, "private void OnIndexStatusContextRequested(", 600);
+        int positionAt = handler.IndexOf("bool hasPosition", StringComparison.Ordinal);
+        int hideAt = handler.IndexOf("HideIndexStatusHoverOverlay();", StringComparison.Ordinal);
+        Assert.True(positionAt >= 0 && hideAt > positionAt,
+            "The context-menu position must be read before HideIndexStatusHoverOverlay collapses the overlay.");
     }
 
     [Fact]

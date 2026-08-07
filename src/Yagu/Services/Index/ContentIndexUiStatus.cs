@@ -76,6 +76,10 @@ public enum IndexRootHealthKind
     FreshnessUnavailable,
     BuildRequired,
     StorageProblem,
+
+    /// <summary>The index hit its storage budget, so Yagu stopped updating it. Searches stay complete
+    /// (uncovered files are read live) but acceleration decays until the user acts.</summary>
+    SizeBudgetReached,
 }
 
 /// <summary>One immutable row in the launch-time all-drive index-health snapshot.</summary>
@@ -88,19 +92,22 @@ public readonly record struct IndexRootHealthEntry(
     string? MaintainRoot = null,
     string? DeleteRoot = null,
     string? AddRoot = null,
-    string? BuildRoot = null)
+    string? BuildRoot = null,
+    string? SizeBudgetRoot = null)
 {
     public bool NeedsAttention => Kind is IndexRootHealthKind.RebuildRequired
         or IndexRootHealthKind.FreshnessUnavailable
         or IndexRootHealthKind.BuildRequired
-        or IndexRootHealthKind.StorageProblem;
+        or IndexRootHealthKind.StorageProblem
+        or IndexRootHealthKind.SizeBudgetReached;
 
     public bool HasStoredIndex => Kind is IndexRootHealthKind.LeftoverIndex
         or IndexRootHealthKind.Healthy
         or IndexRootHealthKind.ChangesPending
         or IndexRootHealthKind.RebuildRequired
         or IndexRootHealthKind.FreshnessUnavailable
-        or IndexRootHealthKind.StorageProblem;
+        or IndexRootHealthKind.StorageProblem
+        or IndexRootHealthKind.SizeBudgetReached;
 
     public bool IsHealthy => Kind is IndexRootHealthKind.Healthy or IndexRootHealthKind.ChangesPending;
 
@@ -246,6 +253,20 @@ public static class ContentIndexUiStatus
     /// <summary>Characters the fixed-width status-bar index label can render before the layout has to
     /// ellipsize it (Consolas 12 in a 210px slot).</summary>
     public const int StatusLabelMaxLength = 31;
+
+    /// <summary>
+    /// Replaces a readiness card's "Yagu can build this in the background" explanation when a build or
+    /// maintenance pass is already under way. Index mutation is serialized by a single cross-process writer
+    /// lease, so a second pass cannot start until the running one finishes — offering one would only fail
+    /// busy, and promising a build Yagu will not start is worse than saying nothing.
+    /// </summary>
+    public static string MaintenanceAlreadyRunningNote(string? activeBuildFolder)
+    {
+        string where = string.IsNullOrWhiteSpace(activeBuildFolder)
+            ? "Indexing is already running."
+            : $"Indexing is already running for {activeBuildFolder.Trim()}.";
+        return where + " Yagu will use the index once that finishes; this search reads files directly in the meantime.";
+    }
 
     /// <summary>Clamps a status-bar index label to <see cref="StatusLabelMaxLength"/>, preferring a word
     /// boundary so an over-long label degrades to whole words instead of a mid-word cut.</summary>

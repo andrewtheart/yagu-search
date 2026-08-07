@@ -1095,6 +1095,27 @@ public sealed partial class ContentIndexManager
     public IndexMetadataStatus GetMetadataStatusForRoot(string rootDirectory)
         => GetMetadataStatus(ScopeIdForRoot(rootDirectory));
 
+    /// <summary>
+    /// Size of one root's active index layers (base plus every referenced segment), or 0 when there is
+    /// no readable index. Cheap: reads the pointer slot and the layer directory sizes, never the
+    /// generation contents.
+    /// </summary>
+    public long GetActiveIndexBytesForRoot(string rootDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(rootDirectory))
+            return 0;
+        try
+        {
+            var store = new ContentIndexStore(_paths, ScopeIdForRoot(rootDirectory), _retainedGenerations);
+            return store.TotalActiveIndexBytes();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For("ContentIndex").LogDebug(ex, "Could not measure the active index for '{Root}'.", rootDirectory);
+            return 0;
+        }
+    }
+
     public bool HasCurrentIndex(string rootDirectory)
     {
         IndexMetadataStatus status = GetMetadataStatusForRoot(rootDirectory);

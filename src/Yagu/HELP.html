@@ -3045,17 +3045,29 @@ only</em> (lowest memory), <em>Compact only</em>, or <em>Off</em>. The
 bounds how large an index may be before automatic compaction stops
 folding it — above the cap only coalescing or an explicit rebuild
 reclaims space. The four <strong>coalescing</strong> controls set the
-largest segment eligible to merge (default 128 MB), the largest merge
-batch (default 512 MB, the main memory bound), the fewest neighbouring
-segments worth merging (default 4), and how many merges one maintenance
-pass may perform (default 8). If the largest-segment value is set below
-your typical segment size, coalescing can never find work and a large
-index will have no way to reclaim storage. Every folder can override the
-strategy, the size budget, and the compaction cap under <strong>Manage
-Indexes ▸ Size…</strong>. None of these settings can change search
-results — an index that stays segmented, or one paused at its budget,
-simply prunes less, and anything it cannot prove safe to skip is read
-live.</td>
+largest segment eligible to merge (default 256 MB), the largest merge
+batch (default 1024 MB, the main memory bound; keep it at or above the
+run minimum multiplied by the segment cap so a full-length run can fit),
+the fewest neighbouring segments worth merging (default 4), and how many
+merges one maintenance pass may perform (default 8). If the
+largest-segment value is set below your typical segment size, coalescing
+can never find work and a large index will have no way to reclaim
+storage. Every folder can override the strategy, the size budget, and
+the compaction cap under <strong>Manage Indexes ▸ Size…</strong>. If an
+index does reach its budget and automatic clean-up cannot bring it back
+under, Yagu says so directly: the index-health row reports
+<strong>updates paused — reached its N MB size limit</strong>, and a
+dialog explains in plain language that searches remain complete
+(uncovered files are read live) but the index is no longer being kept up
+to date. The dialog fixes it for you — <strong>Rebuild this
+index</strong> (recommended; frees almost all the space and resumes
+updates, with the current index still working until the new one is
+ready), <strong>Raise the limit</strong>, <strong>Compact it
+instead</strong>, or <strong>Delete this index</strong> — and applies
+your choice immediately rather than sending you elsewhere. None of these
+settings can change search results — an index that stays segmented, or
+one paused at its budget, simply prunes less, and anything it cannot
+prove safe to skip is read live.</td>
 </tr>
 <tr>
 <td>Status &amp; Provenance</td>
@@ -3262,16 +3274,20 @@ most one recommended maintenance action: <strong>Index in
 background</strong> or <strong>Build in background</strong> for a
 missing index, <strong>Update index</strong> (or <strong>Increase limit
 and update</strong>) for recoverable journal catch-up, and
-<strong>Rebuild index</strong> for an irrecoverable gap/reset.
-<strong>Search live</strong> is the single primary action and starts
-immediately; closing the prompt cancels the pending search. For an
-unregistered location with no index, <strong>Always search this location
-live without warning</strong> permanently dismisses only that location’s
-missing-index warning. Registered, stale, broken, and incompatible
-indexes still warn. Use Settings ▸ Indexing ▸ Status &amp; Provenance ▸
-<strong>Restore live-scan warnings</strong> to re-enable dismissed
-warnings. Query-shape/selectivity bypasses do not show this warning
-because rebuilding cannot make those queries acceleratable.</p>
+<strong>Rebuild index</strong> for an irrecoverable gap/reset. While a
+build or maintenance pass is already running, no action is offered at
+all — index mutation is serialized by a single writer, so the card just
+says indexing is already under way and the search reads files directly
+until it finishes. <strong>Search live</strong> is the single primary
+action and starts immediately; closing the prompt cancels the pending
+search. For an unregistered location with no index, <strong>Always
+search this location live without warning</strong> permanently dismisses
+only that location’s missing-index warning. Registered, stale, broken,
+and incompatible indexes still warn. Use Settings ▸ Indexing ▸ Status
+&amp; Provenance ▸ <strong>Restore live-scan warnings</strong> to
+re-enable dismissed warnings. Query-shape/selectivity bypasses do not
+show this warning because rebuilding cannot make those queries
+acceleratable.</p>
 <p><strong>Quick add from the main window.</strong> When a search covers
 a folder that has no index yet, the status-bar index indicator reads
 <strong>Index: none for this folder</strong> — click it to open an

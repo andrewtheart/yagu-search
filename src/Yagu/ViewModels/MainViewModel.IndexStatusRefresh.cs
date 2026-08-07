@@ -298,6 +298,10 @@ public sealed partial class MainViewModel
         int maxCatchupRecords,
         int fileIoTimeoutSeconds)
     {
+        // Resolved on this thread from the live settings, then applied per index root inside the scan.
+        AppSettings settings = _settings;
+        Func<string, EffectiveIndexSizePolicy> resolveSizePolicy =
+            indexRoot => IndexSizeManagementPolicy.Resolve(settings, indexRoot);
         IReadOnlyList<IndexRootHealthEntry> health;
         try
         {
@@ -326,7 +330,8 @@ public sealed partial class MainViewModel
                             root,
                             registeredRoots,
                             maxCatchupRecords,
-                            fileIoTimeoutSeconds));
+                            fileIoTimeoutSeconds,
+                            resolveSizePolicy));
                     }
                     catch (Exception ex)
                     {
@@ -358,14 +363,30 @@ public sealed partial class MainViewModel
             Environment.NewLine,
             health.Select(static row => $"{row.Root} — {row.Status}"));
         ApplyAllDriveIndexHealthStatus(force: true);
+
+        // An index paused at its budget looks structurally fine and never fixes itself, so surface it
+        // rather than leaving it to be noticed in a hover tooltip.
+        if (IndexSizeBudgetDetected is { } notify)
+        {
+            foreach (IndexRootHealthEntry row in health)
+            {
+                if (row.Kind == IndexRootHealthKind.SizeBudgetReached && row.SizeBudgetRoot is { } budgetRoot)
+                    notify(budgetRoot);
+            }
+        }
     }
+
+    /// <summary>Raised for each index found paused at its storage budget. The window shows the
+    /// remediation dialog; nothing here depends on the UI so the view-model stays testable.</summary>
+    public Action<string>? IndexSizeBudgetDetected { get; set; }
 
     private static IndexRootHealthEntry ReadAllDriveIndexHealth(
         ContentIndexManager manager,
         string root,
         IReadOnlyList<string> registeredRoots,
         int maxCatchupRecords,
-        int fileIoTimeoutSeconds)
+        int fileIoTimeoutSeconds,
+        Func<string, EffectiveIndexSizePolicy> resolveSizePolicy)
     {
         bool registered = IndexedRootsPolicy.FindBestCoveringRoot(registeredRoots, root) is not null;
         if (!registered)
@@ -382,6 +403,20 @@ public sealed partial class MainViewModel
 
         if (metadata.Exists && metadata.MetadataReadable && metadata.Health == IndexStorageHealth.Healthy)
         {
+            // Checked before freshness: an index paused at its storage budget still has perfectly healthy
+            // metadata, so without this it reports as healthy (or merely "changes pending") while silently
+            // never updating again.
+            IndexSizeBudgetDiagnosis budget = IndexSizeBudgetAdvisor.Diagnose(
+                resolveSizePolicy(indexRoot), manager.GetActiveIndexBytesForRoot(indexRoot));
+            if (budget.AtBudget)
+            {
+                return new IndexRootHealthEntry(
+                    root,
+                    IndexRootHealthKind.SizeBudgetReached,
+                    IndexSizeBudgetAdvisor.HealthStatus(budget),
+                    SizeBudgetRoot: indexRoot);
+            }
+
             ContentIndexManager.ScopeFreshnessStatus freshness = manager.GetScopeFreshnessStatus(
                 indexRoot,
                 ContentIndexFreshnessEvaluator.CreateReader(

@@ -2772,6 +2772,7 @@
                 Padding="12"
                 Canvas.ZIndex="101"
                 Translation="0,0,32"
+                ContextRequested="OnIndexStatusContextRequested"
                 PointerEntered="OnIndexStatusHoverPanelPointerEntered"
                 PointerExited="OnIndexStatusHoverPanelPointerExited">
             <Border.Shadow>

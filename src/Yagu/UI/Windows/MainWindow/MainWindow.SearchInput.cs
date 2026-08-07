@@ -559,9 +559,15 @@ public sealed partial class MainWindow
             Grid.SetColumn(headingText, 1);
             heading.Children.Add(headingText);
             card.Children.Add(heading);
+
+            // Index mutation is serialized by one cross-process writer lease, so a second pass cannot start
+            // while one is running. Offering it would fail busy, so this card stays purely informational.
+            bool maintenanceAlreadyRunning = ViewModel.IsIndexBuildActive || ViewModel.IsIndexRebuildBlocking;
             card.Children.Add(new TextBlock
             {
-                Text = DescribeContentIndexReadinessIssue(issue),
+                Text = maintenanceAlreadyRunning
+                    ? ContentIndexUiStatus.MaintenanceAlreadyRunningNote(ViewModel.ActiveIndexBuildFolder)
+                    : DescribeContentIndexReadinessIssue(issue),
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 12,
                 Opacity = 0.72,
@@ -569,7 +575,11 @@ public sealed partial class MainWindow
 
             string? actionLabel = null;
             string? actionKind = null;
-            if (issue.Kind == ContentIndexReadinessIssueKind.Missing)
+            if (maintenanceAlreadyRunning)
+            {
+                // No maintenance action; the running pass already covers it.
+            }
+            else if (issue.Kind == ContentIndexReadinessIssueKind.Missing)
             {
                 actionLabel = issue.CanRebuild ? "Build in background" : issue.CanAdd ? "Index in background" : null;
                 actionKind = issue.CanRebuild ? "build-search" : issue.CanAdd ? "add-search" : null;

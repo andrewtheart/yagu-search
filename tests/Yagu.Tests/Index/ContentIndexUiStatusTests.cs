@@ -504,6 +504,29 @@ public sealed class ContentIndexUiStatusTests
             ContentIndexUiStatus.SchedulingHint("atstartup"));
 
     [Fact]
+    public void MaintenanceAlreadyRunningNote_NamesTheFolderAndPromisesNoNewBuild()
+    {
+        string note = ContentIndexUiStatus.MaintenanceAlreadyRunningNote(@"C:\");
+
+        Assert.Contains(@"already running for C:\", note);
+        Assert.Contains("reads files directly", note);
+        // The card this replaces offered to start a build; the note must not repeat that promise.
+        Assert.DoesNotContain("can build", note);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void MaintenanceAlreadyRunningNote_UntrackedPass_StillSaysIndexingIsRunning(string? folder)
+    {
+        string note = ContentIndexUiStatus.MaintenanceAlreadyRunningNote(folder);
+
+        Assert.StartsWith("Indexing is already running.", note, StringComparison.Ordinal);
+        Assert.Contains("reads files directly", note);
+    }
+
+    [Fact]
     public void AllDriveHealth_MixedFailures_UsesAttentionPrecedence()
     {
         IndexRootHealthEntry[] roots =

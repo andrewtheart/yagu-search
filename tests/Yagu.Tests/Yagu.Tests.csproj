@@ -191,6 +191,7 @@
     <Compile Include="..\..\src\Yagu\Services\Index\IndexedRootSizePolicy.cs" Link="Source\Services\Index\IndexedRootSizePolicy.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\EffectiveIndexSizePolicy.cs" Link="Source\Services\Index\EffectiveIndexSizePolicy.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\IndexSizeManagementPolicy.cs" Link="Source\Services\Index\IndexSizeManagementPolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexSizeBudgetAdvisor.cs" Link="Source\Services\Index\IndexSizeBudgetAdvisor.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\IndexOnboardingPlan.cs" Link="Source\Services\Index\IndexOnboardingPlan.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexAutoBuilder.cs" Link="Source\Services\Index\ContentIndexAutoBuilder.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexScheduleEvaluator.cs" Link="Source\Services\Index\ContentIndexScheduleEvaluator.cs" />

@@ -37,6 +37,8 @@ public sealed partial class MainWindow
         ApplyPreviewColors();
         UpdatePinStartupDirectoryIcon(ViewModel.IsCurrentDirectoryPinned);
         UpdateIndexDirectoryIcon(ViewModel.IsCurrentDirectoryIndexed);
+        ViewModel.IndexSizeBudgetDetected = root =>
+            _ = ShowIndexSizeBudgetDialogAsync(root, fromUserAction: false);
         ViewModel.RefreshAllDriveIndexStatus();
         if (_launcherMode) PositionLauncherWindow();
 
