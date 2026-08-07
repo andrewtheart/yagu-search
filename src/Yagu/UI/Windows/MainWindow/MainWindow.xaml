@@ -2657,11 +2657,14 @@
                      Measurement is off-thread; index size refreshes at most once per minute and never
                      while a search is active. Fixed columns prevent changing values from shifting
                      neighboring indicators; oversized values trim while their tooltips retain full detail. -->
-                    <Grid x:Name="ResourceUsageStatusCluster" ColumnSpacing="12" VerticalAlignment="Center"
+                    <Grid x:Name="ResourceUsageStatusCluster" ColumnSpacing="8" Margin="0,0,10,0"
+                        VerticalAlignment="Center"
                         Visibility="{x:Bind ViewModel.ResourceUsageStatusVisibility, Mode=OneWay}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="104" />
+                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="108" />
+                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="220" />
                     </Grid.ColumnDefinitions>
                     <TextBlock x:Name="TempUsageBlock" Text="{x:Bind ViewModel.TempUsageText, Mode=OneWay}"
@@ -2674,7 +2677,10 @@
                             </ToolTip>
                         </ToolTipService.ToolTip>
                     </TextBlock>
-                          <TextBlock x:Name="IndexUsageBlock" Grid.Column="1"
+                    <TextBlock x:Name="TempIndexStatusSeparator" Grid.Column="1" Text="|"
+                               Style="{StaticResource StatusBarMutedTextStyle}" Opacity="0.35"
+                               IsHitTestVisible="False" />
+                    <TextBlock x:Name="IndexUsageBlock" Grid.Column="2"
                                Text="{x:Bind ViewModel.IndexUsageText, Mode=OneWay}"
                                Style="{StaticResource StatusBarMutedTextStyle}"
                                TextAlignment="Right" TextTrimming="CharacterEllipsis"
@@ -2685,7 +2691,10 @@
                             </ToolTip>
                         </ToolTipService.ToolTip>
                     </TextBlock>
-                          <TextBlock x:Name="RamUsageBlock" Grid.Column="2"
+                    <TextBlock x:Name="IndexRamStatusSeparator" Grid.Column="3" Text="|"
+                               Style="{StaticResource StatusBarMutedTextStyle}" Opacity="0.35"
+                               IsHitTestVisible="False" />
+                    <TextBlock x:Name="RamUsageBlock" Grid.Column="4"
                                Text="{x:Bind ViewModel.RamUsageText, Mode=OneWay}"
                                Style="{StaticResource StatusBarMutedTextStyle}"
                                TextAlignment="Right" TextTrimming="CharacterEllipsis"

@@ -91,17 +91,19 @@ public sealed class ResourceUsageIndicatorRegressionTests
     [Fact]
     public void MainWindowXaml_HasTempIndexAndRamStatusBarIndicators()
     {
-        Assert.Contains("x:Name=\"ResourceUsageStatusCluster\" ColumnSpacing=\"12\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"ResourceUsageStatusCluster\" ColumnSpacing=\"8\" Margin=\"0,0,10,0\"", MainWindowXaml);
         Assert.Contains("<ColumnDefinition Width=\"104\" />", MainWindowXaml);
         Assert.Contains("<ColumnDefinition Width=\"108\" />", MainWindowXaml);
         Assert.Contains("<ColumnDefinition Width=\"220\" />", MainWindowXaml);
         Assert.Contains("x:Name=\"TempUsageBlock\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.TempUsageText, Mode=OneWay}\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.TempUsageTooltip, Mode=OneWay}\"", MainWindowXaml);
-        Assert.Contains("x:Name=\"IndexUsageBlock\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"TempIndexStatusSeparator\" Grid.Column=\"1\" Text=\"|\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"IndexUsageBlock\" Grid.Column=\"2\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.IndexUsageText, Mode=OneWay}\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.IndexUsageTooltip, Mode=OneWay}\"", MainWindowXaml);
-        Assert.Contains("x:Name=\"RamUsageBlock\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"IndexRamStatusSeparator\" Grid.Column=\"3\" Text=\"|\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"RamUsageBlock\" Grid.Column=\"4\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.RamUsageText, Mode=OneWay}\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.RamUsageTooltip, Mode=OneWay}\"", MainWindowXaml);
         Assert.DoesNotContain("x:Name=\"SkipCountBlock\"", MainWindowXaml);
