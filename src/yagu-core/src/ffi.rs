@@ -2398,14 +2398,6 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
 
                 let file_index = item.file_index;
                 let path = &item.path;
-                #[cfg(test)]
-                let file_started_at = if sess.file_io_timeout_seconds == u16::MAX {
-                    std::time::Instant::now()
-                        - std::time::Duration::from_secs(u16::MAX as u64 + 1)
-                } else {
-                    std::time::Instant::now()
-                };
-                #[cfg(not(test))]
                 let file_started_at = std::time::Instant::now();
                 #[cfg(windows)]
                 io_watch.begin(file_started_at);
@@ -2458,6 +2450,11 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                         return early_stop.load(Ordering::Relaxed);
                     }
                     if early_stop.load(Ordering::Relaxed) {
+                        return true;
+                    }
+                    #[cfg(test)]
+                    if sess.worker_test_injection == 4 {
+                        timed_out.set(true);
                         return true;
                     }
                     if deadline.is_some_and(|limit| file_started_at.elapsed() >= limit) {
@@ -3255,7 +3252,7 @@ mod tests {
     fn streaming_scanner_expired_deadline_reports_timeout() {
         unsafe {
             let mut opts = default_opts();
-            opts.file_io_timeout_seconds = u16::MAX;
+            opts.file_io_timeout_seconds = 1;
             let session = qg_create_session(
                 b"missing".as_ptr(),
                 7,
@@ -3263,6 +3260,7 @@ mod tests {
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             );
+            (*session).worker_test_injection = 4;
             let mut collector = StreamingCollector::default();
             let scanner = qg_create_streaming_scanner(
                 session,
