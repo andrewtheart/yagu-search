@@ -175,7 +175,11 @@ public sealed class AppSettings
 
     // Storage/memory quotas scale with pointer size, giving x86 half the x64 defaults
     // for its constrained address space (plan §6.1/§11).
-    public static int DefaultIndexMaxDiskSizeMB => 512 * IntPtr.Size;
+    // 50 GiB on x64: a whole-drive index (content.bin plus the format-v3 sidecars that roughly double it)
+    // lands around 30 GB, so a smaller ceiling halts maintenance on the first pass after a rebuild.
+    public static int DefaultIndexMaxDiskSizeMB => 6400 * IntPtr.Size;
+    /// <summary>The pre-50 GiB default, kept only so a settings file still carrying it can be migrated once.</summary>
+    public static int LegacyDefaultIndexMaxDiskSizeMB => 512 * IntPtr.Size;
     public const int MinimumIndexMaxDiskSizeMB = 256;
 
     public const int DefaultIndexMinimumFreeSpaceMB = 2048;
@@ -252,15 +256,22 @@ public sealed class AppSettings
     // into one replacement without ever opening the base, so it is the only reclamation an index above the
     // auto-compaction cap can still perform. These were previously hard-coded at 8 MB/32 MB/8-in-a-row,
     // which no real whole-drive index could satisfy, leaving such indexes with no reclamation at all.
-    public const int DefaultIndexCoalesceMaxSegmentMB = 128;
+    // Measured on real whole-drive indexes: paged full-build layers and incremental segments both land
+    // around 200 MB, so the previous 128 MB cap made 3 of 27 segments eligible and never produced a run.
+    // The batch cap must stay >= MinRun * MaxSegment or a minimum-length run can never fit.
+    public const int DefaultIndexCoalesceMaxSegmentMB = 256;
     public const int MaximumIndexCoalesceMaxSegmentMB = 8192;
-    public const int DefaultIndexCoalesceMaxBatchMB = 512;
+    public const int DefaultIndexCoalesceMaxBatchMB = 1024;
     public const int MaximumIndexCoalesceMaxBatchMB = 32768;
     public const int DefaultIndexCoalesceMinRun = 4;
     public const int MinimumIndexCoalesceMinRun = 2;
     public const int MaximumIndexCoalesceMinRun = 64;
     public const int DefaultIndexCoalesceMaxRunsPerPass = 8;
     public const int MaximumIndexCoalesceMaxRunsPerPass = 64;
+
+    /// <summary>Pre-migration coalescing defaults, kept only so settings still carrying them can be lifted once.</summary>
+    public const int LegacyDefaultIndexCoalesceMaxSegmentMB = 128;
+    public const int LegacyDefaultIndexCoalesceMaxBatchMB = 512;
 
     /// <summary>Build trigger: how a build/update is kicked off (plan §6.1).</summary>
     public const string DefaultIndexBuildTrigger = "Manual";
@@ -860,9 +871,14 @@ public sealed class AppSettings
     public string IndexStorageDirectory { get; set; } = string.Empty;
     /// <summary>Hard per-file size cap for ingestion (MB). Over-cap files live-scan. Default 100.</summary>
     public int IndexMaxFileSizeMB { get; set; } = DefaultIndexMaxFileSizeMB;
-    /// <summary>Global charged-byte quota across generations/scratch/overlays (MB). Default 4096 on
-    /// 64-bit / 2048 on x86, additionally capped at 10% of the volume by the storage manager.</summary>
+    /// <summary>Storage ceiling for one index (MB); 0 = no ceiling. Reaching it escalates reclamation and,
+    /// if the index still cannot be brought under, pauses that index's maintenance. Default 51200 MB
+    /// (50 GiB) on 64-bit / 25600 MB on x86.</summary>
     public int IndexMaxDiskSizeMB { get; set; } = 0;
+    /// <summary>One-time migration guard for settings written with the pre-50 GiB size budget and the
+    /// 128/512 MB coalescing bounds, which together let a whole-drive index halt with nothing able to
+    /// reclaim it.</summary>
+    public bool IndexSizeDefaultsMigrated { get; set; }
     /// <summary>Reserved free-space floor (MB). Default 2048 (plan §6.1/§11.2).</summary>
     public int IndexMinimumFreeSpaceMB { get; set; } = DefaultIndexMinimumFreeSpaceMB;
     /// <summary>Stop an index build when the index drive is at least this percent full (plan §11.2).
@@ -959,9 +975,9 @@ public sealed class AppSettings
     /// default <c>CoalesceThenCompact</c>. Only decides how an index reorganizes its own storage — never what a
     /// search returns.</summary>
     public string IndexSizeManagementMode { get; set; } = Yagu.Services.Index.IndexSizeManagementModes.CoalesceThenCompact;
-    /// <summary>Largest individual delta segment (MB) eligible to join a coalescing run. Default 128.</summary>
+    /// <summary>Largest individual delta segment (MB) eligible to join a coalescing run. Default 256.</summary>
     public int IndexCoalesceMaxSegmentMB { get; set; } = DefaultIndexCoalesceMaxSegmentMB;
-    /// <summary>Largest total size (MB) of one coalescing run. Bounds maintenance-worker memory. Default 512.</summary>
+    /// <summary>Largest total size (MB) of one coalescing run. Bounds maintenance-worker memory. Default 1024.</summary>
     public int IndexCoalesceMaxBatchMB { get; set; } = DefaultIndexCoalesceMaxBatchMB;
     /// <summary>Fewest contiguous eligible segments that make a coalescing run worth merging. Default 4.</summary>
     public int IndexCoalesceMinRun { get; set; } = DefaultIndexCoalesceMinRun;
@@ -1061,6 +1077,7 @@ public sealed class AppSettings
         IndexMaxWorkerQuerySizeMB = DefaultIndexMaxWorkerQuerySizeMB;
         IndexMaxFileSizeMB = DefaultIndexMaxFileSizeMB;
         IndexMaxDiskSizeMB = DefaultIndexMaxDiskSizeMB;
+        IndexSizeDefaultsMigrated = true;
         IndexMinimumFreeSpaceMB = DefaultIndexMinimumFreeSpaceMB;
         IndexMaxDiskUsagePercent = DefaultIndexMaxDiskUsagePercent;
         IndexRetainedGenerationCount = DefaultIndexRetainedGenerationCount;
@@ -1576,6 +1593,7 @@ public sealed class SettingsService
         => new()
         {
             IndexContinuousIntervalMigrated = true,
+            IndexSizeDefaultsMigrated = true,
         };
 
     // Earlier Yagu versions stored the startup window mode (launcher vs traditional) and the
@@ -1693,6 +1711,28 @@ public sealed class SettingsService
             72);
     }
 
+    /// <summary>
+    /// Lifts the index size-management defaults once. Each of these was materialized into settings.json on
+    /// first run, so raising the C# default alone would never reach an existing install. Only a value still
+    /// sitting on its legacy default moves; a deliberate choice (including 0 = no ceiling) is preserved.
+    /// Together they were unworkable for a whole-drive index: it exceeded the budget immediately, and the
+    /// coalescing caps sat below typical segment size, so nothing could reclaim it.
+    /// </summary>
+    private static void MigrateIndexSizeDefaults(AppSettings settings)
+    {
+        if (settings.IndexSizeDefaultsMigrated)
+            return;
+
+        if (settings.IndexMaxDiskSizeMB == AppSettings.LegacyDefaultIndexMaxDiskSizeMB)
+            settings.IndexMaxDiskSizeMB = AppSettings.DefaultIndexMaxDiskSizeMB;
+        if (settings.IndexCoalesceMaxSegmentMB == AppSettings.LegacyDefaultIndexCoalesceMaxSegmentMB)
+            settings.IndexCoalesceMaxSegmentMB = AppSettings.DefaultIndexCoalesceMaxSegmentMB;
+        if (settings.IndexCoalesceMaxBatchMB == AppSettings.LegacyDefaultIndexCoalesceMaxBatchMB)
+            settings.IndexCoalesceMaxBatchMB = AppSettings.DefaultIndexCoalesceMaxBatchMB;
+
+        settings.IndexSizeDefaultsMigrated = true;
+    }
+
     /// <summary>Normalizes/validates every persisted content-index setting (plan §6.1). Bounded numeric
     /// values are clamped, enums coerced to known values, and strings trimmed. A zero (unset) numeric
     /// value falls back to its architecture-aware default. Kept in one place so Settings and the CLI
@@ -1705,6 +1745,7 @@ public sealed class SettingsService
         settings.IndexQueryWorkerParallelism = AppSettings.NormalizeIndexQueryWorkerParallelism(settings.IndexQueryWorkerParallelism);
         settings.IndexMaxInProcessSizeMB = AppSettings.NormalizeIndexMaxInProcessSizeMB(settings.IndexMaxInProcessSizeMB);
         settings.IndexMaxFileSizeMB = AppSettings.NormalizeIndexMaxFileSizeMB(settings.IndexMaxFileSizeMB);
+        MigrateIndexSizeDefaults(settings);
         settings.IndexMaxDiskSizeMB = AppSettings.NormalizeIndexMaxDiskSizeMB(settings.IndexMaxDiskSizeMB);
         settings.IndexMinimumFreeSpaceMB = AppSettings.NormalizeIndexMinimumFreeSpaceMB(settings.IndexMinimumFreeSpaceMB);
         settings.IndexMaxDiskUsagePercent = AppSettings.NormalizeIndexMaxDiskUsagePercent(settings.IndexMaxDiskUsagePercent);
@@ -1858,6 +1899,7 @@ public sealed class SettingsService
         try
         {
             settings.IndexContinuousIntervalMigrated = true;
+            settings.IndexSizeDefaultsMigrated = true;
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             // Write to a temp file then atomically replace, so a concurrent reader (e.g. the bug
@@ -1882,6 +1924,7 @@ public sealed class SettingsService
         try
         {
             settings.IndexContinuousIntervalMigrated = true;
+            settings.IndexSizeDefaultsMigrated = true;
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             // Write to a temp file then atomically replace, so a concurrent reader (e.g. the bug

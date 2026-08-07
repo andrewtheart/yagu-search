@@ -632,12 +632,12 @@ public sealed partial class SettingsWindow
             s => s.IndexCoalesceMaxSegmentMB,
             (s, v) => s.IndexCoalesceMaxSegmentMB = AppSettings.NormalizeIndexCoalesceMaxSegmentMB(v),
             1, 8192,
-            "Only delta segments at or below this size join a coalescing run. Set below your typical segment size, coalescing can never find work — which leaves a large index with no way to reclaim storage. Default 128.");
+            "Only delta segments at or below this size join a coalescing run. Set below your typical segment size, coalescing can never find work \u2014 which leaves a large index with no way to reclaim storage. Default 256.");
         AddIndexNumber(sizeGroup, "Coalescing: largest merge batch (MB):",
             s => s.IndexCoalesceMaxBatchMB,
             (s, v) => s.IndexCoalesceMaxBatchMB = AppSettings.NormalizeIndexCoalesceMaxBatchMB(v),
             1, 32768,
-            "Total size of one merge. This is the main bound on how much memory a coalescing pass uses. Default 512.");
+            "Total size of one merge. This is the main bound on how much memory a coalescing pass uses. Keep it at or above the run minimum multiplied by the segment cap, or a full-length run can never fit. Default 1024.");
         AddIndexNumber(sizeGroup, "Coalescing: fewest segments worth merging:",
             s => s.IndexCoalesceMinRun,
             (s, v) => s.IndexCoalesceMinRun = AppSettings.NormalizeIndexCoalesceMinRun(v),

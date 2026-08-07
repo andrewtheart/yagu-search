@@ -136,6 +136,83 @@ public class SettingsServiceTests
     }
 
     [Fact]
+    public void DefaultIndexMaxDiskSizeMB_HoldsAWholeDriveIndex()
+    {
+        // A whole-drive index is ~30 GB (content.bin plus the format-v3 sidecars), so a smaller ceiling
+        // halts maintenance on the first pass after a rebuild and pins the superseded copy on disk.
+        int expected = Environment.Is64BitProcess ? 51_200 : 25_600;
+        Assert.Equal(expected, AppSettings.DefaultIndexMaxDiskSizeMB);
+    }
+
+    [Fact]
+    public void DefaultCoalesceBounds_CanActuallyFormAMinimumLengthRun()
+    {
+        // Measured segments on a real whole-drive index sit near 200 MB. A segment cap below that makes
+        // every segment ineligible, and a batch cap below MinRun * MaxSegment truncates every run short of
+        // MinRun - either way coalescing silently never runs.
+        Assert.True(
+            AppSettings.DefaultIndexCoalesceMaxSegmentMB >= 256,
+            "The segment cap must cover the ~200 MB segments real indexes produce.");
+        Assert.True(
+            AppSettings.DefaultIndexCoalesceMaxBatchMB
+                >= AppSettings.DefaultIndexCoalesceMinRun * AppSettings.DefaultIndexCoalesceMaxSegmentMB,
+            "The batch cap must fit a minimum-length run of maximum-size segments.");
+    }
+
+    [Fact]
+    public void Load_LegacySizeBudgetDefault_IsLiftedToTheCurrentDefaultOnce()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(
+                temp,
+                $$"""{ "IndexMaxDiskSizeMB": {{AppSettings.LegacyDefaultIndexMaxDiskSizeMB}}, "IndexCoalesceMaxSegmentMB": {{AppSettings.LegacyDefaultIndexCoalesceMaxSegmentMB}}, "IndexCoalesceMaxBatchMB": {{AppSettings.LegacyDefaultIndexCoalesceMaxBatchMB}} }""");
+
+            AppSettings loaded = new SettingsService(temp).Load();
+
+            Assert.Equal(AppSettings.DefaultIndexMaxDiskSizeMB, loaded.IndexMaxDiskSizeMB);
+            Assert.Equal(AppSettings.DefaultIndexCoalesceMaxSegmentMB, loaded.IndexCoalesceMaxSegmentMB);
+            Assert.Equal(AppSettings.DefaultIndexCoalesceMaxBatchMB, loaded.IndexCoalesceMaxBatchMB);
+            Assert.True(loaded.IndexSizeDefaultsMigrated);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
+    public void Load_DeliberateSizeBudget_SurvivesTheDefaultMigration()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(temp, """{ "IndexMaxDiskSizeMB": 8192, "IndexCoalesceMaxSegmentMB": 64 }""");
+
+            AppSettings loaded = new SettingsService(temp).Load();
+
+            Assert.Equal(8192, loaded.IndexMaxDiskSizeMB);
+            Assert.Equal(64, loaded.IndexCoalesceMaxSegmentMB);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
+    public void Load_AlreadyMigratedLegacyValue_IsKeptAsADeliberateChoice()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(
+                temp,
+                $$"""{ "IndexMaxDiskSizeMB": {{AppSettings.LegacyDefaultIndexMaxDiskSizeMB}}, "IndexSizeDefaultsMigrated": true }""");
+
+            AppSettings loaded = new SettingsService(temp).Load();
+
+            Assert.Equal(AppSettings.LegacyDefaultIndexMaxDiskSizeMB, loaded.IndexMaxDiskSizeMB);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
     public void Load_MigratesLegacyDisabledUpdateChecksToOff()
     {
         var temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");

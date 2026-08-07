@@ -112,9 +112,9 @@ public sealed class IndexMaintenanceSettings
     /// and, if the index still cannot be brought under, halts that index's maintenance instead of growing.</summary>
     public int SizeBudgetMB { get; set; }
     /// <summary>Largest individual delta segment (MB) eligible to join a coalescing run.</summary>
-    public int CoalesceMaxSegmentMB { get; set; } = 128;
+    public int CoalesceMaxSegmentMB { get; set; } = 256;
     /// <summary>Largest total size (MB) of one coalescing run; bounds maintenance-worker memory.</summary>
-    public int CoalesceMaxBatchMB { get; set; } = 512;
+    public int CoalesceMaxBatchMB { get; set; } = 1024;
     /// <summary>Fewest contiguous eligible segments that make a coalescing run worth merging.</summary>
     public int CoalesceMinRun { get; set; } = 4;
     /// <summary>Most coalescing runs merged in one maintenance pass.</summary>

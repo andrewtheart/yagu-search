@@ -73,8 +73,8 @@ public readonly record struct EffectiveIndexSizePolicy(
         IndexSizeManagementModes.CoalesceThenCompact,
         SizeBudgetMB: 0,
         MaxAutoCompactionSizeMB: 512,
-        CoalesceMaxSegmentMB: 128,
-        CoalesceMaxBatchMB: 512,
+        CoalesceMaxSegmentMB: 256,
+        CoalesceMaxBatchMB: 1024,
         CoalesceMinRun: 4,
         CoalesceMaxRunsPerPass: 8);
 
