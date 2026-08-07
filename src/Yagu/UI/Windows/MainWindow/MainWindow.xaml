@@ -1556,8 +1556,8 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <ProgressBar Grid.Column="0"
-                         Maximum="{x:Bind ViewModel.TotalFiles, Mode=OneWay}"
-                         Value="{x:Bind ViewModel.FilesScanned, Mode=OneWay}"
+                         Minimum="0" Maximum="100"
+                         Value="{x:Bind ViewModel.DisplayedSearchProgressPercent, Mode=OneWay}"
                          IsIndeterminate="{x:Bind ViewModel.SearchProgressIndeterminate, Mode=OneWay}" CornerRadius="3" Height="6"
                          VerticalAlignment="Center"
                          ToolTipService.ToolTip="{x:Bind ViewModel.ProgressTooltip, Mode=OneWay}" />
@@ -3061,6 +3061,36 @@
                 </Button>
             </StackPanel>
         </Grid>
+
+        <!-- App-level snackbar shown at the bottom over every row (status bar included), used for
+             short confirmations that are not tied to the preview surface. -->
+        <Border x:Name="AppToast"
+                Grid.RowSpan="7"
+                Visibility="Collapsed"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                Margin="0,0,0,52"
+                Padding="14,10"
+                CornerRadius="20"
+                Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                Canvas.ZIndex="60"
+                Translation="0,0,32">
+            <Border.Shadow>
+                <ThemeShadow />
+            </Border.Shadow>
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <FontIcon x:Name="AppToastIcon" Glyph="&#xE930;" FontSize="14" Opacity="0.9" VerticalAlignment="Center" />
+                <TextBlock x:Name="AppToastText" FontSize="13" VerticalAlignment="Center" />
+                <Button Click="OnAppToastDismissClick" Width="28" Height="28"
+                        MinWidth="0" MinHeight="0" Padding="0"
+                        Background="Transparent" BorderThickness="0"
+                        ToolTipService.ToolTip="Dismiss">
+                    <FontIcon Glyph="&#xE711;" FontSize="10" />
+                </Button>
+            </StackPanel>
+        </Border>
 
     </Grid>
 </Window>

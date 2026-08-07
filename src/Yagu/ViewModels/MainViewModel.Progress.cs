@@ -53,12 +53,15 @@ public sealed partial class MainViewModel
     }
 
     private SourceBackedSearchProgress? _sourceBackedSearchProgress;
+    private readonly SearchProgressDisplayTracker _searchProgressDisplayTracker = new();
+
+    public double DisplayedSearchProgressPercent => _searchProgressDisplayTracker.Percent;
 
     /// <summary>Whole-number completion label shown at the far-right edge of the search progress bar.
-    /// Empty while discovery has not produced a total; clamped because progress snapshots can briefly
-    /// report more processed files than a slightly stale total.</summary>
+    /// Empty while discovery has not produced a total. The displayed percentage is monotonic even when
+    /// discovery revises its total upward during a scan.</summary>
     public string SearchProgressPercentLabel => TotalFiles > 0
-        ? $"{Math.Min(100.0, (double)FilesScanned / TotalFiles * 100):F0}%"
+        ? $"{DisplayedSearchProgressPercent:F0}%"
         : string.Empty;
 
     private string _searchProgressPhaseLabel = string.Empty;
@@ -66,10 +69,16 @@ public sealed partial class MainViewModel
     /// <summary>Right-edge progress text: the normal rounded percent during discovery/native scanning,
     /// then an explicit OCR/PDF counter while slow extraction workers drain their remaining queue.</summary>
     public string SearchProgressRightLabel => SearchProgressIndeterminate
-        ? string.Empty
+        ? DiscoveryProgressLabel
         : string.IsNullOrEmpty(_searchProgressPhaseLabel)
             ? SearchProgressPercentLabel
-            : _searchProgressPhaseLabel;
+            : $"{DisplayedSearchProgressPercent:F0}% [{_searchProgressPhaseLabel}]";
+
+    /// <summary>Shown while the total is still unknown. A backend without an upfront count (managed
+    /// enumeration) can discover for minutes, so the live processed count keeps an indeterminate bar
+    /// informative instead of blank.</summary>
+    private string DiscoveryProgressLabel =>
+        FilesScanned > 0 ? $"{FilesScanned:N0} files" : "Discovering\u2026";
 
     partial void OnFilesScannedChanged(int value)
     {
@@ -88,12 +97,32 @@ public sealed partial class MainViewModel
     private void UpdateSearchProgressPhaseLabel(SearchProgress progress)
     {
         _sourceBackedSearchProgress = progress.SourceBacked;
-        string next = progress.SourceBacked?.BuildCombinedLabel(progress.FilesScanned, progress.TotalFiles)
+        string next = progress.SourceBacked?.BuildPhaseLabel(progress.FilesScanned, progress.TotalFiles)
             ?? string.Empty;
         if (string.Equals(next, _searchProgressPhaseLabel, StringComparison.Ordinal))
             return;
         _searchProgressPhaseLabel = next;
         OnPropertyChanged(nameof(SearchProgressRightLabel));
         OnPropertyChanged(nameof(ProgressTooltip));
+    }
+
+    private void UpdateDisplayedSearchProgress(int filesProcessed, int totalFiles, bool indeterminate)
+    {
+        if (!_searchProgressDisplayTracker.Update(filesProcessed, totalFiles, indeterminate))
+            return;
+
+        OnPropertyChanged(nameof(DisplayedSearchProgressPercent));
+        OnPropertyChanged(nameof(SearchProgressPercentLabel));
+        OnPropertyChanged(nameof(SearchProgressRightLabel));
+    }
+
+    private void ResetDisplayedSearchProgress()
+    {
+        if (!_searchProgressDisplayTracker.Reset())
+            return;
+
+        OnPropertyChanged(nameof(DisplayedSearchProgressPercent));
+        OnPropertyChanged(nameof(SearchProgressPercentLabel));
+        OnPropertyChanged(nameof(SearchProgressRightLabel));
     }
 }

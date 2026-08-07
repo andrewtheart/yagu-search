@@ -95,6 +95,8 @@
     <Compile Include="..\Yagu\Services\Index\FileIdMap.cs" Link="Linked\Index\FileIdMap.cs" />
     <Compile Include="..\Yagu\Services\Index\FileIdPathResolver.cs" Link="Linked\Index\FileIdPathResolver.cs" />
     <Compile Include="..\Yagu\Services\Index\FileIdentityReader.cs" Link="Linked\Index\FileIdentityReader.cs" />
+    <Compile Include="..\Yagu\Services\Index\EffectiveIndexSizePolicy.cs" Link="Linked\Index\EffectiveIndexSizePolicy.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexedRootSizePolicy.cs" Link="Linked\Index\IndexedRootSizePolicy.cs" />
     <Compile Include="..\Yagu\Services\Index\IContentIndexPathProvider.cs" Link="Linked\Index\IContentIndexPathProvider.cs" />
     <Compile Include="..\Yagu\Services\Index\IFileIdPathResolver.cs" Link="Linked\Index\IFileIdPathResolver.cs" />
     <Compile Include="..\Yagu\Services\Index\IndexBuildExecutor.cs" Link="Linked\Index\IndexBuildExecutor.cs" />

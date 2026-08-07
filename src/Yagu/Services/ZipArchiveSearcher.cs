@@ -641,6 +641,8 @@ public static class ZipArchiveSearcher
         int perFileCap = options.MaxMatchesPerFile > 0 ? options.MaxMatchesPerFile : int.MaxValue;
         var ring = new Queue<string>();
         var pendingAfter = new Queue<(SearchResult Partial, List<string> AfterLines, int Remaining)>();
+        // Same hazard as ContentSearcher: FindMatches returns a per-thread buffer and the emit loop awaits.
+        var lineHits = new List<(int Start, int Length)>();
         int lineNumber = 0;
         int matchCount = 0;
 
@@ -674,9 +676,11 @@ public static class ZipArchiveSearcher
             var matches = ContentSearcher.FindMatches(line, regex, literal, literalComparison);
             if (matches.Count > 0)
             {
-                matchCount += matches.Count;
+                lineHits.Clear();
+                lineHits.AddRange(matches);
+                matchCount += lineHits.Count;
                 var before = ring.Count > 0 ? ring.ToArray() : Array.Empty<string>();
-                foreach (var (start, length) in matches)
+                foreach (var (start, length) in lineHits)
                 {
                     var displayLine = LineTruncator.TruncateAroundMatch(line, start, length);
                     var partial = new SearchResult(

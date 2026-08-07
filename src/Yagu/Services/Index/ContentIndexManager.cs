@@ -1445,6 +1445,7 @@ public sealed partial class ContentIndexManager
             store.ProduceV3QueryStructures = settings.ProduceV3QueryStructures;
             int maxSegments = Math.Clamp(settings.MaxDeltaSegments, 1, 64);
             int thresholdMB = Math.Clamp(settings.CompactionThresholdMB, 1, 8192);
+            EffectiveIndexSizePolicy size = settings.ResolveSizePolicy(rootDirectory);
             if (!store.ShouldCompact(maxSegments, thresholdMB))
                 return false;
 
@@ -1454,23 +1455,27 @@ public sealed partial class ContentIndexManager
             // waiting for another source change to append a delta.
             var updater = new ContentIndexIncrementalUpdater(store, policy);
             smallSegmentsCoalesced = updater.CoalesceSmallSegmentsUnderLease(
-                mutation, maxSegments, CancellationToken.None) > 0;
+                mutation, maxSegments, CancellationToken.None, size) > 0;
             if (!store.ShouldCompact(maxSegments, thresholdMB))
                 return smallSegmentsCoalesced;
 
-            // Size guard: folding a LARGE over-segmented index in-process re-materializes every layer's
-            // documents + a combined posting index + a serialization buffer — a transient multi-GB memory
-            // spike. Above the configured cap, skip the automatic compaction and leave the index segmented
-            // (queries still use it, and the query-mode open already bounds their footprint). 0 = no cap.
-            int maxCompactMB = Math.Max(0, settings.MaxAutoCompactionSizeMB);
-            if (maxCompactMB > 0)
+            // Size guard: folding a LARGE over-segmented index re-materializes every layer's documents + a
+            // combined posting index + a serialization buffer — a transient multi-GB memory spike. Above the
+            // per-index cap, skip the automatic compaction and leave the index segmented (queries still use
+            // it, and the query-mode open already bounds their footprint). Exceeding the storage budget lifts
+            // the cap, because otherwise the index would simply grow without limit.
+            long indexBytes = store.TotalActiveIndexBytes();
+            if (!size.AllowsCompactingIndexOf(indexBytes))
             {
-                long indexBytes = store.TotalActiveIndexBytes();
-                if (indexBytes > (long)maxCompactMB * 1024 * 1024)
+                if (size.ExceedsBudget(indexBytes))
                 {
-                    YaguLog.For("ContentIndex").LogInformation("Skipping auto-compaction of over-segmented scope {Scope} for '{Root}': the index is {IndexMB} MB (> {MaxCompactMB} MB cap) \u2014 folding it in-process would spike memory; leaving it segmented.", scopeId, rootDirectory, indexBytes / (1024 * 1024), maxCompactMB);
-                    return smallSegmentsCoalesced;
+                    YaguLog.For("ContentIndex").LogWarning("Scope {Scope} for '{Root}' is {IndexMB} MB, over its {BudgetMB} MB size budget, but its '{Mode}' size-management mode cannot reclaim further — rebuild this index to reclaim the space.", scopeId, rootDirectory, indexBytes / (1024 * 1024), size.SizeBudgetMB, size.Mode);
                 }
+                else
+                {
+                    YaguLog.For("ContentIndex").LogInformation("Skipping auto-compaction of over-segmented scope {Scope} for '{Root}': the index is {IndexMB} MB (> {MaxCompactMB} MB cap, mode '{Mode}') — folding it would spike memory; leaving it segmented.", scopeId, rootDirectory, indexBytes / (1024 * 1024), size.MaxAutoCompactionSizeMB, size.Mode);
+                }
+                return smallSegmentsCoalesced;
             }
             // Compaction folds each layer's per-document trigram sets → the layered open MUST retain the
             // documents (the default), unlike the query-mode open in the accelerator.

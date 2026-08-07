@@ -8,7 +8,11 @@ param(
     [int]$MatchIterations = 200,
     [int]$SearchWaitSeconds = 15,
     [int]$PreviewLoadSeconds = 120,
-    [int]$MaxFiles = 500
+    [int]$MaxFiles = 500,
+    [int]$ExpectedFiles = 0,
+    [int]$UseRegex = 0,
+    [int]$ExactMatch = 1,
+    [int]$Multiline = 0
 )
 
 Add-Type -AssemblyName UIAutomationClient
@@ -38,6 +42,8 @@ public class YaguInput {
     public const uint MOUSEEVENTF_LEFTUP = 0x0004;
     public const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
     public const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+    public const byte VK_CONTROL = 0x11;
+    public const byte VK_A = 0x41;
     public const byte VK_SHIFT = 0x10;
     public const uint KEYEVENTF_KEYUP = 0x0002;
     public static void LeftClick() { mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, IntPtr.Zero); mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, IntPtr.Zero); }
@@ -49,6 +55,12 @@ public class YaguInput {
         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, IntPtr.Zero);
         System.Threading.Thread.Sleep(50);
         keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
+    }
+    public static void ControlA() {
+        keybd_event(VK_CONTROL, 0, 0, IntPtr.Zero);
+        keybd_event(VK_A, 0, 0, IntPtr.Zero);
+        keybd_event(VK_A, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
+        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
     }
     // Windows blocks SetForegroundWindow from a process that does not own the foreground, so a bare call
     // silently no-ops and every mouse_event click below then lands on whatever window really is focused
@@ -391,6 +403,48 @@ function Toggle-Checkbox([System.Windows.Automation.AutomationElement]$Element) 
     }
 }
 
+function Get-ToggleState([System.Windows.Automation.AutomationElement]$Element) {
+    $togglePattern = $Element.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    return $togglePattern.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On
+}
+
+function Set-ToggleState(
+    [System.Windows.Automation.AutomationElement]$Element,
+    [bool]$Desired,
+    [string]$Name) {
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        if ((Get-ToggleState $Element) -eq $Desired) { return }
+        Toggle-Checkbox $Element
+        Start-Sleep -Milliseconds 300
+    }
+    throw "Could not set $Name to $Desired."
+}
+
+function Get-InnerEdit([System.Windows.Automation.AutomationElement]$Container) {
+    if ($Container.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) {
+        return $Container
+    }
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Edit)
+    return $Container.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
+function Set-TextValue(
+    [System.Windows.Automation.AutomationElement]$Container,
+    [string]$Value,
+    [string]$Name) {
+    $edit = Get-InnerEdit $Container
+    if (-not $edit) { throw "No editable text control found inside $Name." }
+    $valuePattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    $valuePattern.SetValue($Value)
+    Start-Sleep -Milliseconds 250
+    $actual = $valuePattern.Current.Value
+    if ($actual -cne $Value) {
+        throw "$Name readback mismatch: expected '$Value', got '$actual'."
+    }
+}
+
 # ──────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ──────────────────────────────────────────────────────────────────────────────
@@ -398,7 +452,12 @@ function Toggle-Checkbox([System.Windows.Automation.AutomationElement]$Element) 
 Write-Host "=== Yagu Match Navigation UI Test ==="
 Write-Host "Directory: $Directory"
 Write-Host "Query: $Query"
+Write-Host "Options: Regex=$([bool]$UseRegex), Exact=$([bool]$ExactMatch), Multiline=$([bool]$Multiline)"
 Write-Host ""
+
+if ($Multiline -ne 0 -and ($UseRegex -eq 0 -or $ExactMatch -ne 0)) {
+    throw "Multiline scenarios must request Regex on and Exact off because the UI enforces that combination."
+}
 
 # 1. Launch Yagu with directory and query
 Write-Host "[1] Launching Yagu..."
@@ -408,19 +467,20 @@ Write-Host "[1] Launching Yagu..."
 # administrator" dialog that steals focus and hangs this script until it times out.
 # The exe name does not exist, so EditorLauncher.Open fails silently (no window, no dialog).
 $env:YAGU_EDITOR_COMMAND = 'yagu-ui-test-noop-editor --goto "{file}:{line}"'
+$env:YAGU_MATCH_NAV_CONTEXT_COMPARE = '1'
 $yaguExe = "C:\src\Yagu\src\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
 
-# Kill any leftover dev-build Yagu instance first. The app is single-instance, so a stale instance
-# (e.g. left running by a previous or failed run) would HIJACK this launch — the new process forwards
-# its command line to the existing instance and exits, and we'd drive the wrong window with the wrong
-# search. Only dev (bin-path) builds are targeted, never an installed app the user may have open.
-Get-Process Yagu -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -like '*\Yagu\bin\*' } |
-    Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
+# The app is single-instance. Refuse to hijack an existing Debug window rather than terminating a
+# developer-owned session; the caller can close it explicitly and rerun the headed test.
+$existingDebugYagu = @(Get-CimInstance Win32_Process -Filter "Name = 'Yagu.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.ExecutablePath -eq $yaguExe })
+if ($existingDebugYagu.Count -gt 0) {
+    Write-Error "A Debug Yagu instance is already running (PID(s): $($existingDebugYagu.ProcessId -join ', ')). Close it before running this headed test."
+    exit 2
+}
 
 $proc = Start-Process -FilePath $yaguExe `
-    -ArgumentList "--dir `"$Directory`" --query `"$Query`" --window-mode traditional" `
+    -ArgumentList "--dir `"$Directory`" --window-mode traditional" `
     -PassThru
 
 Start-Sleep -Seconds 5
@@ -452,24 +512,99 @@ try {
     Write-Host "  Warning: failed to maximize window: $_"
 }
 
-# 3. The app auto-searches when launched with --dir and --query. Wait for search.
-Write-Host "[3] Waiting ${SearchWaitSeconds}s for search to gather results..."
+# 3. Configure the exact GUI option combination, set the query, and start one Traditional search.
+Write-Host "[3] Configuring matching options and starting search..."
+$regexToggle = Find-Element -Parent $yaguWindow -AutomationId "RegexToggle" -TimeoutSeconds 5
+$exactToggle = Find-Element -Parent $yaguWindow -AutomationId "ExactMatchToggle" -TimeoutSeconds 5
+$multilineToggle = Find-Element -Parent $yaguWindow -AutomationId "MultilineToggle" -TimeoutSeconds 5
+if (-not $regexToggle -or -not $exactToggle -or -not $multilineToggle) {
+    throw "Could not find RegexToggle, ExactMatchToggle, and MultilineToggle."
+}
+
+# Multiline mutates Regex and Exact in the view model. Reset it first, set the independent
+# line-mode values, then enable it last when requested and verify the resulting live state.
+Set-ToggleState $multilineToggle $false "Multiline"
+Set-ToggleState $regexToggle ($UseRegex -ne 0) "Regex"
+Set-ToggleState $exactToggle ($ExactMatch -ne 0) "Exact"
+if ($Multiline -ne 0) {
+    Set-ToggleState $multilineToggle $true "Multiline"
+}
+
+$actualRegex = Get-ToggleState $regexToggle
+$actualExact = Get-ToggleState $exactToggle
+$actualMultiline = Get-ToggleState $multilineToggle
+if ($actualRegex -ne ($UseRegex -ne 0) `
+    -or $actualExact -ne ($ExactMatch -ne 0) `
+    -or $actualMultiline -ne ($Multiline -ne 0)) {
+    throw "Matching-option readback mismatch: Regex=$actualRegex Exact=$actualExact Multiline=$actualMultiline."
+}
+Write-Host "  Verified options: Regex=$actualRegex Exact=$actualExact Multiline=$actualMultiline"
+
+$queryBox = Find-Element -Parent $yaguWindow -AutomationId "QueryBox" -TimeoutSeconds 5
+if (-not $queryBox) { throw "Could not find QueryBox." }
+Set-TextValue $queryBox $Query "QueryBox"
+
+$searchAction = Find-Element -Parent $yaguWindow -AutomationId "SearchSplitButton" -TimeoutSeconds 3
+if (-not $searchAction) {
+    $searchAction = Find-Element -Parent $yaguWindow -AutomationId "SearchCancelButton" -TimeoutSeconds 3
+}
+if (-not $searchAction) { throw "Could not find an idle Search action." }
+Click-Element $searchAction
+
+# 4. MatchesFound can advance from
+# progress events before SearchEvent.MatchBatch has populated ResultRows, so a fixed delay followed
+# by Cancel can leave the status showing matches while the result list is empty. Wait until the
+# active Cancel action disappears and at least one file-group row has materialized instead.
+Write-Host "[4] Waiting for search completion and materialized results (minimum ${SearchWaitSeconds}s)..."
 Start-Sleep -Seconds $SearchWaitSeconds
 
-# 4. Click Cancel button to stop the search
-Write-Host "[4] Clicking Cancel to stop search..."
-$cancelBtn = Find-Element -Parent $yaguWindow -AutomationId "SearchCancelButton" -TimeoutSeconds 5
-if (-not $cancelBtn) {
-    # Try by name - it might show "Cancel" text
-    $cancelBtn = Find-Element -Parent $yaguWindow -Name "Cancel" -ControlType ([System.Windows.Automation.ControlType]::Button) -TimeoutSeconds 5
+$searchDeadline = (Get-Date).AddSeconds(120)
+$searchReady = $false
+$lastVisibleGroupCount = 0
+$fileGroupCondition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty, "FileGroupCheckBox")
+while ((Get-Date) -lt $searchDeadline) {
+    $activeCancel = Find-Element -Parent $yaguWindow -AutomationId "SearchCancelButton" -TimeoutSeconds 1
+    $isSearching = $false
+    if ($activeCancel) {
+        try {
+            $cancelRect = $activeCancel.Current.BoundingRectangle
+            $isSearching = -not $activeCancel.Current.IsOffscreen `
+                -and $cancelRect.Width -gt 0 `
+                -and $cancelRect.Height -gt 0 `
+                -and $activeCancel.Current.Name -match '^Cancel'
+        } catch { }
+    }
+
+    try {
+        $fileGroups = $yaguWindow.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            $fileGroupCondition)
+        Reset-UiaTimeoutStreak
+        $lastVisibleGroupCount = $fileGroups.Count
+    } catch {
+        if (-not (Test-IsUiaTimeout $_)) { throw }
+        Register-UiaTimeout "search readiness"
+    }
+
+    if (-not $isSearching -and $lastVisibleGroupCount -gt 0) {
+        $searchReady = $true
+        break
+    }
+
+    [YaguInput]::Progress()
+    Start-Sleep -Milliseconds 250
 }
-if ($cancelBtn) {
-    Click-Element $cancelBtn
-    Write-Host "  Cancelled search."
-} else {
-    Write-Host "  Cancel button not found (search may have finished already)."
+
+if (-not $searchReady) {
+    Take-Screenshot "00-search-readiness-timeout"
+    Write-Error "Search did not finish with materialized result rows within 120s (visible file groups: $lastVisibleGroupCount)."
+    exit 1
 }
-Start-Sleep -Seconds 2
+
+# Give bindings one dispatcher turn to settle before selecting result groups.
+Write-Host "[4] Search finished; $lastVisibleGroupCount file-group row(s) are currently materialized."
+Start-Sleep -Milliseconds 500
 
 Take-Screenshot "01-after-search"
 
@@ -719,6 +854,25 @@ if ($resultsList) {
 
 Write-Host "  Selected approximately $selectedCount file(s) via range selection"
 
+# Headed corpus scenarios know their exact file cardinality. Route selection through the app's
+# ResultsList Ctrl+A handler so every model group is selected even when UI virtualization exposes
+# only a subset of file checkboxes to UI Automation.
+if ($ExpectedFiles -gt 0 -and $resultsList) {
+    Write-Host "  Selecting all $ExpectedFiles model file group(s) through ResultsList Ctrl+A..."
+    Activate-YaguWindow
+    $focusCheckboxes = @(Get-OnscreenFileCheckboxes)
+    if ($focusCheckboxes.Count -eq 0) {
+        throw "Could not find a focusable file checkbox before model-wide Ctrl+A selection."
+    }
+    try { $focusCheckboxes[0].Element.SetFocus() } catch {
+        throw "Could not focus a ResultsList checkbox before model-wide Ctrl+A selection: $($_.Exception.Message)"
+    }
+    Start-Sleep -Milliseconds 200
+    [YaguInput]::ControlA()
+    [YaguInput]::Progress()
+    Start-Sleep -Milliseconds 600
+}
+
 # Helper: count how many file-level checkboxes report ToggleState=On right now (UIA tree).
 function Count-CheckedFileCheckboxes {
     param($listElement)
@@ -843,6 +997,14 @@ if ($clickTarget) {
     }
     
     if ($previewMenuItem) {
+        $previewMenuLabel = $previewMenuItem.Current.Name
+        if ($ExpectedFiles -gt 0) {
+            $expectedPreviewMenuLabel = "Preview all selected ($ExpectedFiles)"
+            if ($previewMenuLabel -ne $expectedPreviewMenuLabel) {
+                throw "Model-wide selection mismatch before preview: expected '$expectedPreviewMenuLabel', got '$previewMenuLabel'."
+            }
+            Write-Host "  Verified model selection before preview: $previewMenuLabel"
+        }
         Click-Element $previewMenuItem
         Write-Host "  Clicked 'Preview selected'"
     } else {
@@ -939,38 +1101,165 @@ if (-not $nextBtn) {
     exit 1
 }
 $matchLabel = Find-Element -Parent $yaguWindow -AutomationId "MatchNavLabel" -TimeoutSeconds 5
+if (-not $matchLabel) {
+    Write-Error "Match navigation label not found before navigation loop."
+    exit 1
+}
+$previewScroller = Find-Element -Parent $yaguWindow -AutomationId "PreviewScrollViewer" -TimeoutSeconds 5
+if (-not $previewScroller) {
+    Write-Error "PreviewScrollViewer not found before navigation loop."
+    exit 1
+}
+
+function Get-PreviewViewportCaptureBounds {
+    $h = Get-YaguWindowHandle
+    if ($h -eq [IntPtr]::Zero) { return $null }
+    $windowRect = New-Object YaguInput+RECT
+    if (-not [YaguInput]::GetWindowRect($h, [ref]$windowRect)) { return $null }
+    try { $previewRect = $previewScroller.Current.BoundingRectangle } catch { return $null }
+    if ($previewRect.Width -le 0 -or $previewRect.Height -le 0) { return $null }
+    return [pscustomobject]@{
+        X      = [int][Math]::Floor($previewRect.X - $windowRect.Left)
+        Y      = [int][Math]::Floor($previewRect.Y - $windowRect.Top)
+        Width  = [int][Math]::Ceiling($previewRect.Width)
+        Height = [int][Math]::Ceiling($previewRect.Height)
+    }
+}
+
+function Get-MatchNavState {
+    param([System.Windows.Automation.AutomationElement]$Element)
+    try { $labelText = $Element.Current.Name } catch { return $null }
+    if ($labelText -notmatch '^Occurrence\s+(\d+)\s*/\s*(\d+)\s+\((\d+)\s+files?\)$') {
+        return $null
+    }
+    return [pscustomobject]@{
+        Current = [int]$Matches[1]
+        Total   = [int]$Matches[2]
+        Files   = [int]$Matches[3]
+        Label   = $labelText
+    }
+}
+
+function ConvertFrom-ContextField([string]$Value) {
+    try {
+        return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Value))
+    } catch {
+        throw "Invalid Base64 field in match-context probe: $($_.Exception.Message)"
+    }
+}
+
+function Get-MatchContextComparison {
+    param([System.Windows.Automation.AutomationElement]$Element)
+
+    try { $payload = $Element.Current.HelpText } catch {
+        throw "Could not read match-context probe: $($_.Exception.Message)"
+    }
+    if ([string]::IsNullOrWhiteSpace($payload)) {
+        throw "Match-context probe is empty for the active occurrence."
+    }
+
+    $fields = @($payload -split '\|')
+    if ($fields.Count -ge 3 -and $fields[0] -eq 'v1' -and $fields[1] -eq 'error') {
+        throw "Match-context probe reported an error: $($fields[2])"
+    }
+    if ($fields.Count -ne 11 -or $fields[0] -ne 'v1' -or $fields[1] -ne 'ok') {
+        throw "Malformed match-context probe payload."
+    }
+
+    $leftBefore = ConvertFrom-ContextField $fields[5]
+    $leftMatch = ConvertFrom-ContextField $fields[6]
+    $leftAfter = ConvertFrom-ContextField $fields[7]
+    $rightBefore = ConvertFrom-ContextField $fields[8]
+    $rightMatch = ConvertFrom-ContextField $fields[9]
+    $rightAfter = ConvertFrom-ContextField $fields[10]
+    if ($leftBefore -cne $rightBefore -or $leftMatch -cne $rightMatch -or $leftAfter -cne $rightAfter) {
+        $file = ConvertFrom-ContextField $fields[2]
+        throw "Left/right match context differs for '$file' line $($fields[3]), column $($fields[4]): " +
+            "left=[$leftBefore][$leftMatch][$leftAfter], right=[$rightBefore][$rightMatch][$rightAfter]."
+    }
+
+    return [pscustomobject]@{
+        Status       = 'PASS'
+        File64       = $fields[2]
+        Line         = [int]$fields[3]
+        Column       = [int]$fields[4]
+        Before64     = $fields[5]
+        Match64      = $fields[6]
+        After64      = $fields[7]
+        MatchText    = $leftMatch
+    }
+}
+
+$initialNavState = Get-MatchNavState -Element $matchLabel
+if (-not $initialNavState) {
+    Write-Error "Unexpected match navigation label: '$($matchLabel.Current.Name)'"
+    exit 1
+}
+
+$navigationManifest = Join-Path $ScreenshotDir "navigation.tsv"
+Set-Content -LiteralPath $navigationManifest `
+    -Value "Screenshot`tOccurrence`tTotal`tFiles`tViewportX`tViewportY`tViewportWidth`tViewportHeight`tLabel`tContextStatus`tContextFile64`tContextLine`tContextColumn`tContextBefore64`tContextMatch64`tContextAfter64" -Encoding utf8
 
 for ($i = 1; $i -le $MatchIterations; $i++) {
-    # Check the match label (e.g. "Match 5 of 500") to see if we've reached the last match.
-    if ($matchLabel) {
-        $labelText = $null
-        try { $labelText = $matchLabel.Current.Name } catch { }
-        if ($labelText -and $labelText -match 'Match\s+(\d+)\s+of\s+(\d+)') {
-            $cur = [int]$Matches[1]
-            $total = [int]$Matches[2]
-            if ($cur -ge $total) {
-                Write-Host "  Reached last match ($cur of $total) — stopping."
-                break
-            }
-        }
+    $before = Get-MatchNavState -Element $matchLabel
+    if (-not $before) {
+        Write-Error "Match navigation label became unreadable before iteration $i."
+        exit 1
+    }
+    if ($before.Current -ge $before.Total) {
+        Write-Host "  Reached last occurrence ($($before.Current) of $($before.Total)); stopping."
+        break
     }
 
     Click-Element $nextBtn
-    Start-Sleep -Milliseconds 500
-    # After clicking Next on iteration $i (starting at match 1), we are now on
-    # match ($i + 1). Name the screenshot to reflect the actual match number
-    # so 03-match-NN.png shows match NN. Match 1 is captured in 02-preview-loaded.
-    Take-Screenshot ("03-match-{0:D2}" -f ($i + 1)) -Fast
+    $advanceDeadline = (Get-Date).AddSeconds(8)
+    $after = $null
+    while ((Get-Date) -lt $advanceDeadline) {
+        Start-Sleep -Milliseconds 100
+        $after = Get-MatchNavState -Element $matchLabel
+        if ($after -and $after.Current -ne $before.Current) { break }
+        [YaguInput]::Progress()
+    }
+    if (-not $after -or $after.Current -ne ($before.Current + 1)) {
+        $afterText = if ($after) { $after.Label } else { "<unreadable>" }
+        Write-Error "Next occurrence did not advance exactly once: before='$($before.Label)', after='$afterText'."
+        exit 1
+    }
+
+    Start-Sleep -Milliseconds 400
+    $context = Get-MatchContextComparison -Element $matchLabel
+    $screenshotName = "03-match-{0:D4}" -f $after.Current
+    $viewport = Get-PreviewViewportCaptureBounds
+    if (-not $viewport) {
+        Write-Error "Could not resolve preview viewport bounds for occurrence $($after.Current)."
+        exit 1
+    }
+    Take-Screenshot $screenshotName -Fast
+    $safeLabel = $after.Label -replace "[`t`r`n]", " "
+    Add-Content -LiteralPath $navigationManifest `
+        -Value "$screenshotName.png`t$($after.Current)`t$($after.Total)`t$($after.Files)`t$($viewport.X)`t$($viewport.Y)`t$($viewport.Width)`t$($viewport.Height)`t$safeLabel`t$($context.Status)`t$($context.File64)`t$($context.Line)`t$($context.Column)`t$($context.Before64)`t$($context.Match64)`t$($context.After64)" `
+        -Encoding utf8
+    Write-Host "  NAV screenshot=$screenshotName.png occurrence=$($after.Current) total=$($after.Total) files=$($after.Files) context=PASS"
 }
 
 Write-Host ""
 Write-Host "=== Test complete. Screenshots saved to: $ScreenshotDir ==="
 
-# Close the instance we launched so a passing run leaves no stray Yagu window behind (and can't
-# hijack a subsequent run). Only the dev-build (bin-path) instance is targeted, never an installed app.
-Get-Process Yagu -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -like '*\Yagu\bin\*' } |
-    Stop-Process -Force -ErrorAction SilentlyContinue
+# Close only the launcher and GUI child created by this run. The GUI self-relaunches with the original
+# process as its parent, so parent-ID scoping avoids touching any unrelated Yagu process.
+$launchedIds = [System.Collections.Generic.HashSet[int]]::new()
+$null = $launchedIds.Add($proc.Id)
+do {
+    $added = $false
+    $children = @(Get-CimInstance Win32_Process -Filter "Name = 'Yagu.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $launchedIds.Contains([int]$_.ParentProcessId) -and $_.ExecutablePath -eq $yaguExe })
+    foreach ($child in $children) {
+        if ($launchedIds.Add([int]$child.ProcessId)) { $added = $true }
+    }
+} while ($added)
+foreach ($launchedId in $launchedIds) {
+    Stop-Process -Id $launchedId -Force -ErrorAction SilentlyContinue
+}
 Write-Host "Review the screenshots to verify match is always centered in the viewport."
 
 # Don't kill the app - leave it open for manual inspection

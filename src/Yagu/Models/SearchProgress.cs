@@ -93,6 +93,43 @@ public sealed record SearchProgress(
     /// progress bar indeterminate during this phase so it doesn't briefly fill to 100% against the tiny
     /// name-first total and then reset to 0 for the full content scan. Init-only to keep the positional API.</summary>
     public bool NameFirstPhase { get; init; }
+
+    /// <summary>True when <see cref="TotalFiles"/> is a trustworthy denominator, either because the
+    /// backend supplied an upfront count or discovery has finished. Backends without an upfront count
+    /// report processed/seen-so-far totals during discovery; those ratios remain close to 100% regardless
+    /// of actual completion and must not drive a determinate progress bar.</summary>
+    public bool TotalFilesKnown { get; init; }
+}
+
+/// <summary>
+/// Tracks the percentage shown by a determinate search progress bar. Discovery can revise its total
+/// upward while scanning continues, so the raw processed/total ratio is not itself monotonic.
+/// </summary>
+public sealed class SearchProgressDisplayTracker
+{
+    public double Percent { get; private set; }
+
+    public bool Update(int filesProcessed, int totalFiles, bool indeterminate)
+    {
+        if (indeterminate || totalFiles <= 0)
+            return false;
+
+        double candidate = Math.Clamp((double)filesProcessed / totalFiles * 100.0, 0, 100);
+        if (candidate <= Percent)
+            return false;
+
+        Percent = candidate;
+        return true;
+    }
+
+    public bool Reset()
+    {
+        if (Percent == 0)
+            return false;
+
+        Percent = 0;
+        return true;
+    }
 }
 
 /// <summary>

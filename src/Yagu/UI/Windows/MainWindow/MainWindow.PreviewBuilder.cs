@@ -3648,6 +3648,45 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
         return false;
     }
 
+    private bool TryRegisterOccurrenceInRenderedWindow(
+        RichTextBlock section,
+        int lineNumber,
+        int sourceColumn,
+        out bool addedEntry)
+    {
+        addedEntry = false;
+        if (sourceColumn < 0)
+            return false;
+
+        foreach (var block in section.Blocks)
+        {
+            if (block is not Paragraph para
+                || !s_paragraphLineNumbers.TryGetValue(para, out var lineObj)
+                || lineObj is not int renderedLine
+                || renderedLine != lineNumber)
+            {
+                continue;
+            }
+
+            if (TryGetParagraphMatchWindow(para, out int windowStart, out int windowEnd)
+                && (sourceColumn < windowStart || sourceColumn >= windowEnd))
+            {
+                continue;
+            }
+
+            if (!TryResolveMatchInParaBySourceColumn(para, sourceColumn, out int matchInPara, out _, out _))
+                return false;
+
+            int previousEntryCount = _matchParagraphs.Count;
+            EnsureNavEntryForParagraphMatch(section, para, matchInPara);
+            addedEntry = _matchParagraphs.Count > previousEntryCount;
+            ApplyMatchColorToParagraphMatch(para, matchInPara);
+            return true;
+        }
+
+        return false;
+    }
+
     private PreviewTruncatedLineState? CreatePreviewTruncatedLineState(
         PreviewLineWindow window,
         string sourceLine,
@@ -4200,9 +4239,18 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
                     : result.MatchStartColumn;
                 if (IsSourceColumnWithinRenderedWindow(section, result.LineNumber, sourceColumn))
                 {
-                    consumedResults++;
-                    lastRenderedLine = Math.Max(lastRenderedLine, result.LineNumber);
-                    continue;
+                    if (TryRegisterOccurrenceInRenderedWindow(
+                        section,
+                        result.LineNumber,
+                        sourceColumn,
+                        out bool addedEntry))
+                    {
+                        if (addedEntry)
+                            addedMatchEntries++;
+                        consumedResults++;
+                        lastRenderedLine = Math.Max(lastRenderedLine, result.LineNumber);
+                        continue;
+                    }
                 }
 
                 if (paragraphsAdded >= maxAdditionalBlocks)

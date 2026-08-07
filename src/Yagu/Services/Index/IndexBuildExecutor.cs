@@ -476,6 +476,12 @@ internal static class IndexBuildExecutor
                             skipped++;
                         }
                         break;
+                    case IncrementalUpdateOutcome.SizeBudgetReached:
+                        // A storage-budget halt is a deliberate stop, not a broken index, so it must never
+                        // escalate into the full-rebuild fallback below.
+                        roots.Add(new IndexMaintenanceRootResult { Root = root, Action = IndexMaintenanceActions.SizeBudgetReached });
+                        skipped++;
+                        break;
                     case IncrementalUpdateOutcome.NeedsCompatibilityRebuild when operation.AllowCompatibilityRebuild:
                     {
                         IndexBuildSuccess success = BuildNestedFullScope(

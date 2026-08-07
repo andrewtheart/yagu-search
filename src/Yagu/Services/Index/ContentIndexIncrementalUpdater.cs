@@ -21,6 +21,11 @@ public enum IncrementalUpdateOutcome
     /// <summary>A pre-fix ReFS layer uses incompatible extended identities. Automatic maintenance should
     /// perform one compatibility rebuild; an explicitly incremental-only action may decline it.</summary>
     NeedsCompatibilityRebuild,
+
+    /// <summary>The index is at its configured storage budget and could not be reclaimed within its
+    /// size-management mode, so no segment was appended. The existing index stays valid and queryable; the
+    /// files it no longer covers are simply live-scanned until it is rebuilt.</summary>
+    SizeBudgetReached,
 }
 
 /// <summary>
@@ -52,15 +57,12 @@ public readonly record struct IncrementalChange(string Path, IndexContentClassif
 /// </summary>
 public sealed partial class ContentIndexIncrementalUpdater
 {
-    // A small-run merge is deliberately independent of total scope size. At most four 32 MiB runs are
-    // processed per maintenance pass, and no input segment may exceed 8 MiB, so a 30+ GiB layered index can
-    // shed hundreds of tiny layers without opening its base or unrelated segments and without recreating the
-    // catastrophic full-compaction memory spike the automatic size cap prevents.
-    internal const int SmallSegmentMinimumRun = 8;
-    internal const int SmallSegmentMaximumRun = 32;
-    internal const int SmallSegmentMaximumBatchesPerPass = 4;
-    internal const long SmallSegmentMaximumIndividualBytes = 8L * 1024 * 1024;
-    internal const long SmallSegmentMaximumBatchBytes = 32L * 1024 * 1024;
+    // A small-run merge is deliberately independent of total scope size: it merges a bounded contiguous run
+    // without opening the base or unrelated segments, so a 30+ GiB layered index can shed layers without
+    // recreating the catastrophic full-compaction memory spike the automatic size cap prevents. The bounds
+    // come from the per-index EffectiveIndexSizePolicy, because fixed bounds that no real whole-drive index
+    // could satisfy left those indexes with no reclamation path at all.
+    internal const int SmallSegmentMaximumRun = EffectiveIndexSizePolicy.MaximumCoalesceRun;
 
     private readonly ContentIndexStore _store;
     private readonly IndexIngestionPolicy _policy;
@@ -191,6 +193,38 @@ public sealed partial class ContentIndexIncrementalUpdater
             return IncrementalUpdateOutcome.NeedsFullRebuild;
         }
 
+        EffectiveIndexSizePolicy size = settings.ResolveSizePolicy(normalizedRootPath);
+        int budgetMaxSegments = Math.Clamp(settings.MaxDeltaSegments, 1, 64);
+        if (size.SizeBudgetMB > 0 && size.ExceedsBudget(_store.TotalActiveIndexBytes()))
+        {
+            // Over the storage ceiling. Try the bounded, low-memory reclamation first; only if that cannot
+            // bring the index back under budget do we stop appending. Halting is the safe way to bound
+            // growth: the existing index stays valid and queryable, and anything it no longer covers is
+            // live-scanned, whereas folding an oversized index would trade disk growth for a memory spike.
+            try
+            {
+                CoalesceSmallSegmentsUnderLease(mutation, budgetMaxSegments, cancellationToken, size);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                YaguLog.For("ContentIndex").LogWarning(ex,
+                    "Budget-triggered coalescing failed for scope {Scope}; keeping the valid layered index.", scopeId);
+            }
+
+            long afterCoalesce = _store.TotalActiveIndexBytes();
+            if (size.ExceedsBudget(afterCoalesce) && !size.AllowsCompactingIndexOf(afterCoalesce))
+            {
+                YaguLog.For("ContentIndex").LogWarning(
+                    "Scope {Scope} for '{Root}' is {IndexMB} MB, at or over its {BudgetMB} MB size budget, and mode '{Mode}' cannot reclaim further — pausing index updates for this root. Searches still return every match (uncovered files are read live); rebuild this index to reclaim the space.",
+                    scopeId, normalizedRootPath, afterCoalesce / (1024 * 1024), size.SizeBudgetMB, size.Mode);
+                return IncrementalUpdateOutcome.SizeBudgetReached;
+            }
+        }
+
         var segmentBuilder = new ContentIndexDeltaSegmentBuilder(_policy, identityProvider: _identityProvider);
         if (mounted is { } boundVolume)
             segmentBuilder.SeedVolumeBinding(boundVolume);
@@ -223,13 +257,13 @@ public sealed partial class ContentIndexIncrementalUpdater
 
         YaguLog.For("ContentIndex").LogInformation("Incremental update for scope {Scope}: appended delta segment ({ChangedCount} changed, {DeletedCount} deleted).", scopeId, changed.Count, deletedPaths.Count);
 
-        int maxSegments = Math.Clamp(settings.MaxDeltaSegments, 1, 64);
+        int maxSegments = budgetMaxSegments;
         int thresholdMB = Math.Clamp(settings.CompactionThresholdMB, 1, 8192);
-        if (_store.ActiveSegmentCount() > maxSegments)
+        if (_store.ActiveSegmentCount() > maxSegments && size.AllowsCoalescing)
         {
             try
             {
-                CoalesceSmallSegmentsUnderLease(mutation, maxSegments, cancellationToken);
+                CoalesceSmallSegmentsUnderLease(mutation, maxSegments, cancellationToken, size);
             }
             catch (OperationCanceledException)
             {
@@ -246,21 +280,26 @@ public sealed partial class ContentIndexIncrementalUpdater
 
         if (_store.ShouldCompact(maxSegments, thresholdMB))
         {
-            // Apply the same automatic-compaction safety cap used by
-            // ContentIndexManager.CompactScopeIfOverSegmentedUnderLease. Without this guard, an
-            // incremental update could append a valid segment and then immediately fold a very large
-            // layered index in memory, bypassing IndexMaxAutoCompactionSizeMB entirely.
-            int maxCompactMB = Math.Max(0, settings.MaxAutoCompactionSizeMB);
-            if (maxCompactMB > 0)
+            // Folding a large layered index re-materializes every layer's documents plus a combined posting
+            // index and a serialization buffer, so the per-index cap decides whether that is affordable.
+            // Exceeding the storage budget lifts the cap, because the only alternative left at that point is
+            // letting this index grow without limit.
+            long indexBytes = _store.TotalActiveIndexBytes();
+            if (!size.AllowsCompactingIndexOf(indexBytes))
             {
-                long indexBytes = _store.TotalActiveIndexBytes();
-                if (indexBytes > (long)maxCompactMB * 1024 * 1024)
+                if (size.ExceedsBudget(indexBytes))
+                {
+                    YaguLog.For("ContentIndex").LogWarning(
+                        "Scope {Scope} is {IndexMB} MB, over its {BudgetMB} MB size budget, but its '{Mode}' size-management mode cannot reclaim further — the appended segment remains active. Rebuild this index to reclaim the space.",
+                        scopeId, indexBytes / (1024 * 1024), size.SizeBudgetMB, size.Mode);
+                }
+                else
                 {
                     YaguLog.For("ContentIndex").LogInformation(
-                        "Skipping post-incremental auto-compaction for scope {Scope}: the index is {IndexMB} MB (> {MaxCompactMB} MB cap) — the appended segment remains active.",
-                        scopeId, indexBytes / (1024 * 1024), maxCompactMB);
-                    return IncrementalUpdateOutcome.SegmentAppended;
+                        "Skipping post-incremental auto-compaction for scope {Scope}: the index is {IndexMB} MB (> {MaxCompactMB} MB cap, mode '{Mode}') — the appended segment remains active.",
+                        scopeId, indexBytes / (1024 * 1024), size.MaxAutoCompactionSizeMB, size.Mode);
                 }
+                return IncrementalUpdateOutcome.SegmentAppended;
             }
 
             if (_store.TryOpenLayered(cancellationToken: cancellationToken) is not { } handle)
@@ -281,17 +320,22 @@ public sealed partial class ContentIndexIncrementalUpdater
     internal int CoalesceSmallSegmentsUnderLease(
         IndexMutationContext mutation,
         int maxSegments,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        EffectiveIndexSizePolicy? sizePolicy = null)
     {
+        EffectiveIndexSizePolicy size = sizePolicy ?? EffectiveIndexSizePolicy.Default;
+        if (!size.AllowsCoalescing)
+            return 0;
+
         int mergedRuns = 0;
         int removedLayers = 0;
-        while (mergedRuns < SmallSegmentMaximumBatchesPerPass
+        while (mergedRuns < size.CoalesceMaxRunsPerPass
                && _store.ActiveSegmentCount() > maxSegments
                && _store.TryFindSmallSegmentRun(
-                   SmallSegmentMinimumRun,
+                   size.CoalesceMinRun,
                    SmallSegmentMaximumRun,
-                   SmallSegmentMaximumIndividualBytes,
-                   SmallSegmentMaximumBatchBytes,
+                   size.CoalesceMaxSegmentBytes,
+                   size.CoalesceMaxBatchBytes,
                    out ContentIndexStore.SegmentCoalesceRun? run)
                && run is not null)
         {

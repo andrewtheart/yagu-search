@@ -105,6 +105,57 @@ public sealed class IndexMaintenanceSettings
     public int MaxDeltaSegments { get; set; } = 8;
     public int CompactionThresholdMB { get; set; } = 256;
     public int MaxAutoCompactionSizeMB { get; set; } = 512;
+    /// <summary>Default size-management strategy for every root in this operation, one of
+    /// <see cref="IndexSizeManagementModes.All"/>. Per-root entries in <see cref="RootSizePolicies"/> win.</summary>
+    public string SizeManagementMode { get; set; } = IndexSizeManagementModes.CoalesceThenCompact;
+    /// <summary>Default storage ceiling (MB) for an index; 0 = no ceiling. Reaching it escalates reclamation
+    /// and, if the index still cannot be brought under, halts that index's maintenance instead of growing.</summary>
+    public int SizeBudgetMB { get; set; }
+    /// <summary>Largest individual delta segment (MB) eligible to join a coalescing run.</summary>
+    public int CoalesceMaxSegmentMB { get; set; } = 128;
+    /// <summary>Largest total size (MB) of one coalescing run; bounds maintenance-worker memory.</summary>
+    public int CoalesceMaxBatchMB { get; set; } = 512;
+    /// <summary>Fewest contiguous eligible segments that make a coalescing run worth merging.</summary>
+    public int CoalesceMinRun { get; set; } = 4;
+    /// <summary>Most coalescing runs merged in one maintenance pass.</summary>
+    public int CoalesceMaxRunsPerPass { get; set; } = 8;
+    /// <summary>Per-root size-management overrides; each pins only the axes it sets.</summary>
+    public List<IndexedRootSizePolicy> RootSizePolicies { get; set; } = [];
+
+    /// <summary>
+    /// The effective size policy for <paramref name="root"/>: these operation-level values with that root's
+    /// override applied. Worker-safe (no <c>AppSettings</c>), so the maintenance worker resolves the same
+    /// answer the app would.
+    /// </summary>
+    public EffectiveIndexSizePolicy ResolveSizePolicy(string? root)
+    {
+        IndexedRootSizePolicy? over = null;
+        if (!string.IsNullOrWhiteSpace(root))
+        {
+            string key = IndexScopeIdentity.NormalizePath(root);
+            foreach (IndexedRootSizePolicy? candidate in RootSizePolicies)
+            {
+                if (candidate is null)
+                    continue;
+                if (string.Equals(IndexScopeIdentity.NormalizePath(candidate.Path ?? string.Empty), key, StringComparison.OrdinalIgnoreCase))
+                {
+                    over = candidate;
+                    break;
+                }
+            }
+        }
+
+        return new EffectiveIndexSizePolicy(
+            over is not null && !string.IsNullOrWhiteSpace(over.Mode)
+                ? IndexSizeManagementModes.Normalize(over.Mode)
+                : IndexSizeManagementModes.Normalize(SizeManagementMode),
+            over is not null && over.SizeBudgetMB >= 0 ? over.SizeBudgetMB : SizeBudgetMB,
+            over is not null && over.MaxAutoCompactionSizeMB >= 0 ? over.MaxAutoCompactionSizeMB : MaxAutoCompactionSizeMB,
+            CoalesceMaxSegmentMB,
+            CoalesceMaxBatchMB,
+            CoalesceMinRun,
+            CoalesceMaxRunsPerPass);
+    }
     /// <summary>The configurable USN catch-up record cap (AppSettings.IndexMaxJournalCatchupRecords). A
     /// journal delta exceeding it reads as <c>UsnReadStatus.Incomplete</c> → the refresh treats freshness as
     /// discontinuous and needs a full rebuild rather than trusting a partial delta. Kept in sync with
@@ -168,6 +219,8 @@ internal static class IndexMaintenanceActions
     public const string Compacted = "compacted";
     public const string Reanchored = "reanchored";
     public const string Skipped = "skipped";
+    /// <summary>Updates were paused because the index is at its configured storage budget.</summary>
+    public const string SizeBudgetReached = "sizeBudgetReached";
     public const string Failed = "failed";
 }
 
@@ -361,6 +414,13 @@ internal static class IndexOperationValidator
         settings.MaxDeltaSegments = Math.Clamp(settings.MaxDeltaSegments, 1, 64);
         settings.CompactionThresholdMB = Math.Clamp(settings.CompactionThresholdMB, 1, 8192);
         settings.MaxAutoCompactionSizeMB = Math.Max(0, settings.MaxAutoCompactionSizeMB);
+        settings.SizeManagementMode = IndexSizeManagementModes.Normalize(settings.SizeManagementMode);
+        settings.SizeBudgetMB = Math.Max(0, settings.SizeBudgetMB);
+        settings.CoalesceMaxSegmentMB = settings.CoalesceMaxSegmentMB > 0 ? settings.CoalesceMaxSegmentMB : 128;
+        settings.CoalesceMaxBatchMB = settings.CoalesceMaxBatchMB > 0 ? settings.CoalesceMaxBatchMB : 512;
+        settings.CoalesceMinRun = Math.Clamp(settings.CoalesceMinRun <= 0 ? 4 : settings.CoalesceMinRun, 2, 64);
+        settings.CoalesceMaxRunsPerPass = settings.CoalesceMaxRunsPerPass > 0 ? settings.CoalesceMaxRunsPerPass : 8;
+        settings.RootSizePolicies ??= [];
         settings.MaxJournalCatchupRecords = Math.Clamp(settings.MaxJournalCatchupRecords, 1, 100_000_000);
         settings.PostBuildCatchUpThresholdChanges = settings.PostBuildCatchUpThresholdChanges < 0
             ? -1

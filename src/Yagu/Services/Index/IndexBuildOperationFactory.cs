@@ -103,6 +103,13 @@ internal static class IndexBuildOperationFactory
             MaxDeltaSegments = AppSettings.NormalizeIndexMaxDeltaSegments(settings.IndexMaxDeltaSegments),
             CompactionThresholdMB = AppSettings.NormalizeIndexCompactionThresholdMB(settings.IndexCompactionThresholdMB),
             MaxAutoCompactionSizeMB = AppSettings.NormalizeIndexMaxAutoCompactionSizeMB(settings.IndexMaxAutoCompactionSizeMB),
+            SizeManagementMode = IndexSizeManagementModes.Normalize(settings.IndexSizeManagementMode),
+            SizeBudgetMB = AppSettings.NormalizeIndexMaxDiskSizeMB(settings.IndexMaxDiskSizeMB),
+            CoalesceMaxSegmentMB = AppSettings.NormalizeIndexCoalesceMaxSegmentMB(settings.IndexCoalesceMaxSegmentMB),
+            CoalesceMaxBatchMB = AppSettings.NormalizeIndexCoalesceMaxBatchMB(settings.IndexCoalesceMaxBatchMB),
+            CoalesceMinRun = AppSettings.NormalizeIndexCoalesceMinRun(settings.IndexCoalesceMinRun),
+            CoalesceMaxRunsPerPass = AppSettings.NormalizeIndexCoalesceMaxRunsPerPass(settings.IndexCoalesceMaxRunsPerPass),
+            RootSizePolicies = IndexSizeManagementPolicy.Normalize(settings.IndexedRootSizePolicies),
             MaxJournalCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(settings.IndexMaxJournalCatchupRecords),
             PostBuildCatchUpThresholdChanges = AppSettings.NormalizeIndexPostBuildCatchUpThresholdChanges(
                 settings.IndexPostBuildCatchUpThresholdChanges),

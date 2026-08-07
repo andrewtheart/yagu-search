@@ -491,7 +491,7 @@ public sealed class ContentIndexStoreSegmentTests : IDisposable
             _scopeId, "vol", _root, new UsnCheckpoint(1, 100), createdUtc));
 
         DateTimeOffset finalBatchUtc = createdUtc;
-        for (int i = 0; i < ContentIndexIncrementalUpdater.SmallSegmentMinimumRun; i++)
+        for (int i = 0; i < EffectiveIndexSizePolicy.Default.CoalesceMinRun; i++)
         {
             finalBatchUtc = createdUtc.AddMinutes(i + 1);
             var batchBuilder = new ContentIndexGenerationBuilder(OpenPolicy);
@@ -507,7 +507,7 @@ public sealed class ContentIndexStoreSegmentTests : IDisposable
         }
 
         DateTimeOffset finalIncrementalUtc = finalBatchUtc;
-        for (int i = 0; i < ContentIndexIncrementalUpdater.SmallSegmentMinimumRun; i++)
+        for (int i = 0; i < EffectiveIndexSizePolicy.Default.CoalesceMinRun; i++)
         {
             finalIncrementalUtc = finalBatchUtc.AddMinutes(i + 1);
             var incrementalBuilder = new ContentIndexDeltaSegmentBuilder(OpenPolicy);
@@ -527,7 +527,7 @@ public sealed class ContentIndexStoreSegmentTests : IDisposable
         int removed = updater.CoalesceSmallSegmentsUnderLease(
             mutation, maxSegments: 1, CancellationToken.None);
 
-        Assert.Equal((ContentIndexIncrementalUpdater.SmallSegmentMinimumRun - 1) * 2, removed);
+        Assert.Equal((EffectiveIndexSizePolicy.Default.CoalesceMinRun - 1) * 2, removed);
         Assert.Equal(2, store.ActiveSegmentCount());
         StoredIndexStat stat = store.ReadStorageStat();
         Assert.Equal(finalBatchUtc, stat.BuiltUtc);

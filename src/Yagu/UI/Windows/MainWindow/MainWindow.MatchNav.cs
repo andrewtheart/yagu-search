@@ -23,6 +23,11 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
+    private static readonly bool s_matchNavContextProbeEnabled = string.Equals(
+        Environment.GetEnvironmentVariable("YAGU_MATCH_NAV_CONTEXT_COMPARE"),
+        "1",
+        StringComparison.Ordinal);
+
     private void BoxMatchRun(Paragraph para, int matchInPara, bool boundaryFlash = false)
     {
         UnboxCurrentMatch();
@@ -72,6 +77,8 @@ public sealed partial class MainWindow
 
         var (run, column) = matches[matchInPara];
         _activeMatchHighlight = (para, run, column, matchInPara);
+        if (s_matchNavContextProbeEnabled)
+            UpdateMatchNavContextProbe(para, run, column);
         ResetActiveOverlayLayoutStability();
 
         if (boundaryFlash)
@@ -151,6 +158,101 @@ public sealed partial class MainWindow
         _paragraphMatchRunCache[para] = matches;
         return matches;
     }
+
+    private const int MatchNavContextRadius = 24;
+
+    private void UpdateMatchNavContextProbe(Paragraph para, Run activeRun, int paragraphColumn)
+    {
+        string payload;
+        if (!s_paragraphPrimaryResults.TryGetValue(para, out var boxed)
+            || boxed is not SearchResult result)
+        {
+            payload = "v1|error|active preview paragraph has no source result";
+        }
+        else
+        {
+            bool hasInlineGutter = TryGetParagraphInlineGutterLength(para, out int gutterLength);
+            string rightText = ExtractParagraphContent(para, hasInlineGutter);
+            int rightMatchStart = paragraphColumn - (hasInlineGutter ? gutterLength : 0);
+            int rightMatchLength = activeRun.Text?.Length ?? 0;
+            int windowStart = TryGetParagraphMatchWindow(para, out int sourceStart, out _)
+                ? sourceStart
+                : 0;
+            int sourceColumn = windowStart + rightMatchStart;
+            SearchResult? leftResult = ResolveLeftPanelContextResult(result, sourceColumn);
+            int leftMatchStart = leftResult?.MatchStartColumn ?? -1;
+
+            if (leftResult is null
+                || !TryExtractMatchContext(leftResult.MatchLine, leftMatchStart, rightMatchLength, out var left)
+                || !TryExtractMatchContext(rightText, rightMatchStart, rightMatchLength, out var right))
+            {
+                payload = string.Create(CultureInfo.InvariantCulture,
+                    $"v1|error|context map failed: line={result.LineNumber}, sourceColumn={sourceColumn}, " +
+                    $"resultSource={result.SourceMatchStartColumn}, leftFound={leftResult is not null}, " +
+                    $"leftStart={leftMatchStart}, leftLength={leftResult?.MatchLine.Length ?? -1}, " +
+                    $"rightStart={rightMatchStart}, rightLength={rightText.Length}, matchLength={rightMatchLength}, " +
+                    $"windowStart={windowStart}, gutterLength={gutterLength}");
+            }
+            else
+            {
+                payload = string.Join('|',
+                    "v1",
+                    "ok",
+                    EncodeMatchNavContextField(result.FilePath),
+                    result.LineNumber.ToString(CultureInfo.InvariantCulture),
+                    sourceColumn.ToString(CultureInfo.InvariantCulture),
+                    EncodeMatchNavContextField(left.Before),
+                    EncodeMatchNavContextField(left.Match),
+                    EncodeMatchNavContextField(left.After),
+                    EncodeMatchNavContextField(right.Before),
+                    EncodeMatchNavContextField(right.Match),
+                    EncodeMatchNavContextField(right.After));
+            }
+        }
+
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(MatchNavLabel, payload);
+    }
+
+    private SearchResult? ResolveLeftPanelContextResult(SearchResult previewResult, int sourceColumn)
+    {
+        FileGroup? group = FindFileGroup(previewResult.FilePath);
+        if (group is null)
+            return null;
+
+        group.MaterializeEvictedStubs();
+        SearchResult? result = group.FirstOrDefault(candidate =>
+            candidate.LineNumber == previewResult.LineNumber
+            && candidate.SourceMatchStartColumn == sourceColumn);
+        if (result is null)
+            return null;
+
+        ViewModel.HydrateResult(result);
+        return result.MatchLine.Length > 0 ? result : null;
+    }
+
+    private static bool TryExtractMatchContext(
+        string? text,
+        int matchStart,
+        int matchLength,
+        out (string Before, string Match, string After) context)
+    {
+        text ??= string.Empty;
+        context = default;
+        if (matchStart < 0 || matchLength <= 0 || matchStart > text.Length - matchLength)
+            return false;
+
+        int beforeStart = Math.Max(0, matchStart - MatchNavContextRadius);
+        int afterStart = matchStart + matchLength;
+        int afterLength = Math.Min(MatchNavContextRadius, text.Length - afterStart);
+        context = (
+            text[beforeStart..matchStart],
+            text.Substring(matchStart, matchLength),
+            text.Substring(afterStart, afterLength));
+        return true;
+    }
+
+    private static string EncodeMatchNavContextField(string value)
+        => Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
 
     private bool IsSearchMatchRun(Run run)
         => s_previewSearchMatchRuns.TryGetValue(run, out _)
@@ -250,6 +352,8 @@ public sealed partial class MainWindow
         if (LogService.Instance.IsVerboseEnabled)
             YaguLog.For("MatchNav").LogDebug("UnboxCurrentMatch: idx={Idx}, caller={Caller}", _currentMatchIndex, caller);
         _activeMatchHighlight = null;
+        if (s_matchNavContextProbeEnabled)
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(MatchNavLabel, string.Empty);
     }
 
     /// <summary>

@@ -44,6 +44,8 @@
     <Compile Include="..\..\src\Yagu\Models\FileGroup.cs" Link="Source\Models\FileGroup.cs" />
     <Compile Include="..\..\src\Yagu\Models\BatchObservableCollection.cs" Link="Source\Models\BatchObservableCollection.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\BinaryDetector.cs" Link="Source\Helpers\BinaryDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\QuickSearchItem.cs" Link="Source\Helpers\QuickSearchItem.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\QuickSearchOptions.cs" Link="Source\Helpers\QuickSearchOptions.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\GlobMatcher.cs" Link="Source\Helpers\GlobMatcher.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\EncodingDetector.cs" Link="Source\Helpers\EncodingDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\LineTruncator.cs" Link="Source\Helpers\LineTruncator.cs" />

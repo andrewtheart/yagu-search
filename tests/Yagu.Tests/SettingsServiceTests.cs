@@ -413,6 +413,65 @@ public class SettingsServiceCoverageTests
     }
 
     [Fact]
+    public void ResolveInstanceSettingsPath_HonorsOverrideEnvVar_ElseDefaultsToAppData()
+    {
+        var saved = Environment.GetEnvironmentVariable(SettingsService.SettingsFileOverrideEnvVar);
+        try
+        {
+            var custom = Path.Combine(Path.GetTempPath(), "yagu-settings-override-" + Guid.NewGuid().ToString("N") + ".json");
+            Environment.SetEnvironmentVariable(SettingsService.SettingsFileOverrideEnvVar, custom);
+            Assert.Equal(custom, SettingsService.ResolveInstanceSettingsPath());
+
+            Environment.SetEnvironmentVariable(SettingsService.SettingsFileOverrideEnvVar, null);
+            Assert.Equal(SettingsService.DefaultPath(), SettingsService.ResolveInstanceSettingsPath());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(SettingsService.SettingsFileOverrideEnvVar, saved);
+        }
+    }
+
+    [Fact]
+    public void TestSuite_DoesNotUseTheRealUserSettingsFile()
+    {
+        // Fails closed if the module initializer is removed: a test run must never be able to load or
+        // save the developer's own %APPDATA%\Yagu\settings.json.
+        Assert.False(string.IsNullOrWhiteSpace(
+            Environment.GetEnvironmentVariable(SettingsService.SettingsFileOverrideEnvVar)));
+        Assert.NotEqual(SettingsService.DefaultPath(), SettingsService.ResolveInstanceSettingsPath());
+    }
+
+    [Fact]
+    public void TestSources_DoNotTargetTheRealUserSettingsFile()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Yagu.slnx")))
+            root = root.Parent;
+        Assert.NotNull(root);
+
+        // This file is skipped: the detection literals below would match themselves.
+        string guardSource = GuardSourcePath();
+        string testsDir = Path.Combine(root!.FullName, "tests", "Yagu.Tests");
+        var offenders = Directory.EnumerateFiles(testsDir, "*.cs", SearchOption.AllDirectories)
+            .Where(file => !string.Equals(file, guardSource, StringComparison.OrdinalIgnoreCase))
+            .Where(file =>
+            {
+                string text = File.ReadAllText(file);
+                return text.Contains("SpecialFolder.ApplicationData", StringComparison.Ordinal)
+                    && text.Contains("\"settings.json\"", StringComparison.Ordinal);
+            })
+            .Select(Path.GetFileName)
+            .ToArray();
+
+        Assert.True(offenders.Length == 0,
+            "Tests must never build the real user settings path; use SettingsService.SettingsFileOverrideEnvVar. " +
+            $"Offending file(s): {string.Join(", ", offenders)}");
+    }
+
+    private static string GuardSourcePath(
+        [System.Runtime.CompilerServices.CallerFilePath] string path = "") => path;
+
+    [Fact]
     public void Save_And_Load_RoundTrip_WithMaxResults()
     {
         var tmp = Path.Combine(Path.GetTempPath(), "qg-roundtrip-" + Guid.NewGuid() + ".json");

@@ -281,6 +281,8 @@ public sealed partial class MainWindow
     private async Task<bool> RunPreSearchWarningGatesAsync()
     {
         if (ViewModel.IsSearchPreparationCancellationRequested) return false;
+        if (!await CheckOcrComponentsAndWarnAsync()) return false;
+        if (ViewModel.IsSearchPreparationCancellationRequested) return false;
         if (!await CheckCloudDriveScanAndWarnAsync()) return false;
         if (ViewModel.IsSearchPreparationCancellationRequested) return false;
         if (!await CheckEverythingIndexCoverageAndWarnAsync()) return false;

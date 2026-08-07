@@ -227,6 +227,10 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("Grid.Row=\"3\" Grid.RowSpan=\"2\"", progressRow);
         Assert.Contains("IsHitTestVisible=\"False\"", progressRow);
         Assert.Contains("<ProgressBar Grid.Column=\"0\"", progressRow);
+        Assert.Contains("Minimum=\"0\" Maximum=\"100\"", progressRow);
+        Assert.Contains("Value=\"{x:Bind ViewModel.DisplayedSearchProgressPercent, Mode=OneWay}\"", progressRow);
+        Assert.DoesNotContain("Maximum=\"{x:Bind ViewModel.TotalFiles, Mode=OneWay}\"", progressRow);
+        Assert.DoesNotContain("Value=\"{x:Bind ViewModel.FilesScanned, Mode=OneWay}\"", progressRow);
         Assert.Contains("IsIndeterminate=\"{x:Bind ViewModel.SearchProgressIndeterminate, Mode=OneWay}\"", progressRow);
         Assert.Contains("<TextBlock x:Name=\"SearchProgressPercentText\" Grid.Column=\"1\"", progressRow);
         Assert.Contains("HorizontalAlignment=\"Right\"", progressRow);
@@ -235,12 +239,17 @@ public sealed class PreviewCoreRegressionTests
 
         Assert.Contains("public string SearchProgressPercentLabel => TotalFiles > 0", MainViewModelSource);
         Assert.Contains("public string SearchProgressRightLabel => SearchProgressIndeterminate", MainViewModelSource);
-        Assert.Contains("? string.Empty", MainViewModelSource);
-        Assert.Contains("progress.SourceBacked?.BuildCombinedLabel(progress.FilesScanned, progress.TotalFiles)", MainViewModelSource);
-        Assert.Contains("Math.Min(100.0, (double)FilesScanned / TotalFiles * 100)", MainViewModelSource);
+        // While the total is unknown the label must stay informative (live count), never blank.
+        Assert.Contains("? DiscoveryProgressLabel", MainViewModelSource);
+        Assert.Contains("FilesScanned > 0 ? $\"{FilesScanned:N0} files\"", MainViewModelSource);
+        Assert.Contains("progress.SourceBacked?.BuildPhaseLabel(progress.FilesScanned, progress.TotalFiles)", MainViewModelSource);
+        Assert.Contains("public double DisplayedSearchProgressPercent => _searchProgressDisplayTracker.Percent;", MainViewModelSource);
+        Assert.Contains("? $\"{DisplayedSearchProgressPercent:F0}%\"", MainViewModelSource);
         Assert.Contains("partial void OnFilesScannedChanged(int value)", MainViewModelSource);
         Assert.Contains("partial void OnTotalFilesChanged(int value)", MainViewModelSource);
-        Assert.Equal(2, MainViewModelSource.Split(
+        // Raw counter changes refresh the label, and the monotonic tracker separately refreshes it
+        // when its displayed value advances or resets for a new search.
+        Assert.Equal(4, MainViewModelSource.Split(
             "OnPropertyChanged(nameof(SearchProgressPercentLabel));",
             StringSplitOptions.None).Length - 1);
 
@@ -250,10 +259,12 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("int pdfFilesQueued = 0, pdfFilesProcessed = 0;", searchService);
         Assert.Contains("SourceBacked = new SourceBackedSearchProgress(", searchService);
         Assert.Contains("NameFirstPhase = Volatile.Read(ref nameFirstPhaseActive) != 0", searchService);
+        Assert.Contains("TotalFilesKnown = Volatile.Read(ref discoveryCompleted) != 0", searchService);
         Assert.Contains("Volatile.Write(ref nameFirstPhaseActive, 1);", searchService);
         Assert.Contains("Volatile.Write(ref nameFirstPhaseActive, 0);", searchService);
         Assert.Contains("public bool SearchProgressIndeterminate => IsPreparingSearch || SearchInNameFirstPhase;", MainViewModelSource);
-        Assert.Contains("if (SearchInNameFirstPhase && !p.Snapshot.NameFirstPhase)", MainViewModelSource);
+        Assert.Contains("if (SearchInNameFirstPhase && p.Snapshot.TotalFilesKnown)", MainViewModelSource);
+        Assert.Contains("indeterminate: !p.Snapshot.TotalFilesKnown", MainViewModelSource);
         Assert.Contains("Interlocked.Increment(ref ocrFilesQueued);", searchService);
         Assert.Contains("Interlocked.Increment(ref ocrFilesProcessed);", searchService);
         Assert.Contains("OCR queued={OcrQueued:N0}, PDF queued={PdfQueued:N0}", searchService);
@@ -3920,20 +3931,30 @@ public sealed class PreviewCoreRegressionTests
     public void AppendHighlightMatchWindows_SameLineOverflow_GivesEachUncoveredOccurrenceItsOwnNavTarget()
     {
         // When every pending result is on an already-rendered (single very long) line, occurrences
-        // whose source column is NOT inside a rendered window must each get a dedicated, sibling-
-        // clipped window with its own match-nav entry — otherwise next/prev stays stuck at the first
-        // occurrence. The branch prefers SourceMatchStartColumn (the column in the ORIGINAL line) and
-        // falls back to MatchStartColumn, then renders a target-only window beside the existing line.
+        // inside that window must gain their own exact nav entry; occurrences outside every rendered
+        // window must each get a dedicated, sibling-clipped window. Otherwise next/prev wraps before
+        // the advertised total. The branch prefers SourceMatchStartColumn (the column in the ORIGINAL
+        // line) and falls back to MatchStartColumn.
         string append = ExtractMethodWindow(MainWindowSource, "AppendHighlightMatchWindows", window: 9000);
         AssertContainsInOrder(append,
             "int sourceColumn = result.SourceMatchStartColumn >= 0",
             "? result.SourceMatchStartColumn",
             ": result.MatchStartColumn;",
             "if (IsSourceColumnWithinRenderedWindow(section, result.LineNumber, sourceColumn))",
+            "TryRegisterOccurrenceInRenderedWindow(",
+            "if (addedEntry)",
+            "addedMatchEntries++;",
             "consumedResults++;",
             "AddPreviewLineParagraphsAroundResult(",
             "targetOnlyMatchEntry: true,",
             "MoveAppendedPreviewLineBesideExistingLine(");
+
+        string register = ExtractMethodWindow(MainWindowSource, "TryRegisterOccurrenceInRenderedWindow", window: 2600);
+        AssertContainsInOrder(register,
+            "TryResolveMatchInParaBySourceColumn(para, sourceColumn",
+            "EnsureNavEntryForParagraphMatch(section, para, matchInPara);",
+            "addedEntry = _matchParagraphs.Count > previousEntryCount;",
+            "ApplyMatchColorToParagraphMatch(para, matchInPara);");
     }
 
     [Fact]
@@ -3992,6 +4013,49 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(goToNext,
             "BoxMatchRun(para, matchInPara);",
             "ScrollAfterMatchNavigation(block, para");
+    }
+
+    [Fact]
+    public void MatchNavigation_PublishesIndependentLeftAndRightContextWindowsForEveryActiveOccurrence()
+    {
+        string box = ExtractMethodWindow(MainWindowSource, "BoxMatchRun", window: 3600);
+        AssertContainsInOrder(box,
+            "var (run, column) = matches[matchInPara];",
+            "_activeMatchHighlight = (para, run, column, matchInPara);",
+            "if (s_matchNavContextProbeEnabled)",
+            "UpdateMatchNavContextProbe(para, run, column);");
+
+        string probe = ExtractMethodWindow(MainWindowSource, "UpdateMatchNavContextProbe", window: 5200);
+        AssertContainsInOrder(probe,
+            "s_paragraphPrimaryResults.TryGetValue(para, out var boxed)",
+            "string rightText = ExtractParagraphContent(para, hasInlineGutter);",
+            "int sourceColumn = windowStart + rightMatchStart;",
+            "SearchResult? leftResult = ResolveLeftPanelContextResult(result, sourceColumn);",
+            "int leftMatchStart = leftResult?.MatchStartColumn ?? -1;",
+            "TryExtractMatchContext(leftResult.MatchLine, leftMatchStart, rightMatchLength, out var left)",
+            "TryExtractMatchContext(rightText, rightMatchStart, rightMatchLength, out var right)",
+            "EncodeMatchNavContextField(left.Before)",
+            "EncodeMatchNavContextField(right.Before)",
+            "AutomationProperties.SetHelpText(MatchNavLabel, payload);");
+        Assert.Contains("v1|error|", probe);
+
+        string resolveLeft = ExtractMethodWindow(MainWindowSource, "ResolveLeftPanelContextResult", window: 2200);
+        AssertContainsInOrder(resolveLeft,
+            "FileGroup? group = FindFileGroup(previewResult.FilePath);",
+            "group.MaterializeEvictedStubs();",
+            "candidate.LineNumber == previewResult.LineNumber",
+            "candidate.SourceMatchStartColumn == sourceColumn",
+            "ViewModel.HydrateResult(result);",
+            "return result.MatchLine.Length > 0 ? result : null;");
+
+        string extract = ExtractMethodWindow(MainWindowSource, "TryExtractMatchContext", window: 2200);
+        Assert.Contains("private const int MatchNavContextRadius = 24;", MainWindowSource);
+        AssertContainsInOrder(extract,
+            "int beforeStart = Math.Max(0, matchStart - MatchNavContextRadius);",
+            "int afterLength = Math.Min(MatchNavContextRadius, text.Length - afterStart);",
+            "text[beforeStart..matchStart]",
+            "text.Substring(matchStart, matchLength)",
+            "text.Substring(afterStart, afterLength)");
     }
 
     [Fact]

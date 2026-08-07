@@ -206,6 +206,11 @@ public static class ContentIndexConfigService
         AddInt("IndexMaxDeltaSegments", s => s.IndexMaxDeltaSegments, (s, v) => s.IndexMaxDeltaSegments = AppSettings.NormalizeIndexMaxDeltaSegments(v));
         AddInt("IndexCompactionThresholdMB", s => s.IndexCompactionThresholdMB, (s, v) => s.IndexCompactionThresholdMB = AppSettings.NormalizeIndexCompactionThresholdMB(v));
         AddInt("IndexMaxAutoCompactionSizeMB", s => s.IndexMaxAutoCompactionSizeMB, (s, v) => s.IndexMaxAutoCompactionSizeMB = AppSettings.NormalizeIndexMaxAutoCompactionSizeMB(v));
+        AddEnum("IndexSizeManagementMode", s => s.IndexSizeManagementMode, (s, v) => s.IndexSizeManagementMode = IndexSizeManagementModes.Normalize(v), IndexSizeManagementModes.All);
+        AddInt("IndexCoalesceMaxSegmentMB", s => s.IndexCoalesceMaxSegmentMB, (s, v) => s.IndexCoalesceMaxSegmentMB = AppSettings.NormalizeIndexCoalesceMaxSegmentMB(v));
+        AddInt("IndexCoalesceMaxBatchMB", s => s.IndexCoalesceMaxBatchMB, (s, v) => s.IndexCoalesceMaxBatchMB = AppSettings.NormalizeIndexCoalesceMaxBatchMB(v));
+        AddInt("IndexCoalesceMinRun", s => s.IndexCoalesceMinRun, (s, v) => s.IndexCoalesceMinRun = AppSettings.NormalizeIndexCoalesceMinRun(v));
+        AddInt("IndexCoalesceMaxRunsPerPass", s => s.IndexCoalesceMaxRunsPerPass, (s, v) => s.IndexCoalesceMaxRunsPerPass = AppSettings.NormalizeIndexCoalesceMaxRunsPerPass(v));
         AddBool("ShareAggregateIndexTelemetry", s => s.ShareAggregateIndexTelemetry, (s, v) => s.ShareAggregateIndexTelemetry = v);
         AddBool("IndexAutoRepair", s => s.IndexAutoRepair, (s, v) => s.IndexAutoRepair = v);
         AddBool("ShowIndexStatusInMainWindow", s => s.ShowIndexStatusInMainWindow, (s, v) => s.ShowIndexStatusInMainWindow = v);

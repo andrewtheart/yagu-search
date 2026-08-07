@@ -26,6 +26,20 @@ public interface IOcrEngine
     string DisplayName { get; }
 
     /// <summary>
+    /// Describes the one-time external download this engine still needs, without starting its worker
+    /// or downloading anything. Lets a caller (e.g. a pre-search gate) decide up front whether the
+    /// user must be asked, instead of discovering it mid-search from a background thread. Engines
+    /// backed by no external assets keep the default "nothing needed" answer.
+    /// </summary>
+    OcrAssetRequirement DescribeAssetRequirement() => new()
+    {
+        EngineDisplayName = DisplayName,
+        DownloadNeeded = false,
+        ApproxBytes = 0,
+        MissingComponents = [],
+    };
+
+    /// <summary>
     /// Prepares the engine for use, lazily downloading any native runtime and models the first
     /// time it is called. Called once per search before the first recognition. Implementations
     /// must be idempotent and safe to await concurrently.

@@ -41,6 +41,9 @@ public sealed class OcrEnginePool : IOcrEngine, IAsyncDisposable, IDisposable
     public string DisplayName => _engines[0].DisplayName;
     public int WorkerCount => _engines.Count;
 
+    // Every lane is the same engine against the same asset directories, so the primary answers for all.
+    public OcrAssetRequirement DescribeAssetRequirement() => _engines[0].DescribeAssetRequirement();
+
     public async Task<OcrResult> EnsureReadyAsync(CancellationToken cancellationToken)
     {
         Task<OcrResult> initialization;

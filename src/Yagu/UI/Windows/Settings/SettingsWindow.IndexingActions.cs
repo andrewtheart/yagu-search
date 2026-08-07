@@ -681,7 +681,9 @@ public sealed partial class SettingsWindow
         };
         var filtersButton = new Button { Content = "Filters…", Padding = new Thickness(12, 4, 12, 4) };
         filtersButton.Click += async (_, _) => await ShowRootFilterEditorAsync();
-        group.Children.Add(MakeIndexButtonRow(addButton, filtersButton, removeButton));
+        var sizeButton = new Button { Content = "Size…", Padding = new Thickness(12, 4, 12, 4) };
+        sizeButton.Click += async (_, _) => await ShowRootSizePolicyEditorAsync();
+        group.Children.Add(MakeIndexButtonRow(addButton, filtersButton, sizeButton, removeButton));
 
         RefreshIndexedRootsRadios();
     }
@@ -1269,6 +1271,110 @@ public sealed partial class SettingsWindow
             ? $"Saved per-folder filters for {root}. Rebuild the index to apply."
             : $"Cleared per-folder filters for {root}.");
         YaguLog.For("ContentIndex").LogInformation("User set per-folder index filters for '{Root}' (include='{Include}', exclude='{Exclude}').", root, include, exclude);
+    }
+
+    /// <summary>
+    /// Edits the selected folder's size-management override: which reclamation strategy that index may use,
+    /// its storage ceiling, and how large it may grow before automatic compaction stops folding it. Each box
+    /// may be left blank/-1 to inherit the global setting. These only govern the index's own storage, so no
+    /// choice here can change what a search returns.
+    /// </summary>
+    private async Task ShowRootSizePolicyEditorAsync()
+    {
+        string root = _indexManageRoot;
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            SetIndexStatus("Select a folder first, then set its size policy.");
+            return;
+        }
+
+        IndexedRootSizePolicy? existing = IndexSizeManagementPolicy.Find(_viewModel.Settings.IndexedRootSizePolicies, root);
+        EffectiveIndexSizePolicy inherited = IndexSizeManagementPolicy.Resolve(_viewModel.Settings, root);
+
+        var modeBox = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch };
+        (string Tag, string Display)[] modeOptions =
+        [
+            (string.Empty, $"Use the global default ({inherited.Mode})"),
+            (IndexSizeManagementModes.CoalesceThenCompact, "Coalesce, then compact"),
+            (IndexSizeManagementModes.Coalesce, "Coalesce small segments only (low memory)"),
+            (IndexSizeManagementModes.Compact, "Compact into a fresh base only"),
+            (IndexSizeManagementModes.Off, "Off — never reorganize automatically"),
+        ];
+        foreach ((string tag, string display) in modeOptions)
+            modeBox.Items.Add(new ComboBoxItem { Content = display, Tag = tag });
+        string currentMode = existing?.Mode ?? string.Empty;
+        modeBox.SelectedIndex = Math.Max(0, Array.FindIndex(modeOptions, o => string.Equals(o.Tag, currentMode, StringComparison.OrdinalIgnoreCase)));
+
+        var budgetBox = new NumberBox
+        {
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+            Minimum = -1,
+            Maximum = 1048576,
+            Value = existing?.SizeBudgetMB ?? -1,
+        };
+        var compactCapBox = new NumberBox
+        {
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+            Minimum = -1,
+            Maximum = 1048576,
+            Value = existing?.MaxAutoCompactionSizeMB ?? -1,
+        };
+
+        var panel = new StackPanel { Spacing = 6 };
+        panel.Children.Add(new TextBlock { Text = $"Index size management for:\n{root}", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.85 });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Each incremental update appends a delta segment, so an index only grows on its own. These settings decide how this one reclaims storage. Use -1 to inherit the global value. Nothing here changes search results — an index that stays segmented or stops updating simply prunes less, and uncovered files are read live.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11,
+            Opacity = 0.6,
+        });
+        panel.Children.Add(new TextBlock { Text = "Strategy:", FontSize = 12, Margin = new Thickness(0, 6, 0, 0) });
+        panel.Children.Add(modeBox);
+        panel.Children.Add(new TextBlock { Text = $"Size budget in MB (-1 inherits {inherited.SizeBudgetMB}, 0 = no limit):", FontSize = 12, Margin = new Thickness(0, 6, 0, 0) });
+        panel.Children.Add(budgetBox);
+        panel.Children.Add(new TextBlock { Text = $"Auto-compaction size cap in MB (-1 inherits {inherited.MaxAutoCompactionSizeMB}, 0 = no cap):", FontSize = 12, Margin = new Thickness(0, 6, 0, 0) });
+        panel.Children.Add(compactCapBox);
+
+        var result = await YaguDialog.ShowAsync(
+            _settingsHwnd,
+            new YaguDialogOptions
+            {
+                Title = "Folder index size management",
+                TitleGlyph = "\uE8F1",
+                Content = panel,
+                PrimaryButtonText = "Save",
+                CloseButtonText = "Cancel",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                RequestedTheme = RootGrid.ActualTheme,
+                Width = 640,
+                ShowTitleBar = false,
+                ShowTopRightCloseButton = true,
+            });
+        if (result != YaguDialogResult.Primary)
+            return;
+
+        string mode = (modeBox.SelectedItem as ComboBoxItem)?.Tag as string ?? string.Empty;
+        int budget = double.IsNaN(budgetBox.Value) ? -1 : (int)budgetBox.Value;
+        int compactCap = double.IsNaN(compactCapBox.Value) ? -1 : (int)compactCapBox.Value;
+
+        _viewModel.Settings.IndexedRootSizePolicies = IndexSizeManagementPolicy.Set(
+            _viewModel.Settings.IndexedRootSizePolicies,
+            new IndexedRootSizePolicy
+            {
+                Path = IndexScopeIdentity.NormalizePath(root),
+                Mode = mode,
+                SizeBudgetMB = budget,
+                MaxAutoCompactionSizeMB = compactCap,
+            });
+
+        RefreshIndexedRootsRadios();
+        MarkSettingsDirty(requireValueChanges: false);
+        bool pinned = mode.Length > 0 || budget >= 0 || compactCap >= 0;
+        SetIndexStatus(pinned
+            ? $"Saved size management for {root}."
+            : $"Cleared the size override for {root}; it now follows the global settings.");
+        YaguLog.For("ContentIndex").LogInformation("User set per-folder index size policy for '{Root}' (mode='{Mode}', budgetMB={Budget}, compactCapMB={CompactCap}).", root, mode, budget, compactCap);
     }
 
     private void SetIndexStatus(string text)

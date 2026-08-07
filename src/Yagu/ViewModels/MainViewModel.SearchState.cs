@@ -33,17 +33,16 @@ public sealed partial class MainViewModel
     /// the progress-overlay visibility so the bar also shows during the gate phase.</summary>
     public bool IsSearchActive => IsSearching || IsPreparingSearch;
 
-    /// <summary>True during the fast filename name-first pass (and its brief priority content scan), before
-    /// the full-drive scan total is established. Set true when a scan commits and latched false once a
-    /// progress snapshot reports the full phase, so the bar stays indeterminate across preparing + name-first
-    /// and only becomes determinate for the single 0→100% content-scan climb.</summary>
+    /// <summary>True while the progress denominator is provisional: through the fast filename pass and
+    /// full discovery. Set when a scan commits and latched false once the backend supplies a trustworthy
+    /// total or discovery completes, so a provisional processed/seen-so-far ratio is never displayed.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SearchProgressIndeterminate))]
     [NotifyPropertyChangedFor(nameof(SearchProgressRightLabel))]
     public partial bool SearchInNameFirstPhase { get; set; }
 
-    /// <summary>The search progress bar is indeterminate while preparing (pre-scan gates) or during the
-    /// name-first pass, and determinate for the full content scan (a single 0→100% climb).</summary>
+    /// <summary>The search progress bar is indeterminate while preparing or discovering files, then
+    /// determinate once the final total is known.</summary>
     public bool SearchProgressIndeterminate => IsPreparingSearch || SearchInNameFirstPhase;
 
     /// <summary>True from the instant the user clicks Cancel until the in-flight file scan or semantic

@@ -104,6 +104,13 @@ public static class ContentIndexSettingsChangeAdvisor
         "IndexMaxDeltaSegments",
         "IndexCompactionThresholdMB",
         "IndexMaxAutoCompactionSizeMB",
+        // Size management alters how an existing index reorganizes or when its maintenance stops; it never
+        // changes which files were ingested, so it never warrants a rebuild prompt.
+        "IndexSizeManagementMode",
+        "IndexCoalesceMaxSegmentMB",
+        "IndexCoalesceMaxBatchMB",
+        "IndexCoalesceMinRun",
+        "IndexCoalesceMaxRunsPerPass",
         "ShareAggregateIndexTelemetry",
         "IndexAutoRepair",
         "ShowIndexStatusInMainWindow",

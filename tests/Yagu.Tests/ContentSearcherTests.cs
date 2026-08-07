@@ -18,6 +18,58 @@ public class ContentSearcherTests : IDisposable
     }
     public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch { } }
 
+    [Fact]
+    public async Task SearchLinesAsync_KeepsEveryMatchWhenAnotherScanRefillsTheSharedHitBuffer()
+    {
+        // FindMatches hands back a [ThreadStatic] buffer, and the emit loop awaits once per match. A
+        // concurrently scanned file refilling that buffer mid-enumeration threw "Collection was modified",
+        // which aborted the file and silently dropped its remaining matches while the search still
+        // reported success. Observed four times in real benchmark runs.
+        const string text = "needle needle needle\nneedle needle needle\n";
+        using var reader = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(text)));
+        var writer = new BufferRefillingWriter();
+        var options = new SearchOptions { Directory = _root, Query = "needle", ContextLines = 0 };
+
+        int produced = await ContentSearcher.SearchLinesAsync(
+            Path.Combine(_root, "a.txt"),
+            reader,
+            regex: null,
+            literal: "needle",
+            StringComparison.Ordinal,
+            options,
+            writer,
+            new FileMetadata(text.Length, DateTime.Now, DateTime.Now),
+            CancellationToken.None);
+
+        Assert.Equal(6, produced);
+        Assert.Equal(6, writer.Results.Count);
+    }
+
+    /// <summary>Refills the shared per-thread hit buffer during each awaited write, standing in for a
+    /// different file being scanned on the same thread.</summary>
+    private sealed class BufferRefillingWriter : ChannelWriter<SearchResult>
+    {
+        public List<SearchResult> Results { get; } = [];
+
+        public override bool TryComplete(Exception? error = null) => true;
+
+        public override bool TryWrite(SearchResult item)
+        {
+            Results.Add(item);
+            return true;
+        }
+
+        public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(true);
+
+        public override ValueTask WriteAsync(SearchResult item, CancellationToken cancellationToken = default)
+        {
+            Results.Add(item);
+            ContentSearcher.FindMatches("a line with no hits", regex: null, literal: "zzz", StringComparison.Ordinal);
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private string Write(string name, string content)
     {
         var p = Path.Combine(_root, name);

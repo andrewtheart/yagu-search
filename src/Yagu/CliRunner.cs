@@ -2005,7 +2005,8 @@ internal static partial class CliRunner
             return RunIndexConfig(args);
 
         if (args.IndexListRoots || args.IndexAddRootPath is not null || args.IndexRemoveRootPath is not null
-            || args.IndexSetRootFilterPath is not null || args.IndexClearRootFilterPath is not null)
+            || args.IndexSetRootFilterPath is not null || args.IndexClearRootFilterPath is not null
+            || args.IndexSetRootSizePath is not null || args.IndexClearRootSizePath is not null)
             return RunIndexRoots(args);
 
         var pathProvider = DefaultContentIndexPathProvider.Create(settings.IndexStorageDirectory);
@@ -2219,16 +2220,49 @@ internal static partial class CliRunner
             return (int)ContentIndexExitCode.Success;
         }
 
+        if (args.IndexSetRootSizePath is not null)
+        {
+            string key = IndexScopeIdentity.NormalizePath(args.IndexSetRootSizePath);
+            string mode = string.IsNullOrWhiteSpace(args.RootSizeMode)
+                ? string.Empty
+                : IndexSizeManagementModes.Normalize(args.RootSizeMode);
+            settings.IndexedRootSizePolicies = IndexSizeManagementPolicy.Set(
+                settings.IndexedRootSizePolicies,
+                new IndexedRootSizePolicy
+                {
+                    Path = key,
+                    Mode = mode,
+                    SizeBudgetMB = args.RootSizeBudgetMB ?? -1,
+                    MaxAutoCompactionSizeMB = args.RootMaxAutoCompactionSizeMB ?? -1,
+                });
+            service.Save(settings);
+            EffectiveIndexSizePolicy effective = IndexSizeManagementPolicy.Resolve(settings, key);
+            Console.Out.WriteLine(
+                $"Set size management for {key}: mode={effective.Mode}, budgetMB={effective.SizeBudgetMB}, autoCompactionCapMB={effective.MaxAutoCompactionSizeMB}.");
+            return (int)ContentIndexExitCode.Success;
+        }
+
+        if (args.IndexClearRootSizePath is not null)
+        {
+            string key = IndexScopeIdentity.NormalizePath(args.IndexClearRootSizePath);
+            settings.IndexedRootSizePolicies = IndexSizeManagementPolicy.Remove(settings.IndexedRootSizePolicies, key);
+            service.Save(settings);
+            Console.Out.WriteLine($"Cleared the size override for {key}; it now follows the global settings.");
+            return (int)ContentIndexExitCode.Success;
+        }
+
         if (settings.IndexedRoots.Count == 0)
             Console.Out.WriteLine("No indexed folders registered.");
         else
             foreach (string root in settings.IndexedRoots)
             {
                 IndexedRootFilter? filter = IndexedRootFilterPolicy.Find(settings.IndexedRootFilters, root);
+                EffectiveIndexSizePolicy size = IndexSizeManagementPolicy.Resolve(settings, root);
+                string sizePart = $"  [size mode={size.Mode} budgetMB={size.SizeBudgetMB} autoCompactionCapMB={size.MaxAutoCompactionSizeMB}]";
                 if (filter is null)
-                    Console.Out.WriteLine(root);
+                    Console.Out.WriteLine(root + sizePart);
                 else
-                    Console.Out.WriteLine($"{root}  [include='{filter.IncludeGlobs}' exclude='{filter.ExcludeGlobs}']");
+                    Console.Out.WriteLine($"{root}  [include='{filter.IncludeGlobs}' exclude='{filter.ExcludeGlobs}']{sizePart}");
             }
         return (int)ContentIndexExitCode.Success;
     }
@@ -2946,6 +2980,17 @@ internal static partial class CliRunner
                                           drops (e.g. index node_modules under just this folder). Omit both to clear;
                                           semantic changes print the affected root's rebuild command.
                   --index-clear-root-filter <path> Remove per-folder overrides and print rebuild advice.
+                  --index-set-root-size <path> [--root-size-mode <mode>] [--root-size-budget-mb <n>]
+                                               [--root-auto-compaction-cap-mb <n>]
+                                          Set one index's size management. <mode> is Off, Coalesce, Compact,
+                                          or CoalesceThenCompact. An index only grows on its own (each update
+                                          appends a segment); coalescing merges runs of small segments cheaply,
+                                          compaction folds everything into a fresh base but briefly loads the
+                                          index into memory, so the cap bounds it. At the size budget Yagu
+                                          reclaims what it can and then pauses that index's updates instead of
+                                          growing - searches still return every match. Use -1 for any numeric
+                                          value to inherit the global setting.
+                  --index-clear-root-size <path> Remove one index's size override (follow the global settings).
 
             SETTINGS FILE:
                             If .yagu.json exists in the current working directory it is used as the
@@ -4171,6 +4216,11 @@ internal sealed class CliArgs
     public string?          IndexAddRootPath { get; private set; }
     public string?          IndexRemoveRootPath { get; private set; }
     public string?          IndexSetRootFilterPath { get; private set; }
+    public string?          IndexSetRootSizePath { get; private set; }
+    public string?          IndexClearRootSizePath { get; private set; }
+    public string?          RootSizeMode { get; private set; }
+    public int?             RootSizeBudgetMB { get; private set; }
+    public int?             RootMaxAutoCompactionSizeMB { get; private set; }
     public string?          IndexClearRootFilterPath { get; private set; }
     public string?          RootIncludeGlobs { get; private set; }
     public string?          RootExcludeGlobs { get; private set; }
@@ -4181,7 +4231,8 @@ internal sealed class CliArgs
         IndexBuildRequested || IndexRebuildRequested || IndexStatusRequested
         || IndexDeletePath is not null || ClearIndexes || IndexConfigRequested
         || IndexListRoots || IndexAddRootPath is not null || IndexRemoveRootPath is not null
-        || IndexSetRootFilterPath is not null || IndexClearRootFilterPath is not null;
+        || IndexSetRootFilterPath is not null || IndexClearRootFilterPath is not null
+        || IndexSetRootSizePath is not null || IndexClearRootSizePath is not null;
 
     private CliArgs() { }
 
@@ -4288,6 +4339,26 @@ internal sealed class CliArgs
                 if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexRemoveRootPath = raw[i++].Trim('"'); }
                 continue;
             }
+            if (Eq(tok, "--index-set-root-size"))
+            {
+                i++;
+                if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexSetRootSizePath = raw[i++].Trim('"'); }
+                continue;
+            }
+            if (Eq(tok, "--index-clear-root-size"))
+            {
+                i++;
+                if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexClearRootSizePath = raw[i++].Trim('"'); }
+                continue;
+            }
+            if (TryGetVal(raw, ref i, out string rsm, "--root-size-mode"))
+            { a.RootSizeMode = rsm.Trim('"'); continue; }
+            if (TryGetVal(raw, ref i, out string rsb, "--root-size-budget-mb")
+                && int.TryParse(rsb.Trim('"'), out int rsbValue))
+            { a.RootSizeBudgetMB = rsbValue; continue; }
+            if (TryGetVal(raw, ref i, out string rac, "--root-auto-compaction-cap-mb")
+                && int.TryParse(rac.Trim('"'), out int racValue))
+            { a.RootMaxAutoCompactionSizeMB = racValue; continue; }
             if (Eq(tok, "--index-set-root-filter"))
             {
                 i++;

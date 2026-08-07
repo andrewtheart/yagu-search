@@ -585,7 +585,7 @@ public sealed class ContentSearcher
         return list;
     }
 
-    private static async Task<int> SearchLinesAsync(
+    internal static async Task<int> SearchLinesAsync(
         string filePath,
         StreamReader reader,
         Regex? regex,
@@ -606,6 +606,9 @@ public sealed class ContentSearcher
         // (thousands of hits) used to allocate one List+backing array per match; we
         // now copy into a sized string[] on emit and recycle the List for reuse.
         Stack<List<string>>? afterListPool = contextLines > 0 ? new Stack<List<string>>() : null;
+        // FindMatches hands back a per-THREAD buffer and the emit loop awaits, so hits are copied here:
+        // another file scanned on this thread would otherwise refill it mid-enumeration.
+        var lineHits = new List<(int Start, int Length)>();
         int lineNumber = 0;
         int matchCount = 0;
         bool metadataCached = false;
@@ -701,14 +704,16 @@ public sealed class ContentSearcher
             var matches = FindMatches(line, regex, literal, literalComparison);
             if (matches.Count > 0)
             {
+                lineHits.Clear();
+                lineHits.AddRange(matches);
                 if (!metadataCached)
                 {
                     FileMetadataCache.Set(filePath, metadata);
                     metadataCached = true;
                 }
-                matchCount += matches.Count;
+                matchCount += lineHits.Count;
                 var before = ring.Snapshot();
-                foreach (var (start, length) in matches)
+                foreach (var (start, length) in lineHits)
                 {
                     var displayLine = TruncateAroundMatch(line, start, length);
                     var partial = new SearchResult(

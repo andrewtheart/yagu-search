@@ -107,21 +107,24 @@ public static class OcrAssetPaths
            && File.Exists(Path.Combine(dir, PaddleNativeProbeB));
 
     /// <summary>
-    /// True when <paramref name="dir"/> holds a usable PP-OCR model set: a detection (<c>*_det</c>),
-    /// recognition (<c>*_rec</c>) and angle-classification (<c>*_cls</c>) model, each with its weight
-    /// file. Matching by suffix keeps this correct across model variants (EnglishV4, ChineseV5, …)
-    /// without hard-coding every model's folder name.
+    /// True when <paramref name="dir"/> holds a usable PP-OCR model set: a detection (<c>det</c>),
+    /// recognition (<c>rec</c>) and angle-classification (<c>cls</c>) model, each with its weight
+    /// file. Matching by role segment keeps this correct across model variants without hard-coding
+    /// every model's folder name.
     /// </summary>
     public static bool PaddleModelsPresent(string dir)
-        => HasModelWithSuffix(dir, "_det")
-           && HasModelWithSuffix(dir, "_rec")
-           && HasModelWithSuffix(dir, "_cls");
+        => HasModelForRole(dir, "det")
+           && HasModelForRole(dir, "rec")
+           && HasModelForRole(dir, "cls");
 
     /// <summary>True when <c>eng.traineddata</c> is present in <paramref name="dir"/>.</summary>
     public static bool TesseractDataPresent(string dir)
         => File.Exists(Path.Combine(dir, TesseractDataFile));
 
-    private static bool HasModelWithSuffix(string dir, string suffix)
+    // The role is matched as a delimited NAME SEGMENT, not a suffix: PaddleSharp puts it in different
+    // positions across model families ("PP-OCRv5_mobile_det_infer" vs "ch_ppocr_mobile_v2.0_cls"), so a
+    // suffix test reports a fully downloaded PP-OCRv5 set as missing and re-prompts forever.
+    private static bool HasModelForRole(string dir, string role)
     {
         if (!Directory.Exists(dir))
         {
@@ -130,11 +133,17 @@ public static class OcrAssetPaths
 
         foreach (string sub in Directory.EnumerateDirectories(dir))
         {
-            string name = Path.GetFileName(sub);
-            if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
-                && File.Exists(Path.Combine(sub, ModelParamsFile)))
+            if (!File.Exists(Path.Combine(sub, ModelParamsFile)))
             {
-                return true;
+                continue;
+            }
+
+            foreach (string segment in Path.GetFileName(sub).Split('_', '.', '-'))
+            {
+                if (string.Equals(segment, role, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
             }
         }
 

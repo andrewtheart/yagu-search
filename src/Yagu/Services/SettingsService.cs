@@ -248,6 +248,20 @@ public sealed class AppSettings
     public const int DefaultIndexMaxAutoCompactionSizeMB = 512;
     public const int MaximumIndexMaxAutoCompactionSizeMB = 1_048_576;
 
+    // Segment coalescing bounds (plan §11.4). Coalescing merges a contiguous run of small delta segments
+    // into one replacement without ever opening the base, so it is the only reclamation an index above the
+    // auto-compaction cap can still perform. These were previously hard-coded at 8 MB/32 MB/8-in-a-row,
+    // which no real whole-drive index could satisfy, leaving such indexes with no reclamation at all.
+    public const int DefaultIndexCoalesceMaxSegmentMB = 128;
+    public const int MaximumIndexCoalesceMaxSegmentMB = 8192;
+    public const int DefaultIndexCoalesceMaxBatchMB = 512;
+    public const int MaximumIndexCoalesceMaxBatchMB = 32768;
+    public const int DefaultIndexCoalesceMinRun = 4;
+    public const int MinimumIndexCoalesceMinRun = 2;
+    public const int MaximumIndexCoalesceMinRun = 64;
+    public const int DefaultIndexCoalesceMaxRunsPerPass = 8;
+    public const int MaximumIndexCoalesceMaxRunsPerPass = 64;
+
     /// <summary>Build trigger: how a build/update is kicked off (plan §6.1).</summary>
     public const string DefaultIndexBuildTrigger = "Manual";
     /// <summary>The <see cref="IndexBuildTrigger"/> value that runs build passes on a user-defined schedule
@@ -393,6 +407,26 @@ public sealed class AppSettings
     public static int NormalizeIndexMaxAutoCompactionSizeMB(int value)
         => value < 0 ? DefaultIndexMaxAutoCompactionSizeMB
             : Math.Min(value, MaximumIndexMaxAutoCompactionSizeMB);
+
+    /// <summary>Normalizes the largest individual segment (MB) eligible to join a coalescing run.</summary>
+    public static int NormalizeIndexCoalesceMaxSegmentMB(int value)
+        => value <= 0 ? DefaultIndexCoalesceMaxSegmentMB
+            : Math.Min(value, MaximumIndexCoalesceMaxSegmentMB);
+
+    /// <summary>Normalizes the largest total size (MB) of one coalescing run.</summary>
+    public static int NormalizeIndexCoalesceMaxBatchMB(int value)
+        => value <= 0 ? DefaultIndexCoalesceMaxBatchMB
+            : Math.Min(value, MaximumIndexCoalesceMaxBatchMB);
+
+    /// <summary>Normalizes the fewest contiguous eligible segments that make a coalescing run worthwhile.</summary>
+    public static int NormalizeIndexCoalesceMinRun(int value)
+        => value <= 0 ? DefaultIndexCoalesceMinRun
+            : Math.Clamp(value, MinimumIndexCoalesceMinRun, MaximumIndexCoalesceMinRun);
+
+    /// <summary>Normalizes the most coalescing runs merged in one maintenance pass.</summary>
+    public static int NormalizeIndexCoalesceMaxRunsPerPass(int value)
+        => value <= 0 ? DefaultIndexCoalesceMaxRunsPerPass
+            : Math.Min(value, MaximumIndexCoalesceMaxRunsPerPass);
 
     /// <summary>Normalizes the build-trigger selection to a canonical, de-duplicated, ordered combination of
     /// the automatic triggers (e.g. <c>"AtStartup, OnSchedule"</c>). Several triggers can be active at once.
@@ -920,6 +954,19 @@ public sealed class AppSettings
     /// the query-mode load already bounds their footprint. 0 disables the cap (always compact). Default 512.
     /// Manual/explicit compaction is never gated by this.</summary>
     public int IndexMaxAutoCompactionSizeMB { get; set; } = DefaultIndexMaxAutoCompactionSizeMB;
+    /// <summary>Default size-management strategy for every index, overridable per folder via
+    /// <see cref="IndexedRootSizePolicies"/>. One of <see cref="Yagu.Services.Index.IndexSizeManagementPolicy.Modes"/>;
+    /// default <c>CoalesceThenCompact</c>. Only decides how an index reorganizes its own storage — never what a
+    /// search returns.</summary>
+    public string IndexSizeManagementMode { get; set; } = Yagu.Services.Index.IndexSizeManagementModes.CoalesceThenCompact;
+    /// <summary>Largest individual delta segment (MB) eligible to join a coalescing run. Default 128.</summary>
+    public int IndexCoalesceMaxSegmentMB { get; set; } = DefaultIndexCoalesceMaxSegmentMB;
+    /// <summary>Largest total size (MB) of one coalescing run. Bounds maintenance-worker memory. Default 512.</summary>
+    public int IndexCoalesceMaxBatchMB { get; set; } = DefaultIndexCoalesceMaxBatchMB;
+    /// <summary>Fewest contiguous eligible segments that make a coalescing run worth merging. Default 4.</summary>
+    public int IndexCoalesceMinRun { get; set; } = DefaultIndexCoalesceMinRun;
+    /// <summary>Most coalescing runs merged in a single maintenance pass. Default 8.</summary>
+    public int IndexCoalesceMaxRunsPerPass { get; set; } = DefaultIndexCoalesceMaxRunsPerPass;
     /// <summary>Opt-in to sharing <b>aggregate-only</b> index telemetry (build/refresh time, segment and
     /// compaction counts, index-used vs bypassed) on top of global telemetry. Default false, and inert
     /// unless <see cref="TelemetryEnabled"/> is also on and an endpoint is configured (plan §6.4). Never
@@ -951,6 +998,11 @@ public sealed class AppSettings
     /// <c>node_modules</c> can be excluded globally but indexed under one specific folder). Canonicalized on
     /// load by <see cref="Yagu.Services.Index.IndexedRootFilterPolicy"/>. Empty by default.</summary>
     public List<Yagu.Services.Index.IndexedRootFilter> IndexedRootFilters { get; set; } = [];
+    /// <summary>Optional per-folder size-management overrides for the registered <see cref="IndexedRoots"/>.
+    /// Each entry may pin the strategy, the storage ceiling, and the automatic-compaction cap for one index,
+    /// inheriting whatever it leaves unset. Canonicalized on load by
+    /// <see cref="Yagu.Services.Index.IndexSizeManagementPolicy"/>. Empty by default.</summary>
+    public List<Yagu.Services.Index.IndexedRootSizePolicy> IndexedRootSizePolicies { get; set; } = [];
 
     public static List<string> NormalizeContentIndexLiveScanWarningDismissedRoots(IEnumerable<string>? roots)
     {
@@ -1038,6 +1090,11 @@ public sealed class AppSettings
         IndexMaxDeltaSegments = DefaultIndexMaxDeltaSegments;
         IndexCompactionThresholdMB = DefaultIndexCompactionThresholdMB;
         IndexMaxAutoCompactionSizeMB = DefaultIndexMaxAutoCompactionSizeMB;
+        IndexSizeManagementMode = Yagu.Services.Index.IndexSizeManagementModes.CoalesceThenCompact;
+        IndexCoalesceMaxSegmentMB = DefaultIndexCoalesceMaxSegmentMB;
+        IndexCoalesceMaxBatchMB = DefaultIndexCoalesceMaxBatchMB;
+        IndexCoalesceMinRun = DefaultIndexCoalesceMinRun;
+        IndexCoalesceMaxRunsPerPass = DefaultIndexCoalesceMaxRunsPerPass;
         ShareAggregateIndexTelemetry = false;
         ShowIndexStatusInMainWindow = true;
         ShowIndexBuildNotifications = true;
@@ -1377,12 +1434,24 @@ public sealed class SettingsService
     private readonly string _path;
     private static readonly JsonSerializerOptions JsonOpts = AppSettingsJsonContext.Default.Options;
 
-    public SettingsService() : this(DefaultPath()) { }
+    public SettingsService() : this(ResolveInstanceSettingsPath()) { }
 
     public SettingsService(string path) { _path = path; }
 
     public static string DefaultPath() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Yagu", "settings.json");
+
+    /// <summary>Redirects the settings file away from the real user profile. Tests and CI MUST set this
+    /// so a run can never modify the user's own configuration.</summary>
+    internal const string SettingsFileOverrideEnvVar = "YAGU_SETTINGS_FILE";
+
+    /// <summary>Path used by the parameterless constructor: the override when set, else
+    /// <see cref="DefaultPath"/>, which stays pure so it always reports the real user location.</summary>
+    internal static string ResolveInstanceSettingsPath()
+    {
+        string? overridePath = Environment.GetEnvironmentVariable(SettingsFileOverrideEnvVar);
+        return string.IsNullOrWhiteSpace(overridePath) ? DefaultPath() : overridePath;
+    }
 
     // The pre-"unlimited by default" backstop value. A persisted AbsoluteMaxResults equal to this exact
     // legacy default is migrated to 0 (disabled) on load so existing installs stop truncating results.
@@ -1678,6 +1747,12 @@ public sealed class SettingsService
             AppSettings.NormalizeContentIndexLiveScanWarningDismissedRoots(
                 settings.ContentIndexLiveScanWarningDismissedRoots);
         settings.IndexedRootFilters = Yagu.Services.Index.IndexedRootFilterPolicy.Normalize(settings.IndexedRootFilters);
+        settings.IndexedRootSizePolicies = Yagu.Services.Index.IndexSizeManagementPolicy.Normalize(settings.IndexedRootSizePolicies);
+        settings.IndexSizeManagementMode = Yagu.Services.Index.IndexSizeManagementPolicy.NormalizeMode(settings.IndexSizeManagementMode);
+        settings.IndexCoalesceMaxSegmentMB = AppSettings.NormalizeIndexCoalesceMaxSegmentMB(settings.IndexCoalesceMaxSegmentMB);
+        settings.IndexCoalesceMaxBatchMB = AppSettings.NormalizeIndexCoalesceMaxBatchMB(settings.IndexCoalesceMaxBatchMB);
+        settings.IndexCoalesceMinRun = AppSettings.NormalizeIndexCoalesceMinRun(settings.IndexCoalesceMinRun);
+        settings.IndexCoalesceMaxRunsPerPass = AppSettings.NormalizeIndexCoalesceMaxRunsPerPass(settings.IndexCoalesceMaxRunsPerPass);
     }
 
     private static string NormalizeArgbHexString(string? value, string fallback)

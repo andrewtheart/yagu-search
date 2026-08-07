@@ -149,6 +149,9 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
     /// </summary>
     protected abstract OcrAssetRequirement DescribeAssetRequirement();
 
+    /// <summary>Reports what this engine still needs to download, without starting the worker.</summary>
+    OcrAssetRequirement IOcrEngine.DescribeAssetRequirement() => DescribeAssetRequirement();
+
     /// <summary>Test/diagnostics hook: exposes <see cref="DescribeAssetRequirement"/> without starting the worker.</summary>
     internal OcrAssetRequirement DescribeAssetRequirementForTest() => DescribeAssetRequirement();
 

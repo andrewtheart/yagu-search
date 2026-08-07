@@ -15,6 +15,11 @@ public sealed class SearchService
 {
     private const int MemoryPressureRecoveryMarginPercent = 5;
     private const double ProcessMemoryRecoveryRatio = 0.90;
+
+    // Below a quarter of its own cap the process cannot meaningfully relieve machine-wide pressure, but a
+    // large user memory limit must not make a genuinely large footprint look unsheddable.
+    private const double SheddableProcessMemoryRatio = 0.25;
+    private const long SheddableProcessMemoryFloorCeiling = 256L * 1024 * 1024;
     // How often (seconds) to log a machine-wide memory heartbeat while a search is active, so the log
     // carries a fine-grained WS + system-memory trail up to any native crash. 0.5s ≈ a few lines even on
     // a fast (multi-GB/s) memory balloon, without spamming ordinary sub-second searches.
@@ -843,6 +848,8 @@ public sealed class SearchService
                     Volatile.Read(ref pdfFilesQueued),
                     Volatile.Read(ref discoveryCompleted) != 0),
                 NameFirstPhase = Volatile.Read(ref nameFirstPhaseActive) != 0,
+                TotalFilesKnown = Volatile.Read(ref discoveryCompleted) != 0
+                    || (Volatile.Read(ref nameFirstPhaseActive) == 0 && _fileLister.KnownTotalFiles > 0),
             };
         }
 
@@ -2814,6 +2821,10 @@ public sealed class SearchService
     {
         if (workingSet > effectiveCap) return true;
 
+        // System-wide load means the MACHINE is busy, which is usually other processes. Shedding is only
+        // worth degraded mode, working-set trims and compacting GCs once Yagu holds enough to give back.
+        if (workingSet < SheddableProcessMemoryFloor(effectiveCap)) return false;
+
         if (pressurePercent > 0 && pressurePercent <= 100)
         {
             if (hasSystemLoad)
@@ -2825,6 +2836,16 @@ public sealed class SearchService
 
         return false;
     }
+
+    /// <summary>Working set below which the process has nothing worth shedding, so machine-wide pressure
+    /// must not degrade the search. Derived from the process cap, which already follows the user's
+    /// memory-limit setting.</summary>
+    internal static long SheddableProcessMemoryFloor(long effectiveProcessCapBytes) =>
+        effectiveProcessCapBytes <= 0
+            ? 0
+            : Math.Min(
+                (long)(effectiveProcessCapBytes * SheddableProcessMemoryRatio),
+                SheddableProcessMemoryFloorCeiling);
 
 
     internal static bool IsMemoryPressureRelieved(long maxProcessBytes, int pressurePercent)
@@ -2863,9 +2884,11 @@ public sealed class SearchService
         long gcMemoryLoadBytes, long gcTotalAvailableBytes)
     {
         bool processRelieved = IsProcessMemoryRelieved(workingSetBytes, effectiveProcessCapBytes);
+        if (!processRelieved) return false;
+        if (workingSetBytes < SheddableProcessMemoryFloor(effectiveProcessCapBytes)) return true;
         int reliefPercent = Math.Max(0, pressurePercent - recoveryMarginPercent);
         double reliefThreshold = gcTotalAvailableBytes * (reliefPercent / 100.0);
-        return processRelieved && gcMemoryLoadBytes <= reliefThreshold;
+        return gcMemoryLoadBytes <= reliefThreshold;
     }
 
     internal static bool IsMemoryPressureRelievedForSnapshot(
@@ -2879,6 +2902,11 @@ public sealed class SearchService
             return false;
 
         if (pressurePercent <= 0 || pressurePercent > 100)
+            return true;
+
+        // Symmetric with the trigger: once back under the floor Yagu is no longer a contributor, so a
+        // busy machine must not pin the search in memory-saving mode for the rest of the run.
+        if (workingSetBytes < SheddableProcessMemoryFloor(effectiveProcessCapBytes))
             return true;
 
         int reliefPercent = Math.Max(0, pressurePercent - Math.Clamp(recoveryMarginPercent, 0, 100));

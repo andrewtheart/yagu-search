@@ -188,6 +188,9 @@
     <Compile Include="..\..\src\Yagu\Services\Index\IndexedRootsPolicy.cs" Link="Source\Services\Index\IndexedRootsPolicy.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\IndexedRootFilter.cs" Link="Source\Services\Index\IndexedRootFilter.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\IndexedRootFilterPolicy.cs" Link="Source\Services\Index\IndexedRootFilterPolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexedRootSizePolicy.cs" Link="Source\Services\Index\IndexedRootSizePolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\EffectiveIndexSizePolicy.cs" Link="Source\Services\Index\EffectiveIndexSizePolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexSizeManagementPolicy.cs" Link="Source\Services\Index\IndexSizeManagementPolicy.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\IndexOnboardingPlan.cs" Link="Source\Services\Index\IndexOnboardingPlan.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexAutoBuilder.cs" Link="Source\Services\Index\ContentIndexAutoBuilder.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexScheduleEvaluator.cs" Link="Source\Services\Index\ContentIndexScheduleEvaluator.cs" />
@@ -257,6 +260,7 @@
     <Compile Include="..\..\src\Yagu\Services\Ocr\OcrTextMatcher.cs" Link="Source\Services\Ocr\OcrTextMatcher.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\OcrAssetPaths.cs" Link="Source\Services\Ocr\OcrAssetPaths.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\OcrDownloadGate.cs" Link="Source\Services\Ocr\OcrDownloadGate.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\OcrPreSearchReadiness.cs" Link="Source\Services\Ocr\OcrPreSearchReadiness.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\UnavailableOcrEngine.cs" Link="Source\Services\Ocr\UnavailableOcrEngine.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\OcrWorkerProcess.cs" Link="Source\Services\Ocr\OcrWorkerProcess.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ocr\WorkerOcrEngine.cs" Link="Source\Services\Ocr\WorkerOcrEngine.cs" />

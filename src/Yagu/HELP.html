@@ -1459,20 +1459,17 @@ label combines both views — for example <strong>95% [OCR: 11,113 /
 104,000 images]</strong> (then PDF text if needed) — and the
 tooltip/status show the same queue count, so a large OCR tail never
 looks frozen. The OCR engine, recognition quality, and this toggle’s
-default come from the <strong>Settings ▸ OCR</strong> tab (see
-below).</td>
-</tr>
-<tr>
-<td>Search PDF text</td>
-<td>When enabled, PDF files are converted to text (via the bundled Xpdf
-<code>pdftotext</code>) and the extracted text is searched like any
-other file’s contents. Off by default because extraction is slower than
-reading text files. It runs on a background queue that does not block or
-slow the normal file scan; matches appear in the results panel as each
-PDF is processed. Only the embedded text layer is read —
-scanned/image-only PDFs (pages that are just pictures) yield no text.
-The toggle’s default comes from <strong>Settings ▸ Path and File Type
-Filters ▸ Search PDF text</strong>.</td>
+default come from the <strong>Settings ▸ OCR</strong> tab (see below).
+The first search that uses OCR checks for the engine’s one-time
+components <strong>before</strong> the search starts: if they are
+missing, Yagu asks once, then downloads them while showing a progress
+dialog with elapsed time, and begins the search only when they are ready
+(confirmed by an <strong>OCR components downloaded</strong> message at
+the bottom of the window). Declining the download simply runs the search
+without OCR; if the download fails you can still choose <strong>Search
+anyway</strong>, which searches everything except text inside images.
+The OCR-bundled edition of the installer already ships these components,
+so nothing is downloaded.</td>
 </tr>
 <tr>
 <td>Use content index</td>
@@ -3028,11 +3025,37 @@ immediately applies changes that arrived while its crawl was running.
 The remaining controls include <strong>use file-system watcher
 hints</strong> (off by default; a latency hint only — the change journal
 stays authoritative), the <strong>maximum delta segments</strong>
-(default 8), <strong>compaction size threshold</strong> (default 256
-MB), and the <strong>auto-compaction size cap</strong> (default 512 MB,
-0 = no cap). (The opt-in <strong>share aggregate content-index
+(default 8), and the <strong>compaction size threshold</strong> (default
+256 MB). (The opt-in <strong>share aggregate content-index
 metrics</strong> telemetry toggle lives on the <strong>Privacy</strong>
 tab.)</td>
+</tr>
+<tr>
+<td>Index Size Management</td>
+<td>How each index reclaims storage. An index only ever grows on its
+own: every incremental update appends a delta segment, and storage comes
+back only through <strong>coalescing</strong> (merging a run of
+neighbouring small segments — cheap, never loads the base) or
+<strong>compaction</strong> (folding every layer into a fresh base — far
+more effective, but it briefly loads the index into memory). The
+<strong>default size-management strategy</strong> picks which an index
+may use: <em>Coalesce, then compact</em> (default), <em>Coalesce
+only</em> (lowest memory), <em>Compact only</em>, or <em>Off</em>. The
+<strong>auto-compaction size cap</strong> (default 512 MB, 0 = no cap)
+bounds how large an index may be before automatic compaction stops
+folding it — above the cap only coalescing or an explicit rebuild
+reclaims space. The four <strong>coalescing</strong> controls set the
+largest segment eligible to merge (default 128 MB), the largest merge
+batch (default 512 MB, the main memory bound), the fewest neighbouring
+segments worth merging (default 4), and how many merges one maintenance
+pass may perform (default 8). If the largest-segment value is set below
+your typical segment size, coalescing can never find work and a large
+index will have no way to reclaim storage. Every folder can override the
+strategy, the size budget, and the compaction cap under <strong>Manage
+Indexes ▸ Size…</strong>. None of these settings can change search
+results — an index that stays segmented, or one paused at its budget,
+simply prunes less, and anything it cannot prove safe to skip is read
+live.</td>
 </tr>
 <tr>
 <td>Status &amp; Provenance</td>
@@ -3100,21 +3123,27 @@ a folder and click <strong>Filters…</strong> to give it
 global excludes for that folder only, and include globs re-admit paths a
 broader exclude would drop (so you can, e.g., exclude
 <code>node_modules</code> globally but still index it under one specific
-folder). A folder with custom filters is marked in the list. A folder
-that has an index on disk but is <strong>not</strong> in your list —
-e.g. one you built, then removed with <strong>Remove selected
-folder</strong> (which unregisters it without deleting the index files)
-— still appears, marked <strong>leftover index</strong>: the index stays
-on disk and searches can still use it, but it won’t be kept up to date
-automatically. An old-version, corrupt, or incomplete index shows its
-recovered folder and exact reason instead of the vague “unreadable or
-partial” label. The <strong>Index storage</strong> area is grouped into
-<strong>Needs attention</strong> and <strong>Healthy indexes</strong>
-cards: a green check means valid, a red X means broken/incompatible, and
-an orange warning identifies valid-but-unmaintained or redundant data.
-Counts are labeled <strong>stored content records</strong> because the
-cheap manifest-only total counts records in the base plus every active
-layer; replacements may temporarily exist in more than one layer until
+folder). A folder with custom filters is marked in the list. Select a
+folder and click <strong>Size…</strong> to override how that one index
+manages its storage — its strategy (coalesce / compact / both / off),
+its size budget, and its auto-compaction cap — leaving any box at
+<code>-1</code> to inherit the global setting. This is how a whole-drive
+index can be limited to cheap coalescing while a small project folder
+still gets full compaction. A folder that has an index on disk but is
+<strong>not</strong> in your list — e.g. one you built, then removed
+with <strong>Remove selected folder</strong> (which unregisters it
+without deleting the index files) — still appears, marked
+<strong>leftover index</strong>: the index stays on disk and searches
+can still use it, but it won’t be kept up to date automatically. An
+old-version, corrupt, or incomplete index shows its recovered folder and
+exact reason instead of the vague “unreadable or partial” label. The
+<strong>Index storage</strong> area is grouped into <strong>Needs
+attention</strong> and <strong>Healthy indexes</strong> cards: a green
+check means valid, a red X means broken/incompatible, and an orange
+warning identifies valid-but-unmaintained or redundant data. Counts are
+labeled <strong>stored content records</strong> because the cheap
+manifest-only total counts records in the base plus every active layer;
+replacements may temporarily exist in more than one layer until
 compaction, so this is not presented as a unique live-file count. Every
 card has direct action links beside its explanation — <strong>Repair
 now</strong>, <strong>Delete stored index</strong>,
@@ -5743,6 +5772,22 @@ Exclude globs add to the global excludes; include globs re-admit paths a
 broader exclude drops (e.g. index <code>node_modules</code> under just
 this folder while excluding it globally). Omit both globs to clear. A
 semantic change prints the affected root’s rebuild command.</td>
+</tr>
+<tr>
+<td><code>--index-set-root-size &lt;path&gt; [--root-size-mode &lt;mode&gt;] [--root-size-budget-mb &lt;n&gt;] [--root-auto-compaction-cap-mb &lt;n&gt;]</code></td>
+<td>Set <strong>per-folder</strong> size management for one index.
+<code>&lt;mode&gt;</code> is <code>Off</code>, <code>Coalesce</code>,
+<code>Compact</code>, or <code>CoalesceThenCompact</code>. Use
+<code>-1</code> for either numeric value to inherit the global setting,
+<code>0</code> for “no limit”/“no cap”. At its size budget Yagu reclaims
+what it safely can and then pauses that index’s updates instead of
+letting it grow; searches still return every match, because files the
+index no longer covers are read live.</td>
+</tr>
+<tr>
+<td><code>--index-clear-root-size &lt;path&gt;</code></td>
+<td>Remove one index’s size override so it follows the global settings
+again.</td>
 </tr>
 <tr>
 <td><code>--index-clear-root-filter &lt;path&gt;</code></td>

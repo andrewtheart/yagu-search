@@ -391,6 +391,7 @@ public sealed partial class MainViewModel
         MatchesFound = 0;
         FilesScanned = 0;
         TotalFiles = 0;
+        ResetDisplayedSearchProgress();
         FilesSkipped = 0;
         HasPerformedSearch = false;
         AccessDeniedCount = 0;

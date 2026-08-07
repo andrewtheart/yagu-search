@@ -70,6 +70,38 @@ public sealed class MainViewModelSearchStatusRegressionTests
     }
 
     [Fact]
+    public void SearchLoop_UsesMonotonicDisplayedProgressAndResetsItForEachSearch()
+    {
+        string progressCase = ExtractWindow(MainViewModelSource, "case SearchEvent.Progress p:", "case SearchEvent.SearchError e:");
+        Assert.Contains("UpdateDisplayedSearchProgress(", progressCase);
+        Assert.Contains("p.Snapshot.FilesScanned", progressCase);
+        Assert.Contains("p.Snapshot.TotalFiles", progressCase);
+        Assert.Contains("indeterminate: !p.Snapshot.TotalFilesKnown", progressCase);
+        Assert.Contains("if (SearchInNameFirstPhase && p.Snapshot.TotalFilesKnown)", progressCase);
+
+        string resetForSearch = ExtractWindow(MainViewModelSource, "private void ResetStateForNewSearch()", "private bool IsCurrentSearch");
+        Assert.Contains("ResetDisplayedSearchProgress();", resetForSearch);
+
+        Assert.Contains("private readonly SearchProgressDisplayTracker _searchProgressDisplayTracker = new();", MainViewModelSource);
+        Assert.Contains("public double DisplayedSearchProgressPercent => _searchProgressDisplayTracker.Percent;", MainViewModelSource);
+        Assert.Contains("_searchProgressDisplayTracker.Update(filesProcessed, totalFiles, indeterminate)", MainViewModelSource);
+        Assert.Contains("_searchProgressDisplayTracker.Reset()", MainViewModelSource);
+    }
+
+    [Fact]
+    public void SearchProgress_ReportsLiveFileCountWhileTheTotalIsStillUnknown()
+    {
+        // An indeterminate bar with a blank label left a multi-minute discovery looking like no progress.
+        string label = ExtractWindow(
+            MainViewModelSource,
+            "public string SearchProgressRightLabel => SearchProgressIndeterminate",
+            "partial void OnFilesScannedChanged");
+        Assert.Contains("? DiscoveryProgressLabel", label);
+        Assert.DoesNotContain("? string.Empty", label);
+        Assert.Contains("FilesScanned > 0 ? $\"{FilesScanned:N0} files\" : \"Discovering", MainViewModelSource);
+    }
+
+    [Fact]
     public void SearchStatusHeartbeat_UpdatesElapsedEvenBeforeFilesScannedProgressArrives()
     {
         string updateMethod = ExtractWindow(MainViewModelSource, "private void UpdateFilesPerSecond()", "partial void OnFileNameFilterChanged");

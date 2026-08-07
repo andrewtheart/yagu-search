@@ -1,20 +1,19 @@
 using System.Diagnostics;
-using System.Globalization;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit.Abstractions;
+using Yagu.Services;
 
 namespace Yagu.Tests;
 
 /// <summary>
-/// UI regression test that exercises the full match-navigation flow:
-///   1. Launches Yagu via <c>scripts\test-match-nav.ps1</c> against a test
-///      directory and query, capturing screenshots after each "Next match"
-///      click into a randomly-named output directory.
-///   2. Invokes <c>scripts\count-red-pixels.ps1</c> against the screenshot
-///      directory to count OrangeRed-ish pixels (the active-match highlight
-///      colour) in every <c>03-match-*.png</c> screenshot.
-///   3. Fails if ANY <c>03-match-*</c> screenshot contains fewer than
-///      <see cref="MinRedPixelsPerMatch"/> red pixels — the highlight is
-///      considered "missing" / off-screen at that point.
+/// Headed UI regressions for preview occurrence pagination across deterministic corpora: mixed terms,
+/// large random-text files, many single-line files tens of thousands of characters long, and dense
+/// same-line matches. Every Next click must advance the live <c>Occurrence x/y</c> label exactly once.
+/// The screenshot analyzer then requires one term-sized OrangeRed component inside the preview, or up
+/// to two independently validated components for multiline matches. Extra highlighted text, gutter
+/// spill, preview-edge contact, and line-wide boxes are rejected.
 ///
 /// This test is heavy: it actually launches the WinUI 3 desktop app, drives
 /// the UI via UIAutomation, and takes full-screen screenshots. It must run
@@ -28,8 +27,6 @@ namespace Yagu.Tests;
 [Trait("Category", "Headed")]
 public sealed class MatchNavRegressionTests
 {
-    private const int MinRedPixelsPerMatch = 100;
-
     private readonly ITestOutputHelper _output;
 
     public MatchNavRegressionTests(ITestOutputHelper output)
@@ -37,8 +34,12 @@ public sealed class MatchNavRegressionTests
         _output = output;
     }
 
-    [Fact]
-    public void MatchNav_AllScreenshotsContainHighlight()
+    public static IEnumerable<object[]> ScenarioIds()
+        => MatchNavTestCorpus.Scenarios.Select(scenario => new object[] { scenario.Id });
+
+    [Theory]
+    [MemberData(nameof(ScenarioIds))]
+    public void MatchNav_DiverseCorpus_PaginatesAndBoxesOnlyTheActiveTerm(string scenarioId)
     {
         if (!HeadedTestEnvironment.CanRun)
         {
@@ -68,77 +69,68 @@ public sealed class MatchNavRegressionTests
         Assert.True(File.Exists(yaguExe),
             $"Yagu Debug build not found at {yaguExe}. Run 'dotnet build src/Yagu/Yagu.csproj -c Debug' first.");
 
-        // Random per-run screenshot directory under TestResults so concurrent runs
-        // don't collide and old screenshots don't pollute the red-pixel scan.
-        var runId = "MatchNavRun-" + Guid.NewGuid().ToString("N")[..8];
+        MatchNavScenario scenario = MatchNavTestCorpus.Get(scenarioId);
+        var runId = $"{scenario.Id}-{Guid.NewGuid().ToString("N")[..8]}";
         var screenshotDir = Path.Combine(
             solutionRoot, "TestResults", "MatchNavScreenshots", runId);
         Directory.CreateDirectory(screenshotDir);
         _output.WriteLine($"Screenshot dir: {screenshotDir}");
 
-        // Drive a SMALL, DETERMINISTIC corpus instead of the old default (all of C:\ for "a", which
-        // produced tens of millions of matches over minutes, so the match-nav panel was never ready
-        // when the script looked for the Next-match button). A handful of files with a known term
-        // makes the search finish in well under a second and the match-nav flow reliable.
-        // The term is deliberately long (14 chars) so the active-match highlight band is comfortably
-        // above the MinRedPixelsPerMatch floor — a short term like "needle" renders only ~97 px.
-        const string query = "yagumatchtoken";
         var corpusDir = Path.Combine(solutionRoot, "TestResults", "MatchNavCorpus", runId);
         Directory.CreateDirectory(corpusDir);
-        CreateMatchNavCorpus(corpusDir, query);
+        MatchNavTestCorpus.Create(corpusDir, scenario);
         _output.WriteLine($"Corpus dir: {corpusDir}");
+        _output.WriteLine(
+            $"Scenario: {scenario.Id}; query='{scenario.Query}'; files={scenario.FileCount}; " +
+            $"expected occurrences={scenario.ExpectedMatches}; regex={scenario.UseRegex}; " +
+            $"exact={scenario.ExactMatch}; multiline={scenario.Multiline}");
+
+        using var settingsScope = PreviewTestSettingsScope.Create();
+        HashSet<int> processIdsBefore = CaptureDebugYaguProcessIds(yaguExe);
 
         try
         {
-            // Step 1: drive the UI and capture screenshots against the deterministic corpus.
             RunPowerShellScript(
                 navScript,
-                $"-Directory \"{corpusDir}\" -Query \"{query}\" -ScreenshotDir \"{screenshotDir}\" " +
-                "-SearchWaitSeconds 4 -MatchIterations 24",
-                timeout: TimeSpan.FromMinutes(5));
+                $"-Directory \"{corpusDir}\" -Query \"{scenario.Query}\" " +
+                $"-ScreenshotDir \"{screenshotDir}\" -SearchWaitSeconds {scenario.SearchWaitSeconds} " +
+                $"-MatchIterations {scenario.MatchIterations} -MaxFiles {scenario.FileCount} " +
+                $"-ExpectedFiles {scenario.FileCount} -UseRegex {Convert.ToInt32(scenario.UseRegex)} " +
+                $"-ExactMatch {Convert.ToInt32(scenario.ExactMatch)} -Multiline {Convert.ToInt32(scenario.Multiline)}",
+                timeout: TimeSpan.FromMinutes(8),
+                settingsFilePath: settingsScope.SettingsPath);
 
-            // Step 2: red-pixel scan over 03-match-*.png. Use Threshold = MinRedPixelsPerMatch - 1
-            // so the script only emits rows for screenshots whose count is BELOW the floor;
-            // any output row therefore indicates a regression.
-            var thresholdBelow = MinRedPixelsPerMatch - 1;
-            var redCountOutput = RunPowerShellScript(
+            string manifestPath = Path.Combine(screenshotDir, "navigation.tsv");
+            Assert.True(File.Exists(manifestPath), $"Navigation manifest was not created: {manifestPath}");
+            NavigationRow[] rows = ReadNavigationManifest(manifestPath);
+            string[] matchScreenshots = Directory.GetFiles(screenshotDir, "03-match-*.png");
+
+            Assert.True(matchScreenshots.Length >= scenario.MinimumScreenshots,
+                $"Scenario '{scenario.Id}' produced only {matchScreenshots.Length} match screenshots; " +
+                $"expected at least {scenario.MinimumScreenshots}. Artifacts: {screenshotDir}");
+            Assert.Equal(matchScreenshots.Length, rows.Length);
+            Assert.All(rows, row => Assert.Equal(scenario.ExpectedMatches, row.Total));
+            Assert.All(rows, row => Assert.Equal(scenario.FileCount, row.Files));
+            Assert.All(rows, row => Assert.True(row.ContextCompared,
+                $"Occurrence {row.Occurrence} did not compare left/right context."));
+            Assert.All(rows, row => Assert.Equal(scenario.ExpectedHighlightLength, row.ContextMatch.Length));
+            Assert.Equal(
+                Enumerable.Range(2, rows.Length).ToArray(),
+                rows.Select(row => row.Occurrence).ToArray());
+
+            int maximumHighlightComponents = scenario.Multiline ? 2 : 1;
+            string geometryOutput = RunPowerShellScript(
                 redCountScript,
-                $"-Directory \"{screenshotDir}\" -Pattern \"03-match-*.png\" -Threshold {thresholdBelow}",
-                timeout: TimeSpan.FromMinutes(5));
+                $"-Directory \"{screenshotDir}\" -Pattern \"03-match-*.png\" " +
+                $"-Manifest \"{manifestPath}\" -ExpectedTermLength {scenario.ExpectedHighlightLength} " +
+                $"-MaximumHighlightComponents {maximumHighlightComponents} -StrictGeometry",
+                timeout: TimeSpan.FromMinutes(5),
+                settingsFilePath: settingsScope.SettingsPath);
 
-            _output.WriteLine("count-red-pixels output:");
-            _output.WriteLine(redCountOutput);
-
-            // Parse failing screenshots out of the script output. The script emits
-            // PSObject lines that, when echoed, take the form:
-            //   RedPixels Path
-            //   --------- ----
-            //          12 D:\...\03-match-05.png
-            // We grep for any line ending in "03-match-*.png" with a leading
-            // RedPixels integer < MinRedPixelsPerMatch.
-            var failures = ParseFailingScreenshots(redCountOutput, MinRedPixelsPerMatch);
-
-            // Sanity check: we must have produced at least one 03-match-*.png. Otherwise
-            // the UI script itself failed silently (e.g. preview never loaded) and the
-            // red-pixel scan trivially passes.
-            var matchScreenshots = Directory.GetFiles(screenshotDir, "03-match-*.png");
-            Assert.True(matchScreenshots.Length > 0,
-                $"No 03-match-*.png screenshots produced in {screenshotDir}. " +
-                "The UI test script likely failed to navigate matches. Check screenshot dir " +
-                "for '01-after-search.png' and '02-preview-loaded.png' for diagnosis.");
-            _output.WriteLine($"Screenshots produced: {matchScreenshots.Length}");
-
-            if (failures.Count > 0)
-            {
-                var lines = failures.Select(f =>
-                    $"  • {Path.GetFileName(f.Path)}: {f.RedPixels} red pixels (< {MinRedPixelsPerMatch})");
-                Assert.Fail(
-                    $"{failures.Count} of {matchScreenshots.Length} match-nav screenshots had " +
-                    $"fewer than {MinRedPixelsPerMatch} red highlight pixels — the active-match " +
-                    $"highlight was likely not visible in those frames:\n" +
-                    string.Join("\n", lines) +
-                    $"\n\nReview the screenshots in {screenshotDir} to confirm.");
-            }
+            _output.WriteLine("Strict highlight geometry output:");
+            _output.WriteLine(geometryOutput);
+            Assert.Contains("GEOMETRY\tPASS", geometryOutput);
+            Assert.DoesNotContain("GEOMETRY\tFAIL", geometryOutput);
         }
         catch
         {
@@ -147,14 +139,15 @@ public sealed class MatchNavRegressionTests
         }
         finally
         {
-            // The corpus is disposable — always clean it up (screenshots are kept for diagnosis).
+            StopDebugYaguCreatedAfter(yaguExe, processIdsBefore);
             try { Directory.Delete(corpusDir, recursive: true); } catch { /* best-effort */ }
         }
     }
 
     // ───────────────────────── Helpers ─────────────────────────
 
-    private string RunPowerShellScript(string scriptPath, string scriptArgs, TimeSpan timeout)
+    private string RunPowerShellScript(
+        string scriptPath, string scriptArgs, TimeSpan timeout, string? settingsFilePath = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -167,6 +160,11 @@ public sealed class MatchNavRegressionTests
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+
+        // The launched Yagu.exe inherits this, so the app under test reads the throwaway settings file
+        // instead of the developer's own configuration.
+        if (settingsFilePath is not null)
+            psi.Environment[SettingsService.SettingsFileOverrideEnvVar] = settingsFilePath;
 
         _output.WriteLine($"$ pwsh -File {Path.GetFileName(scriptPath)} {scriptArgs}");
         using var proc = Process.Start(psi)
@@ -205,55 +203,125 @@ public sealed class MatchNavRegressionTests
         return outStr;
     }
 
-    private static List<(int RedPixels, string Path)> ParseFailingScreenshots(string output, int floor)
+    private static NavigationRow[] ReadNavigationManifest(string path)
     {
-        var failures = new List<(int, string)>();
-        foreach (var rawLine in output.Split('\n'))
+        return File.ReadLines(path)
+            .Skip(1)
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Select(line =>
         {
-            var line = rawLine.TrimEnd('\r').Trim();
-            if (line.Length == 0) continue;
-            // Skip table headers/separators emitted by Format-Table.
-            if (line.StartsWith("RedPixels", StringComparison.OrdinalIgnoreCase)) continue;
-            if (line.StartsWith("---", StringComparison.Ordinal)) continue;
-
-            // Expected: "<integer><spaces><path-ending-in-03-match-*.png>"
-            int firstSpace = line.IndexOf(' ');
-            if (firstSpace <= 0) continue;
-            var numText = line[..firstSpace];
-            if (!int.TryParse(numText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var redCount))
-                continue;
-            var pathPart = line[(firstSpace + 1)..].Trim();
-            if (pathPart.Length == 0) continue;
-            var fileName = Path.GetFileName(pathPart);
-            if (!fileName.StartsWith("03-match-", StringComparison.OrdinalIgnoreCase)) continue;
-            if (!fileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) continue;
-
-            if (redCount < floor)
-                failures.Add((redCount, pathPart));
-        }
-        return failures;
+            string[] columns = line.Split('\t');
+            Assert.True(columns.Length >= 16, $"Malformed navigation manifest row: {line}");
+            return new NavigationRow(
+                Screenshot: columns[0],
+                Occurrence: int.Parse(columns[1]),
+                Total: int.Parse(columns[2]),
+                Files: int.Parse(columns[3]),
+                ContextCompared: string.Equals(columns[9], "PASS", StringComparison.Ordinal),
+                ContextMatch: Encoding.UTF8.GetString(Convert.FromBase64String(columns[14])));
+        }).ToArray();
     }
 
-    // Builds a small, deterministic corpus so the match-nav UI flow is fast and reliable: four files
-    // each with eight lines containing the query term (32 matches total), giving plenty to navigate
-    // through and screenshot the active-match highlight for, without depending on a huge live search.
-    private static void CreateMatchNavCorpus(string dir, string query)
+    private static HashSet<int> CaptureDebugYaguProcessIds(string executablePath)
     {
-        for (int f = 1; f <= 4; f++)
+        var processIds = new HashSet<int>();
+        foreach (Process process in Process.GetProcessesByName("Yagu"))
         {
-            var sb = new System.Text.StringBuilder();
-            for (int ln = 1; ln <= 24; ln++)
+            using (process)
             {
-                sb.AppendLine(ln % 3 == 0
-                    ? $"L{ln}: the {query} appears clearly here on line {ln} of file {f}."
-                    : $"L{ln}: filler line {ln} of file {f} with no target term.");
+                try
+                {
+                    if (string.Equals(process.MainModule?.FileName, executablePath, StringComparison.OrdinalIgnoreCase))
+                        processIds.Add(process.Id);
+                }
+                catch { }
             }
-            File.WriteAllText(
-                Path.Combine(dir, $"match-corpus-{f}.txt"),
-                sb.ToString(),
-                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        return processIds;
+    }
+
+    private static void StopDebugYaguCreatedAfter(string executablePath, IReadOnlySet<int> processIdsBefore)
+    {
+        foreach (Process process in Process.GetProcessesByName("Yagu"))
+        {
+            using (process)
+            {
+                try
+                {
+                    if (!processIdsBefore.Contains(process.Id)
+                        && string.Equals(process.MainModule?.FileName, executablePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        process.Kill(entireProcessTree: true);
+                        process.WaitForExit(5_000);
+                    }
+                }
+                catch { }
+            }
         }
     }
+
+    /// <summary>
+    /// Deterministic settings for the app under test, written to a throwaway file and handed to the child
+    /// process via <see cref="SettingsService.SettingsFileOverrideEnvVar"/>. This must NEVER touch the real
+    /// user settings: an earlier version wrote %APPDATA%\Yagu\settings.json directly and a running app
+    /// re-persisted the test values, silently switching the developer's own searches to the slow managed
+    /// enumeration backend.
+    /// </summary>
+    private sealed class PreviewTestSettingsScope : IDisposable
+    {
+        private readonly string _directory;
+
+        private PreviewTestSettingsScope(string directory, string settingsPath)
+        {
+            _directory = directory;
+            SettingsPath = settingsPath;
+        }
+
+        public string SettingsPath { get; }
+
+        public static PreviewTestSettingsScope Create()
+        {
+            string directory = Path.Combine(
+                Path.GetTempPath(), "yagu-match-nav-settings-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string path = Path.Combine(directory, "settings.json");
+
+            var settings = new JsonObject
+            {
+                ["PreviewWordWrap"] = false,
+                ["PreviewWrapModeIndex"] = 2,
+                ["PreviewOverlayColor"] = "#FFFF4500",
+                ["PreviewMatchTextColor"] = "#FFFFD700",
+                ["PreviewGutterContextColor"] = "#FF9CDCFE",
+                ["PreviewGutterMatchColor"] = "#FF9CDCFE",
+                ["PreviewMatchLineColor"] = "#FFFFFFFF",
+                ["PreviewTextFontFamily"] = "Consolas",
+                ["PreviewTextFontSize"] = 14,
+                // The corpus is created moments before the run, so Everything has not indexed it yet.
+                ["FileListerBackendIndex"] = 3,
+                ["EnableContentIndex"] = false,
+                ["UseContentIndexByDefault"] = false,
+            };
+            File.WriteAllText(
+                path,
+                settings.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            return new PreviewTestSettingsScope(directory, path);
+        }
+
+        public void Dispose()
+        {
+            try { Directory.Delete(_directory, recursive: true); } catch { }
+        }
+    }
+
+    private sealed record NavigationRow(
+        string Screenshot,
+        int Occurrence,
+        int Total,
+        int Files,
+        bool ContextCompared,
+        string ContextMatch);
 
     private static string FindSolutionRoot()
     {

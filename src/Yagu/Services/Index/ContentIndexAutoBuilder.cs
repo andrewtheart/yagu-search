@@ -373,6 +373,10 @@ public sealed class ContentIndexAutoBuilder
                     case IncrementalUpdateOutcome.NoChanges:
                         skipped++;
                         break;
+                    case IncrementalUpdateOutcome.SizeBudgetReached:
+                        // A deliberate storage-budget halt, not a broken index — never rebuild from here.
+                        skipped++;
+                        break;
                     default: // NeedsFullRebuild
                         YaguLog.For("ContentIndex").LogInformation("Incremental auto-refresh: '{Root}' needs a full rebuild — rebuilding.", root);
                         manager.BuildScope(root, policyForRoot?.Invoke(root) ?? policy, cancellationToken, 0, _maxDiskUsagePercent,

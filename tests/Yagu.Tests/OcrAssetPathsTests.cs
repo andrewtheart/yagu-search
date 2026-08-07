@@ -88,6 +88,33 @@ public sealed class OcrAssetPathsTests
     }
 
     [Fact]
+    public void PaddleModelsPresent_RecognizesTheRealPpOcrV5Layout()
+    {
+        // The exact directory names PaddleSharp downloads for the default ChineseV5 model. The role
+        // ("det"/"rec") sits mid-name here, not at the end, so a suffix test reported a fully
+        // downloaded model set as missing and re-prompted for the download on every search.
+        using var dir = new TempDir();
+        WriteModel(dir.Path, "PP-OCRv5_mobile_det_infer");
+        WriteModel(dir.Path, "PP-OCRv5_mobile_rec_infer");
+        WriteModel(dir.Path, "ch_ppocr_mobile_v2.0_cls");
+
+        Assert.True(OcrAssetPaths.PaddleModelsPresent(dir.Path));
+        Assert.False(OcrAssetPaths.BuildPaddleRequirement("PaddleSharp", nativePresent: true, modelsPresent: true).DownloadNeeded);
+    }
+
+    [Fact]
+    public void PaddleModelsPresent_DoesNotAcceptAnUnrelatedNameContainingARole()
+    {
+        // "predetermined" contains "det" but is not a detection model; only whole segments count.
+        using var dir = new TempDir();
+        WriteModel(dir.Path, "predetermined");
+        WriteModel(dir.Path, "PP-OCRv5_mobile_rec_infer");
+        WriteModel(dir.Path, "ch_ppocr_mobile_v2.0_cls");
+
+        Assert.False(OcrAssetPaths.PaddleModelsPresent(dir.Path));
+    }
+
+    [Fact]
     public void TesseractDataPresent_ChecksEngTrainedData()
     {
         using var dir = new TempDir();

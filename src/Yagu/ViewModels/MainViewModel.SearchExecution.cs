@@ -525,9 +525,14 @@ public sealed partial class MainViewModel
                     case SearchEvent.Progress p:
                         FilesScanned = p.Snapshot.FilesScanned;
                         TotalFiles = p.Snapshot.TotalFiles;
-                        // Latch out of the indeterminate name-first phase once the full-scan total is live.
-                        if (SearchInNameFirstPhase && !p.Snapshot.NameFirstPhase)
+                        // A backend without an upfront count reports processed/seen-so-far during discovery,
+                        // which looks nearly complete. Stay indeterminate until the final total is published.
+                        if (SearchInNameFirstPhase && p.Snapshot.TotalFilesKnown)
                             SearchInNameFirstPhase = false;
+                        UpdateDisplayedSearchProgress(
+                            p.Snapshot.FilesScanned,
+                            p.Snapshot.TotalFiles,
+                            indeterminate: !p.Snapshot.TotalFilesKnown);
                         UpdateSearchProgressPhaseLabel(p.Snapshot);
                         MatchesFound = Math.Max(p.Snapshot.MatchesFound, ClampMatchCount(uiMatchesReceived));
                         FilesSkipped = p.Snapshot.FilesSkipped;
@@ -586,6 +591,7 @@ public sealed partial class MainViewModel
                         FilesScanned = sc.Summary.FilesScanned;
                         TotalFiles = sc.Summary.TotalFiles;
                         SearchInNameFirstPhase = false;
+                        UpdateDisplayedSearchProgress(sc.Summary.FilesScanned, sc.Summary.TotalFiles, indeterminate: false);
                         MatchesFound = Math.Max(sc.Summary.TotalMatches, ClampMatchCount(uiMatchesReceived));
                         FilesSkipped = sc.Summary.FilesSkipped;
                         AccessDeniedCount = sc.Summary.SkipReasons?.AccessDenied ?? 0;
@@ -606,6 +612,7 @@ public sealed partial class MainViewModel
                         FilesScanned = c.Summary.FilesScanned;
                         TotalFiles = c.Summary.TotalFiles;
                         SearchInNameFirstPhase = false;
+                        UpdateDisplayedSearchProgress(c.Summary.FilesScanned, c.Summary.TotalFiles, indeterminate: false);
                         MatchesFound = actualTotalMatches;
                         FilesSkipped = c.Summary.FilesSkipped;
                         AccessDeniedCount = c.Summary.SkipReasons?.AccessDenied ?? 0;
@@ -836,6 +843,7 @@ public sealed partial class MainViewModel
         FallbackReason = null;
         _searchProgressPhaseLabel = string.Empty;
         _sourceBackedSearchProgress = null;
+        ResetDisplayedSearchProgress();
         OnPropertyChanged(nameof(SearchProgressRightLabel));
         FilesScanned = 0;
         TotalFiles = 0;

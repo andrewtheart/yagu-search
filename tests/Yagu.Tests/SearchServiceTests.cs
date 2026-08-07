@@ -850,6 +850,7 @@ public class SearchServiceTests : IDisposable
         {
             if (evt is SearchEvent.Progress progress && !discoveryCompleteSeen && progress.Snapshot.TotalFiles > 0)
             {
+                Assert.False(progress.Snapshot.TotalFilesKnown);
                 progressBeforeDiscoveryComplete = true;
             }
             else if (evt is SearchEvent.DiscoveryComplete)
@@ -897,6 +898,7 @@ public class SearchServiceTests : IDisposable
 
         Assert.NotNull(progressBeforeDiscoveryComplete);
         Assert.Equal(1_000_000, progressBeforeDiscoveryComplete!.TotalFiles);
+        Assert.True(progressBeforeDiscoveryComplete.TotalFilesKnown);
         Assert.True(progressBeforeDiscoveryComplete.FilesScanned < progressBeforeDiscoveryComplete.TotalFiles);
     }
 
@@ -1731,6 +1733,20 @@ public class SearchServiceExtraTests : IDisposable
             recoveryMarginPercent: 100);
         Assert.True(relieved);
     }
+
+    [Fact]
+    public void IsMemoryPressureRelievedForSnapshot_ProcessBelowSheddableFloor_ReturnsTrueWhileSystemStaysBusy()
+    {
+        // Once Yagu is back under the sheddable floor it is no longer a contributor, so a search must not
+        // stay stuck in memory-saving mode just because other processes keep the machine busy.
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSetBytes: 23L * 1024 * 1024,
+            effectiveProcessCapBytes: 768L * 1024 * 1024,
+            systemMemoryLoadPercent: 87,
+            pressurePercent: 75,
+            recoveryMarginPercent: 5);
+        Assert.True(relieved);
+    }
 }
 
 // ─── SearchService.ExtractExtensions ────────────────────────────────────
@@ -2303,7 +2319,7 @@ public class IsMemoryPressureHighForSnapshotTests
     public void SystemLoadExceedsThreshold_ReturnsTrue()
     {
         Assert.True(SearchService.IsMemoryPressureHighForSnapshot(
-            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            workingSet: 2_000_000_000, effectiveCap: 4_000_000_000,
             hasSystemLoad: true, systemLoadPercent: 85,
             pressurePercent: 80, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
     }
@@ -2312,7 +2328,7 @@ public class IsMemoryPressureHighForSnapshotTests
     public void SystemLoadBelowThreshold_ReturnsFalse()
     {
         Assert.False(SearchService.IsMemoryPressureHighForSnapshot(
-            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            workingSet: 2_000_000_000, effectiveCap: 4_000_000_000,
             hasSystemLoad: true, systemLoadPercent: 50,
             pressurePercent: 80, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
     }
@@ -2321,7 +2337,7 @@ public class IsMemoryPressureHighForSnapshotTests
     public void GcFallback_HighLoad_ReturnsTrue()
     {
         Assert.True(SearchService.IsMemoryPressureHighForSnapshot(
-            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            workingSet: 2_000_000_000, effectiveCap: 4_000_000_000,
             hasSystemLoad: false, systemLoadPercent: 0,
             pressurePercent: 80,
             gcMemoryLoadBytes: 9_000_000_000, gcTotalAvailableBytes: 10_000_000_000));
@@ -2331,7 +2347,7 @@ public class IsMemoryPressureHighForSnapshotTests
     public void GcFallback_LowLoad_ReturnsFalse()
     {
         Assert.False(SearchService.IsMemoryPressureHighForSnapshot(
-            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            workingSet: 2_000_000_000, effectiveCap: 4_000_000_000,
             hasSystemLoad: false, systemLoadPercent: 0,
             pressurePercent: 80,
             gcMemoryLoadBytes: 1_000_000_000, gcTotalAvailableBytes: 10_000_000_000));
@@ -2341,7 +2357,7 @@ public class IsMemoryPressureHighForSnapshotTests
     public void PressureDisabled_Zero_ReturnsFalse()
     {
         Assert.False(SearchService.IsMemoryPressureHighForSnapshot(
-            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            workingSet: 2_000_000_000, effectiveCap: 4_000_000_000,
             hasSystemLoad: true, systemLoadPercent: 99,
             pressurePercent: 0, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
     }
@@ -2350,9 +2366,92 @@ public class IsMemoryPressureHighForSnapshotTests
     public void PressureAbove100_ReturnsFalse()
     {
         Assert.False(SearchService.IsMemoryPressureHighForSnapshot(
-            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            workingSet: 2_000_000_000, effectiveCap: 4_000_000_000,
             hasSystemLoad: true, systemLoadPercent: 99,
             pressurePercent: 101, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
+    }
+
+    // Replays a real session: a 64 GB machine sitting at 76-87% system load because of OTHER processes,
+    // while Yagu itself held 23 MB against a 768 MB cap. Every cycle logged "Eviction acknowledged:
+    // freed 0" yet still forced degraded mode, working-set trims and compacting GCs (501ms, 1,138ms).
+    private const long RealSessionCap = 768L * 1024 * 1024;
+
+    [Fact]
+    public void SystemLoadHigh_ButProcessHoldsNothingSheddable_ReturnsFalse()
+    {
+        Assert.False(SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 23L * 1024 * 1024, effectiveCap: RealSessionCap,
+            hasSystemLoad: true, systemLoadPercent: 78,
+            pressurePercent: 75, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
+    }
+
+    [Fact]
+    public void GcFallbackHigh_ButProcessHoldsNothingSheddable_ReturnsFalse()
+    {
+        Assert.False(SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 23L * 1024 * 1024, effectiveCap: RealSessionCap,
+            hasSystemLoad: false, systemLoadPercent: 0,
+            pressurePercent: 75,
+            gcMemoryLoadBytes: 9_000_000_000, gcTotalAvailableBytes: 10_000_000_000));
+    }
+
+    [Fact]
+    public void SystemLoadHigh_AndProcessHoldsSheddableMemory_ReturnsTrue()
+    {
+        Assert.True(SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 400L * 1024 * 1024, effectiveCap: RealSessionCap,
+            hasSystemLoad: true, systemLoadPercent: 78,
+            pressurePercent: 75, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
+    }
+
+    [Fact]
+    public void ProcessOverItsOwnCap_ReturnsTrueEvenWhenSystemIsIdle()
+    {
+        Assert.True(SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 1_035L * 1024 * 1024, effectiveCap: RealSessionCap,
+            hasSystemLoad: true, systemLoadPercent: 20,
+            pressurePercent: 75, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
+    }
+
+    // Every (process WS MB, system load %) pair logged by the real session, in order. The machine sat at
+    // 76-87% because of other processes the whole time, so the trigger is decided purely by what Yagu held.
+    [Theory]
+    [InlineData(23, 78, false)]
+    [InlineData(127, 78, false)]
+    [InlineData(146, 78, false)]
+    [InlineData(218, 78, true)]
+    [InlineData(403, 78, true)]
+    [InlineData(619, 80, true)]
+    [InlineData(770, 79, true)]
+    [InlineData(1035, 87, true)]
+    public void RealSessionSamples_OnlyShedOnceYaguHoldsSomething(int workingSetMb, uint systemLoadPercent, bool expectedPressure)
+    {
+        bool pressure = SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: workingSetMb * 1024L * 1024,
+            effectiveCap: RealSessionCap,
+            hasSystemLoad: true,
+            systemLoadPercent: systemLoadPercent,
+            pressurePercent: 75,
+            gcMemoryLoadBytes: 0,
+            gcTotalAvailableBytes: 0);
+
+        Assert.Equal(expectedPressure, pressure);
+    }
+
+    [Fact]
+    public void RealSessionStart_DoesNotLatchDegradedModeForTheWholeSearch()
+    {
+        // Cycle #1 fired at 2 files scanned with Yagu at 23 MB. Because degraded mode is latched for the
+        // rest of the run, that single bogus trigger shrank every native batch for the entire search.
+        bool pressureAtSearchStart = SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 23L * 1024 * 1024, effectiveCap: RealSessionCap,
+            hasSystemLoad: true, systemLoadPercent: 78,
+            pressurePercent: 75, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0);
+
+        Assert.False(pressureAtSearchStart);
+        Assert.NotEqual(
+            SearchService.ResolveNativeBatchTarget(currentBatchTarget: 2048, memorySaving: true),
+            SearchService.ResolveNativeBatchTarget(currentBatchTarget: 2048, memorySaving: pressureAtSearchStart));
     }
 }
 
