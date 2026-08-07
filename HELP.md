@@ -758,7 +758,7 @@ The CLI exposes the same lifecycle through `--build-index`, `--rebuild-index`, `
 | Content-search parallelism | Concurrent file scan workers: Safe cap, 1 thread, Half cores, 2x cores, or All cores. |
 | Limit disk-intensive parallelism on HDDs | Authoritative per-root HDD safeguard. Forces content-scan CPU parallelism, OCR worker processes, content-index query lanes, and content-index build lanes to one. The native scanner's separate I/O oversubscription can still overlap sequential reads. |
 | SDK channel buffer size | Number of file paths buffered between Everything SDK discovery and search workers. |
-| Search result temp-file drive | Drive used for disk-backed result temp files during memory-saving mode. Only writable drives with enough free space are listed. |
+| Search result temp-file drive | Drive used for disk-backed result temp files during memory-saving mode. Only writable drives with enough free space are listed, ordered by storage tier (NVMe, SSD, SATA, HDD, then unknown). Within a tier, drives with an OS-advertised spindle speed are ordered fastest first. |
 | Temp-drive full warning threshold (%) | Active searches are terminated when the search result temp-file drive is more than this full. Default 90%; valid range 1-99. Checked every 30 seconds. |
 | System memory pressure limit (%) | System RAM usage threshold for memory-saving mode. 0 = disabled. |
 | Process memory hard cap (MB) | Working-set limit before memory-saving activates. |

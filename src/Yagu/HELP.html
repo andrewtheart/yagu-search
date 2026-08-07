@@ -3553,7 +3553,9 @@ search workers.</td>
 <tr>
 <td>Search result temp-file drive</td>
 <td>Drive used for disk-backed result temp files during memory-saving
-mode. Only writable drives with enough free space are listed.</td>
+mode. Only writable drives with enough free space are listed, ordered by
+storage tier (NVMe, SSD, SATA, HDD, then unknown). Within a tier, drives
+with an OS-advertised spindle speed are ordered fastest first.</td>
 </tr>
 <tr>
 <td>Temp-drive full warning threshold (%)</td>

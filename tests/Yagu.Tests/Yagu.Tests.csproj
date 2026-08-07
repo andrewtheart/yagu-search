@@ -242,6 +242,7 @@
     <Compile Include="..\..\src\Yagu\Services\DirectoryAutoCompleteService.cs" Link="Source\Services\DirectoryAutoCompleteService.cs" />
     <Compile Include="..\..\src\Yagu\Services\GitignoreService.cs" Link="Source\Services\GitignoreService.cs" />
     <Compile Include="..\..\src\Yagu\Services\DynamicGitignoreMatcher.cs" Link="Source\Services\DynamicGitignoreMatcher.cs" />
+    <Compile Include="..\..\src\Yagu\Services\ResultStoreDriveProfileDetector.cs" Link="Source\Services\ResultStoreDriveProfileDetector.cs" />
     <Compile Include="..\..\src\Yagu\Services\ResultStoreTempLocationService.cs" Link="Source\Services\ResultStoreTempLocationService.cs" />
     <Compile Include="..\..\src\Yagu\Services\ResultStore.cs" Link="Source\Services\ResultStore.cs" />
     <Compile Include="..\..\src\Yagu\Services\SessionFileService.cs" Link="Source\Services\SessionFileService.cs" />

@@ -1,11 +1,22 @@
 namespace Yagu.Services;
 
+public enum ResultStoreDriveTier
+{
+    Nvme,
+    SolidState,
+    Sata,
+    HardDisk,
+    Unknown,
+}
+
 public sealed record ResultStoreTempDriveOption(
     string DriveRoot,
     string TempDirectory,
     string DisplayName,
     long AvailableFreeBytes,
-    bool IsLaunchDrive);
+    bool IsLaunchDrive,
+    ResultStoreDriveTier DriveTier = ResultStoreDriveTier.Unknown,
+    uint? AdvertisedSpeedRpm = null);
 
 public sealed record ResultStoreTempLocationProbe(
     bool CurrentDirectoryIsUsable,
@@ -40,8 +51,24 @@ public static class ResultStoreTempLocationService
                 options.Add(option);
         }
 
-        options.Sort((left, right) =>
+        SortDriveOptions(options);
+
+        return options;
+    }
+
+    internal static void SortDriveOptions(List<ResultStoreTempDriveOption> options)
+    {
+        options.Sort(static (left, right) =>
         {
+            int tierCompare = left.DriveTier.CompareTo(right.DriveTier);
+            if (tierCompare != 0) return tierCompare;
+
+            int speedAvailabilityCompare = right.AdvertisedSpeedRpm.HasValue.CompareTo(left.AdvertisedSpeedRpm.HasValue);
+            if (speedAvailabilityCompare != 0) return speedAvailabilityCompare;
+
+            int speedCompare = (right.AdvertisedSpeedRpm ?? 0).CompareTo(left.AdvertisedSpeedRpm ?? 0);
+            if (speedCompare != 0) return speedCompare;
+
             int launchCompare = left.IsLaunchDrive.CompareTo(right.IsLaunchDrive);
             if (launchCompare != 0) return launchCompare;
 
@@ -50,8 +77,6 @@ public static class ResultStoreTempLocationService
 
             return string.Compare(left.DriveRoot, right.DriveRoot, StringComparison.OrdinalIgnoreCase);
         });
-
-        return options;
     }
 
     public static Task<IReadOnlyList<ResultStoreTempDriveOption>> GetWritableDriveOptionsAsync(
@@ -159,12 +184,15 @@ public static class ResultStoreTempLocationService
             if (!CanWriteToDirectory(tempDirectory)) return null;
 
             bool isLaunchDrive = string.Equals(root, launchDriveRoot, StringComparison.OrdinalIgnoreCase);
+            ResultStoreDriveHardwareProfile hardware = ResultStoreDriveProfileDetector.Detect(root);
             return new ResultStoreTempDriveOption(
                 root,
                 tempDirectory,
-                BuildDisplayName(drive, root, isLaunchDrive),
+                BuildDisplayName(drive, root, isLaunchDrive, hardware),
                 drive.AvailableFreeSpace,
-                isLaunchDrive);
+                isLaunchDrive,
+                hardware.Tier,
+                hardware.AdvertisedSpeedRpm);
         }
         catch
         {
@@ -172,15 +200,31 @@ public static class ResultStoreTempLocationService
         }
     }
 
-    private static string BuildDisplayName(DriveInfo drive, string root, bool isLaunchDrive)
+    private static string BuildDisplayName(
+        DriveInfo drive,
+        string root,
+        bool isLaunchDrive,
+        ResultStoreDriveHardwareProfile hardware)
     {
         string label = string.Empty;
         try { label = drive.VolumeLabel; }
         catch { }
 
         string name = string.IsNullOrWhiteSpace(label) ? root : $"{root} ({label})";
+        string hardwareName = hardware.Tier switch
+        {
+            ResultStoreDriveTier.Nvme => "NVMe",
+            ResultStoreDriveTier.SolidState => "SSD",
+            ResultStoreDriveTier.Sata => "SATA",
+            ResultStoreDriveTier.HardDisk => "HDD",
+            _ => string.Empty,
+        };
+        string speed = hardware.AdvertisedSpeedRpm.HasValue
+            ? $" ({hardware.AdvertisedSpeedRpm.Value:N0} RPM)"
+            : string.Empty;
+        string hardwareSuffix = hardwareName.Length > 0 ? $" - {hardwareName}{speed}" : string.Empty;
         string launchSuffix = isLaunchDrive ? " - launch drive" : string.Empty;
-        return $"{name} - {FormatBytesAsGiB(drive.AvailableFreeSpace)} free{launchSuffix}";
+        return $"{name}{hardwareSuffix} - {FormatBytesAsGiB(drive.AvailableFreeSpace)} free{launchSuffix}";
     }
 
     private static bool CanWriteToDirectory(string directory)

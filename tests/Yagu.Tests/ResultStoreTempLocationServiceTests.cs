@@ -300,25 +300,37 @@ public sealed class ResultStoreTempLocationServiceBranchTests
     }
 
     [Fact]
-    public void GetWritableDriveOptions_SortsByLaunchDriveThenFreeSpace()
+    public void SortDriveOptions_OrdersByMediaTierThenAdvertisedSpeed()
     {
-        string? launchRoot = ResultStoreTempLocationService.GetLaunchDriveRoot();
-        var options = ResultStoreTempLocationService.GetWritableDriveOptions(launchRoot);
-        if (options.Count < 2) return; // can't verify sort with single drive
+        var options = new List<ResultStoreTempDriveOption>
+        {
+            Option(@"H:\", ResultStoreDriveTier.HardDisk, 5_400),
+            Option(@"A:\", ResultStoreDriveTier.Sata),
+            Option(@"N:\", ResultStoreDriveTier.Nvme),
+            Option(@"I:\", ResultStoreDriveTier.HardDisk),
+            Option(@"S:\", ResultStoreDriveTier.SolidState),
+            Option(@"G:\", ResultStoreDriveTier.HardDisk, 7_200),
+        };
 
-        // Non-launch drives come first (IsLaunchDrive=false sorts before true)
-        int firstLaunchIdx = -1;
-        for (int i = 0; i < options.Count; i++)
-        {
-            if (options[i].IsLaunchDrive) { firstLaunchIdx = i; break; }
-        }
-        if (firstLaunchIdx > 0)
-        {
-            // All before it should be non-launch
-            for (int i = 0; i < firstLaunchIdx; i++)
-                Assert.False(options[i].IsLaunchDrive);
-        }
+        ResultStoreTempLocationService.SortDriveOptions(options);
+
+        Assert.Equal(
+            [@"N:\", @"S:\", @"A:\", @"G:\", @"H:\", @"I:\"],
+            options.Select(static option => option.DriveRoot));
     }
+
+    private static ResultStoreTempDriveOption Option(
+        string driveRoot,
+        ResultStoreDriveTier driveTier,
+        uint? advertisedSpeedRpm = null) =>
+        new(
+            driveRoot,
+            Path.Combine(driveRoot, "Temp", "Yagu"),
+            driveRoot,
+            100L * 1024 * 1024 * 1024,
+            IsLaunchDrive: false,
+            driveTier,
+            advertisedSpeedRpm);
 
     [Fact]
     public void ChoosePreferredOption_AllMatchLaunchRoot_FallsBackToFirstOption()
@@ -496,5 +508,86 @@ public sealed class ResultStoreTempLocationStartupTests
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.slnx")))
             dir = dir.Parent;
         return dir?.FullName ?? Directory.GetCurrentDirectory();
+    }
+}
+
+public sealed class ResultStoreDriveProfileDetectorTests
+{
+    [Fact]
+    public void PhysicalDiskQueryCommand_ReadsRawCimPropertyValues()
+    {
+        Assert.Contains("$_.CimInstanceProperties['DeviceId'].Value", ResultStoreDriveProfileDetector.PhysicalDiskQueryCommand);
+        Assert.Contains("[uint32]($_.CimInstanceProperties['MediaType'].Value)", ResultStoreDriveProfileDetector.PhysicalDiskQueryCommand);
+        Assert.Contains("[uint32]($_.CimInstanceProperties['BusType'].Value)", ResultStoreDriveProfileDetector.PhysicalDiskQueryCommand);
+        Assert.Contains("[uint32]($_.CimInstanceProperties['SpindleSpeed'].Value)", ResultStoreDriveProfileDetector.PhysicalDiskQueryCommand);
+        Assert.DoesNotContain("[uint32]($_.MediaType)", ResultStoreDriveProfileDetector.PhysicalDiskQueryCommand);
+    }
+
+    [Theory]
+    [InlineData(17u, 4u, false, ResultStoreDriveTier.Nvme)]
+    [InlineData(20u, null, null, ResultStoreDriveTier.Nvme)]
+    [InlineData(11u, 3u, true, ResultStoreDriveTier.HardDisk)]
+    [InlineData(11u, 4u, false, ResultStoreDriveTier.Sata)]
+    [InlineData(7u, 4u, false, ResultStoreDriveTier.SolidState)]
+    [InlineData(null, 5u, null, ResultStoreDriveTier.SolidState)]
+    [InlineData(null, null, true, ResultStoreDriveTier.HardDisk)]
+    [InlineData(null, null, false, ResultStoreDriveTier.SolidState)]
+    [InlineData(11u, null, null, ResultStoreDriveTier.Sata)]
+    [InlineData(null, null, null, ResultStoreDriveTier.Unknown)]
+    public void Classify_UsesBusMediaAndSeekPenalty(
+        uint? busType,
+        uint? mediaType,
+        bool? incursSeekPenalty,
+        ResultStoreDriveTier expected)
+    {
+        Assert.Equal(
+            expected,
+            ResultStoreDriveProfileDetector.Classify(busType, mediaType, incursSeekPenalty));
+    }
+
+    [Fact]
+    public void ParsePhysicalDiskMetadata_KeepsValidRpmAndDropsUnknownSentinels()
+    {
+        IReadOnlyDictionary<uint, WindowsPhysicalDiskMetadata> result =
+            ResultStoreDriveProfileDetector.ParsePhysicalDiskMetadata(
+                "0|4|17|0\r\n2|3|7|7200\r\n3|3|7|4294967295\r\nbad line\r\n");
+
+        Assert.Equal(3, result.Count);
+        Assert.Equal(new WindowsPhysicalDiskMetadata(4, 17, null), result[0]);
+        Assert.Equal(new WindowsPhysicalDiskMetadata(3, 7, 7_200), result[2]);
+        Assert.Equal(new WindowsPhysicalDiskMetadata(3, 7, null), result[3]);
+    }
+
+    [Theory]
+    [InlineData("bad|4|17|7200")]
+    [InlineData("0|bad|17|7200")]
+    [InlineData("0|4|bad|7200")]
+    [InlineData("0|4|17|bad")]
+    [InlineData("0|4|17|7200|extra")]
+    public void ParsePhysicalDiskMetadata_MalformedFields_AreIgnored(string line)
+    {
+        IReadOnlyDictionary<uint, WindowsPhysicalDiskMetadata> result =
+            ResultStoreDriveProfileDetector.ParsePhysicalDiskMetadata(line);
+
+        Assert.Empty(result);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(@"\\server\share")]
+    [InlineData(@"1:\Temp")]
+    public void Detect_NonDriveRoots_ReturnUnknown(string path)
+    {
+        Assert.Equal(
+            new ResultStoreDriveHardwareProfile(ResultStoreDriveTier.Unknown, null),
+            ResultStoreDriveProfileDetector.Detect(path));
+    }
+
+    [Fact]
+    public void Detect_NullPath_ReturnsUnknown()
+    {
+        Assert.Equal(
+            new ResultStoreDriveHardwareProfile(ResultStoreDriveTier.Unknown, null),
+            ResultStoreDriveProfileDetector.Detect(null!));
     }
 }
