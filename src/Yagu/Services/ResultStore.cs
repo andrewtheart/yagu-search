@@ -408,43 +408,6 @@ public sealed class ResultStore : IDisposable
     }
 
     /// <summary>
-    /// Writes Rust-packed context lines as BinaryWriter-format string list.
-    /// Rust format: repeated [4-byte LE length][UTF-8 bytes].
-    /// Output format: Int32(count) + repeated [7-bit-encoded length][UTF-8 bytes].
-    /// Lines are truncated to <see cref="LineTruncator.MaxDisplayLength"/> bytes.
-    /// </summary>
-    private static unsafe void WriteRawContextLines(BinaryWriter w, byte* ptr, int totalBytes, int count)
-    {
-        w.Write(count);
-        if (count == 0 || ptr == null || totalBytes == 0) return;
-
-        int pos = 0;
-        int maxBytes = (LineTruncator.MaxDisplayLength + 1) * 4; // same cap as DecodeAndTruncate
-        for (int i = 0; i < count && pos + 4 <= totalBytes; i++)
-        {
-            uint len = (uint)(ptr[pos] | (ptr[pos + 1] << 8) | (ptr[pos + 2] << 16) | (ptr[pos + 3] << 24));
-            pos += 4;
-            if (len > int.MaxValue || pos + (int)len > totalBytes)
-            {
-                // Malformed — write empty string for remaining
-                w.Write7BitEncodedInt(0);
-                continue;
-            }
-            int writeLen = Math.Min((int)len, maxBytes);
-            // Align to UTF-8 char boundary if truncated
-            if (writeLen < (int)len)
-            {
-                while (writeLen > 0 && (ptr[pos + writeLen] & 0xC0) == 0x80)
-                    writeLen--;
-            }
-            w.Write7BitEncodedInt(writeLen);
-            if (writeLen > 0)
-                w.BaseStream.Write(new ReadOnlySpan<byte>(ptr + pos, writeLen));
-            pos += (int)len;
-        }
-    }
-
-    /// <summary>
     /// Batched write: invokes <paramref name="action"/> with a per-item writer that
     /// returns the offset to record on each result. Holds the lock once and flushes
     /// once at the end. Use this during bulk eviction to avoid one Flush() syscall

@@ -1449,7 +1449,6 @@ public sealed class AppSettings
 public sealed class SettingsService
 {
     private readonly string _path;
-    private static readonly JsonSerializerOptions JsonOpts = AppSettingsJsonContext.Default.Options;
 
     public SettingsService() : this(ResolveInstanceSettingsPath()) { }
 
