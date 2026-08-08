@@ -601,6 +601,22 @@ public sealed class AdvancedOptionsTests
     }
 
     [Fact]
+    public void DirectoryCommandButtons_HaveNoSeparatingBorders()
+    {
+        foreach (string name in new[]
+        {
+            "PinStartupDirectoryButton",
+            "IndexDirectoryButton",
+            "BrowseDirectoryButton",
+        })
+        {
+            string button = ExtractXamlElement($"x:Name=\"{name}\"", 700);
+            Assert.Contains("BorderThickness=\"0\"", button);
+            Assert.DoesNotContain("BorderThickness=\"1,0,0,0\"", button);
+        }
+    }
+
+    [Fact]
     public void IndexDirectoryButton_HighlightDrivenFromDerivedIndexedState()
     {
         // The "selected" highlight tracks the derived IsCurrentDirectoryIndexed value (recomputed whenever

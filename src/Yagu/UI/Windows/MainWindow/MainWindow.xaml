@@ -517,7 +517,7 @@
                                       VerticalAlignment="Stretch" Padding="10,0" MinWidth="0"
                                       CornerRadius="0"
                                       Background="Transparent"
-                                      BorderThickness="1,0,0,0"
+                                      BorderThickness="0"
                                       BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
                             <FontIcon x:Name="PinStartupDirectoryIcon" Glyph="&#xE734;" FontSize="14" />
                         </ToggleButton>
@@ -527,7 +527,7 @@
                                       VerticalAlignment="Stretch" Padding="10,0" MinWidth="0"
                                       CornerRadius="0"
                                       Background="Transparent"
-                                      BorderThickness="1,0,0,0"
+                                      BorderThickness="0"
                                       BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
                             <FontIcon x:Name="IndexDirectoryIcon" Glyph="&#xE8F1;" FontSize="14" />
                         </ToggleButton>
@@ -537,7 +537,7 @@
                                 Padding="10,0" MinWidth="0"
                                 CornerRadius="0,4,4,0"
                                 Background="Transparent"
-                                BorderThickness="1,0,0,0"
+                                BorderThickness="0"
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
                             <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                                 <FontIcon Glyph="&#xED25;" FontSize="14" />
@@ -563,6 +563,7 @@
                         QuerySubmitted="OnQuerySubmitted"
                         TextChanged="OnQueryTextChanged"
                         SizeChanged="OnSearchInputSizeChanged"
+                        Loaded="OnQueryBoxLoaded"
                         LostFocus="OnQueryLostFocus">
                         <AutoSuggestBox.ItemTemplate>
                             <DataTemplate x:DataType="models:HistorySuggestion">
@@ -580,29 +581,29 @@
                         <!-- Style the inner TextBox so long queries wrap and fill the tall box
                              instead of staying on a single top line. AcceptsReturn stays false so
                              Enter still submits the search. The right padding reserves room for the
-                             overlaid InlineSearchToggles (Case/Regex/Multiline/Exact, ~116px + 36px
-                             margin) and the QueryClearButton (32px + 4px margin) so wrapped text never
-                             flows underneath those controls. -->
+                             overlaid QueryTrailingControls (clear + Case/Regex/Multiline/Exact) so
+                             wrapped text never flows underneath those controls. -->
                         <AutoSuggestBox.TextBoxStyle>
                             <Style TargetType="TextBox" BasedOn="{StaticResource AutoSuggestBoxTextBoxStyle}">
                                 <Setter Property="AcceptsReturn" Value="False" />
                                 <Setter Property="TextWrapping" Value="Wrap" />
                                 <Setter Property="VerticalContentAlignment" Value="Top" />
                                 <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
-                                <Setter Property="Padding" Value="10,6,158,6" />
+                                <Setter Property="Padding" Value="10,6,170,6" />
                             </Style>
                         </AutoSuggestBox.TextBoxStyle>
                     </AutoSuggestBox>
-                    <!-- Inline toggle buttons for search options -->
-                    <StackPanel x:Name="InlineSearchToggles"
+                    <!-- Custom trailing controls replace the inner TextBox's default far-right X.
+                         Keep the custom X outside InlineSearchToggles so it remains available in
+                         semantic mode, where the four traditional-search toggles are collapsed. -->
+                    <StackPanel x:Name="QueryTrailingControls"
                                 Orientation="Horizontal" Spacing="2"
                                 HorizontalAlignment="Right" VerticalAlignment="Center"
-                                Margin="0,0,36,0"
-                                Visibility="{x:Bind ViewModel.InlineSearchTogglesVisibility, Mode=OneWay}">
+                                Margin="0,0,8,0">
                         <!-- Inline calculator / unit-converter answer, shown inside the search box just
-                             to the left of the toggles when the query is a math expression (2+2,
+                             to the left of the clear/toggle controls when the query is a math expression (2+2,
                              sqrt(9)*4, 15% of 340) or a unit conversion (5 km to miles). The extra right
-                             margin keeps a gap between the pill and the Match case button. -->
+                             margin keeps a gap before the clear button. -->
                         <Border x:Name="InlineCalculatorBanner"
                                 Visibility="{x:Bind ViewModel.InlineCalculatorResultVisibility, Mode=OneWay}"
                                 VerticalAlignment="Center" Margin="0,0,10,0" Padding="8,2"
@@ -624,53 +625,57 @@
                                 </Button>
                             </StackPanel>
                         </Border>
-                        <ToggleButton x:Name="CaseSensitiveToggle"
-                                      AccessKey="C"
-                                      IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}"
-                                      ToolTipService.ToolTip="Match Case (Alt+C)"
-                                      Padding="4,2" MinWidth="0" MinHeight="0"
-                                      Width="28" Height="24" FontSize="12"
-                                      VerticalAlignment="Center">
-                            <TextBlock Text="Aa" FontSize="12" FontWeight="SemiBold" />
-                        </ToggleButton>
-                        <ToggleButton x:Name="RegexToggle"
-                                      AccessKey="R"
-                                      IsChecked="{x:Bind ViewModel.UseRegex, Mode=TwoWay}"
-                                      ToolTipService.ToolTip="Use Regular Expression (Alt+R). This will be enabled if Multiline is enabled"
-                                      Padding="4,2" MinWidth="0" MinHeight="0"
-                                      Width="28" Height="24" FontSize="12"
-                                      VerticalAlignment="Center">
-                            <TextBlock Text=".*" FontSize="12" FontFamily="Consolas" />
-                        </ToggleButton>
-                        <ToggleButton x:Name="MultilineToggle"
-                                      AccessKey="M"
-                                      IsChecked="{x:Bind ViewModel.Multiline, Mode=TwoWay}"
-                                      ToolTipService.ToolTip="Match Across Lines / Multiline — run the query over the whole file so a match can span line breaks. Slower &amp; heavier; best with a narrow scope. (Alt+M)"
-                                      Padding="4,2" MinWidth="0" MinHeight="0"
-                                      Width="28" Height="24" FontSize="12"
-                                      VerticalAlignment="Center">
-                            <TextBlock Text="\n" FontSize="12" FontFamily="Consolas" />
-                        </ToggleButton>
-                        <ToggleButton x:Name="ExactMatchToggle"
-                                      AccessKey="E"
-                                      IsChecked="{x:Bind ViewModel.ExactMatch, Mode=TwoWay}"
-                                      ToolTipService.ToolTip="Exact Match — on: treat the whole query as one term. Off: split on spaces and match any term. (Alt+E). Ignored while Multiline is on"
-                                      Padding="4,2" MinWidth="0" MinHeight="0"
-                                      Width="28" Height="24" FontSize="12"
-                                      VerticalAlignment="Center">
-                            <TextBlock Text="&quot;&quot;" FontSize="12" FontFamily="Consolas" />
-                        </ToggleButton>
+                        <Button x:Name="QueryClearButton"
+                                Width="32" Height="32" MinWidth="0" Padding="0"
+                                VerticalAlignment="Center"
+                                Background="Transparent" BorderThickness="0"
+                                Visibility="{x:Bind ViewModel.HasQueryText, Mode=OneWay}"
+                                Click="OnQueryClearClick"
+                                ToolTipService.ToolTip="Clear query">
+                            <FontIcon Glyph="&#xE894;" FontSize="12" />
+                        </Button>
+                        <StackPanel x:Name="InlineSearchToggles"
+                                    Orientation="Horizontal" Spacing="2"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind ViewModel.InlineSearchTogglesVisibility, Mode=OneWay}">
+                            <ToggleButton x:Name="CaseSensitiveToggle"
+                                          AccessKey="C"
+                                          IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}"
+                                          ToolTipService.ToolTip="Match Case (Alt+C)"
+                                          Padding="4,2" MinWidth="0" MinHeight="0"
+                                          Width="28" Height="24" FontSize="12"
+                                          VerticalAlignment="Center">
+                                <TextBlock Text="Aa" FontSize="12" FontWeight="SemiBold" />
+                            </ToggleButton>
+                            <ToggleButton x:Name="RegexToggle"
+                                          AccessKey="R"
+                                          IsChecked="{x:Bind ViewModel.UseRegex, Mode=TwoWay}"
+                                          ToolTipService.ToolTip="Use Regular Expression (Alt+R). This will be enabled if Multiline is enabled"
+                                          Padding="4,2" MinWidth="0" MinHeight="0"
+                                          Width="28" Height="24" FontSize="12"
+                                          VerticalAlignment="Center">
+                                <TextBlock Text=".*" FontSize="12" FontFamily="Consolas" />
+                            </ToggleButton>
+                            <ToggleButton x:Name="MultilineToggle"
+                                          AccessKey="M"
+                                          IsChecked="{x:Bind ViewModel.Multiline, Mode=TwoWay}"
+                                          ToolTipService.ToolTip="Match Across Lines / Multiline — run the query over the whole file so a match can span line breaks. Slower &amp; heavier; best with a narrow scope. (Alt+M)"
+                                          Padding="4,2" MinWidth="0" MinHeight="0"
+                                          Width="28" Height="24" FontSize="12"
+                                          VerticalAlignment="Center">
+                                <TextBlock Text="\n" FontSize="12" FontFamily="Consolas" />
+                            </ToggleButton>
+                            <ToggleButton x:Name="ExactMatchToggle"
+                                          AccessKey="E"
+                                          IsChecked="{x:Bind ViewModel.ExactMatch, Mode=TwoWay}"
+                                          ToolTipService.ToolTip="Exact Match — on: treat the whole query as one term. Off: split on spaces and match any term. (Alt+E). Ignored while Multiline is on"
+                                          Padding="4,2" MinWidth="0" MinHeight="0"
+                                          Width="28" Height="24" FontSize="12"
+                                          VerticalAlignment="Center">
+                                <TextBlock Text="&quot;&quot;" FontSize="12" FontFamily="Consolas" />
+                            </ToggleButton>
+                        </StackPanel>
                     </StackPanel>
-                    <Button x:Name="QueryClearButton"
-                            Width="32" Height="32" MinWidth="0" Padding="0"
-                            HorizontalAlignment="Right" VerticalAlignment="Center"
-                            Margin="0,0,4,0"
-                            Background="Transparent" BorderThickness="0"
-                            Visibility="{x:Bind ViewModel.HasQueryText, Mode=OneWay}"
-                            Click="OnQueryClearClick"
-                            ToolTipService.ToolTip="Clear query">
-                        <FontIcon Glyph="&#xE894;" FontSize="12" />
-                    </Button>
                 </Grid>
                 <!-- Bottom action bar: Advanced Options (fills, left), then the utility icons, then
                      the primary Search action on the right. One grid so Search's right edge lines up

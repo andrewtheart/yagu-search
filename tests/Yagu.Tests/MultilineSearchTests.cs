@@ -975,7 +975,7 @@ public sealed class MultilineSearchTests : IDisposable
         // The exact-match toggle tooltip explains it is ignored while multiline is on.
         Assert.Contains("(Alt+E). Ignored while Multiline is on", src);
         // Reserved room for the fourth toggle (padding set via a Setter, not an inline attribute).
-        Assert.Contains("<Setter Property=\"Padding\" Value=\"10,6,158,6\" />", src);
+        Assert.Contains("<Setter Property=\"Padding\" Value=\"10,6,170,6\" />", src);
         // Advanced Options toggle + dot-all sub-toggle.
         Assert.Contains("x:Name=\"MultilineAdvancedToggle\"", src);
         Assert.Contains("x:Name=\"MultilineDotAllToggle\"", src);

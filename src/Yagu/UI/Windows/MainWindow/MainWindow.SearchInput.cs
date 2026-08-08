@@ -1309,6 +1309,10 @@ public sealed partial class MainWindow
 
     private void OnQueryTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
     {
+        DispatcherQueue.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            SuppressDefaultQueryDeleteButton);
+
         if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput && !AreQuerySuggestionsSuppressed())
         {
             ApplyQuerySuggestions(sender, open: sender.IsSuggestionListOpen || _querySuggestionsUserOpened);
@@ -1324,6 +1328,42 @@ public sealed partial class MainWindow
             sender.IsSuggestionListOpen = false;
             DispatcherQueue.TryEnqueue(() => sender.IsSuggestionListOpen = false);
         }
+    }
+
+    private void OnQueryBoxLoaded(object sender, RoutedEventArgs e)
+    {
+        DispatcherQueue.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            SuppressDefaultQueryDeleteButton);
+    }
+
+    private void SuppressDefaultQueryDeleteButton()
+    {
+        FrameworkElement? deleteButton = FindVisualDescendantByName(QueryBox, "DeleteButton");
+        if (deleteButton is null)
+            return;
+
+        deleteButton.Visibility = Visibility.Collapsed;
+        deleteButton.Width = 0;
+        deleteButton.MinWidth = 0;
+        deleteButton.MaxWidth = 0;
+        deleteButton.IsHitTestVisible = false;
+    }
+
+    private static FrameworkElement? FindVisualDescendantByName(DependencyObject parent, string name)
+    {
+        int childCount = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < childCount; i++)
+        {
+            DependencyObject child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is FrameworkElement element && string.Equals(element.Name, name, StringComparison.Ordinal))
+                return element;
+
+            if (FindVisualDescendantByName(child, name) is { } descendant)
+                return descendant;
+        }
+
+        return null;
     }
 
     /// <summary>

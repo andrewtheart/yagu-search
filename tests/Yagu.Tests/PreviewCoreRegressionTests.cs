@@ -1327,16 +1327,33 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void QueryBox_ClearButtonVisibilityFollowsQueryTextEvenWithoutFocus()
     {
-        string inlineToggles = ExtractXamlWindow("x:Name=\"InlineSearchToggles\"", 300);
-        Assert.Contains("Margin=\"0,0,36,0\"", inlineToggles);
+        string trailingControls = ExtractXamlWindow("x:Name=\"QueryTrailingControls\"", 6000);
+        Assert.Contains("HorizontalAlignment=\"Right\" VerticalAlignment=\"Center\"", trailingControls);
+        Assert.Contains("Margin=\"0,0,8,0\"", trailingControls);
+        AssertContainsInOrder(trailingControls,
+            "x:Name=\"QueryClearButton\"",
+            "x:Name=\"InlineSearchToggles\"",
+            "x:Name=\"CaseSensitiveToggle\"",
+            "x:Name=\"RegexToggle\"",
+            "x:Name=\"MultilineToggle\"",
+            "x:Name=\"ExactMatchToggle\"");
 
         string searchBar = ExtractXamlWindow("x:Name=\"QueryClearButton\"", 1100);
         Assert.Contains("Width=\"32\" Height=\"32\"", searchBar);
-        Assert.Contains("Margin=\"0,0,4,0\"", searchBar);
         Assert.Contains("Visibility=\"{x:Bind ViewModel.HasQueryText, Mode=OneWay}\"", searchBar);
         Assert.Contains("Click=\"OnQueryClearClick\"", searchBar);
         Assert.Contains("ToolTipService.ToolTip=\"Clear query\"", searchBar);
         Assert.Contains("<FontIcon Glyph=\"&#xE894;\"", searchBar);
+
+        string queryBox = ExtractXamlWindow("x:Name=\"QueryBox\"", 900);
+        Assert.Contains("Loaded=\"OnQueryBoxLoaded\"", queryBox);
+
+        string suppressDefault = ExtractMethodWindow(MainWindowSource, "SuppressDefaultQueryDeleteButton", 1100);
+        AssertContainsInOrder(suppressDefault,
+            "FindVisualDescendantByName(QueryBox, \"DeleteButton\")",
+            "deleteButton.Visibility = Visibility.Collapsed;",
+            "deleteButton.Width = 0;",
+            "deleteButton.IsHitTestVisible = false;");
 
         string clearHandler = ExtractMethodWindow(MainWindowSource, "OnQueryClearClick", 700);
         AssertContainsInOrder(clearHandler,
