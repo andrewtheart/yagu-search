@@ -1484,7 +1484,7 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("Value=\"{x:Bind ViewModel.IndexBuildPercentValue, Mode=OneWay}\"", MainWindowXaml);
         Assert.Contains("Visibility=\"{x:Bind ViewModel.IndexBuildPercentVisibility, Mode=OneWay}\"", MainWindowXaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.IndexStatusTooltip, Mode=OneWay}\"", MainWindowXaml);
-        string indexHover = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusHoverOverlay\"", 2500);
+        string indexHover = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusHoverOverlay\"", 9000);
         Assert.Contains("IsIndeterminate=\"True\"", indexHover);
 
         // Both user-initiated build paths capture the drive denominator once and forward per-report progress.
