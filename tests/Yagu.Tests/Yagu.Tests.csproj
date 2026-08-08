@@ -9,12 +9,18 @@
     <IsPackable>false</IsPackable>
     <RootNamespace>Yagu.Tests</RootNamespace>
     <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <BuildRustCore Condition="'$(BuildRustCore)' == ''">true</BuildRustCore>
     <RustProfile Condition="'$(RustProfile)' == '' And '$(Configuration)' == 'Debug'">profiling</RustProfile>
     <RustProfile Condition="'$(RustProfile)' == ''">release</RustProfile>
+    <RustCargoProfileArgs Condition="'$(RustProfile)' == 'release'">--release</RustCargoProfileArgs>
+    <RustCargoProfileArgs Condition="'$(RustCargoProfileArgs)' == ''">--profile $(RustProfile)</RustCargoProfileArgs>
+    <RustCargoFeatureArgs Condition="'$(RustCargoFeatureArgs)' == ''">--features grep_crates</RustCargoFeatureArgs>
     <RustCoreDir>$(MSBuildThisFileDirectory)..\..\src\yagu-core\</RustCoreDir>
     <RustTargetDir>$(RustCoreDir)target\$(RustProfile)\</RustTargetDir>
     <RustDllPath>$(RustTargetDir)yagu_core.dll</RustDllPath>
     <RustPdbPath>$(RustTargetDir)yagu_core.pdb</RustPdbPath>
+    <CargoExe Condition="'$(CargoExe)' == '' And Exists('$(USERPROFILE)\.cargo\bin\cargo.exe')">$(USERPROFILE)\.cargo\bin\cargo.exe</CargoExe>
+    <CargoExe Condition="'$(CargoExe)' == ''">cargo</CargoExe>
   </PropertyGroup>
 
   <ItemGroup>
@@ -306,6 +312,26 @@
   <!-- Copy the Rust cdylib next to the test assembly so the native fast-path
        is exercised under `dotnet test`. The build is gated on Cargo.toml
        existing; missing DLLs fall back to the managed path. -->
+  <Target Name="BuildYaguCoreForTests"
+          BeforeTargets="BeforeBuild"
+          Condition="'$(BuildRustCore)' == 'true' And Exists('$(RustCoreDir)Cargo.toml')">
+    <Exec Command="&quot;$(CargoExe)&quot; build $(RustCargoProfileArgs) $(RustCargoFeatureArgs) --quiet"
+          WorkingDirectory="$(RustCoreDir)"
+          ConsoleToMSBuild="true"
+          IgnoreStandardErrorWarningFormat="true"
+          ContinueOnError="WarnAndContinue" />
+    <Warning Condition="!Exists('$(RustDllPath)')"
+             Text="yagu-core: Rust build did not produce $(RustDllPath); native-path tests will fail." />
+    <ItemGroup>
+      <_YaguCoreTestRuntimeFiles Include="$(RustDllPath)" Condition="Exists('$(RustDllPath)')" />
+      <_YaguCoreTestRuntimeFiles Include="$(RustPdbPath)" Condition="Exists('$(RustPdbPath)')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YaguCoreTestRuntimeFiles)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Condition="'@(_YaguCoreTestRuntimeFiles)' != ''" />
+  </Target>
+
   <ItemGroup Condition="Exists('$(RustDllPath)')">
     <None Include="$(RustDllPath)">
       <Link>yagu_core.dll</Link>
