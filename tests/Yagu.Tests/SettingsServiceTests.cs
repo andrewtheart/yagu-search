@@ -52,9 +52,8 @@ public class SettingsServiceTests
         Assert.Equal(AppSettings.IndexBuildTriggerContinuous, settings.IndexBuildTrigger);
         Assert.Equal(AppSettings.IndexUpdateModeAutomaticIncremental, settings.IndexUpdateMode);
         Assert.Equal(AppSettings.DefaultIndexIdleDelayMinutes, settings.IndexIdleDelayMinutes);
-        Assert.Equal(1, AppSettings.FirstRunDriveIndexContinuousIntervalMinutes);
         Assert.Equal(
-            AppSettings.FirstRunDriveIndexContinuousIntervalMinutes,
+            AppSettings.DefaultIndexContinuousIntervalMinutes,
             settings.IndexContinuousIntervalMinutes);
         Assert.Equal(AppSettings.DefaultIndexScheduleMode, settings.IndexScheduleMode);
         Assert.Equal(AppSettings.DefaultIndexScheduleIntervalMinutes, settings.IndexScheduleIntervalMinutes);

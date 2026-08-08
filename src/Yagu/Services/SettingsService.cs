@@ -1086,7 +1086,7 @@ public sealed class AppSettings
         IndexBuildTrigger = IndexBuildTriggerContinuous;
         IndexUpdateMode = IndexUpdateModeAutomaticIncremental;
         IndexIdleDelayMinutes = DefaultIndexIdleDelayMinutes;
-        IndexContinuousIntervalMinutes = FirstRunDriveIndexContinuousIntervalMinutes;
+        IndexContinuousIntervalMinutes = DefaultIndexContinuousIntervalMinutes;
         IndexContinuousIntervalMigrated = true;
         IndexScheduleMode = DefaultIndexScheduleMode;
         IndexScheduleIntervalMinutes = DefaultIndexScheduleIntervalMinutes;
