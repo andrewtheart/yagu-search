@@ -2211,6 +2211,11 @@ table:</p>
 <td>Created</td>
 <td>When the session was saved — the default sort, newest first.</td>
 </tr>
+<tr>
+<td>Delete</td>
+<td>The trash button permanently deletes that saved session file after
+confirmation.</td>
+</tr>
 </tbody>
 </table>
 <p>Click any column header to sort by it (click again to reverse the
@@ -2219,6 +2224,10 @@ order). Select a session with a click, double‑click, or
 pick a file manually with the standard Windows dialog. If Everything is
 not available, Yagu skips the picker and opens the Browse dialog
 directly.</p>
+<p>To remove a saved session, choose its trash button and confirm
+<strong>Delete</strong>. <strong>Keep file</strong> is the default
+action so an accidental click does not remove anything. After deletion,
+the picker updates immediately and remains open.</p>
 <p>Loading a session repopulates the results list and preview from the
 saved data — no files are re‑read and no scan runs, so even a session
 from a search that originally took minutes reopens at once. From the
@@ -3946,19 +3955,22 @@ used again.</td>
 <td>Check GitHub for Yagu updates</td>
 <td>Chooses how Yagu looks for a newer version on the official GitHub
 Releases page (it never sends any of your data). Pick
-<strong>Automatically</strong> (a quiet background check about once a
-week — you’re notified only when a genuinely newer version exists, via a
-dismissible banner, never a pop-up on every launch), <strong>Only when I
-ask</strong> (Yagu never checks on its own; use <strong>Check for
-updates now</strong>), or <strong>Off</strong>. A fresh install asks you
-once which mode to use; you can change it here any time. The
-<strong>Check for updates now</strong> button runs an on-demand check
-and reports whether you’re up to date. When a newer release is found,
-Yagu shows its release notes before asking to download; the download
-runs in a dedicated MultiTerm terminal, and Yagu verifies the GitHub
-size/SHA-256 and requires the installer and running app to have trusted
-Authenticode signatures from the same publisher before offering
-installation; a failed installer is deleted and never executed.</td>
+<strong>Automatically (a quiet check once a day)</strong> — the
+recommended default — <strong>Automatically (a quiet check about once a
+week)</strong>, <strong>Only when I ask</strong> (Yagu never checks on
+its own; use <strong>Check for updates now</strong>), or
+<strong>Off</strong>. Either automatic mode notifies you only when a
+genuinely newer version exists, via a dismissible banner, never a pop-up
+on every launch. A fresh install asks you once which mode to use, with
+<strong>once a day</strong> preselected; you can change it here any
+time. The <strong>Check for updates now</strong> button runs an
+on-demand check and reports whether you’re up to date. When a newer
+release is found, Yagu shows its release notes before asking to
+download; the download runs in a dedicated MultiTerm terminal, and Yagu
+verifies the GitHub size/SHA-256 and requires the installer and running
+app to have trusted Authenticode signatures from the same publisher
+before offering installation; a failed installer is deleted and never
+executed.</td>
 </tr>
 </tbody>
 </table>

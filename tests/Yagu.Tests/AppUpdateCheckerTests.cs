@@ -52,6 +52,23 @@ public sealed class AppUpdateCheckerTests
         => Assert.Equal(TimeSpan.FromDays(7), AppUpdateChecker.DefaultAutoCheckInterval);
 
     [Fact]
+    public void DailyAutoCheckInterval_IsOneDay()
+        => Assert.Equal(TimeSpan.FromDays(1), AppUpdateChecker.DailyAutoCheckInterval);
+
+    [Theory]
+    [InlineData(AppUpdateCheckMode.AutomaticDaily, 1)]
+    [InlineData(AppUpdateCheckMode.Automatic, 7)]
+    public void GetAutoCheckInterval_AutomaticModes_MapToTheirThrottle(AppUpdateCheckMode mode, int expectedDays)
+        => Assert.Equal(TimeSpan.FromDays(expectedDays), AppUpdateChecker.GetAutoCheckInterval(mode));
+
+    [Theory]
+    [InlineData(AppUpdateCheckMode.Prompt)]
+    [InlineData(AppUpdateCheckMode.Manual)]
+    [InlineData(AppUpdateCheckMode.Off)]
+    public void GetAutoCheckInterval_NonAutomaticModes_NeverCheckOnTheirOwn(AppUpdateCheckMode mode)
+        => Assert.Null(AppUpdateChecker.GetAutoCheckInterval(mode));
+
+    [Fact]
     public void SelectInstallerAsset_RequiresExactArchitectureVersionHttpsAndDigest()
     {
         var version = new Version(1, 0, 0, 9);
@@ -634,8 +651,15 @@ public sealed class AppUpdateWiringRegressionTests
 
         // Consent is asked only once (the undecided Prompt mode), never every launch.
         Assert.Contains("settings.AppUpdateCheckMode != AppUpdateCheckMode.Prompt", update);
+        // The one-time prompt offers every mode from the shared choice list with the recommended row
+        // preselected, and only an explicit Save persists a choice (dismissal re-asks next launch).
+        Assert.Contains("AppUpdateModeChoices.All.Select(BuildAppUpdateModeOption)", update);
+        Assert.Contains("options[AppUpdateModeChoices.DefaultIndex].IsChecked = true;", update);
+        Assert.Contains("Tag = choice.Mode,", update);
+        Assert.Contains("PrimaryButtonText = \"Save\"", update);
+        Assert.Contains("if (result != YaguDialogResult.Primary)", update);
         // Automatic checks are gated on the mode AND throttled before any network request is made.
-        Assert.Contains("settings.AppUpdateCheckMode != AppUpdateCheckMode.Automatic", update);
+        Assert.Contains("AppUpdateChecker.GetAutoCheckInterval(settings.AppUpdateCheckMode) is not { } interval", update);
         Assert.Contains("AppUpdateChecker.ShouldAutoCheck(", update);
         // Privacy: the GitHub request is defined only after the consent dialog.
         int promptIndex = update.IndexOf("YaguDialog.ShowAsync", StringComparison.Ordinal);
@@ -689,9 +713,14 @@ public sealed class AppUpdateWiringRegressionTests
         Assert.Contains("Click=\"OnAppUpdateInfoBarViewRelease\"", xaml);
         Assert.Contains("Click=\"OnAppUpdateInfoBarSkipVersion\"", xaml);
 
-        // Settings exposes the 3-way mode picker and an on-demand check wired to the owner hwnd.
-        Assert.Contains("AppUpdateCheckMode.Automatic", settings);
-        Assert.Contains("AppUpdateCheckMode.Off", settings);
+        // Settings renders the same shared choice list and maps rows through the shared index helpers,
+        // so its rows can never drift from the consent prompt's. Wording is unit-tested in
+        // AppUpdateModeChoicesTests rather than pinned here.
+        Assert.Contains("foreach (AppUpdateModeChoice choice in AppUpdateModeChoices.All)", settings);
+        Assert.Contains("appUpdateMode.Items.Add(choice.SettingsLabel);", settings);
+        Assert.Contains("AppUpdateModeChoices.IndexFor(_viewModel.Settings.AppUpdateCheckMode)", settings);
+        Assert.Contains("AppUpdateModeChoices.ModeFor(appUpdateMode.SelectedIndex)", settings);
+        Assert.Contains("AppUpdateChecksEnabled = mode != AppUpdateCheckMode.Off", settings);
         Assert.Contains("Content = \"Check for updates now\"", settings);
         Assert.Contains("_checkForUpdatesNow?.Invoke(_settingsHwnd)", settings);
 

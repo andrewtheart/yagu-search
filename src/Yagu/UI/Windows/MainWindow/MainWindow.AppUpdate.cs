@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Yagu.Helpers;
 using Yagu.Services;
 using Yagu.Services.Index;
 using Yagu.Services.Logging;
@@ -30,15 +31,14 @@ public sealed partial class MainWindow
             Text = "How should Yagu check for new versions? It only ever contacts the official GitHub Releases page and never sends any of your data.",
             TextWrapping = TextWrapping.Wrap,
         });
-        panel.Children.Add(new TextBlock
-        {
-            Text = "\u2022 Automatically \u2014 a quiet background check about once a week; you are notified only when a newer version exists.\n"
-                 + "\u2022 Only when I ask \u2014 Yagu never checks on its own; a Settings button checks on demand.\n"
-                 + "\u2022 Don't check \u2014 no update checks at all.",
-            TextWrapping = TextWrapping.Wrap,
-            FontSize = 12,
-            Opacity = 0.8,
-        });
+
+        var choices = new StackPanel { Spacing = 6 };
+        var options = AppUpdateModeChoices.All.Select(BuildAppUpdateModeOption).ToList();
+        foreach (RadioButton option in options)
+            choices.Children.Add(option);
+        options[AppUpdateModeChoices.DefaultIndex].IsChecked = true;
+        panel.Children.Add(choices);
+
         panel.Children.Add(new TextBlock
         {
             Text = "You can change this any time under Settings \u25b8 Updates.",
@@ -52,24 +52,20 @@ public sealed partial class MainWindow
             Title = "How should Yagu check for updates?",
             TitleGlyph = "\uE895",
             Content = panel,
-            PrimaryButtonText = "Automatically",
-            SecondaryButtonText = "Only when I ask",
-            CloseButtonText = "Don't check",
+            PrimaryButtonText = "Save",
+            CloseButtonText = "Ask me later",
             DefaultButton = YaguDialogDefaultButton.Primary,
             RequestedTheme = RootGrid.ActualTheme,
             ShowTitleBar = false,
             Width = 660,
-            Height = 430,
+            Height = 520,
         });
 
-        AppUpdateCheckMode? chosen = result switch
-        {
-            YaguDialogResult.Primary => AppUpdateCheckMode.Automatic,
-            YaguDialogResult.Secondary => AppUpdateCheckMode.Manual,
-            YaguDialogResult.Close => AppUpdateCheckMode.Off,
-            _ => null, // dismissed without choosing — leave at Prompt and ask again next launch
-        };
-        if (chosen is not { } mode)
+        // Anything other than Save (including Escape/close) leaves the mode at Prompt so Yagu asks again
+        // next launch instead of silently picking a network behavior for the user.
+        if (result != YaguDialogResult.Primary)
+            return;
+        if (options.FirstOrDefault(o => o.IsChecked == true) is not { Tag: AppUpdateCheckMode mode })
             return;
 
         settings.AppUpdateCheckMode = mode;
@@ -77,8 +73,31 @@ public sealed partial class MainWindow
         await ViewModel.PersistSettingsAsync().ConfigureAwait(true);
     }
 
+    private static RadioButton BuildAppUpdateModeOption(AppUpdateModeChoice choice)
+    {
+        var content = new StackPanel { Spacing = 2 };
+        content.Children.Add(new TextBlock { Text = choice.PromptTitle, TextWrapping = TextWrapping.Wrap });
+        content.Children.Add(new TextBlock
+        {
+            Text = choice.PromptDetail,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11,
+            Opacity = 0.7,
+        });
+
+        return new RadioButton
+        {
+            GroupName = "AppUpdateCheckMode",
+            Tag = choice.Mode,
+            Content = content,
+            VerticalContentAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0),
+        };
+    }
+
     /// <summary>
-    /// Automatic-mode background check. Runs at most once per <see cref="AppUpdateChecker.DefaultAutoCheckInterval"/>
+    /// Automatic-mode background check. Runs at most once per the interval
+    /// <see cref="AppUpdateChecker.GetAutoCheckInterval"/> maps the chosen mode to (daily or weekly)
     /// and never opens a modal: it silently ignores "up to date" and network errors and surfaces a genuinely
     /// newer, verifiable, not-already-skipped release only through the non-modal <c>AppUpdateInfoBar</c>.
     /// Fire-and-forget from startup so it never delays launch.
@@ -86,11 +105,11 @@ public sealed partial class MainWindow
     private async Task MaybeRunAutomaticAppUpdateCheckAsync()
     {
         AppSettings settings = ViewModel.Settings;
-        if (settings.AppUpdateCheckMode != AppUpdateCheckMode.Automatic)
+        if (AppUpdateChecker.GetAutoCheckInterval(settings.AppUpdateCheckMode) is not { } interval)
             return;
         if (!settings.NotificationsEnabled || !settings.NotifyApplicationUpdates)
             return;
-        if (!AppUpdateChecker.ShouldAutoCheck(settings.LastAppUpdateCheckUtc, DateTimeOffset.UtcNow, AppUpdateChecker.DefaultAutoCheckInterval))
+        if (!AppUpdateChecker.ShouldAutoCheck(settings.LastAppUpdateCheckUtc, DateTimeOffset.UtcNow, interval))
             return;
 
         AppUpdateCheckResult? check = await RunAppUpdateCheckCoreAsync().ConfigureAwait(true);

@@ -458,6 +458,8 @@ public sealed partial class MainWindow : Window, IDisposable
                 e.PropertyName != nameof(ViewModel.IsPreparingSearch) &&
                 e.PropertyName != nameof(ViewModel.IsCancelling)) return;
 
+            UpdateSearchActivityIndicator();
+
             // "Busy" covers the pre-search preparation (gate) phase, the semantic translation phase, and
             // the actual file scan, so the Search button morphs into the red Cancel action the instant the
             // user clicks Search — before a single file has been scanned, and before the multi-second

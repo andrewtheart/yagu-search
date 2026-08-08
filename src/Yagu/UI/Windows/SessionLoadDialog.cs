@@ -1,8 +1,10 @@
 using System.Globalization;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Yagu.Helpers;
 using Yagu.Services;
 
 namespace Yagu;
@@ -39,6 +41,13 @@ internal static class SessionLoadDialog
             completed = true;
             selectedPath = path;
             dialog?.AcceptSecondary();
+        }, async session =>
+        {
+            if (dialog is null)
+                return false;
+
+            IntPtr dialogHwnd = WinRT.Interop.WindowNative.GetWindowHandle(dialog);
+            return await DeleteSessionAsync(dialogHwnd, session, requestedTheme);
         });
 
         var result = await YaguDialog.ShowAsync(
@@ -69,7 +78,10 @@ internal static class SessionLoadDialog
         };
     }
 
-    private static Grid BuildContent(IReadOnlyList<SessionFileCandidate> sessions, Action<string> loadPath)
+    private static Grid BuildContent(
+        IReadOnlyList<SessionFileCandidate> sessions,
+        Action<string> loadPath,
+        Func<SessionFileCandidate, Task<bool>> deleteSession)
     {
         var root = new Grid
         {
@@ -110,9 +122,7 @@ internal static class SessionLoadDialog
 
         var summary = new TextBlock
         {
-            Text = sessions.Count == 0
-                ? "No .yagu-session files found by Everything."
-                : $"{sessions.Count:N0} .yagu-session file{(sessions.Count == 1 ? string.Empty : "s")} found",
+            Text = SessionPickerList.BuildSummary(sessions.Count),
             FontSize = 13,
             Opacity = 0.72,
             TextWrapping = TextWrapping.WrapWholeWords,
@@ -123,7 +133,7 @@ internal static class SessionLoadDialog
 
         FrameworkElement body = sessions.Count == 0
             ? BuildEmptyState()
-            : BuildSessionTable(sessions, loadPath);
+            : BuildSessionTable(sessions, loadPath, deleteSession, count => summary.Text = SessionPickerList.BuildSummary(count));
         Grid.SetRow(body, 1);
         root.Children.Add(body);
 
@@ -132,7 +142,11 @@ internal static class SessionLoadDialog
 
     private enum SortColumn { Name, Directory, Size, Created }
 
-    private static Grid BuildSessionTable(IReadOnlyList<SessionFileCandidate> sessions, Action<string> loadPath)
+    private static Grid BuildSessionTable(
+        IReadOnlyList<SessionFileCandidate> sessions,
+        Action<string> loadPath,
+        Func<SessionFileCandidate, Task<bool>> deleteSession,
+        Action<int> sessionsChanged)
     {
         var sortedSessions = sessions.OrderByDescending(s => s.CreatedUtc ?? DateTimeOffset.MinValue).ToList();
         var currentSort = SortColumn.Created;
@@ -150,6 +164,7 @@ internal static class SessionLoadDialog
         headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Directory
         headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) }); // Size
         headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) }); // Created
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(32) }); // Delete
 
         TextBlock nameHeader = CreateSortableHeader("Name", SortColumn.Name);
         TextBlock dirHeader = CreateSortableHeader("Directory", SortColumn.Directory);
@@ -178,15 +193,32 @@ internal static class SessionLoadDialog
             MaxHeight = 400,
         };
 
+        var emptyState = BuildEmptyState();
+        emptyState.Visibility = Visibility.Collapsed;
+
+        async Task DeleteSessionFromListAsync(SessionFileCandidate session)
+        {
+            if (!await deleteSession(session))
+                return;
+
+            SessionPickerList.RemoveByPath(sortedSessions, session.Path);
+            sessionsChanged(sortedSessions.Count);
+            RebuildList();
+        }
+
         void RebuildList()
         {
             list.Items.Clear();
+            bool hasSessions = sortedSessions.Count > 0;
+            list.Visibility = hasSessions ? Visibility.Visible : Visibility.Collapsed;
+            emptyState.Visibility = hasSessions ? Visibility.Collapsed : Visibility.Visible;
+
             foreach (var session in sortedSessions)
             {
                 var item = new ListViewItem
                 {
                     Tag = session,
-                    Content = BuildTableRow(session),
+                    Content = BuildTableRow(session, DeleteSessionFromListAsync),
                     HorizontalContentAlignment = HorizontalAlignment.Stretch,
                     Padding = new Thickness(10, 6, 10, 6),
                 };
@@ -265,6 +297,8 @@ internal static class SessionLoadDialog
 
         Grid.SetRow(list, 1);
         container.Children.Add(list);
+        Grid.SetRow(emptyState, 1);
+        container.Children.Add(emptyState);
 
         return container;
     }
@@ -282,13 +316,14 @@ internal static class SessionLoadDialog
         };
     }
 
-    private static Grid BuildTableRow(SessionFileCandidate session)
+    private static Grid BuildTableRow(SessionFileCandidate session, Func<SessionFileCandidate, Task> deleteSession)
     {
         var row = new Grid { ColumnSpacing = 8 };
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(200) }); // Name
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Directory
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) }); // Size
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) }); // Created
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(32) }); // Delete
 
         string fileName = Path.GetFileName(session.Path);
         string directory = Path.GetDirectoryName(session.Path) ?? "";
@@ -339,6 +374,41 @@ internal static class SessionLoadDialog
         Grid.SetColumn(createdBlock, 3);
         row.Children.Add(createdBlock);
 
+        var deleteButton = new Button
+        {
+            Width = 28,
+            Height = 28,
+            MinWidth = 0,
+            MinHeight = 0,
+            Padding = new Thickness(0),
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Content = new FontIcon
+            {
+                Glyph = "\uE74D",
+                FontSize = 13,
+            },
+        };
+        AutomationProperties.SetName(deleteButton, $"Delete {fileName}");
+        ToolTipService.SetToolTip(deleteButton, $"Delete {fileName}");
+        deleteButton.Tapped += (_, args) => args.Handled = true;
+        deleteButton.Click += async (_, _) =>
+        {
+            deleteButton.IsEnabled = false;
+            try
+            {
+                await deleteSession(session);
+            }
+            finally
+            {
+                deleteButton.IsEnabled = true;
+            }
+        };
+        Grid.SetColumn(deleteButton, 4);
+        row.Children.Add(deleteButton);
+
         return row;
     }
 
@@ -358,6 +428,92 @@ internal static class SessionLoadDialog
             default:
                 session = null!;
                 return false;
+        }
+    }
+
+    private static async Task<bool> DeleteSessionAsync(
+        IntPtr ownerHwnd,
+        SessionFileCandidate session,
+        ElementTheme requestedTheme)
+    {
+        string fileName = Path.GetFileName(session.Path);
+        var confirmation = await YaguDialog.ShowAsync(
+            ownerHwnd,
+            new YaguDialogOptions
+            {
+                Title = "Delete saved session?",
+                Content = new StackPanel
+                {
+                    Spacing = 8,
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = fileName,
+                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                            TextWrapping = TextWrapping.WrapWholeWords,
+                        },
+                        new TextBlock
+                        {
+                            Text = "This permanently deletes the session file. Search results stored in it cannot be recovered.",
+                            Opacity = 0.78,
+                            TextWrapping = TextWrapping.WrapWholeWords,
+                        },
+                    },
+                },
+                PrimaryButtonText = "Delete",
+                CloseButtonText = "Keep file",
+                DefaultButton = YaguDialogDefaultButton.Close,
+                RequestedTheme = requestedTheme,
+                Width = 520,
+                Height = 270,
+                ShowTitleBar = false,
+                TitleGlyph = "\uE74D",
+            }).ConfigureAwait(true);
+
+        if (confirmation != YaguDialogResult.Primary)
+            return false;
+
+        try
+        {
+            File.Delete(session.Path);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            await YaguDialog.ShowAsync(
+                ownerHwnd,
+                new YaguDialogOptions
+                {
+                    Title = "Couldn't delete session",
+                    Content = new StackPanel
+                    {
+                        Spacing = 8,
+                        Children =
+                        {
+                            new TextBlock
+                            {
+                                Text = fileName,
+                                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                                TextWrapping = TextWrapping.WrapWholeWords,
+                            },
+                            new TextBlock
+                            {
+                                Text = ex.Message,
+                                Opacity = 0.78,
+                                TextWrapping = TextWrapping.WrapWholeWords,
+                            },
+                        },
+                    },
+                    CloseButtonText = "OK",
+                    DefaultButton = YaguDialogDefaultButton.Close,
+                    RequestedTheme = requestedTheme,
+                    Width = 520,
+                    Height = 270,
+                    ShowTitleBar = false,
+                    TitleGlyph = "\uE783",
+                }).ConfigureAwait(true);
+            return false;
         }
     }
 

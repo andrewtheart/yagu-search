@@ -2646,7 +2646,7 @@
         <!-- Bottom status bar -->
           <Grid x:Name="BottomStatusBar" Grid.Row="6" Padding="20,6,20,8"
               Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-              BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" ColumnSpacing="16">
+              BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" ColumnSpacing="8">
             <Grid.Resources>
                 <Style x:Key="StatusBarTextStyle" TargetType="TextBlock">
                     <Setter Property="FontFamily" Value="Consolas" />
@@ -2665,13 +2665,30 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}"
-                     Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}"
-                     Style="{StaticResource StatusBarMutedTextStyle}" Opacity="0.6" />
+            <!-- The activity glyph and files/sec share one cell so the collapsed files/sec column can no
+                 longer push the glyph away from the status text it belongs to. -->
+            <StackPanel x:Name="SearchActivityCluster" Grid.Column="0" Orientation="Horizontal"
+                        Spacing="6" VerticalAlignment="Center">
+                <Grid x:Name="SearchActivityIndicator" Width="26" Height="16"
+                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                      IsHitTestVisible="False" AutomationProperties.Name="Ready to search">
+                    <FontIcon x:Name="SearchActivityIcon" Glyph="&#xE721;" FontSize="12" Opacity="0.72"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                        <FontIcon.RenderTransform>
+                            <TranslateTransform x:Name="SearchActivityTransform" />
+                        </FontIcon.RenderTransform>
+                    </FontIcon>
+                </Grid>
+                <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}"
+                         Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}"
+                         Style="{StaticResource StatusBarMutedTextStyle}" Opacity="0.6" />
+            </StackPanel>
             <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
                        Style="{StaticResource StatusBarTextStyle}" Opacity="0.8"
                        TextTrimming="CharacterEllipsis" />
             <Grid Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Stretch" Height="16"
+                Margin="8,0,0,0"
                 Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}">
                 <!-- Background utilization gauge -->
                 <Rectangle x:Name="DiskGaugeBar" HorizontalAlignment="Left" VerticalAlignment="Stretch"
@@ -2684,7 +2701,8 @@
               <!-- Right-aligned status cluster: resource usage, then the content-index status and a truncated
                   warning. Each item hides independently, so the cluster adapts to whatever is present; the
                   search stats stay far left and the stretch column keeps this group pinned to the right. -->
-            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center"
+                        Margin="8,0,0,0">
                 <!-- Yagu resource stats (disk temp + cached index storage + Yagu/worker RAM).
                      Measurement is off-thread; index size refreshes at most once per minute and never
                      while a search is active. Fixed columns prevent changing values from shifting

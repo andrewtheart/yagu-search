@@ -26,12 +26,15 @@ public enum AppUpdateCheckMode
 {
     /// <summary>One-time consent not given yet; ask once on next launch (fresh-install default).</summary>
     Prompt = 0,
-    /// <summary>Check automatically in the background on a throttle; notify only when a newer version exists.</summary>
+    /// <summary>Check automatically in the background about once a week; notify only when a newer version exists.</summary>
     Automatic = 1,
     /// <summary>Never check on its own; only when the user explicitly asks (a Settings button).</summary>
     Manual = 2,
     /// <summary>Never check for updates.</summary>
     Off = 3,
+    /// <summary>Check automatically in the background about once a day; notify only when a newer version
+    /// exists. The recommended choice offered by the one-time consent prompt.</summary>
+    AutomaticDaily = 4,
 }
 
 /// <summary>Queries and validates Yagu's public GitHub latest-release metadata.</summary>
@@ -40,6 +43,17 @@ public static class AppUpdateChecker
     public const string Repository = "andrewtheart/yagu-search";
     /// <summary>Default minimum interval between automatic background checks.</summary>
     public static readonly TimeSpan DefaultAutoCheckInterval = TimeSpan.FromDays(7);
+    /// <summary>Minimum interval between automatic background checks in once-per-day mode.</summary>
+    public static readonly TimeSpan DailyAutoCheckInterval = TimeSpan.FromDays(1);
+
+    /// <summary>The background-check throttle for <paramref name="mode"/>, or null when the mode never
+    /// checks on its own.</summary>
+    public static TimeSpan? GetAutoCheckInterval(AppUpdateCheckMode mode) => mode switch
+    {
+        AppUpdateCheckMode.AutomaticDaily => DailyAutoCheckInterval,
+        AppUpdateCheckMode.Automatic => DefaultAutoCheckInterval,
+        _ => null,
+    };
 
     /// <summary>Whether enough time has elapsed since the last check to auto-check again. A null last-check
     /// (never checked) always returns true.</summary>

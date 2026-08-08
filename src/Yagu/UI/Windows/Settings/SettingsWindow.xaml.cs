@@ -4050,23 +4050,12 @@ public sealed partial class SettingsWindow : Window
 
             updatesGroup.Children.Add(new TextBlock { Text = "Check GitHub for Yagu updates:", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
             var appUpdateMode = new ComboBox { MinWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
-            appUpdateMode.Items.Add("Automatically (a quiet check about once a week)");
-            appUpdateMode.Items.Add("Only when I ask");
-            appUpdateMode.Items.Add("Off (never check)");
-            appUpdateMode.SelectedIndex = _viewModel.Settings.AppUpdateCheckMode switch
-            {
-                AppUpdateCheckMode.Automatic => 0,
-                AppUpdateCheckMode.Off => 2,
-                _ => 1, // Manual, or the undecided Prompt state, shows as "Only when I ask"
-            };
+            foreach (AppUpdateModeChoice choice in AppUpdateModeChoices.All)
+                appUpdateMode.Items.Add(choice.SettingsLabel);
+            appUpdateMode.SelectedIndex = AppUpdateModeChoices.IndexFor(_viewModel.Settings.AppUpdateCheckMode);
             appUpdateMode.SelectionChanged += (_, _) =>
             {
-                AppUpdateCheckMode mode = appUpdateMode.SelectedIndex switch
-                {
-                    0 => AppUpdateCheckMode.Automatic,
-                    2 => AppUpdateCheckMode.Off,
-                    _ => AppUpdateCheckMode.Manual,
-                };
+                AppUpdateCheckMode mode = AppUpdateModeChoices.ModeFor(appUpdateMode.SelectedIndex);
                 _viewModel.Settings.AppUpdateCheckMode = mode;
                 _viewModel.Settings.AppUpdateChecksEnabled = mode != AppUpdateCheckMode.Off;
                 MarkSettingsDirty(requireValueChanges: false);

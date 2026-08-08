@@ -78,6 +78,37 @@ public sealed class SessionLoadDialogRegressionTests
     }
 
     [Fact]
+    public void LoadSession_RowsExposeDeleteAction_AndRefreshAfterDeletion()
+    {
+        Assert.Contains("Content = BuildTableRow(session, DeleteSessionFromListAsync)", SessionLoadDialogSource);
+        AssertContainsInOrder(SessionLoadDialogSource,
+            "async Task DeleteSessionFromListAsync(SessionFileCandidate session)",
+            "if (!await deleteSession(session))",
+            "SessionPickerList.RemoveByPath(sortedSessions, session.Path);",
+            "sessionsChanged(sortedSessions.Count);",
+            "RebuildList();");
+        Assert.Contains("Glyph = \"\\uE74D\"", SessionLoadDialogSource);
+        Assert.Contains("AutomationProperties.SetName(deleteButton, $\"Delete {fileName}\");", SessionLoadDialogSource);
+        Assert.Contains("ToolTipService.SetToolTip(deleteButton, $\"Delete {fileName}\");", SessionLoadDialogSource);
+        Assert.Contains("deleteButton.Tapped += (_, args) => args.Handled = true;", SessionLoadDialogSource);
+    }
+
+    [Fact]
+    public void LoadSession_DeleteRequiresOwnedConfirmation_AndReportsFailures()
+    {
+        Assert.Contains("WinRT.Interop.WindowNative.GetWindowHandle(dialog)", SessionLoadDialogSource);
+        AssertContainsInOrder(SessionLoadDialogSource,
+            "private static async Task<bool> DeleteSessionAsync",
+            "Title = \"Delete saved session?\"",
+            "PrimaryButtonText = \"Delete\"",
+            "CloseButtonText = \"Keep file\"",
+            "DefaultButton = YaguDialogDefaultButton.Close",
+            "File.Delete(session.Path);",
+            "Title = \"Couldn't delete session\"");
+        Assert.True(CountOccurrences(SessionLoadDialogSource, "ShowTitleBar = false") >= 3);
+    }
+
+    [Fact]
     public void LoadSession_CustomModalSuppressesTitleBar()
     {
         Assert.Contains("ShowTitle = false", SessionLoadDialogSource);
@@ -91,16 +122,22 @@ public sealed class SessionLoadDialogRegressionTests
     [Fact]
     public void LoadSession_CustomModalHasInContentTitleAndGuidance()
     {
-        AssertContainsInOrder(SessionLoadDialogSource,
+        string buildContent = ExtractWindow(
+            SessionLoadDialogSource,
+            "private static Grid BuildContent(",
+            "private enum SortColumn");
+        AssertContainsInOrder(buildContent,
             "var header = new StackPanel",
             "Text = \"Load session\"",
             "Saved sessions reopen previous Yagu results without rerunning the search.",
             "Select a .yagu-session file from the list, or choose Browse... to pick one manually.",
-            "No .yagu-session files found by Everything.",
+            "Text = SessionPickerList.BuildSummary(sessions.Count)",
             "root.Children.Add(header);");
 
-        Assert.Contains("FontWeight = Microsoft.UI.Text.FontWeights.SemiBold", SessionLoadDialogSource);
-        Assert.Contains("TextWrapping = TextWrapping.WrapWholeWords", SessionLoadDialogSource);
+        Assert.Contains("FontWeight = Microsoft.UI.Text.FontWeights.SemiBold", buildContent);
+        Assert.Contains("TextWrapping = TextWrapping.WrapWholeWords", buildContent);
+        // The summary wording itself is unit-tested in SessionPickerListTests.
+        Assert.Contains("summary.Text = SessionPickerList.BuildSummary(count)", SessionLoadDialogSource);
     }
 
     [Fact]
@@ -211,7 +248,7 @@ public sealed class SessionLoadDialogRegressionTests
     public void LoadSession_TableRowHasDirectoryTooltip()
     {
         AssertContainsInOrder(SessionLoadDialogSource,
-            "private static Grid BuildTableRow(SessionFileCandidate session)",
+            "private static Grid BuildTableRow(SessionFileCandidate session, Func<SessionFileCandidate, Task> deleteSession)",
             "string directory = Path.GetDirectoryName(session.Path)",
             "TextTrimming = TextTrimming.CharacterEllipsis",
             "ToolTipService.SetToolTip(dirBlock, directory)");
@@ -271,6 +308,19 @@ public sealed class SessionLoadDialogRegressionTests
             Assert.True(found >= 0, $"Expected to find '{part}' after index {index}.");
             index = found + part.Length;
         }
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        int count = 0;
+        int index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
     }
 
     private static string FindRepoRoot()

@@ -292,6 +292,54 @@ public sealed class MainViewModelSearchStatusRegressionTests
     }
 
     [Fact]
+    public void BottomStatusBar_SearchIconMovesInFigureEight_ThenShowsCompletion()
+    {
+        string repoRoot = FindRepoRoot();
+        string mainWindowXaml = File.ReadAllText(
+            Path.Combine(repoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+        string mainWindowSource = File.ReadAllText(
+            Path.Combine(repoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
+        string indicatorSource = File.ReadAllText(
+            Path.Combine(repoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchActivityIndicator.cs"));
+
+        string statusBar = ExtractWindow(mainWindowXaml, "x:Name=\"BottomStatusBar\"", "<!-- Right-aligned status cluster");
+        AssertContainsInOrder(statusBar,
+            "x:Name=\"SearchActivityCluster\" Grid.Column=\"0\" Orientation=\"Horizontal\"",
+            "x:Name=\"SearchActivityIndicator\"",
+            "x:Name=\"SearchActivityIcon\"",
+            "Glyph=\"&#xE721;\"",
+            "<TranslateTransform x:Name=\"SearchActivityTransform\" />",
+            "Text=\"{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}\"",
+            "Grid.Column=\"1\" Text=\"{x:Bind ViewModel.StatusText, Mode=OneWay}\"");
+        // The glyph shares a cell with files/sec so a collapsed files/sec never opens a second
+        // column gap between the glyph and the status text it annotates.
+        Assert.DoesNotContain("<ColumnDefinition Width=\"26\" />", statusBar);
+        Assert.Contains("Spacing=\"6\" VerticalAlignment=\"Center\"", statusBar);
+        Assert.DoesNotContain("RotateTransform", statusBar);
+
+        AssertContainsInOrder(indicatorSource,
+            "private void UpdateSearchActivityIndicator()",
+            "bool busy = ViewModel.IsSearching || ViewModel.IsTranslatingSemanticQuery || ViewModel.IsPreparingSearch;",
+            "_searchIndicatorSawScan |= ViewModel.IsSearching;",
+            "SearchActivityVisual visual = SearchActivityVisuals.Resolve(busy, _searchIndicatorSawScan);",
+            "AutomationProperties.SetName(SearchActivityIndicator, visual.AutomationName);",
+            "StartSearchActivityAnimation();",
+            "StopSearchActivityAnimation();");
+        Assert.Contains("RepeatBehavior = RepeatBehavior.Forever", indicatorSource);
+        Assert.Contains("Storyboard.SetTargetProperty(xAnimation, nameof(TranslateTransform.X));", indicatorSource);
+        Assert.Contains("Storyboard.SetTargetProperty(yAnimation, nameof(TranslateTransform.Y));", indicatorSource);
+        // The keyframe table lives in SearchActivityVisuals so the figure-eight shape is unit-tested
+        // (SearchActivityVisualsTests) instead of pinned as literal call text here.
+        Assert.Contains("foreach ((double seconds, double x, double y) in SearchActivityVisuals.FigureEightKeyframes)", indicatorSource);
+        Assert.DoesNotContain("Rotation", indicatorSource);
+
+        AssertContainsInOrder(mainWindowSource,
+            "e.PropertyName != nameof(ViewModel.IsPreparingSearch)",
+            "UpdateSearchActivityIndicator();",
+            "bool busy = ViewModel.IsSearching || ViewModel.IsTranslatingSemanticQuery || ViewModel.IsPreparingSearch;");
+    }
+
+    [Fact]
     public void SearchStatusHeartbeat_EnqueuesHighPriorityRefreshWhileSearchIsActive()
     {
         Assert.Contains("private CancellationTokenSource? _searchStatusHeartbeatCts;", MainViewModelSource);
