@@ -2991,13 +2991,15 @@ continuously current, select <strong>Automatic incremental</strong>
 the default <strong>Manual full rebuild</strong> update mode only builds
 missing indexes, regardless of trigger. On a fresh first-launch drive
 opt-in, Yagu preselects <strong>Continuously while Yagu is
-open</strong>, a <strong>one-minute continuous interval</strong>, and
+open</strong>, a <strong>five-minute continuous interval</strong>, and
 <strong>Automatic incremental</strong>, while keeping the separate idle
 delay at its five-minute default and keeping pause-during-search and
 pause-on-battery enabled; the dialog still lets you override its trigger
-and update mode. The approved first-run profile also uses an
-8,000,000-record foreground journal catch-up cap. This tab shows an
-inline warning if an automatic trigger is ever left on <strong>Manual
+and update mode. On first load after this update, an existing one-minute
+continuous interval is migrated once to five minutes; selecting one
+minute afterward remains supported. The approved first-run profile also
+uses an 8,000,000-record foreground journal catch-up cap. This tab shows
+an inline warning if an automatic trigger is ever left on <strong>Manual
 full rebuild</strong>. <strong>On a schedule</strong> supports an
 interval (5–10080 minutes) or selected weekdays/time. Automatic
 incremental applies small append-only deltas and never silently
@@ -5169,7 +5171,7 @@ right-click entry (skipped if already registered).</li>
 <li><strong>Content index onboarding</strong> — optionally index one or
 more folders you search often. A fresh first-launch opt-in starts from
 the approved indexing profile: <strong>Continuously while Yagu is
-open</strong>, a <strong>one-minute continuous interval</strong>
+open</strong>, a <strong>five-minute continuous interval</strong>
 (separate from the five-minute idle delay), <strong>Automatic
 incremental</strong>, an 8,000,000-record journal catch-up cap, and the
 same query, worker, safety, storage-budget, and status options shipped

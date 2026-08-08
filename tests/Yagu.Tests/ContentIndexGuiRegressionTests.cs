@@ -857,6 +857,13 @@ public sealed class ContentIndexGuiRegressionTests
     }
 
     [Fact]
+    public void HelpMarkdown_DocumentsFiveMinuteFirstRunIndexCadence()
+    {
+        Assert.Contains("a **five-minute continuous interval**", HelpMarkdown);
+        Assert.DoesNotContain("a **one-minute continuous interval**", HelpMarkdown);
+    }
+
+    [Fact]
     public void UserFacingIndexText_ExplainsAdditionalQueryFilesWithoutSpecializedJargon()
     {
         Assert.DoesNotContain("sidecar", SettingsIndexingSource, StringComparison.OrdinalIgnoreCase);
