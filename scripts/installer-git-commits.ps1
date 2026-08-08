@@ -533,6 +533,82 @@ Non-executable excerpt of retired loop:
 This block is intentionally not executable; whole-file atomic planning is now the active workflow.
 #>
 
+# Recoverable post-build guard. Source edits made WHILE the (long) installer build was running are not
+# in the built binaries, so they must never ride along in the release commit. Rather than aborting the
+# whole run and orphaning an unpushed version bump plus four freshly built installers, offer to set the
+# stray changes aside in a named stash so the release finishes with exactly what was built; the caller
+# restores them afterwards. Non-interactive sessions (and an explicit abort) keep the hard failure.
+function Suspend-YaguUnexpectedPostBuildChanges {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$RepoRoot,
+    [Parameter(Mandatory)][string[]]$AllowedPaths
+  )
+
+  $allowed = @{}
+  foreach ($path in $AllowedPaths) {
+    $allowed[$path.Replace('\', '/')] = $true
+  }
+
+  $changed = @(Get-YaguGitChangedPaths -RepoRoot $RepoRoot)
+  [string[]]$unexpected = @($changed | Where-Object { -not $allowed.ContainsKey($_.Replace('\', '/')) })
+  if ($unexpected.Count -eq 0) { return $null }
+
+  $failure = "Unexpected post-build change(s) will not be committed or pushed: $($unexpected -join ', ')"
+  if ([Console]::IsInputRedirected) { throw $failure }
+
+  Write-Host ''
+  Write-Warning 'These files changed after the installers were built, so they are NOT in the built binaries:'
+  foreach ($path in $unexpected) { Write-Host "     - $path" }
+  Write-Host 'Setting them aside stashes them, finishes this release with exactly what was built, then restores them.' -ForegroundColor Cyan
+  $choice = (Read-Host 'Set these changes aside and finish the release? [setaside/abort]').Trim()
+  if ($choice -cne 'setaside') { throw $failure }
+
+  $label = "yagu-release-setaside $([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
+  # Out-Host keeps git's own stdout off this function's success stream, which returns the descriptor.
+  & git --no-pager -C $RepoRoot stash push --include-untracked --message $label -- @unexpected | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "Could not set aside the unexpected post-build change(s) (git stash push exit $LASTEXITCODE)." }
+
+  $remaining = @(Get-YaguGitChangedPaths -RepoRoot $RepoRoot)
+  [string[]]$stillUnexpected = @($remaining | Where-Object { -not $allowed.ContainsKey($_.Replace('\', '/')) })
+  if ($stillUnexpected.Count -gt 0) {
+    throw "Set-aside did not clear every unexpected post-build change: $($stillUnexpected -join ', ')"
+  }
+
+  Write-Host "Set aside as stash '$label'." -ForegroundColor Green
+  return [pscustomobject]@{ Label = $label; Paths = $unexpected }
+}
+
+function Restore-YaguSetAsideChanges {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$RepoRoot,
+    $SetAside
+  )
+
+  if (-not $SetAside) { return }
+
+  $entries = @(& git --no-pager -C $RepoRoot stash list --format='%gd%x09%gs')
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Could not list stashes to restore '$($SetAside.Label)'. Restore it manually with: git stash list"
+    return
+  }
+
+  $match = $entries | Where-Object { $_ -like "*$($SetAside.Label)" } | Select-Object -First 1
+  if (-not $match) {
+    Write-Warning "Stash '$($SetAside.Label)' was not found; restore it manually with: git stash list"
+    return
+  }
+
+  $ref = ($match -split "`t")[0]
+  & git --no-pager -C $RepoRoot stash pop $ref | Out-Host
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Could not automatically restore '$($SetAside.Label)'. It is still stashed - recover it with: git stash pop $ref"
+    return
+  }
+  Write-Host "Restored the set-aside change(s): $($SetAside.Paths -join ', ')" -ForegroundColor Green
+}
+
 function Invoke-YaguInstallerReleaseCommit {
   [CmdletBinding()]
   param(

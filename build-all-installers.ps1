@@ -52,9 +52,14 @@
 .PARAMETER Push
   Run the same conservative whole-file atomic commit workflow as -Commit, then run git push.
   Remaining changes are grouped only as complete files by a read-only Copilot plan, validated in a
-  temporary Git index, shown for explicit approval, and aborted on any uncertainty. Before push, generates
+  temporary Git index, shown for explicit approval, and aborted on any uncertainty. Source edits made
+  while the build was running are not in the built binaries, so they are never committed; interactively
+  they can be set aside in a named stash (and are restored when the run ends) so the release still
+  finishes instead of orphaning the version bump and the built installers. Before push, generates
   comprehensive user-facing release notes from bounded read-only Copilot context and appends exact
-  Assets, Validation, Installation, and Full changelog sections. After push, creates or refreshes the
+  Assets, Validation, Installation, and Full changelog sections. Notes are always based on the last
+  PUBLISHED GitHub release, so commits left behind by an earlier interrupted run are still covered.
+  After push, creates or refreshes the
   selected Draft/Published release with only the freshly built installers, then verifies its live
   state, tag target, notes, asset sizes, and SHA-256 digests when GitHub exposes them. Missing tools,
   authentication failures, upload failures, and verification mismatches fail the release.
@@ -851,6 +856,7 @@ if ($Commit -or $Push) {
   # error; we inspect $LASTEXITCODE ourselves and throw only on genuine failures.
   $restoreNativePref = $false
   $savedNativePref = $null
+  $setAsideChanges = $null
   if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
     $savedNativePref = $PSNativeCommandUseErrorActionPreference
     $PSNativeCommandUseErrorActionPreference = $false
@@ -863,12 +869,16 @@ if ($Commit -or $Push) {
     }
 
     Write-Host ""
-    $commitMessage = "Build installers v$pinnedVersion ($($requested -join ', '))"
-    Invoke-YaguInstallerReleaseCommit -RepoRoot $repoRoot -Message $commitMessage -AllowedPaths @(
+    $releaseAllowedPaths = @(
       'src/Yagu/Properties/build-version.txt',
       'src/Yagu/Properties/AppInfo.g.cs',
       'README.md'
     )
+    # Edits made while the build was running are not in the built binaries; set them aside (with consent)
+    # so this run still finishes instead of orphaning the version bump and the freshly built installers.
+    $setAsideChanges = Suspend-YaguUnexpectedPostBuildChanges -RepoRoot $repoRoot -AllowedPaths $releaseAllowedPaths
+    $commitMessage = "Build installers v$pinnedVersion ($($requested -join ', '))"
+    Invoke-YaguInstallerReleaseCommit -RepoRoot $repoRoot -Message $commitMessage -AllowedPaths $releaseAllowedPaths
 
     [System.IO.FileInfo[]]$releaseAssets = @()
     $tag = $null
@@ -895,6 +905,11 @@ if ($Commit -or $Push) {
         -GitHubCli $gh.Source `
         -RepoArgs $repoArgs `
         -CurrentTag $tag
+
+      # The baseline is the last PUBLISHED release, never the last local tag or version bump, so an
+      # earlier interrupted run's commits are still described by these notes.
+      $notesBaseline = if ([string]::IsNullOrWhiteSpace($previousReleaseTag)) { 'the first commit' } else { $previousReleaseTag }
+      Write-Host "Release notes cover every change from $notesBaseline (last published release) to $headSha." -ForegroundColor Cyan
 
       & $gh.Source release view $tag @repoArgs *> $null
       $releaseExists = ($LASTEXITCODE -eq 0)
@@ -1022,6 +1037,7 @@ if ($Commit -or $Push) {
     }
   }
   finally {
+    Restore-YaguSetAsideChanges -RepoRoot $repoRoot -SetAside $setAsideChanges
     if ($restoreNativePref) { $PSNativeCommandUseErrorActionPreference = $savedNativePref }
   }
 }

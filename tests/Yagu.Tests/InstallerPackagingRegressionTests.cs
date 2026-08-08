@@ -570,6 +570,20 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply'", gitHelper);
         Assert.Contains("[Console]::IsInputRedirected", gitHelper);
         Assert.Contains("Unexpected post-build change(s) will not be committed or pushed", gitHelper);
+        // Post-build source edits are recoverable: set them aside (never commit them into the release,
+        // because they are not in the built binaries) so the run finishes, then restore them.
+        Assert.Contains("function Suspend-YaguUnexpectedPostBuildChanges", gitHelper);
+        Assert.Contains("function Restore-YaguSetAsideChanges", gitHelper);
+        Assert.Contains("if ([Console]::IsInputRedirected) { throw $failure }", gitHelper);
+        Assert.Contains("Set these changes aside and finish the release? [setaside/abort]", gitHelper);
+        Assert.Contains("if ($choice -cne 'setaside') { throw $failure }", gitHelper);
+        Assert.Contains("stash push --include-untracked --message $label -- @unexpected", gitHelper);
+        Assert.Contains("$setAsideChanges = Suspend-YaguUnexpectedPostBuildChanges -RepoRoot $repoRoot -AllowedPaths $releaseAllowedPaths", buildAll);
+        Assert.Contains("Restore-YaguSetAsideChanges -RepoRoot $repoRoot -SetAside $setAsideChanges", buildAll);
+        Assert.True(
+            buildAll.IndexOf("$setAsideChanges = Suspend-YaguUnexpectedPostBuildChanges", StringComparison.Ordinal)
+                < buildAll.IndexOf("Invoke-YaguInstallerReleaseCommit -RepoRoot $repoRoot", StringComparison.Ordinal),
+            "Stray post-build changes must be resolved before the release commit runs its guard.");
         Assert.Contains("& git --no-pager -C $RepoRoot add -A -- @releaseChanges", gitHelper);
         Assert.Contains("commit --only -m $Message -- @releaseChanges", gitHelper);
         Assert.Contains("'README.md'", buildAll);
@@ -605,6 +619,9 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("https://github.com/$RepositorySlug/compare/$range", buildAll);
         Assert.Contains("function Get-PreviousGitHubReleaseTag", buildAll);
         Assert.Contains("Where-Object { -not $_.isDraft -and $_.tagName -ne $CurrentTag }", buildAll);
+        // The notes baseline is the last PUBLISHED release, so commits left behind by an interrupted run
+        // (which bumped and tagged nothing) are still described by the next release.
+        Assert.Contains("Release notes cover every change from $notesBaseline (last published release) to $headSha.", buildAll);
 
         // Release notes are Copilot-generated from bounded local context, normalized, then deterministically augmented.
         Assert.Contains("function Get-ReleaseChangeContext", buildAll);
