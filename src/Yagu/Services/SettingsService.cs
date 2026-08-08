@@ -909,6 +909,8 @@ public sealed class AppSettings
     /// <summary>One-time migration guard for settings written when <see cref="IndexIdleDelayMinutes"/>
     /// controlled both idle and continuous maintenance cadence.</summary>
     public bool IndexContinuousIntervalMigrated { get; set; }
+    /// <summary>One-time migration guard for the former one-minute first-run continuous cadence.</summary>
+    public bool IndexOneMinuteContinuousIntervalMigrated { get; set; }
 
     /// <summary>Schedule mode when <see cref="IndexBuildTrigger"/> is OnSchedule: <c>Interval</c> (every N
     /// minutes) or <c>Weekly</c> (on chosen days of the week at a set time). Default Interval.</summary>
@@ -1088,6 +1090,7 @@ public sealed class AppSettings
         IndexIdleDelayMinutes = DefaultIndexIdleDelayMinutes;
         IndexContinuousIntervalMinutes = DefaultIndexContinuousIntervalMinutes;
         IndexContinuousIntervalMigrated = true;
+        IndexOneMinuteContinuousIntervalMigrated = true;
         IndexScheduleMode = DefaultIndexScheduleMode;
         IndexScheduleIntervalMinutes = DefaultIndexScheduleIntervalMinutes;
         IndexScheduleDaysOfWeekMask = DefaultIndexScheduleDaysOfWeekMask;
@@ -1592,6 +1595,7 @@ public sealed class SettingsService
         => new()
         {
             IndexContinuousIntervalMigrated = true,
+            IndexOneMinuteContinuousIntervalMigrated = true,
             IndexSizeDefaultsMigrated = true,
         };
 
@@ -1759,6 +1763,12 @@ public sealed class SettingsService
                 settings.IndexIdleDelayMinutes);
             settings.IndexContinuousIntervalMigrated = true;
         }
+        if (!settings.IndexOneMinuteContinuousIntervalMigrated)
+        {
+            if (settings.IndexContinuousIntervalMinutes == AppSettings.FirstRunDriveIndexContinuousIntervalMinutes)
+                settings.IndexContinuousIntervalMinutes = AppSettings.DefaultIndexContinuousIntervalMinutes;
+            settings.IndexOneMinuteContinuousIntervalMigrated = true;
+        }
         settings.IndexIdleDelayMinutes = AppSettings.NormalizeIndexIdleDelayMinutes(settings.IndexIdleDelayMinutes);
         settings.IndexContinuousIntervalMinutes = AppSettings.NormalizeIndexContinuousIntervalMinutes(
             settings.IndexContinuousIntervalMinutes);
@@ -1898,6 +1908,7 @@ public sealed class SettingsService
         try
         {
             settings.IndexContinuousIntervalMigrated = true;
+            settings.IndexOneMinuteContinuousIntervalMigrated = true;
             settings.IndexSizeDefaultsMigrated = true;
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
@@ -1923,6 +1934,7 @@ public sealed class SettingsService
         try
         {
             settings.IndexContinuousIntervalMigrated = true;
+            settings.IndexOneMinuteContinuousIntervalMigrated = true;
             settings.IndexSizeDefaultsMigrated = true;
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);

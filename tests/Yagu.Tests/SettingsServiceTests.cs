@@ -121,6 +121,58 @@ public class SettingsServiceTests
     }
 
     [Fact]
+    public void Load_OneMinuteContinuousInterval_MigratesToDefaultOnce()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(
+                temp,
+                """{ "IndexContinuousIntervalMinutes": 1, "IndexContinuousIntervalMigrated": true }""");
+
+            AppSettings loaded = new SettingsService(temp).Load();
+
+            Assert.Equal(AppSettings.DefaultIndexContinuousIntervalMinutes, loaded.IndexContinuousIntervalMinutes);
+            Assert.True(loaded.IndexOneMinuteContinuousIntervalMigrated);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
+    public void Load_LegacyCombinedOneMinuteCadence_MigratesToDefault()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(temp, """{ "IndexIdleDelayMinutes": 1 }""");
+
+            AppSettings loaded = new SettingsService(temp).Load();
+
+            Assert.Equal(AppSettings.DefaultIndexContinuousIntervalMinutes, loaded.IndexContinuousIntervalMinutes);
+            Assert.True(loaded.IndexContinuousIntervalMigrated);
+            Assert.True(loaded.IndexOneMinuteContinuousIntervalMigrated);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
+    public void Save_DeliberateOneMinuteContinuousInterval_PreservesValue()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var service = new SettingsService(temp);
+            service.Save(new AppSettings { IndexContinuousIntervalMinutes = 1 });
+
+            AppSettings loaded = service.Load();
+
+            Assert.Equal(1, loaded.IndexContinuousIntervalMinutes);
+            Assert.True(loaded.IndexOneMinuteContinuousIntervalMigrated);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
     public void Load_MissingSettingsFile_UsesBothCadenceDefaults()
     {
         string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
