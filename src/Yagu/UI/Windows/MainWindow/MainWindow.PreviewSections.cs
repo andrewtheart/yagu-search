@@ -375,6 +375,8 @@ public sealed partial class MainWindow
         UpdateAdvancedOptionsDrawerMaxHeight();
         UpdateTopExpandedPreviewMeasurements();
         UpdateSearchProgressOverlayWidth();
+        if (IndexStatusHoverOverlay?.Visibility == Visibility.Visible)
+            PositionIndexStatusHoverOverlay();
     }
 
     private void OnTopExpandedPreviewLayoutSourceSizeChanged(object sender, SizeChangedEventArgs e)

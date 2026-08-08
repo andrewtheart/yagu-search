@@ -1208,8 +1208,9 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("AdvancedOptionsExpandGlyph.Glyph = \"\\uE70D\";", closed);
 
         string width = ExtractMethodWindow(MainWindowSource, "SyncAdvancedOptionsDrawerWidth", 700);
-        Assert.Contains("SearchCardBottomBar.ActualWidth", width);
-        Assert.Contains("AdvancedOptionsScrollViewer.Width = width;", width);
+        Assert.Contains("private const double AdvancedOptionsDrawerWidth = 740;", MainWindowSource);
+        Assert.Contains("AdvancedOptionsScrollViewer.Width = AdvancedOptionsDrawerWidth;", width);
+        Assert.DoesNotContain("SearchCardBottomBar.ActualWidth", width);
 
         // Max-height is bounded by the monitor work area (the flyout is its own visual root).
         string maxHeight = ExtractMethodWindow(MainWindowSource, "UpdateAdvancedOptionsDrawerMaxHeight", 1600);
@@ -1244,6 +1245,9 @@ public sealed class PreviewCoreRegressionTests
             "Click=\"OnToggleTerminalPane\"",
             "Style=\"{StaticResource SearchCardBottomIconButtonStyle}\"");
         Assert.Contains("x:Key=\"SearchCardBottomIconButtonStyle\"", MainWindowXaml);
+        string utilityStyle = ExtractXamlWindow("x:Key=\"SearchCardBottomIconButtonStyle\"", 700);
+        Assert.Contains("<Setter Property=\"BorderThickness\" Value=\"0\" />", utilityStyle);
+        Assert.DoesNotContain("<Setter Property=\"BorderThickness\" Value=\"1\" />", utilityStyle);
         Assert.Contains("<Setter Property=\"Background\" Value=\"Transparent\" />", MainWindowXaml);
         Assert.Contains("<Setter Property=\"BorderBrush\" Value=\"{ThemeResource CardStrokeColorDefaultBrush}\" />", MainWindowXaml);
 
@@ -1257,6 +1261,7 @@ public sealed class PreviewCoreRegressionTests
         string terminalHost = ExtractXamlWindow("x:Name=\"TerminalHost\"", 5600);
         AssertContainsInOrder(terminalHost,
             "<ComboBox x:Name=\"TerminalShellSelector\"",
+            "Width=\"96\" MinWidth=\"0\" Height=\"28\" MinHeight=\"0\" Padding=\"8,0,4,0\"",
             "SelectionChanged=\"OnTerminalShellSelectionChanged\"",
             "<WebView2 x:Name=\"TerminalWebView\"",
             "<Button x:Name=\"TerminalChevron\"",
@@ -1265,6 +1270,7 @@ public sealed class PreviewCoreRegressionTests
             "Margin=\"0,0,32,10\"",
             "Canvas.ZIndex=\"10\"",
             "<FontIcon x:Name=\"TerminalChevronIcon\"");
+        Assert.DoesNotContain("MinWidth=\"110\"", terminalHost);
 
         Assert.Contains("<Grid RowSpacing=\"12\" ColumnSpacing=\"8\">", MainWindowXaml);
         Assert.Contains("<ColumnDefinition Width=\"Auto\" />", MainWindowXaml);
@@ -2306,15 +2312,14 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("Width=\"24\" Height=\"24\" MinWidth=\"0\" MinHeight=\"0\" Padding=\"0\"", selectAllFiles);
         Assert.Contains("HorizontalAlignment=\"Center\" VerticalAlignment=\"Center\"", selectAllFiles);
 
-        // Layout: the select-all checkbox and the expander sit inline in the results toolbar. The
-        // skipped-files indicator and "Filter files…" box share the top-right slot (Grid.Column=2).
+        // Layout: the select-all checkbox stays in the left toolbar; skipped-files/filter controls
+        // occupy column 2; the expand/restore command owns the final far-right column.
         Assert.DoesNotContain("<Grid Width=\"38\" VerticalAlignment=\"Center\">", MainWindowXaml);
         Assert.DoesNotContain("<Grid Grid.Row=\"1\" Margin=\"22,6,34,6\" ColumnSpacing=\"6\">", MainWindowXaml);
         AssertContainsInOrder(MainWindowXaml,
             "x:Name=\"SelectAllFilesCheckBox\"",
             "ToolTipService.ToolTip=\"Sort results\"",
             "ToolTipService.ToolTip=\"Filter results\"",
-            "x:Name=\"ExpandResultsButton\"",
             "<Grid Grid.Column=\"2\" VerticalAlignment=\"Center\" Margin=\"0,0,4,0\"",
             "Visibility=\"{x:Bind ViewModel.ResultFilterAreaVisibility, Mode=OneWay}\"",
             "x:Name=\"SkippedInfoButton\"",
@@ -2324,7 +2329,8 @@ public sealed class PreviewCoreRegressionTests
             // 4px right margin so the filter box's right edge lines up with the result
             // drawer (Expander) card edge below it, instead of overhanging it slightly.
             "Visibility=\"{x:Bind ViewModel.ResultFileFilterVisibility, Mode=OneWay}\"",
-            "AutomationProperties.AutomationId=\"ResultFileFilterBox\"");
+            "AutomationProperties.AutomationId=\"ResultFileFilterBox\"",
+            "x:Name=\"ExpandResultsButton\" Grid.Column=\"3\"");
 
         // The filter box is hidden until a search has produced files. It keys off the UNFILTERED
         // AllGroups count (not HasResults, which reflects the filtered/visible groups) so filtering
@@ -2445,13 +2451,20 @@ public sealed class PreviewCoreRegressionTests
             "ItemTemplateSelector=\"{StaticResource ResultListItemTemplateSelector}\"");
         Assert.DoesNotContain("Text=\"{x:Bind GroupHeaderText", MainWindowXaml);
 
-        string resultsExpandButton = ExtractXamlWindow("x:Name=\"ExpandResultsButton\"", 360);
+        string resultsExpandButton = ExtractXamlWindow("x:Name=\"ExpandResultsButton\"", 600);
         Assert.Contains("Width=\"28\" Height=\"28\" MinWidth=\"0\" MinHeight=\"0\"", resultsExpandButton);
         Assert.Contains("Padding=\"0\"", resultsExpandButton);
         Assert.DoesNotContain("Padding=\"6,4\"", resultsExpandButton);
-        // The expander moved out of the top-right corner (Grid.Column=2) into the inline results
-        // toolbar StackPanel, so it no longer carries a dedicated grid column or trailing margin.
-        Assert.DoesNotContain("x:Name=\"ExpandResultsButton\" Grid.Column=\"2\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"ExpandResultsButton\" Grid.Column=\"3\"", resultsExpandButton);
+        Assert.Contains("HorizontalAlignment=\"Right\" VerticalAlignment=\"Top\"", resultsExpandButton);
+
+        // ResultsHeaderBar is row 0, outside the scrolling ResultsList in row 2. Keeping the restore
+        // button inside that header makes its far-right position sticky while result rows scroll.
+        AssertContainsInOrder(MainWindowXaml,
+            "x:Name=\"ResultsHeaderBar\" Grid.Row=\"0\"",
+            "x:Name=\"ExpandResultsButton\" Grid.Column=\"3\"",
+            "x:Name=\"ResultsList\"",
+            "Grid.Row=\"2\"");
 
         // The old dedicated select-all/filter row is gone (both controls relocated into the toolbar).
         Assert.DoesNotContain("<Grid Grid.Row=\"1\" Margin=\"22,6,34,6\" ColumnSpacing=\"6\">", MainWindowXaml);

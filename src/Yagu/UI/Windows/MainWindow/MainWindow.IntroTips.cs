@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Yagu.Models;
 using Yagu.ViewModels;
 
 namespace Yagu;
@@ -24,10 +25,10 @@ public sealed partial class MainWindow
     {
         if (sender is FrameworkElement target)
         {
-            QueueDelayedFileDrawerIntroTip(target);
             ApplyDrawerLabelSettings(target);
             if (target is Grid headerGrid && _realizedFileGroupHeaders.Add(headerGrid))
                 headerGrid.Unloaded += OnFileGroupHeaderUnloaded;
+            QueueDelayedFileDrawerIntroTip(target);
         }
     }
 
@@ -37,7 +38,20 @@ public sealed partial class MainWindow
         {
             _realizedFileGroupHeaders.Remove(headerGrid);
             headerGrid.Unloaded -= OnFileGroupHeaderUnloaded;
+            CancelDelayedFileDrawerIntroTip(headerGrid);
         }
+    }
+
+    private void CancelDelayedFileDrawerIntroTip(FrameworkElement target)
+    {
+        if (!ReferenceEquals(_fileDrawerIntroTipDelayTarget, target))
+            return;
+
+        _fileDrawerIntroTipDelayTimer?.Stop();
+        if (_fileDrawerIntroTipDelayTimer is { } timer)
+            timer.Tick -= OnFileDrawerIntroTipDelayTick;
+        _fileDrawerIntroTipDelayTimer = null;
+        _fileDrawerIntroTipDelayTarget = null;
     }
 
     private void QueueDelayedFileDrawerIntroTip(FrameworkElement target)
@@ -68,7 +82,7 @@ public sealed partial class MainWindow
 
         var target = _fileDrawerIntroTipDelayTarget;
         _fileDrawerIntroTipDelayTarget = null;
-        if (target is null)
+        if (target is null || !IsRenderedFileDrawerIntroTipTarget(target))
             return;
 
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
@@ -79,6 +93,38 @@ public sealed partial class MainWindow
                 "Double click or right click to preview this file",
                 TeachingTipPlacementMode.Right);
         });
+    }
+
+    private bool IsRenderedFileDrawerIntroTipTarget(FrameworkElement target)
+    {
+        if (target is not Grid headerGrid
+            || !_realizedFileGroupHeaders.Contains(headerGrid)
+            || !target.IsLoaded
+            || target.Visibility != Visibility.Visible
+            || target.DataContext is not FileGroup { FilePath.Length: > 0 }
+            || target.XamlRoot is null
+            || target.XamlRoot != ResultsList.XamlRoot
+            || target.ActualWidth <= 0
+            || target.ActualHeight <= 0
+            || ResultsList.ActualWidth <= 0
+            || ResultsList.ActualHeight <= 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            Windows.Foundation.Rect bounds = target.TransformToVisual(ResultsList).TransformBounds(
+                new Windows.Foundation.Rect(0, 0, target.ActualWidth, target.ActualHeight));
+            return bounds.Right > 0
+                && bounds.Bottom > 0
+                && bounds.Left < ResultsList.ActualWidth
+                && bounds.Top < ResultsList.ActualHeight;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private void OnMatchLineNumberLoaded(object sender, RoutedEventArgs e)

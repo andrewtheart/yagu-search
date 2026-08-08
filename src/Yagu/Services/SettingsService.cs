@@ -546,6 +546,9 @@ public sealed class AppSettings
     /// means "use the shipped order". Unknown keys are ignored and tabs missing from the list fall
     /// back to their shipped position, so the setting survives tabs being added or renamed.</summary>
     public List<string> AdvancedOptionsTabOrder { get; set; } = [];
+    /// <summary>Custom Advanced Options row placements, keyed by stable option ID with a stable tab key
+    /// value. Missing entries use the shipped tab. Unknown IDs/tabs are ignored so upgrades fail safe.</summary>
+    public Dictionary<string, string> AdvancedOptionPlacements { get; set; } = [];
     /// <summary>The user-editable one-click searches shown on the Advanced Options ▸ Quick searches tab,
     /// in display order. Seeded from the built-in catalog on first run (see
     /// <see cref="QuickSearchesInitialized"/>); afterwards the list is entirely user-owned, so an empty
@@ -689,6 +692,9 @@ public sealed class AppSettings
     /// <summary>When true, show result-temp, content-index storage, and Yagu/worker RAM usage in the
     /// bottom status bar. Hidden by default and configurable under Developer Options.</summary>
     public bool ShowResourceUsageInStatusBar { get; set; }
+    /// <summary>When true, show the bottom-right live-log button and debug panel. Hidden by default
+    /// and configurable under Developer Options.</summary>
+    public bool ShowDebugPanel { get; set; }
     /// <summary>When true, append the app version/build number to the main title bar.</summary>
     public bool ShowBuildNumberInTitleBar { get; set; }
     /// <summary>When true, show the Auto-scroll checkbox in the results toolbar. Hidden by default.</summary>

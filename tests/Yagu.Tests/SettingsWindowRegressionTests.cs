@@ -161,6 +161,55 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void SettingsSearchJump_FlashesAnAuroraAroundTheOpenedSetting()
+    {
+        // The highlight is a non-interactive overlay: settings search must never reparent live controls.
+        Assert.Contains("x:Name=\"SettingHighlightLayer\"", SettingsWindowXaml);
+        Assert.Contains("x:Name=\"SettingHighlight\"", SettingsWindowXaml);
+        Assert.Contains("IsHitTestVisible=\"False\"", SettingsWindowXaml);
+
+        AssertContainsInOrder(ExtractMethod(SettingsWindowSource, "JumpToSetting", window: 400),
+            "SelectTab(entry.TabIndex);",
+            "FlashSettingHighlight(entry);");
+
+        // The aurora spans the whole captured setting group, so the control sits inside it.
+        Assert.Contains("HighlightElements = captured,", SettingsWindowSource);
+
+        // A fresh generation retires the previous jump's queued retries and storyboard callbacks.
+        AssertContainsInOrder(ExtractMethod(SettingsWindowSource, "FlashSettingHighlight", window: 1400),
+            "entry.HighlightElements",
+            "HideSettingHighlight();",
+            "int generation = ++_settingHighlightGeneration;",
+            "QueueSettingHighlightAttempt(generation, SettingHighlightMaxLayoutAttempts);");
+
+        // SelectTab re-parents the tab page, so its children measure zero for several layout passes:
+        // keep retrying instead of giving up, and only scroll once the target is measurable.
+        string attempt = ExtractMethod(SettingsWindowSource, "QueueSettingHighlightAttempt", window: 1800);
+        AssertContainsInOrder(attempt,
+            "if (generation != _settingHighlightGeneration)",
+            "if (!TryPositionSettingHighlight())",
+            "QueueSettingHighlightAttempt(generation, attemptsRemaining - 1);",
+            "StartBringIntoView(",
+            "StartSettingHighlightFlash(generation);");
+
+        // Opacity key frames drive the brief flash; Stop() also raises Completed, so it is generation-gated.
+        string flash = ExtractMethod(SettingsWindowSource, "StartSettingHighlightFlash", window: 2400);
+        Assert.Contains("Storyboard.SetTargetProperty(flash, \"Opacity\");", flash);
+        AssertContainsInOrder(flash,
+            "storyboard.Completed += (_, _) =>",
+            "if (generation == _settingHighlightGeneration)",
+            "HideSettingHighlight();");
+
+        // Bring-into-view is animated, so the highlight follows the setting while the pane scrolls.
+        Assert.Contains("SettingsContentScrollViewer.ViewChanged += OnSettingHighlightViewChanged;",
+            ExtractMethod(SettingsWindowSource, "BeginTrackingSettingHighlight", window: 400));
+        AssertContainsInOrder(ExtractMethod(SettingsWindowSource, "HideSettingHighlight", window: 800),
+            "_settingHighlightGeneration++;",
+            "storyboard?.Stop();",
+            "SettingsContentScrollViewer.ViewChanged -= OnSettingHighlightViewChanged;");
+    }
+
+    [Fact]
     public void SettingsWindowXaml_HasSaveAndCloseButtons()
     {
         Assert.Contains("Click=\"OnSaveClick\"", SettingsWindowXaml);
@@ -1213,6 +1262,11 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("private static readonly TimeSpan FileDrawerIntroTipDelay = TimeSpan.FromSeconds(2);", MainWindowIntroTipsSource);
         Assert.Contains("QueueDelayedFileDrawerIntroTip(target);", MainWindowIntroTipsSource);
         Assert.Contains("new DispatcherTimer { Interval = FileDrawerIntroTipDelay }", MainWindowIntroTipsSource);
+        Assert.Contains("CancelDelayedFileDrawerIntroTip(headerGrid);", MainWindowIntroTipsSource);
+        Assert.Contains("!IsRenderedFileDrawerIntroTipTarget(target)", MainWindowIntroTipsSource);
+        Assert.Contains("_realizedFileGroupHeaders.Contains(headerGrid)", MainWindowIntroTipsSource);
+        Assert.Contains("target.DataContext is not FileGroup { FilePath.Length: > 0 }", MainWindowIntroTipsSource);
+        Assert.Contains("target.TransformToVisual(ResultsList).TransformBounds(", MainWindowIntroTipsSource);
         Assert.Contains("TryOpenIntroTip(\r\n                IntroTipKind.FileDrawer", MainWindowIntroTipsSource);
         Assert.Contains("Select a line number to preview just that line number + context", MainWindowIntroTipsSource);
         Assert.Contains("Double click on any match to jump to it in a file editor", MainWindowIntroTipsSource);
@@ -1495,6 +1549,19 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("DisposeTerminal();", MainWindowTerminalSource);
         Assert.Contains("StartConPtySession();", MainWindowTerminalSource);
         Assert.Contains("_terminalSessionGeneration", MainWindowTerminalSource);
+    }
+
+    [Fact]
+    public void EmbeddedTerminal_ReservesScrollbarGutterAndUsesCompactContextMenu()
+    {
+        Assert.Contains("#terminal .xterm {", TerminalHtml);
+        Assert.Contains("padding-right: 22px;", TerminalHtml);
+        Assert.Contains("min-width: 154px;", TerminalHtml);
+        Assert.Contains("padding: 2px 8px;", TerminalHtml);
+        Assert.Contains("font: 12px/18px 'Segoe UI', sans-serif;", TerminalHtml);
+        Assert.Contains("terminalMenu.style.visibility = 'hidden';", TerminalHtml);
+        Assert.Contains("const menuHeight = terminalMenu.offsetHeight || 143;", TerminalHtml);
+        Assert.Contains("terminalMenu.style.visibility = 'visible';", TerminalHtml);
     }
 
     [Fact]

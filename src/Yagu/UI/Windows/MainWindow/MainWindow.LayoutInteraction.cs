@@ -28,11 +28,10 @@ public sealed partial class MainWindow
     // scrollbar is preferred over shrinking further.
     private const double MinAdvancedOptionsDrawerHeight = 160;
 
-    // Minimum usable width for the Advanced Options drawer. The body is a 132px tab rail plus
-    // padded option rows whose inner two-column grids need room before controls clip. Half the
-    // search-card bottom bar is fine under a wide card, but when the preview pane is shown the
-    // search card lives in the narrow left pane, so the half-width must not fall below this floor.
-    private const double MinAdvancedOptionsDrawerWidth = 520;
+    // Measured minimum for the 160px tab rail, padded content pane, and the Filters tab's two
+    // 250px option columns. Keeping this fixed prevents a wide search card from making every row
+    // needlessly long while still leaving a small right inset after the longest control.
+    private const double AdvancedOptionsDrawerWidth = 740;
 
     private void InitializeAdvancedOptionsDrawerStateTracking()
     {
@@ -90,19 +89,12 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// Sizes the flyout drawer to half the search card's bottom action bar width, left-aligned under
-    /// the "Advanced Options" toggle.
+    /// Applies the measured compact width, left-aligned under the "Advanced Options" toggle.
     /// </summary>
     private void SyncAdvancedOptionsDrawerWidth()
     {
-        if (AdvancedOptionsScrollViewer is null || SearchCardBottomBar is null) return;
-        // Clamp to a usable floor so the tabbed content stays fully visible when the preview pane
-        // narrows the search card (otherwise half the bottom bar squeezes the option rows until
-        // controls clip). The flyout is its own visual root, so a width wider than the search card
-        // simply overflows the window without growing it.
-        double width = Math.Max(SearchCardBottomBar.ActualWidth * 0.5, MinAdvancedOptionsDrawerWidth);
-        if (width > 0)
-            AdvancedOptionsScrollViewer.Width = width;
+        if (AdvancedOptionsScrollViewer is not null)
+            AdvancedOptionsScrollViewer.Width = AdvancedOptionsDrawerWidth;
     }
 
     /// <summary>

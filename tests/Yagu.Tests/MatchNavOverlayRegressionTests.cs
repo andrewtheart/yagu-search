@@ -143,7 +143,9 @@ public sealed class MatchNavOverlayRegressionTests
     [Fact]
     public void SectionNavOverlay_DismissCollapsesAndHoverAdjustsOpacity()
     {
-        Assert.Contains("SectionNavOverlay.Visibility = Visibility.Collapsed;", Method("OnSectionNavDismiss", 150));
+        // The dismiss button and the Esc key share one collapse helper.
+        Assert.Contains("HideSectionNavOverlay();", Method("OnSectionNavDismiss", 150));
+        Assert.Contains("SectionNavOverlay.Visibility = Visibility.Collapsed;", Method("HideSectionNavOverlay", 150));
         Assert.Contains("SectionNavOverlay.Opacity = 1.0;", Method("OnSectionNavPointerEntered", 150));
         Assert.Contains("SectionNavOverlay.Opacity = 0.75;", Method("OnSectionNavPointerExited", 150));
     }

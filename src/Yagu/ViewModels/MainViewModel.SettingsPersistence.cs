@@ -17,6 +17,9 @@ public sealed partial class MainViewModel
     /// reads it once when it first opens and writes it back after a drag completes.</summary>
     public List<string> AdvancedOptionsTabOrder { get; set; } = [];
 
+    /// <summary>Persisted stable option ID → Advanced Options tab key overrides.</summary>
+    public Dictionary<string, string> AdvancedOptionPlacements { get; set; } = new(StringComparer.Ordinal);
+
     /// <summary>Resolves the directory the box should show at launch. Honors a pinned startup
     /// directory when the user has enabled the pin and a path was captured; otherwise starts empty so
     /// the search defaults to all drives. The legacy LastDirectory value is intentionally not restored
@@ -208,6 +211,7 @@ public sealed partial class MainViewModel
         _settings.ShowMemoryPressureWarningLabel = ShowMemoryPressureWarningLabel;
         _settings.ShowStatsForNerds = ShowStatsForNerds;
         _settings.ShowResourceUsageInStatusBar = ShowResourceUsageInStatusBar;
+        _settings.ShowDebugPanel = ShowDebugPanel;
         _settings.ShowBuildNumberInTitleBar = ShowBuildNumberInTitleBar;
         _settings.ShowAutoScrollResultsCheckbox = ShowAutoScrollResultsCheckbox;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
@@ -237,6 +241,7 @@ public sealed partial class MainViewModel
         // Tab order is a drawer-layout preference, not a search option, so it is persisted directly
         // and deliberately left out of the Advanced Options "save as defaults" / "reset" snapshot.
         _settings.AdvancedOptionsTabOrder = AdvancedOptionsTabOrder;
+        _settings.AdvancedOptionPlacements = new Dictionary<string, string>(AdvancedOptionPlacements, StringComparer.Ordinal);
         _settings.SuppressEverythingIndexCoverageWarning = SuppressEverythingIndexCoverageWarning;
         _settings.SuppressExcludedExtensionWarnings = SuppressExcludedExtensionWarnings;
         _settings.IncludeExcludedExtensionByDefault = IncludeExcludedExtensionByDefault;

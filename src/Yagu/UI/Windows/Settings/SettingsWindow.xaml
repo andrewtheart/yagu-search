@@ -80,6 +80,19 @@
                             PointerMoved="OnSettingsContentPointerMoved"
                             PointerExited="OnSettingsContentPointerExited" />
             </ScrollViewer>
+
+            <!-- Accent "aurora" pulsed over a setting jumped to from a search result. Overlays the
+                 scroll viewport because settings search must never reparent live controls. -->
+            <Canvas x:Name="SettingHighlightLayer"
+                    Grid.Column="1"
+                    IsHitTestVisible="False"
+                    SizeChanged="OnSettingHighlightLayerSizeChanged">
+                <Border x:Name="SettingHighlight"
+                        Visibility="Collapsed"
+                        Opacity="0"
+                        CornerRadius="8"
+                        BorderThickness="2" />
+            </Canvas>
         </Grid>
 
         <!-- Button bar -->

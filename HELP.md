@@ -192,6 +192,8 @@ Click the **Advanced Options** expander below the search bar to reveal a tabbed 
 
 **Reordering the tabs.** Drag any tab up or down the left column to put the ones you use most at the top. The new order is remembered across restarts (it is stored separately from your search defaults, so **Reset** and **Save as Defaults** leave it alone). The panel always reopens on the **Search** tab wherever you have moved it to.
 
+**Moving options between tabs.** Use the small grip at the right of an option row to move that control and its label together. Drag the grip over a different tab and hold it there for a moment; the tab opens after 650 ms, and dropping then asks you to confirm the move. Dragging the control or label itself does not start a move, a quick pass over a tab is ignored, and dropping on the current tab does nothing. Placements are remembered across restarts and stay separate from **Reset** and **Save as Defaults**. To restore one option to its shipped tab, drag it back there and confirm.
+
 ![Advanced Options drawer with search tabs, path filters, and command generation](docs/images/advanced-options.png)
 
 ### Search Tab
@@ -225,6 +227,8 @@ Each saved quick search stores its own **Traditional / Semantic** mode plus the 
 #### Choosing where a quick search runs
 
 **Search in folder** sets the directory the entry searches. **Leave it empty and the search starts at the root of every drive** — the same thing an empty directory box does anywhere else in Yagu. Hovering a row tells you which of the two it will do.
+
+The user-managed list shows five quick searches at a time. Use its vertical scrollbar, mouse wheel, or trackpad to move through the complete saved list; the fixed code-annotation action and Add/Save controls remain outside that scrolling viewport.
 
 Choose the folder icon beside the field to open Yagu's own folder browser: a flyout listing your drives, then their subfolders as you click down into them, with **↑** to go back up and the path box for typing or pasting a location directly (press <kbd>Enter</kbd> to jump there). **Use this folder** takes the folder you are viewing; **Search all drives** clears the field. Folders are listed on a background thread, so a slow network or removable drive never freezes the panel.
 
@@ -510,7 +514,7 @@ Loading a session repopulates the results list and preview from the saved data �
 
 Open Settings from the **gear** button in the title bar. Settings are saved to `%APPDATA%\Yagu\settings.json`. Reset and Use default buttons are disabled when the current value already matches the default. If you close Settings with unsaved changes, Yagu asks whether to save, discard, or keep editing.
 
-Use the search box at the top of Settings to filter settings by tab name, setting label, helper text, current value, or available option text. Hover over a setting label to open its detailed description in a flyout. Close it with the flyout's **X**, **Esc**, or a click outside it; descriptions are resolved and cached only as they are shown.
+Use the search box at the top of Settings to filter settings by tab name, setting label, helper text, current value, or available option text. Choose a result's **Open section** button to switch to that tab and scroll the setting into view; it is briefly surrounded by a glowing accent highlight that pulses so you can spot the control. Hover over a setting label to open its detailed description in a flyout. Close it with the flyout's **X**, **Esc**, or a click outside it; descriptions are resolved and cached only as they are shown.
 
 ### Search Defaults Tab
 
@@ -854,6 +858,7 @@ The CLI exposes the same lifecycle through `--build-index`, `--rebuild-index`, `
 | Show memory pressure warning | Display the orange toolbar warning when memory-saving mode activates. Hidden by default. |
 | Stats for nerds | Shows files/sec, MB/s, disk throughput sparkline, and utilization percentage in the bottom status bar. |
 | Show resource usage in status bar | Shows result-temp disk usage, total content-index storage, and RAM used by Yagu plus its worker processes. Hidden by default. |
+| Show debug panel | Shows a small log button at the bottom-right of Yagu. Click it for a live tail of the active `yagu.log`, with filters for every available log dimension: timestamp window, severity, category, and message/exception text. The reader uses shared access and never blocks Yagu's writer. The panel also changes file and console log levels independently at runtime and saves both choices immediately. Hidden by default. |
 | Show build number in title bar | Adds the current Yagu version to the main title bar for diagnostics and screenshots. Hidden by default. |
 | Show Auto-scroll checkbox | Shows the results-toolbar Auto-scroll checkbox for testing continuously appended result rows. Hidden by default. |
 | Simulate system idle | Session-only index-maintenance test switch. While enabled, the **When idle** scheduler treats the machine as idle. Enabling it requests an immediate real maintenance check; the configured trigger and update mode plus normal pause, search, power, disk-space, and eligibility safeguards still apply. Click **Stop simulating system idle** to restore real keyboard/mouse idle detection. The switch resets when Yagu exits. |
@@ -966,6 +971,7 @@ When using generated CLI commands, **Send command to terminal** first verifies t
 | **Ctrl+Shift+Delete** | Clear all results. |
 | **Enter** (preview) | Jump to next match. |
 | **Shift+Enter** (preview) | Jump to previous match. |
+| **Escape** (preview) | Close the per-file occurrence paginator. Closing the Find bar and cancelling a running search take priority. |
 | **Ctrl+Click** Next/Prev | Bulk match jump (configurable step size). |
 | **Alt+C** | Toggle case sensitive. |
 | **Alt+R** | Toggle regex. |

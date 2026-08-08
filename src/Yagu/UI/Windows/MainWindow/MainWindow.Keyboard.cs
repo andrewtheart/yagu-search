@@ -110,6 +110,17 @@ public sealed partial class MainWindow
             return true;
         }
 
+        // The per-file paginator stays up while you work, unlike the transient popups above, so it must
+        // not swallow the Esc that closes the find bar or cancels an in-flight search.
+        if (SectionNavOverlay?.Visibility == Visibility.Visible
+            && FindBar?.Visibility != Visibility.Visible
+            && !ViewModel.IsSearching
+            && !ViewModel.IsTranslatingSemanticQuery)
+        {
+            HideSectionNavOverlay();
+            return true;
+        }
+
         return false;
     }
 

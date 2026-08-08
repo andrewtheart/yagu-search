@@ -9,6 +9,8 @@ public sealed class AdvancedOptionsTests
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string AdvancedOptionsSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs"));
+    private static readonly string AdvancedOptionPlacementSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptionPlacement.cs"));
     private static readonly string MainWindowXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
     private static readonly string MainViewModelSource = MainViewModelPartials.Text;
@@ -153,6 +155,56 @@ public sealed class AdvancedOptionsTests
         Assert.Contains("_settings.AdvancedOptionsTabOrder = AdvancedOptionsTabOrder;", MainViewModelSource);
     }
 
+    [Fact]
+    public void OptionPlacement_UsesDedicatedGripAndPrivatePayload()
+    {
+        Assert.Contains("CanDrag = true,", AdvancedOptionPlacementSource);
+        Assert.Contains("grip.DragStarting += OnAdvancedOptionDragStarting;", AdvancedOptionPlacementSource);
+        Assert.Contains("wrapper.Children.Add(content);", AdvancedOptionPlacementSource);
+        Assert.Contains("private const string AdvancedOptionDragDataFormat = \"Yagu.AdvancedOption\";", AdvancedOptionPlacementSource);
+        Assert.Contains("args.Data.SetData(AdvancedOptionDragDataFormat, id);", AdvancedOptionPlacementSource);
+        Assert.Contains("e.DataView.Contains(AdvancedOptionDragDataFormat)", AdvancedOptionPlacementSource);
+    }
+
+    [Fact]
+    public void OptionPlacement_RequiresSustainedCrossTabHoverAndConfirmation()
+    {
+        Assert.Contains("private const int AdvancedOptionTabHoverArmMilliseconds = 650;", AdvancedOptionPlacementSource);
+        Assert.Contains("e.AcceptedOperation = DataPackageOperation.None;", AdvancedOptionPlacementSource);
+        Assert.Contains("string.Equals(_armedAdvancedOptionTargetTabKey, targetTabKey, StringComparison.Ordinal)", AdvancedOptionPlacementSource);
+
+        string drop = ExtractSourceWindow(AdvancedOptionPlacementSource, "private async void OnAdvancedOptionTabDrop", 3200);
+        AssertContainsInOrder(drop,
+            "var result = await YaguDialog.ShowAsync(",
+            "ShowTitleBar = false,",
+            "if (result != YaguDialogResult.Primary)",
+            "ViewModel.AdvancedOptionPlacements[registration.Id] = targetTabKey;",
+            "RebuildAdvancedOptionPlacement();",
+            "await ViewModel.PersistSettingsAsync();");
+    }
+
+    [Fact]
+    public void OptionPlacement_MovesIntactRowsAndFallsBackForUnknownSettings()
+    {
+        Assert.Contains("parent.Children.RemoveAt(homeIndex);", AdvancedOptionPlacementSource);
+        Assert.Contains("targetHost.Children.Insert(AdvancedOptionTargetInsertIndex(targetTabKey, targetHost), registration.Wrapper);", AdvancedOptionPlacementSource);
+        Assert.Contains("ShippedAdvancedOptionsTabOrder.Contains(target, StringComparer.Ordinal)", AdvancedOptionPlacementSource);
+        Assert.Contains(": registration.HomeTabKey;", AdvancedOptionPlacementSource);
+        Assert.Contains("ViewModel.AdvancedOptionPlacements.Remove(registration.Id);", AdvancedOptionPlacementSource);
+        Assert.Contains("DragOver=\"OnAdvancedOptionTabDragOver\"", MainWindowXaml);
+        Assert.Contains("Drop=\"OnAdvancedOptionTabDrop\"", MainWindowXaml);
+    }
+
+    [Fact]
+    public void OptionPlacement_IsPersistedAndReloadedThroughSettings()
+    {
+        string settings = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "Services", "SettingsService.cs"));
+        Assert.Contains("public Dictionary<string, string> AdvancedOptionPlacements { get; set; } = [];", settings);
+        Assert.Contains("AdvancedOptionPlacements = new Dictionary<string, string>(", MainViewModelSource);
+        Assert.Contains("_settings.AdvancedOptionPlacements ?? [], StringComparer.Ordinal", MainViewModelSource);
+        Assert.Contains("_settings.AdvancedOptionPlacements = new Dictionary<string, string>(AdvancedOptionPlacements, StringComparer.Ordinal);", MainViewModelSource);
+    }
+
     // ══════════════════════════════════════════════════════════════════
     // Quick searches tab (developer one-click presets)
     // ══════════════════════════════════════════════════════════════════
@@ -182,10 +234,16 @@ public sealed class AdvancedOptionsTests
         // The canonical code-annotation button stays a fixed action (it is the GUI twin of CLI --todos).
         Assert.Contains("x:Name=\"FindCodeAnnotationsButton\"", panel);
         Assert.Contains("Click=\"OnFindCodeAnnotations\"", panel);
+        Assert.Contains("x:Name=\"QuickSearchesPanel\" Width=\"500\" HorizontalAlignment=\"Left\"", panel);
 
         // The remaining presets became a user-managed list: rows are built in code so they can be
         // added, inline-edited, reordered and deleted, so they are no longer static XAML buttons.
-        Assert.Contains("x:Name=\"UserQuickSearchesPanel\"", panel);
+        Assert.Contains("x:Name=\"UserQuickSearchesScrollViewer\"", panel);
+        Assert.Contains("Width=\"500\" MaxHeight=\"196\"", panel);
+        Assert.Contains("VerticalScrollMode=\"Enabled\"", panel);
+        Assert.Contains("VerticalScrollBarVisibility=\"Auto\"", panel);
+        Assert.Contains("HorizontalScrollMode=\"Disabled\"", panel);
+        Assert.Contains("x:Name=\"UserQuickSearchesPanel\" Spacing=\"4\"", panel);
         Assert.Contains("x:Name=\"AddQuickSearchButton\"", panel);
         Assert.Contains("Click=\"OnAddQuickSearch\"", panel);
         // "Save current options" turns the live drawer into a quick search that restores all of it later.
@@ -731,6 +789,32 @@ public sealed class AdvancedOptionsTests
     // Filters-tab extension dropdown alignment (vertical, half-width offset)
     // ══════════════════════════════════════════════════════════════════
 
+    [Fact]
+    public void ContentOptions_AreArrangedInTwoColumns()
+    {
+        string flyout = ExtractXamlElement("x:Name=\"AdvancedOptionsFlyout\"", 1000);
+        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"740\" />", flyout);
+        string scrollViewer = ExtractXamlElement("x:Name=\"AdvancedOptionsScrollViewer\"", 500);
+        Assert.Contains("MinWidth=\"740\"", scrollViewer);
+        string drawer = ExtractXamlElement("x:Name=\"AdvancedOptionsDrawerBodyBorder\"", 400);
+        Assert.Contains("MinWidth=\"740\"", drawer);
+        Assert.Contains("<Grid x:Name=\"ContentOptionsGrid\" ColumnSpacing=\"12\" RowSpacing=\"10\">", MainWindowXaml);
+        string grid = ExtractXamlElement("x:Name=\"ContentOptionsGrid\"", 600);
+        AssertContainsInOrder(grid,
+            "<ColumnDefinition Width=\"250\" />",
+            "<ColumnDefinition Width=\"*\" MinWidth=\"250\" />");
+        Assert.Contains("x:Name=\"BinaryExtRow\" Grid.Row=\"0\" Grid.Column=\"0\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"ArchiveExtRow\" Grid.Row=\"0\" Grid.Column=\"1\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"CloudFilesRow\" Grid.Row=\"1\" Grid.Column=\"0\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"HiddenFilesRow\" Grid.Row=\"1\" Grid.Column=\"1\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"ImageTextRow\" Grid.Row=\"2\" Grid.Column=\"0\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"PdfTextRow\" Grid.Row=\"2\" Grid.Column=\"1\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"UseContentIndexRow\" Grid.Row=\"3\" Grid.Column=\"0\"", MainWindowXaml);
+
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(
+            MainWindowXaml, "<ColumnDefinition Width=\"290\" />").Count);
+    }
+
     [Theory]
     [InlineData("SkipExtRow")]
     [InlineData("BinaryExtRow")]
@@ -792,6 +876,13 @@ public sealed class AdvancedOptionsTests
         Assert.True(start >= 0, $"Could not find method '{methodName}' in AdvancedOptions source.");
         int end = Math.Min(start + windowSize, AdvancedOptionsSource.Length);
         return AdvancedOptionsSource[start..end];
+    }
+
+    private static string ExtractSourceWindow(string source, string anchor, int windowSize)
+    {
+        int start = source.IndexOf(anchor, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Could not find '{anchor}' in source.");
+        return source[start..Math.Min(start + windowSize, source.Length)];
     }
 
     private static string ExtractViewModelMethod(string anchor, int windowSize = 2400)

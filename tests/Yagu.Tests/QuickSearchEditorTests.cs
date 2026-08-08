@@ -65,8 +65,10 @@ public sealed class QuickSearchEditorTests
     public void Row_ReservesAFixedActionsLaneSoIconsDoNotMoveWithTheLabel()
     {
         Assert.Contains("private const double QuickSearchActionsLaneWidth", EditorSource);
+        Assert.Contains("private const double QuickSearchRowHeight = 36;", EditorSource);
 
         string row = Extract(EditorSource, "private Grid BuildQuickSearchRow");
+        Assert.Contains("new Grid { Height = QuickSearchRowHeight }", row);
         // Right padding reserves the lane inside the button's own border.
         Assert.Contains("Padding = new Thickness(11, 5, QuickSearchActionsLaneWidth, 6)", row);
 
@@ -85,6 +87,22 @@ public sealed class QuickSearchEditorTests
         Assert.Contains("IsHitTestVisible = false", row);
         Assert.Contains("SetQuickSearchActionsVisible(actions, true)", row);
         Assert.Contains("SetQuickSearchActionsVisible(actions, false)", row);
+    }
+
+    [Fact]
+    public void ListViewport_ShowsFiveRowsAndKeepsTheEntireListScrollable()
+    {
+        Assert.Contains("private const int VisibleQuickSearchRowCount = 5;", EditorSource);
+        Assert.Contains("private const double QuickSearchRowSpacing = 4;", EditorSource);
+        string refresh = Extract(EditorSource, "private void RefreshUserQuickSearches");
+        Assert.Contains("UserQuickSearchesScrollViewer.MaxHeight =", refresh);
+        Assert.Contains("VisibleQuickSearchRowCount * QuickSearchRowHeight", refresh);
+        Assert.Contains("VisibleQuickSearchRowCount - 1", refresh);
+
+        Assert.Contains("x:Name=\"UserQuickSearchesScrollViewer\"", MainWindowXaml);
+        Assert.Contains("VerticalScrollMode=\"Enabled\"", MainWindowXaml);
+        Assert.Contains("VerticalScrollBarVisibility=\"Auto\"", MainWindowXaml);
+        Assert.Contains("HorizontalScrollMode=\"Disabled\"", MainWindowXaml);
     }
 
     [Fact]

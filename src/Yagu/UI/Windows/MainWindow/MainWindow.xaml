@@ -6,6 +6,7 @@
     xmlns:local="using:Yagu"
     xmlns:vm="using:Yagu.ViewModels"
     xmlns:models="using:Yagu.Models"
+    xmlns:services="using:Yagu.Services"
     xmlns:tcb="using:TextControlBoxNS"
     xmlns:ui="using:Yagu.UI"
     Title="Yagu - Yet Another Grep Utility">
@@ -23,8 +24,7 @@
             <Setter Property="MinHeight" Value="0" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="6" />
         </Style>
 
@@ -788,7 +788,7 @@
                                 <Style TargetType="FlyoutPresenter">
                                     <Setter Property="Padding" Value="0" />
                                     <Setter Property="CornerRadius" Value="8" />
-                                    <Setter Property="MinWidth" Value="0" />
+                                    <Setter Property="MinWidth" Value="740" />
                                     <Setter Property="MaxWidth" Value="2400" />
                                     <Setter Property="MaxHeight" Value="2400" />
                                     <Setter Property="Background" Value="{ThemeResource SolidBackgroundFillColorBaseBrush}" />
@@ -805,11 +805,13 @@
                                  scrollbar appears instead of the content being clipped. The
                                  MaxHeight is set dynamically in code-behind. -->
                             <ScrollViewer x:Name="AdvancedOptionsScrollViewer"
+                                          MinWidth="740"
                                           VerticalScrollBarVisibility="Auto"
                                           VerticalScrollMode="Auto"
                                   HorizontalScrollMode="Disabled"
                                   HorizontalScrollBarVisibility="Disabled">
                         <Border x:Name="AdvancedOptionsDrawerBodyBorder"
+                            MinWidth="740"
                                 Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                 BorderThickness="0" CornerRadius="8" Padding="0">
@@ -847,6 +849,9 @@
                                                   CanReorderItems="True"
                                                   AllowDrop="True"
                                                   ToolTipService.ToolTip="Drag a tab to reorder the list"
+                                                  DragOver="OnAdvancedOptionTabDragOver"
+                                                  DragLeave="OnAdvancedOptionTabDragLeave"
+                                                  Drop="OnAdvancedOptionTabDrop"
                                                   DragItemsCompleted="OnAdvancedOptionsTabsReordered"
                                                   SelectionChanged="OnAdvancedOptionsTabSelectionChanged">
                                             <ListView.ItemContainerStyle>
@@ -873,7 +878,7 @@
                                         <!-- Search tab -->
                                         <StackPanel x:Name="AdvancedOptionsSearchTabContent" Spacing="14">
                                             <TextBlock Text="Search" FontSize="16" FontWeight="SemiBold" />
-                                            <StackPanel Spacing="6">
+                                            <StackPanel x:Name="AdvancedOptionSearchModeRow" Spacing="6">
                                                 <TextBlock Text="Search mode" Opacity="0.75" />
                                                 <ComboBox SelectedIndex="{x:Bind ViewModel.SearchModeIndex, Mode=TwoWay}"
                                                           HorizontalAlignment="Left"
@@ -889,7 +894,7 @@
                                                 </ComboBox>
                                             </StackPanel>
 
-                                            <StackPanel Spacing="6">
+                                            <StackPanel x:Name="AdvancedOptionMultilineRow" Spacing="6">
                                                 <CheckBox x:Name="MultilineAdvancedToggle"
                                                           Content="Match across lines (multiline)"
                                                           IsChecked="{x:Bind ViewModel.Multiline, Mode=TwoWay}"
@@ -902,7 +907,7 @@
                                                           ToolTipService.ToolTip="When on, the dot (.) also matches newline characters (ripgrep --multiline-dotall / inline (?s))." />
                                             </StackPanel>
 
-                                            <StackPanel Spacing="6">
+                                            <StackPanel x:Name="AdvancedOptionPathFiltersRow" Spacing="6">
                                                 <TextBlock Text="Path filters" Opacity="0.75"
                                                            FontWeight="SemiBold" />
                                                 <StackPanel Spacing="8">
@@ -913,7 +918,7 @@
                                                         </Grid.RowDefinitions>
                                                         <Grid.ColumnDefinitions>
                                                             <!-- MinWidth keeps the Include box at least as wide as its example text when the drawer is compressed beside the preview pane. -->
-                                                            <ColumnDefinition Width="*" MinWidth="290" />
+                                                            <ColumnDefinition Width="290" />
                                                             <ColumnDefinition Width="*" />
                                                         </Grid.ColumnDefinitions>
                                                         <Grid Grid.Row="0" Grid.Column="0" ColumnSpacing="6">
@@ -953,7 +958,7 @@
                                                         </Grid.RowDefinitions>
                                                         <Grid.ColumnDefinitions>
                                                             <!-- MinWidth keeps the Exclude box at least as wide as its example text when the drawer is compressed beside the preview pane. -->
-                                                            <ColumnDefinition Width="*" MinWidth="290" />
+                                                            <ColumnDefinition Width="290" />
                                                             <ColumnDefinition Width="*" />
                                                         </Grid.ColumnDefinitions>
                                                         <Grid Grid.Row="0" Grid.Column="0" ColumnSpacing="6">
@@ -995,7 +1000,7 @@
                                             <TextBlock Text="Quick searches" FontSize="16" FontWeight="SemiBold" />
                                             <TextBlock Opacity="0.75" TextWrapping="Wrap"
                                                        Text="One-click searches for things developers hunt for across a codebase. Each loads its query into the box and runs immediately, in the folder it was saved with — or across every drive from its root when no folder was set." />
-                                            <StackPanel x:Name="QuickSearchesPanel" Spacing="6">
+                                            <StackPanel x:Name="QuickSearchesPanel" Width="500" HorizontalAlignment="Left" Spacing="6">
                                                 <Button x:Name="FindCodeAnnotationsButton"
                                                         Click="OnFindCodeAnnotations"
                                                         HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
@@ -1041,13 +1046,21 @@
                                                        Text="No saved quick searches yet — choose Add to create one."
                                                        Opacity="0.7" FontSize="12" TextWrapping="Wrap"
                                                        Visibility="Collapsed" />
-                                            <StackPanel x:Name="UserQuickSearchesPanel" Spacing="4" />
+                                            <ScrollViewer x:Name="UserQuickSearchesScrollViewer"
+                                                          Width="500" MaxHeight="196"
+                                                          HorizontalAlignment="Left"
+                                                          VerticalScrollMode="Enabled"
+                                                          VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollMode="Disabled"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <StackPanel x:Name="UserQuickSearchesPanel" Spacing="4" />
+                                            </ScrollViewer>
                                         </StackPanel>
 
                                         <!-- Filters tab -->
                                         <StackPanel x:Name="AdvancedOptionsFiltersTabContent" Spacing="18" Visibility="Collapsed">
                                             <TextBlock Text="Filters" FontSize="16" FontWeight="SemiBold" />
-                                            <StackPanel Spacing="10">
+                                            <StackPanel x:Name="AdvancedOptionFileTypeFilterRow" Spacing="10">
                                                 <TextBlock Text="File type filter" Opacity="0.75" />
                                                 <Grid x:Name="SkipExtRow">
                                                     <Grid.ColumnDefinitions>
@@ -1110,9 +1123,20 @@
                                                 </Grid>
                                             </StackPanel>
 
-                                            <StackPanel Spacing="10">
+                                            <StackPanel x:Name="AdvancedOptionContentOptionsRow" Spacing="10">
                                                 <TextBlock Text="Content options" Opacity="0.75" />
-                                                <Grid x:Name="BinaryExtRow">
+                                                <Grid x:Name="ContentOptionsGrid" ColumnSpacing="12" RowSpacing="10">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="250" />
+                                                        <ColumnDefinition Width="*" MinWidth="250" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                    </Grid.RowDefinitions>
+                                                <Grid x:Name="BinaryExtRow" Grid.Row="0" Grid.Column="0">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="*" />
@@ -1167,7 +1191,7 @@
                                                         </DropDownButton.Flyout>
                                                     </DropDownButton>
                                                 </Grid>
-                                                <Grid x:Name="ArchiveExtRow">
+                                                <Grid x:Name="ArchiveExtRow" Grid.Row="0" Grid.Column="1">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="*" />
@@ -1227,7 +1251,7 @@
                                                         </DropDownButton.Flyout>
                                                     </DropDownButton>
                                                 </Grid>
-                                                <StackPanel x:Name="CloudFilesRow" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                <StackPanel x:Name="CloudFilesRow" Grid.Row="1" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                                     <ToggleSwitch OnContent="Search online-only cloud files" OffContent="Search online-only cloud files"
                                                                   IsOn="{x:Bind ViewModel.SearchOnlineOnlyFiles, Mode=TwoWay}"
                                                                   MinWidth="0" />
@@ -1235,7 +1259,7 @@
                                                               Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                                               ToolTipService.ToolTip="When on, OneDrive/Google Drive online-only placeholder files are downloaded on demand and searched — but only while the sync provider is running. Off by default: cloud-only files are skipped so the scan can't hang on a download. Can be slow and use network/disk." />
                                                </StackPanel>
-                                               <StackPanel x:Name="HiddenFilesRow" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                               <StackPanel x:Name="HiddenFilesRow" Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                                    <ToggleSwitch OnContent="Search hidden files" OffContent="Search hidden files"
                                                                  IsOn="{x:Bind ViewModel.SearchHiddenFiles, Mode=TwoWay}"
                                                                  MinWidth="0" />
@@ -1243,7 +1267,7 @@
                                                              Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                                              ToolTipService.ToolTip="When on (default), files and folders with the Windows Hidden attribute are searched. When off, hidden items are excluded. System files (e.g. pagefile.sys) are always skipped by the file walker regardless of this setting." />
                                                </StackPanel>
-                                               <StackPanel x:Name="ImageTextRow" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                               <StackPanel x:Name="ImageTextRow" Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                                    <ToggleSwitch OnContent="Search image text" OffContent="Search image text"
                                                                  IsOn="{x:Bind ViewModel.SearchImageText, Mode=TwoWay}"
                                                                  MinWidth="0" />
@@ -1251,7 +1275,7 @@
                                                              Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                                              ToolTipService.ToolTip="When on, raster images (PNG/JPG/etc.) are OCR'd on a background queue and their recognized text is searched. Off by default. OCR runs on a separate thread so it never slows the file scan; image matches appear as they finish. Choose the OCR engine (PaddleSharp or Tesseract) in Settings." />
                                                </StackPanel>
-                                               <StackPanel x:Name="PdfTextRow" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                               <StackPanel x:Name="PdfTextRow" Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                                    <ToggleSwitch OnContent="Search PDF text" OffContent="Search PDF text"
                                                                  IsOn="{x:Bind ViewModel.SearchPdfText, Mode=TwoWay}"
                                                                  MinWidth="0" />
@@ -1259,7 +1283,7 @@
                                                              Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                                              ToolTipService.ToolTip="When on, PDF files are converted to text on a background queue (via the bundled Xpdf pdftotext) and their extracted text is searched. Off by default. Extraction runs on a separate thread so it never slows the file scan; PDF matches appear as they finish. Only the embedded text layer is read — scanned/image-only PDFs yield no text." />
                                                </StackPanel>
-                                               <StackPanel x:Name="UseContentIndexRow" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                               <StackPanel x:Name="UseContentIndexRow" Grid.Row="3" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                                    <ToggleSwitch OnContent="Use content index" OffContent="Use content index"
                                                                  IsOn="{x:Bind ViewModel.UseContentIndex, Mode=TwoWay}"
                                                                  MinWidth="0" />
@@ -1267,13 +1291,14 @@
                                                              Foreground="{ThemeResource SystemFillColorAttentionBrush}"
                                                              ToolTipService.ToolTip="When on, this search uses the opt-in persistent content index to skip files that cannot contain a match, then verifies the rest live — an accelerator only. Mirrors the Indexing settings default and requires content indexing to be enabled in Settings ▸ Indexing. It never changes results and is independent of image/PDF/archive search. Equivalent to the CLI --use-index / --no-index flags." />
                                                </StackPanel>
+                                               </Grid>
                                             </StackPanel>
                                         </StackPanel>
 
                                         <!-- Size tab -->
                                         <StackPanel x:Name="AdvancedOptionsSizeTabContent" Spacing="14" Visibility="Collapsed">
                                             <TextBlock Text="Size" FontSize="16" FontWeight="SemiBold" />
-                                            <StackPanel Spacing="4">
+                                            <StackPanel x:Name="AdvancedOptionMinSizeRow" Spacing="4">
                                                 <TextBlock Text="Min MB" Opacity="0.75" />
                                                 <NumberBox Value="{x:Bind ViewModel.MinFileSizeMB, Mode=TwoWay}"
                                                            Minimum="0"
@@ -1284,7 +1309,7 @@
                                                            SpinButtonPlacementMode="Hidden"
                                                            ToolTipService.ToolTip="Minimum file size in MB. Leave blank for no lower limit." />
                                             </StackPanel>
-                                            <StackPanel Spacing="4">
+                                            <StackPanel x:Name="AdvancedOptionMaxSizeRow" Spacing="4">
                                                 <TextBlock Text="Max MB" Opacity="0.75" />
                                                 <NumberBox Value="{x:Bind ViewModel.MaxFileSizeMB, Mode=TwoWay}"
                                                            Minimum="0"
@@ -1309,7 +1334,7 @@
                                         <!-- Dates tab -->
                                         <StackPanel x:Name="AdvancedOptionsDatesTabContent" Spacing="14" Visibility="Collapsed">
                                             <TextBlock Text="Dates" FontSize="16" FontWeight="SemiBold" />
-                                            <StackPanel Spacing="4">
+                                            <StackPanel x:Name="AdvancedOptionCreatedDateRow" Spacing="4">
                                                 <TextBlock Text="Created date" Opacity="0.75" />
                                                 <Grid ColumnSpacing="10">
                                                     <Grid.ColumnDefinitions>
@@ -1331,7 +1356,7 @@
                                                     </StackPanel>
                                                 </Grid>
                                             </StackPanel>
-                                            <StackPanel Spacing="4">
+                                            <StackPanel x:Name="AdvancedOptionModifiedDateRow" Spacing="4">
                                                 <TextBlock Text="Modified date" Opacity="0.75" />
                                                 <Grid ColumnSpacing="10">
                                                     <Grid.ColumnDefinitions>
@@ -1367,7 +1392,7 @@
                                         <!-- Advanced tab -->
                                         <StackPanel x:Name="AdvancedOptionsAdvancedTabContent" Spacing="14" Visibility="Collapsed">
                                             <TextBlock Text="Advanced" FontSize="16" FontWeight="SemiBold" />
-                                            <StackPanel Spacing="4">
+                                            <StackPanel x:Name="AdvancedOptionMaxDepthRow" Spacing="4">
                                                 <TextBlock Text="Max depth" Opacity="0.75" />
                                                 <NumberBox Value="{x:Bind ViewModel.MaxSearchDepth, Mode=TwoWay}"
                                                            Minimum="0"
@@ -1598,11 +1623,12 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0" Padding="12,8"
+                        <Grid x:Name="ResultsHeaderBar" Grid.Row="0" Padding="12,8"
                           BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Orientation="Horizontal" Spacing="8">
@@ -1877,14 +1903,6 @@
                                 </Flyout>
                             </Button.Flyout>
                         </Button>
-                        <Button x:Name="ExpandResultsButton"
-                                Click="OnExpandResultsPanel"
-                                Background="Transparent" BorderThickness="0"
-                                Width="28" Height="28" MinWidth="0" MinHeight="0"
-                                Padding="0" VerticalAlignment="Center"
-                                ToolTipService.ToolTip="Expand file list / collapse preview">
-                            <FontIcon x:Name="ExpandResultsIcon" Glyph="&#xE740;" FontSize="12" />
-                        </Button>
                         </StackPanel>
                         <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.DegradedNoticeText, Mode=OneWay}"
                                    Visibility="{x:Bind ViewModel.MemoryPressureWarningVisibility, Mode=OneWay}"
@@ -1934,6 +1952,15 @@
                                           Margin="10,0,0,0" IsHitTestVisible="False" />
                             </Grid>
                         </Grid>
+                        <Button x:Name="ExpandResultsButton" Grid.Column="3"
+                                Click="OnExpandResultsPanel"
+                                Background="Transparent" BorderThickness="0"
+                                Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                Margin="8,0,0,0" Padding="0"
+                                HorizontalAlignment="Right" VerticalAlignment="Top"
+                                ToolTipService.ToolTip="Expand file list / collapse preview">
+                            <FontIcon x:Name="ExpandResultsIcon" Glyph="&#xE740;" FontSize="12" />
+                        </Button>
                     </Grid>
 
                     <ListView
@@ -2764,6 +2791,213 @@
                            MaxWidth="190" TextTrimming="CharacterEllipsis"
                            Visibility="{x:Bind ViewModel.Truncated, Mode=OneWay}"
                            Text="Results truncated — refine your query" />
+                <Button x:Name="DebugLogButton"
+                    Width="24" Height="16" MinWidth="0" MinHeight="0" Padding="0"
+                        Background="Transparent" BorderThickness="0"
+                        VerticalAlignment="Center"
+                        Visibility="{x:Bind ViewModel.DebugPanelButtonVisibility, Mode=OneWay}"
+                        ToolTipService.ToolTip="Open live Yagu log">
+                    <FontIcon Glyph="&#xE9D9;" FontSize="12" />
+                    <Button.Flyout>
+                        <Flyout x:Name="DebugLogFlyout"
+                                Placement="TopEdgeAlignedRight"
+                                ShouldConstrainToRootBounds="False"
+                                Opened="OnDebugLogFlyoutOpened"
+                                Closed="OnDebugLogFlyoutClosed">
+                            <Flyout.FlyoutPresenterStyle>
+                                <Style TargetType="FlyoutPresenter">
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="CornerRadius" Value="8" />
+                                    <Setter Property="MinWidth" Value="0" />
+                                    <Setter Property="MaxWidth" Value="1200" />
+                                    <Setter Property="MaxHeight" Value="760" />
+                                                                        <Setter Property="Background" Value="{ThemeResource SolidBackgroundFillColorBaseBrush}" />
+                                </Style>
+                            </Flyout.FlyoutPresenterStyle>
+                                                        <Grid x:Name="DebugLogSurface" Width="960" Height="560"
+                                                                    Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+                                <Grid.Resources>
+                                    <local:DebugLogSeverityBrushConverter x:Key="DebugLogSeverityBrushConverter" />
+                                </Grid.Resources>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+
+                                <Grid Padding="14,12" ColumnSpacing="10"
+                                      Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <FontIcon Glyph="&#xE9D9;" FontSize="16" />
+                                        <TextBlock Text="Live Yagu log" FontSize="16" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="DebugLogStatusText" Grid.Column="1"
+                                               HorizontalAlignment="Right" VerticalAlignment="Center"
+                                               FontFamily="Consolas" FontSize="11" Opacity="0.65"
+                                               TextTrimming="CharacterEllipsis" MaxWidth="620" />
+                                </Grid>
+
+                                <Grid Grid.Row="1" Padding="14,8,14,4" ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="180" />
+                                        <ColumnDefinition Width="130" />
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Text="Category" FontSize="11" Opacity="0.65" />
+                                        <ComboBox x:Name="DebugLogCategoryFilter"
+                                                  HorizontalAlignment="Stretch"
+                                                  Height="28" MinHeight="0" Padding="8,0" FontSize="11"
+                                                  SelectionChanged="OnDebugLogFilterChanged" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Spacing="3">
+                                        <TextBlock Text="Severity" FontSize="11" Opacity="0.65" />
+                                        <ComboBox x:Name="DebugLogSeverityFilter"
+                                                  HorizontalAlignment="Stretch"
+                                                  Height="28" MinHeight="0" Padding="8,0" FontSize="11"
+                                                  SelectionChanged="OnDebugLogFilterChanged">
+                                            <x:String>All severities</x:String>
+                                            <x:String>Critical</x:String>
+                                            <x:String>Warning</x:String>
+                                            <x:String>Info</x:String>
+                                            <x:String>Verbose</x:String>
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2" Spacing="3">
+                                        <TextBlock Text="Time" FontSize="11" Opacity="0.65" />
+                                        <ComboBox x:Name="DebugLogSinceFilter"
+                                                  HorizontalAlignment="Stretch"
+                                                  Height="28" MinHeight="0" Padding="8,0" FontSize="11"
+                                                  SelectionChanged="OnDebugLogFilterChanged">
+                                            <x:String>All time</x:String>
+                                            <x:String>Last minute</x:String>
+                                            <x:String>Last 5 minutes</x:String>
+                                            <x:String>Last 15 minutes</x:String>
+                                            <x:String>Last hour</x:String>
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="3" Spacing="3">
+                                        <TextBlock Text="Message contains" FontSize="11" Opacity="0.65" />
+                                        <TextBox x:Name="DebugLogTextFilter"
+                                                 HorizontalAlignment="Stretch"
+                                                 Height="28" MinHeight="0" Padding="8,2" FontSize="11"
+                                                 PlaceholderText="Filter text or exception details"
+                                                 TextChanged="OnDebugLogTextFilterChanged" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="4" Spacing="3">
+                                        <TextBlock Text="View" FontSize="11" Opacity="0.65" />
+                                        <CheckBox x:Name="DebugLogFollowTail"
+                                                  Content="Follow tail"
+                                                  Height="28" MinHeight="0" Padding="0" FontSize="11"
+                                                  VerticalAlignment="Center"
+                                                  Checked="OnDebugLogFollowTailChanged"
+                                                  Unchecked="OnDebugLogFollowTailChanged" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid Grid.Row="2" Padding="14,2,14,8" ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Text="File level" FontSize="11" Opacity="0.75" />
+                                        <ComboBox x:Name="DebugLogFileLevel"
+                                                  HorizontalAlignment="Stretch"
+                                                  Height="28" MinHeight="0" Padding="8,0" FontSize="11"
+                                                  SelectionChanged="OnDebugLogFileLevelChanged">
+                                            <x:String>None</x:String>
+                                            <x:String>Critical</x:String>
+                                            <x:String>Warning</x:String>
+                                            <x:String>Info</x:String>
+                                            <x:String>Verbose</x:String>
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Spacing="3">
+                                        <TextBlock Text="Console level" FontSize="11" Opacity="0.75" />
+                                        <ComboBox x:Name="DebugLogConsoleLevel"
+                                                  HorizontalAlignment="Stretch"
+                                                  Height="28" MinHeight="0" Padding="8,0" FontSize="11"
+                                                  SelectionChanged="OnDebugLogConsoleLevelChanged">
+                                            <x:String>None</x:String>
+                                            <x:String>Critical</x:String>
+                                            <x:String>Warning</x:String>
+                                            <x:String>Info</x:String>
+                                            <x:String>Verbose</x:String>
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <Button x:Name="DebugLogRefreshButton" Grid.Column="3"
+                                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                            Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                            Background="Transparent" BorderThickness="0"
+                                            ToolTipService.ToolTip="Refresh log now"
+                                            Click="OnDebugLogRefreshNow">
+                                        <FontIcon Glyph="&#xE72C;" FontSize="12" />
+                                    </Button>
+                                </Grid>
+
+                                <Grid Grid.Row="3" Padding="14,5" ColumnSpacing="8"
+                                      Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="88" />
+                                        <ColumnDefinition Width="68" />
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Time" FontSize="11" FontWeight="SemiBold" Opacity="0.65" />
+                                    <TextBlock Grid.Column="1" Text="Severity" FontSize="11" FontWeight="SemiBold" Opacity="0.65" />
+                                    <TextBlock Grid.Column="2" Text="Category" FontSize="11" FontWeight="SemiBold" Opacity="0.65" />
+                                    <TextBlock Grid.Column="3" Text="Message" FontSize="11" FontWeight="SemiBold" Opacity="0.65" />
+                                </Grid>
+
+                                <ListView x:Name="DebugLogList" Grid.Row="4"
+                                          SelectionMode="None" IsItemClickEnabled="False"
+                                          HorizontalContentAlignment="Stretch"
+                                          Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                                          Padding="6,2,6,6">
+                                    <ListView.ItemContainerStyle>
+                                        <Style TargetType="ListViewItem">
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                            <Setter Property="Padding" Value="0" />
+                                            <Setter Property="MinHeight" Value="0" />
+                                        </Style>
+                                    </ListView.ItemContainerStyle>
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate x:DataType="services:LogTailEntry">
+                                            <Grid Padding="8,4" ColumnSpacing="8"
+                                                  ToolTipService.ToolTip="{x:Bind RawText, Mode=OneWay}">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="88" />
+                                                    <ColumnDefinition Width="68" />
+                                                    <ColumnDefinition Width="150" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{x:Bind TimestampText}" FontFamily="Consolas" FontSize="11" Opacity="0.7" />
+                                                <TextBlock Grid.Column="1" Text="{x:Bind Severity}"
+                                                           Foreground="{Binding Level, Converter={StaticResource DebugLogSeverityBrushConverter}}"
+                                                           FontFamily="Consolas" FontSize="11" FontWeight="SemiBold" />
+                                                <TextBlock Grid.Column="2" Text="{x:Bind Category}" FontFamily="Consolas" FontSize="11"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="3" Text="{x:Bind Message, Mode=OneWay}" FontFamily="Consolas" FontSize="11"
+                                                           TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                            </Grid>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
             </StackPanel>
         </Grid>
 
@@ -2774,9 +3008,8 @@
         <Border x:Name="IndexStatusHoverOverlay"
             Grid.Row="0" Grid.RowSpan="7"
                 Visibility="Collapsed"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Bottom"
-                Margin="0,0,20,8"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
                 MinWidth="320"
                 MaxWidth="460"
                 Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
@@ -2787,12 +3020,24 @@
                 Canvas.ZIndex="101"
                 Translation="0,0,32"
                 ContextRequested="OnIndexStatusContextRequested"
+                SizeChanged="OnIndexStatusHoverOverlaySizeChanged"
+                PreviewKeyDown="OnIndexStatusHoverOverlayPreviewKeyDown"
                 PointerEntered="OnIndexStatusHoverPanelPointerEntered"
                 PointerExited="OnIndexStatusHoverPanelPointerExited">
             <Border.Shadow>
                 <ThemeShadow />
             </Border.Shadow>
             <StackPanel MaxWidth="420" Spacing="10">
+                <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                    <FontIcon x:Name="IndexStatusHoverIndexingIcon"
+                              Glyph="&#xE8F1;" FontSize="28"
+                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                              VerticalAlignment="Center"
+                              AutomationProperties.Name="Indexing" />
+                    <TextBlock Text="Indexing overview"
+                               FontSize="15" FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                </StackPanel>
                 <StackPanel Spacing="6" Visibility="{x:Bind ViewModel.IndexBuildPercentVisibility, Mode=OneWay}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <FontIcon Glyph="&#xE895;" FontSize="18" VerticalAlignment="Center"
@@ -2820,6 +3065,7 @@
                              MinWidth="280"
                              PlaceholderText="Choose when indexing should run"
                              AutomationProperties.Name="Automatic indexing schedule"
+                             PreviewKeyDown="OnIndexStatusHoverOverlayPreviewKeyDown"
                              DropDownOpened="OnIndexStatusAutomaticIndexingDropDownOpened"
                              DropDownClosed="OnIndexStatusAutomaticIndexingDropDownClosed"
                              SelectionChanged="OnIndexStatusAutomaticIndexingSelectionChanged">
@@ -2946,7 +3192,7 @@
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="6">
                     <TextBlock Text="Shell:" Foreground="#B8B8B8" FontSize="12" VerticalAlignment="Center" />
                     <ComboBox x:Name="TerminalShellSelector"
-                              MinWidth="110"
+                              Width="96" MinWidth="0" Height="28" MinHeight="0" Padding="8,0,4,0"
                               FontSize="12"
                               SelectionChanged="OnTerminalShellSelectionChanged"
                               ToolTipService.ToolTip="Choose the shell used by the embedded terminal">

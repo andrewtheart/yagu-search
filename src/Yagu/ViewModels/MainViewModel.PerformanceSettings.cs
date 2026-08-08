@@ -64,6 +64,7 @@ public sealed partial class MainViewModel
     [ObservableProperty] public partial bool ShowMemoryPressureWarningLabel { get; set; }
     [ObservableProperty] public partial bool ShowStatsForNerds { get; set; }
     [ObservableProperty] public partial bool ShowResourceUsageInStatusBar { get; set; }
+    [ObservableProperty] public partial bool ShowDebugPanel { get; set; }
     [ObservableProperty] public partial bool ShowBuildNumberInTitleBar { get; set; }
     [ObservableProperty] public partial bool ShowAutoScrollResultsCheckbox { get; set; }
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;

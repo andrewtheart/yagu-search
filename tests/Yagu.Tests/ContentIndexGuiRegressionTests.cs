@@ -117,8 +117,14 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("ContentIndexReadinessChecker.CheckRoot(", SearchInputSource);
         Assert.Contains("Title = \"Content index needs attention\"", SearchInputSource);
         Assert.Contains("PrimaryButtonText = \"Search live\"", SearchInputSource);
-        Assert.Contains("Your search results will still be complete.", SearchInputSource);
-        Assert.Contains("The content index only makes searches faster.", SearchInputSource);
+        int introduction = SearchInputSource.IndexOf(
+            "Yagu found that one or more locations below cannot currently use the content index.", StringComparison.Ordinal);
+        int reassurance = SearchInputSource.IndexOf(
+            "Your search results will still be complete.", StringComparison.Ordinal);
+        int explanation = SearchInputSource.IndexOf(
+            "The content index only affects search speed, never which matches are returned.", StringComparison.Ordinal);
+        Assert.True(introduction >= 0 && reassurance > introduction && explanation > reassurance,
+            "The readiness dialog should introduce the index issue before reassuring and explaining the fallback.");
         Assert.Contains("actionLabel = issue.CanRebuild ? \"Build in background\" : issue.CanAdd ? \"Index in background\" : null;", SearchInputSource);
         Assert.DoesNotContain("Index & wait", SearchInputSource);
         Assert.DoesNotContain("Index & search now", SearchInputSource);
@@ -973,18 +979,22 @@ public sealed class ContentIndexGuiRegressionTests
     [Fact]
     public void IndexStatusHover_ExplainsFreshnessFailureAndOffersDirectRepair()
     {
-        string hover = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusIndicator\"", 12000);
+        string indicator = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusIndicator\"", 4500);
+        string hover = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusHoverOverlay\"", 9000);
         Assert.Contains("x:Name=\"IndexStatusHoverOverlay\"", hover);
         Assert.Contains("Grid.Row=\"0\" Grid.RowSpan=\"7\"", hover);
         Assert.Contains("Background=\"{ThemeResource AcrylicBackgroundFillColorDefaultBrush}\"", hover);
+        Assert.Contains("x:Name=\"IndexStatusHoverIndexingIcon\"", hover);
+        Assert.Contains("Glyph=\"&#xE8F1;\" FontSize=\"28\"", hover);
+        Assert.Contains("Text=\"Indexing overview\"", hover);
         Assert.Contains("x:Name=\"IndexStatusRepairButton\"", hover);
         Assert.Contains("Click=\"OnIndexStatusRepairClick\"", hover);
         Assert.Contains("Click=\"OnIndexStatusOpenSettingsFromHoverClick\"", hover);
         Assert.Contains("Orientation=\"Horizontal\" Spacing=\"8\" HorizontalAlignment=\"Right\"", hover);
         Assert.Contains("Text=\"{x:Bind ViewModel.IndexStatusTooltip, Mode=OneWay}\"", hover);
-        Assert.Contains("<Grid Width=\"230\" VerticalAlignment=\"Center\">", hover);
-        Assert.Contains("HorizontalAlignment=\"Left\" VerticalAlignment=\"Center\">", hover);
-        Assert.Contains("MaxWidth=\"210\" TextTrimming=\"CharacterEllipsis\"", hover);
+        Assert.Contains("<Grid Width=\"230\" VerticalAlignment=\"Center\">", indicator);
+        Assert.Contains("HorizontalAlignment=\"Left\" VerticalAlignment=\"Center\">", indicator);
+        Assert.Contains("MaxWidth=\"210\" TextTrimming=\"CharacterEllipsis\"", indicator);
 
         Assert.DoesNotContain("<FlyoutBase.AttachedFlyout>", hover);
         Assert.DoesNotContain("IndexStatusHoverFlyout", IndexOnboardingSource);
@@ -1001,7 +1011,7 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("All-drive and indexed-folder health", hover);
         Assert.Contains("x:Name=\"IndexStatusAllDriveHealthRows\"", hover);
         Assert.Contains("ViewModel.AllDriveIndexStatusVisibility", hover);
-        Assert.Contains("ViewModel.IndexStatusAccessibleHelpText", hover);
+        Assert.Contains("ViewModel.IndexStatusAccessibleHelpText", indicator);
         Assert.Contains("private void RebuildIndexStatusHealthRows()", IndexOnboardingSource);
         Assert.Contains("IReadOnlyList<IndexRootHealthEntry> entries = ViewModel.AllDriveIndexHealth;", IndexOnboardingSource);
         Assert.Contains("entry.CanIncrementallyRefresh", IndexOnboardingSource);
@@ -1057,6 +1067,43 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("private string BuildIndexSchedulingDetails()", MainViewModelSource);
         Assert.Contains("=> Environment.NewLine + Environment.NewLine", MainViewModelSource);
         Assert.Contains("+ BuildIndexDateDetails()\r\n                + BuildIndexSchedulingDetails();", MainViewModelSource);
+    }
+
+    [Fact]
+    public void IndexStatusHover_MaterializesCenteredAboveLabel_AndEscapeAlwaysDismisses()
+    {
+        string hover = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusHoverOverlay\"", 9000);
+        Assert.Contains("HorizontalAlignment=\"Left\"", hover);
+        Assert.Contains("VerticalAlignment=\"Top\"", hover);
+        Assert.DoesNotContain("Margin=\"0,0,20,8\"", hover);
+        Assert.Contains("SizeChanged=\"OnIndexStatusHoverOverlaySizeChanged\"", hover);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(
+            hover, "PreviewKeyDown=\"OnIndexStatusHoverOverlayPreviewKeyDown\""));
+
+        string show = ExtractFrom(IndexOnboardingSource, "private void ShowIndexStatusHoverOverlay()", 700);
+        Assert.Contains("IndexStatusHoverOverlay.Visibility = Visibility.Visible;", show);
+        Assert.Contains("PositionIndexStatusHoverOverlay();", show);
+
+        string position = ExtractFrom(IndexOnboardingSource, "private void PositionIndexStatusHoverOverlay()", 2800);
+        Assert.Contains("IndexStatusHoverOverlay.UpdateLayout();", position);
+        Assert.Contains("IndexStatusIndicator.TransformToVisual(RootGrid)", position);
+        Assert.Contains("(IndexStatusIndicator.ActualWidth / 2) - (overlayWidth / 2)", position);
+        Assert.Contains("anchor.Y - overlayHeight - IndexStatusHoverGap", position);
+        Assert.Contains("Math.Clamp(left, IndexStatusHoverEdgeInset, maxLeft)", position);
+        Assert.Contains("Math.Clamp(top, IndexStatusHoverEdgeInset, maxTop)", position);
+        Assert.Contains("PositionIndexStatusHoverOverlay();", ExtractFrom(
+            PreviewSectionsSource,
+            "private void OnRootGridSizeChanged(",
+            500));
+
+        string escape = ExtractFrom(
+            IndexOnboardingSource,
+            "private void OnIndexStatusHoverOverlayPreviewKeyDown(",
+            1000);
+        Assert.Contains("e.Key != Windows.System.VirtualKey.Escape", escape);
+        Assert.Contains("IndexStatusAutomaticIndexingComboBox.IsDropDownOpen = false;", escape);
+        Assert.Contains("HideIndexStatusHoverOverlay();", escape);
+        Assert.Contains("e.Handled = true;", escape);
     }
 
     [Fact]

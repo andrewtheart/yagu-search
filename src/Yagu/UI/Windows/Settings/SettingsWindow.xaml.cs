@@ -75,6 +75,18 @@ public sealed partial class SettingsWindow : Window
 
     private readonly List<UIElement> _searchResultContainers = new();
 
+    /// <summary>Elements the aurora highlight currently surrounds; repositioned while the pane scrolls.</summary>
+    private IReadOnlyList<UIElement> _settingHighlightTargets = Array.Empty<UIElement>();
+    private UIElement? _settingHighlightRevealTarget;
+    private Storyboard? _settingHighlightStoryboard;
+    private bool _settingHighlightTracking;
+
+    /// <summary>Retires queued retries and storyboard callbacks from a superseded jump.</summary>
+    private int _settingHighlightGeneration;
+
+    /// <summary>Layout passes to wait for the re-parented tab page to measure before giving up.</summary>
+    private const int SettingHighlightMaxLayoutAttempts = 30;
+
     /// <summary>Represents a single setting item with searchable text and its UI elements.</summary>
     private sealed class SettingEntry
     {
@@ -84,6 +96,9 @@ public sealed partial class SettingsWindow : Window
         public string? Description { get; init; }
         public string? ControlText { get; init; }
         public UIElement? TargetElement { get; init; }
+
+        /// <summary>Every element in this setting (label, control, description) so the highlight can span it.</summary>
+        public IReadOnlyList<UIElement> HighlightElements { get; init; } = Array.Empty<UIElement>();
         public bool Matches(string query)
         {
             return Label.Contains(query, StringComparison.OrdinalIgnoreCase)
@@ -1246,14 +1261,190 @@ public sealed partial class SettingsWindow : Window
     private void JumpToSetting(SettingEntry entry)
     {
         SelectTab(entry.TabIndex);
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        FlashSettingHighlight(entry);
+    }
+
+    /// <summary>
+    /// Surrounds the jumped-to setting with the accent "aurora" and pulses it so the eye lands on the
+    /// control. Drawn as an overlay rather than by wrapping the control, because settings search must
+    /// never reparent live controls.
+    /// </summary>
+    private void FlashSettingHighlight(SettingEntry entry)
+    {
+        IReadOnlyList<UIElement> targets = entry.HighlightElements.Count > 0
+            ? entry.HighlightElements
+            : entry.TargetElement is null ? Array.Empty<UIElement>() : new[] { entry.TargetElement };
+        if (targets.Count == 0)
+            return;
+
+        HideSettingHighlight();
+        int generation = ++_settingHighlightGeneration;
+        _settingHighlightTargets = targets;
+        _settingHighlightRevealTarget = entry.TargetElement;
+        BeginTrackingSettingHighlight();
+        QueueSettingHighlightAttempt(generation, SettingHighlightMaxLayoutAttempts);
+    }
+
+    /// <summary>
+    /// Waits for the setting to be measurable before revealing and flashing it. <see cref="SelectTab"/>
+    /// clears the search box and re-adds the tab page, so the page is re-parented several times in one
+    /// turn and its children report a zero size for the next few layout passes.
+    /// </summary>
+    private void QueueSettingHighlightAttempt(int generation, int attemptsRemaining)
+        => DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            entry.TargetElement?.StartBringIntoView(new BringIntoViewOptions
+            if (generation != _settingHighlightGeneration)
+                return;
+
+            if (!TryPositionSettingHighlight())
+            {
+                if (attemptsRemaining > 1)
+                {
+                    QueueSettingHighlightAttempt(generation, attemptsRemaining - 1);
+                }
+                else
+                {
+                    LogService.Instance.Verbose("Settings", "Setting highlight gave up: target never measured.");
+                    HideSettingHighlight();
+                }
+                return;
+            }
+
+            // Scroll only once the target is measurable, or the scroll viewer has no extent to work with.
+            _settingHighlightRevealTarget?.StartBringIntoView(new BringIntoViewOptions
             {
                 AnimationDesired = true,
                 VerticalAlignmentRatio = 0.15,
             });
+            _settingHighlightRevealTarget = null;
+            LogService.Instance.Verbose(
+                "Settings",
+                $"Setting highlight ready after {SettingHighlightMaxLayoutAttempts - attemptsRemaining + 1} layout pass(es).");
+            StartSettingHighlightFlash(generation);
         });
+
+    private void StartSettingHighlightFlash(int generation)
+    {
+        Windows.UI.Color accent = ResolveAuroraAccentColor();
+        SettingHighlight.BorderBrush = new SolidColorBrush(accent);
+        SettingHighlight.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x38, accent.R, accent.G, accent.B));
+        SettingHighlight.Visibility = Visibility.Visible;
+
+        var flash = new DoubleAnimationUsingKeyFrames();
+        AddSettingHighlightFrame(flash, 0.00, 0.0);
+        AddSettingHighlightFrame(flash, 0.15, 1.0);
+        AddSettingHighlightFrame(flash, 0.45, 0.25);
+        AddSettingHighlightFrame(flash, 0.75, 1.0);
+        AddSettingHighlightFrame(flash, 1.05, 0.25);
+        AddSettingHighlightFrame(flash, 1.35, 1.0);
+        AddSettingHighlightFrame(flash, 1.90, 0.0);
+        Storyboard.SetTarget(flash, SettingHighlight);
+        Storyboard.SetTargetProperty(flash, "Opacity");
+
+        var storyboard = new Storyboard();
+        storyboard.Children.Add(flash);
+        // Stop() also raises Completed, so only the flash that is still current may clear the overlay.
+        storyboard.Completed += (_, _) =>
+        {
+            if (generation == _settingHighlightGeneration)
+                HideSettingHighlight();
+        };
+        _settingHighlightStoryboard = storyboard;
+        storyboard.Begin();
+    }
+
+    private static void AddSettingHighlightFrame(DoubleAnimationUsingKeyFrames frames, double seconds, double opacity)
+        => frames.KeyFrames.Add(new LinearDoubleKeyFrame
+        {
+            KeyTime = KeyTime.FromTimeSpan(TimeSpan.FromSeconds(seconds)),
+            Value = opacity,
+        });
+
+    /// <summary>Fits the highlight around the union of the setting's elements, in overlay coordinates.</summary>
+    private bool TryPositionSettingHighlight()
+    {
+        const double padding = 6;
+        double left = double.MaxValue, top = double.MaxValue;
+        double right = double.MinValue, bottom = double.MinValue;
+
+        foreach (UIElement target in _settingHighlightTargets)
+        {
+            if (target is not FrameworkElement element || element.ActualWidth <= 0 || element.ActualHeight <= 0)
+                continue;
+            try
+            {
+                Windows.Foundation.Rect bounds = element
+                    .TransformToVisual(SettingHighlightLayer)
+                    .TransformBounds(new Windows.Foundation.Rect(0, 0, element.ActualWidth, element.ActualHeight));
+                left = Math.Min(left, bounds.Left);
+                top = Math.Min(top, bounds.Top);
+                right = Math.Max(right, bounds.Right);
+                bottom = Math.Max(bottom, bounds.Bottom);
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Verbose("Settings", $"Setting highlight transform failed: {ex.GetType().Name}");
+            }
+        }
+
+        if (right <= left || bottom <= top)
+            return false;
+
+        Canvas.SetLeft(SettingHighlight, left - padding);
+        Canvas.SetTop(SettingHighlight, top - padding);
+        SettingHighlight.Width = (right - left) + (padding * 2);
+        SettingHighlight.Height = (bottom - top) + (padding * 2);
+        return true;
+    }
+
+    private void BeginTrackingSettingHighlight()
+    {
+        if (_settingHighlightTracking)
+            return;
+        SettingsContentScrollViewer.ViewChanged += OnSettingHighlightViewChanged;
+        _settingHighlightTracking = true;
+    }
+
+    // The bring-into-view scroll is animated, so the highlight has to follow the setting as it moves.
+    private void OnSettingHighlightViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
+    {
+        if (SettingHighlight.Visibility == Visibility.Visible)
+            TryPositionSettingHighlight();
+    }
+
+    private void HideSettingHighlight()
+    {
+        // Bumping the generation first retires any queued retry and the Completed that Stop() raises.
+        _settingHighlightGeneration++;
+        Storyboard? storyboard = _settingHighlightStoryboard;
+        _settingHighlightStoryboard = null;
+        storyboard?.Stop();
+
+        SettingHighlight.Visibility = Visibility.Collapsed;
+        SettingHighlight.Opacity = 0;
+        _settingHighlightTargets = Array.Empty<UIElement>();
+        _settingHighlightRevealTarget = null;
+        if (_settingHighlightTracking)
+        {
+            SettingsContentScrollViewer.ViewChanged -= OnSettingHighlightViewChanged;
+            _settingHighlightTracking = false;
+        }
+    }
+
+    private void OnSettingHighlightLayerSizeChanged(object sender, SizeChangedEventArgs e)
+        => SettingHighlightLayer.Clip = new RectangleGeometry
+        {
+            Rect = new Windows.Foundation.Rect(0, 0, SettingHighlightLayer.ActualWidth, SettingHighlightLayer.ActualHeight),
+        };
+
+    /// <summary>The translucent accent wash used for the "aurora", matching the window-mode picker cards.</summary>
+    private static Windows.UI.Color ResolveAuroraAccentColor()
+    {
+        ResourceDictionary resources = Application.Current.Resources;
+        if (resources.ContainsKey("AccentFillColorDefaultBrush")
+            && resources["AccentFillColorDefaultBrush"] is SolidColorBrush accent)
+            return accent.Color;
+        return Windows.UI.Color.FromArgb(0xFF, 0x3B, 0x82, 0xF6);
     }
 
     private static string TrimSearchResultText(string text)
@@ -1351,6 +1542,7 @@ public sealed partial class SettingsWindow : Window
                         Description = capturedDesc,
                         ControlText = capturedControlText,
                         TargetElement = captured.FirstOrDefault(IsLabelElement) ?? captured.FirstOrDefault(),
+                        HighlightElements = captured,
                     });
                     entryElements.Clear();
                     entryDescription = null;
@@ -1382,6 +1574,7 @@ public sealed partial class SettingsWindow : Window
                     Description = capturedDesc,
                     ControlText = capturedControlText,
                     TargetElement = captured.FirstOrDefault(IsLabelElement) ?? captured.FirstOrDefault(),
+                    HighlightElements = captured,
                 });
             }
         }
@@ -3944,6 +4137,22 @@ public sealed partial class SettingsWindow : Window
             diagnosticsGroup.Children.Add(new TextBlock
             {
                 Text = "Shows result-temp disk usage, total content-index storage, and RAM used by Yagu plus its worker processes. Hidden by default.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var showDebugPanel = new CheckBox
+            {
+                Content = "Show debug panel",
+                IsChecked = _viewModel.ShowDebugPanel,
+            };
+            showDebugPanel.Checked += (_, _) => _viewModel.ShowDebugPanel = true;
+            showDebugPanel.Unchecked += (_, _) => _viewModel.ShowDebugPanel = false;
+            diagnosticsGroup.Children.Add(showDebugPanel);
+            diagnosticsGroup.Children.Add(new TextBlock
+            {
+                Text = "Shows a bottom-right log button with a live, filterable tail of yagu.log and independent runtime file/console level controls. Hidden by default.",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,

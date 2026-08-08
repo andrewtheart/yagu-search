@@ -250,6 +250,12 @@ public sealed class MainViewModelSearchStatusRegressionTests
             "HideIndexStatusHoverOverlay();",
             "PreviewShowMoreTooltipOverlay?.Visibility == Visibility.Visible",
             "HidePreviewShowMoreTooltip();",
+            // The per-file paginator dismisses last, and only when Esc has no higher-priority meaning.
+            "SectionNavOverlay?.Visibility == Visibility.Visible",
+            "FindBar?.Visibility != Visibility.Visible",
+            "!ViewModel.IsSearching",
+            "!ViewModel.IsTranslatingSemanticQuery",
+            "HideSectionNavOverlay();",
             "return false;");
         Assert.Contains("if (e.Key == Windows.System.VirtualKey.Escape && TryDismissOpenOverlayOnEscape())", mainWindowSource);
     }

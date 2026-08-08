@@ -503,6 +503,14 @@ public sealed partial class MainWindow
         var summaryText = new StackPanel { Spacing = 5 };
         summaryText.Children.Add(new TextBlock
         {
+            Text = "Yagu found that one or more locations below cannot currently use the content index. "
+                 + "This may make the search slower while those files are read directly.",
+            FontSize = 12,
+            Opacity = 0.75,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        summaryText.Children.Add(new TextBlock
+        {
             Text = "Your search results will still be complete.",
             FontSize = 15,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
@@ -510,8 +518,8 @@ public sealed partial class MainWindow
         });
         summaryText.Children.Add(new TextBlock
         {
-            Text = "The content index only makes searches faster. For the locations below, Yagu will read files "
-                 + "directly instead. You can search now, or start the recommended index maintenance first.",
+              Text = "The content index only affects search speed, never which matches are returned. "
+                  + "You can search now, or start the recommended index maintenance first.",
             FontSize = 12,
             Opacity = 0.75,
             TextWrapping = TextWrapping.Wrap,

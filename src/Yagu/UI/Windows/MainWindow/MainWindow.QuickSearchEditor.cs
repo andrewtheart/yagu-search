@@ -15,6 +15,9 @@ public sealed partial class MainWindow
 {
     /// <summary>Fixed lane reserved on the right of a row for its four hover actions (4 × 28 + spacing + inset).</summary>
     private const double QuickSearchActionsLaneWidth = (4 * 28) + (3 * 2) + 10;
+    private const double QuickSearchRowHeight = 36;
+    private const int VisibleQuickSearchRowCount = 5;
+    private const double QuickSearchRowSpacing = 4;
 
     /// <summary>Icons offered by the editor's picker, so a glyph is chosen visually instead of typed as a codepoint.</summary>
     private static readonly string[] QuickSearchGlyphChoices =
@@ -49,6 +52,10 @@ public sealed partial class MainWindow
     {
         if (UserQuickSearchesPanel is null)
             return;
+
+        UserQuickSearchesScrollViewer.MaxHeight =
+            (VisibleQuickSearchRowCount * QuickSearchRowHeight)
+            + ((VisibleQuickSearchRowCount - 1) * QuickSearchRowSpacing);
 
         UserQuickSearchesPanel.Children.Clear();
         var items = QuickSearches;
@@ -135,7 +142,7 @@ public sealed partial class MainWindow
 
     private Grid BuildQuickSearchRow(QuickSearchItem item, int index, int count)
     {
-        var grid = new Grid();
+        var grid = new Grid { Height = QuickSearchRowHeight };
 
         var content = new Grid { ColumnSpacing = 8 };
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });

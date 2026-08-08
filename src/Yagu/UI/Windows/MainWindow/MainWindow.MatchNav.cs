@@ -3259,6 +3259,12 @@ public sealed partial class MainWindow
 
     private void OnSectionNavDismiss(object sender, RoutedEventArgs e)
     {
+        HideSectionNavOverlay();
+    }
+
+    /// <summary>Collapses the per-file occurrence paginator; navigating to another match shows it again.</summary>
+    private void HideSectionNavOverlay()
+    {
         SectionNavOverlay.Visibility = Visibility.Collapsed;
     }
 

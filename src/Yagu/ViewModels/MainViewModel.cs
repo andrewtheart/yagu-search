@@ -361,6 +361,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         ShowMemoryPressureWarningLabel = _settings.ShowMemoryPressureWarningLabel;
         ShowStatsForNerds = _settings.ShowStatsForNerds;
         ShowResourceUsageInStatusBar = _settings.ShowResourceUsageInStatusBar;
+        ShowDebugPanel = _settings.ShowDebugPanel;
         ShowBuildNumberInTitleBar = _settings.ShowBuildNumberInTitleBar;
         ShowAutoScrollResultsCheckbox = _settings.ShowAutoScrollResultsCheckbox;
         SdkChannelBufferSize = _settings.SdkChannelBufferSize;
@@ -392,6 +393,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         ArchiveExtensions = SettingsArchiveExtensions;
         SuppressAdminWarning = _settings.SuppressAdminWarning;
         AdvancedOptionsTabOrder = _settings.AdvancedOptionsTabOrder ?? [];
+        AdvancedOptionPlacements = new Dictionary<string, string>(
+            _settings.AdvancedOptionPlacements ?? [], StringComparer.Ordinal);
         SuppressEverythingNotRunningPrompt = _settings.SuppressEverythingNotRunningPrompt;
         SuppressEverythingIndexCoverageWarning = _settings.SuppressEverythingIndexCoverageWarning;
         SuppressExcludedExtensionWarnings = _settings.SuppressExcludedExtensionWarnings;

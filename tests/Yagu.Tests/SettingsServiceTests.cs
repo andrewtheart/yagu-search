@@ -5,6 +5,28 @@ namespace Yagu.Tests;
 public class SettingsServiceTests
 {
     [Fact]
+    public void AdvancedOptionPlacements_RoundTrip()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var service = new SettingsService(temp);
+            service.Save(new AppSettings
+            {
+                AdvancedOptionPlacements = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["size.maximum"] = "filters",
+                },
+            });
+
+            AppSettings loaded = service.Load();
+
+            Assert.Equal("filters", loaded.AdvancedOptionPlacements["size.maximum"]);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
     public void ApplyFirstRunDriveIndexingProfile_MatchesApprovedDebugConfiguration()
     {
         var settings = new AppSettings

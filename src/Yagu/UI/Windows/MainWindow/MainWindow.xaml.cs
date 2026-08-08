@@ -232,6 +232,7 @@ public sealed partial class MainWindow : Window, IDisposable
         InitializeHelpKeyboardShortcut();
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
         InitializeAdvancedOptionsDrawerStateTracking();
+        InitializeAdvancedOptionPlacement();
         ApplyAppWindowTitle();
 
         // PreviewBlock's built-in text-selection swallows DoubleTapped by
@@ -590,6 +591,8 @@ public sealed partial class MainWindow : Window, IDisposable
         _autoScrollTimer?.Stop();
         _previewContextDebounceTimer?.Stop();
         _diskSparklineTimer?.Stop();
+        DisposeDebugLogPanel();
+        DisposeAdvancedOptionPlacement();
         DisposePreviewSelectionAutoScroll();
         DisposeResultsListSmartScroll();
         DisposeTerminal();

@@ -58,6 +58,11 @@ public sealed partial class MainViewModel
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
+    public Microsoft.UI.Xaml.Visibility DebugPanelButtonVisibility =>
+        ShowDebugPanel
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
     public Microsoft.UI.Xaml.Visibility IndexStatusVisibility =>
         ShowIndexStatus
             ? Microsoft.UI.Xaml.Visibility.Visible
@@ -84,6 +89,7 @@ public sealed partial class MainViewModel
     partial void OnShowMemoryPressureWarningLabelChanged(bool value) => OnPropertyChanged(nameof(MemoryPressureWarningVisibility));
     partial void OnShowStatsForNerdsChanged(bool value) => OnPropertyChanged(nameof(StatsForNerdsVisibility));
     partial void OnShowResourceUsageInStatusBarChanged(bool value) => OnPropertyChanged(nameof(ResourceUsageStatusVisibility));
+    partial void OnShowDebugPanelChanged(bool value) => OnPropertyChanged(nameof(DebugPanelButtonVisibility));
     partial void OnShowAutoScrollResultsCheckboxChanged(bool value) => OnPropertyChanged(nameof(AutoScrollResultsCheckboxVisibility));
     partial void OnShowIndexStatusChanged(bool value) => OnPropertyChanged(nameof(IndexStatusVisibility));
 

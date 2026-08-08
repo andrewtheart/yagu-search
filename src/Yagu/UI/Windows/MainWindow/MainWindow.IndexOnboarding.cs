@@ -20,6 +20,8 @@ namespace Yagu;
 public sealed partial class MainWindow
 {
     private const int IndexStatusHoverHideDelayMs = 350;
+    private const double IndexStatusHoverGap = 8;
+    private const double IndexStatusHoverEdgeInset = 8;
     private bool _indexStatusPointerOverIndicator;
     private bool _indexStatusPointerOverHoverPanel;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _indexStatusHoverHideTimer;
@@ -77,8 +79,79 @@ public sealed partial class MainWindow
         // Match the stable Skipped status overlay: this surface remains in the main visual tree rather
         // than opening a WinUI popup. Index-progress binding updates can therefore re-render its content
         // without dismissing/reopening the surface or generating synthetic target pointer transitions.
-        if (IndexStatusHoverOverlay is not null)
-            IndexStatusHoverOverlay.Visibility = Visibility.Visible;
+        ShowIndexStatusHoverOverlay();
+    }
+
+    private void ShowIndexStatusHoverOverlay()
+    {
+        if (IndexStatusHoverOverlay is null)
+            return;
+
+        IndexStatusHoverOverlay.Visibility = Visibility.Visible;
+        PositionIndexStatusHoverOverlay();
+    }
+
+    /// <summary>Centers the overview immediately above the status label and clamps it to the window.</summary>
+    private void PositionIndexStatusHoverOverlay()
+    {
+        if (IndexStatusHoverOverlay?.Visibility != Visibility.Visible
+            || IndexStatusIndicator is null
+            || RootGrid is null
+            || IndexStatusIndicator.ActualWidth <= 0)
+        {
+            return;
+        }
+
+        IndexStatusHoverOverlay.UpdateLayout();
+        double overlayWidth = IndexStatusHoverOverlay.ActualWidth > 0
+            ? IndexStatusHoverOverlay.ActualWidth
+            : IndexStatusHoverOverlay.DesiredSize.Width;
+        double overlayHeight = IndexStatusHoverOverlay.ActualHeight > 0
+            ? IndexStatusHoverOverlay.ActualHeight
+            : IndexStatusHoverOverlay.DesiredSize.Height;
+        if (overlayWidth <= 0 || overlayHeight <= 0)
+        {
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (IndexStatusHoverOverlay?.Visibility == Visibility.Visible)
+                    PositionIndexStatusHoverOverlay();
+            });
+            return;
+        }
+
+        var anchor = IndexStatusIndicator.TransformToVisual(RootGrid)
+            .TransformPoint(new Windows.Foundation.Point(0, 0));
+        double left = anchor.X + (IndexStatusIndicator.ActualWidth / 2) - (overlayWidth / 2);
+        double top = anchor.Y - overlayHeight - IndexStatusHoverGap;
+        double maxLeft = Math.Max(IndexStatusHoverEdgeInset,
+            RootGrid.ActualWidth - overlayWidth - IndexStatusHoverEdgeInset);
+        double maxTop = Math.Max(IndexStatusHoverEdgeInset,
+            RootGrid.ActualHeight - overlayHeight - IndexStatusHoverEdgeInset);
+        IndexStatusHoverOverlay.Margin = new Thickness(
+            Math.Clamp(left, IndexStatusHoverEdgeInset, maxLeft),
+            Math.Clamp(top, IndexStatusHoverEdgeInset, maxTop),
+            0,
+            0);
+    }
+
+    private void OnIndexStatusHoverOverlaySizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (IndexStatusHoverOverlay?.Visibility == Visibility.Visible)
+            PositionIndexStatusHoverOverlay();
+    }
+
+    private void OnIndexStatusHoverOverlayPreviewKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != Windows.System.VirtualKey.Escape
+            || IndexStatusHoverOverlay?.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
+        if (IndexStatusAutomaticIndexingComboBox?.IsDropDownOpen == true)
+            IndexStatusAutomaticIndexingComboBox.IsDropDownOpen = false;
+        HideIndexStatusHoverOverlay();
+        e.Handled = true;
     }
 
     private void OnIndexStatusPointerExited(object sender, PointerRoutedEventArgs e)
