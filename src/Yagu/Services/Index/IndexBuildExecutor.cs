@@ -391,7 +391,12 @@ internal static class IndexBuildExecutor
                 ContentIndexManager.ScopeFreshnessState incrementalFreshness = operation.ForceRefresh
                     ? ContentIndexManager.ScopeFreshnessState.Dirty
                     : runtime.CheckFreshness(manager, root, operation.Settings.MaxJournalCatchupRecords);
-                if (exists && incrementalFreshness == ContentIndexManager.ScopeFreshnessState.Uncertain)
+                // Unprovable freshness is only terminal when a rescan cannot be attempted. With rescan on,
+                // fall through to the refresh: it re-reads the journal, and a wrapped or over-length interval
+                // recovers by sweeping per-file change USNs. Any other cause still returns needsFullRebuild.
+                if (exists
+                    && incrementalFreshness == ContentIndexManager.ScopeFreshnessState.Uncertain
+                    && !operation.Settings.RescanOnJournalGap)
                 {
                     roots.Add(new IndexMaintenanceRootResult
                     {

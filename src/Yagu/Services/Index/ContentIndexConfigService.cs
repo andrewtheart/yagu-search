@@ -201,6 +201,7 @@ public static class ContentIndexConfigService
         AddBool("IndexIncludeHiddenFiles", s => s.IndexIncludeHiddenFiles, (s, v) => s.IndexIncludeHiddenFiles = v);
         AddInt("IndexMaxJournalCatchupMB", s => s.IndexMaxJournalCatchupMB, (s, v) => s.IndexMaxJournalCatchupMB = AppSettings.NormalizeIndexMaxJournalCatchupMB(v));
         AddInt("IndexMaxJournalCatchupRecords", s => s.IndexMaxJournalCatchupRecords, (s, v) => s.IndexMaxJournalCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(v));
+        AddBool("IndexRescanOnJournalGap", s => s.IndexRescanOnJournalGap, (s, v) => s.IndexRescanOnJournalGap = v);
         AddInt("IndexPostBuildCatchUpThresholdChanges", s => s.IndexPostBuildCatchUpThresholdChanges, (s, v) => s.IndexPostBuildCatchUpThresholdChanges = AppSettings.NormalizeIndexPostBuildCatchUpThresholdChanges(v));
         AddBool("IndexUseWatcherHints", s => s.IndexUseWatcherHints, (s, v) => s.IndexUseWatcherHints = v);
         AddInt("IndexMaxDeltaSegments", s => s.IndexMaxDeltaSegments, (s, v) => s.IndexMaxDeltaSegments = AppSettings.NormalizeIndexMaxDeltaSegments(v));

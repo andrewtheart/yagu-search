@@ -652,7 +652,35 @@ public sealed class ContentIndexAutoBuilderTests : IDisposable
     }
 
     [Fact]
-    public void RefreshIncremental_JournalGap_FallsBackToFullRebuild()
+    public void RefreshIncremental_JournalGap_RecoversByRescanning_InsteadOfRebuilding()
+    {
+        string indexRoot = Path.Combine(_sandbox, "index");
+        string root = Path.Combine(_sandbox, "a");
+        Directory.CreateDirectory(root);
+        string file = Path.Combine(root, "f.txt");
+        File.WriteAllText(file, "alpha content", new UTF8Encoding(false));
+        var paths = new DefaultContentIndexPathProvider(indexRoot, indexRoot);
+        var policy = new IndexIngestionPolicy(0, null, null, true, false, 0);
+        UsnFileIdentity id = PublishFakeGeneration(paths, root, file);
+
+        ContentIndexFreshnessEvaluator.JournalReader gapWhenRefreshing = (p, since) =>
+            new UsnReadResult(UsnReadStatus.GapDetected, since, Array.Empty<UsnChange>());
+        // IsScopeStale must first report stale so the refresh path is taken.
+        var staleThenGap = new StatefulReader(DirtyReaderFor(id), gapWhenRefreshing);
+
+        var result = new ContentIndexAutoBuilder(paths).RefreshIncremental(
+            new[] { root }, policy, new AppSettings(), staleThenGap.Read,
+            _ => new MapResolver(new() { [id] = file }),
+            _ => ClassifiedRead("x", policy), FileIdentityReader.TryGetIdentity);
+
+        Assert.Equal(1, result.Built);
+        var store = new ContentIndexStore(paths, ContentIndexManager.ScopeIdForRoot(root));
+        // The lost journal interval is recovered as an ordinary delta segment; the base is never rebuilt.
+        Assert.Equal(1, store.ActiveSegmentCount());
+    }
+
+    [Fact]
+    public void RefreshIncremental_JournalGap_RescanDisabled_FallsBackToFullRebuild()
     {
         string indexRoot = Path.Combine(_sandbox, "index");
         string root = Path.Combine(_sandbox, "a");
@@ -666,11 +694,10 @@ public sealed class ContentIndexAutoBuilderTests : IDisposable
         // A stale root whose journal is discontinuous → NeedsFullRebuild → full rebuild (no segments).
         ContentIndexFreshnessEvaluator.JournalReader gapWhenRefreshing = (p, since) =>
             new UsnReadResult(UsnReadStatus.GapDetected, since, Array.Empty<UsnChange>());
-        // IsScopeStale must first report stale so the refresh path is taken.
         var staleThenGap = new StatefulReader(DirtyReaderFor(id), gapWhenRefreshing);
 
         var result = new ContentIndexAutoBuilder(paths).RefreshIncremental(
-            new[] { root }, policy, new AppSettings(), staleThenGap.Read,
+            new[] { root }, policy, new AppSettings { IndexRescanOnJournalGap = false }, staleThenGap.Read,
             _ => new MapResolver(new() { [id] = file }),
             _ => ClassifiedRead("x", policy), FileIdentityReader.TryGetIdentity);
 

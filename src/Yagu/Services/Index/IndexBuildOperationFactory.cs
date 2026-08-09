@@ -111,6 +111,7 @@ internal static class IndexBuildOperationFactory
             CoalesceMaxRunsPerPass = AppSettings.NormalizeIndexCoalesceMaxRunsPerPass(settings.IndexCoalesceMaxRunsPerPass),
             RootSizePolicies = IndexSizeManagementPolicy.Normalize(settings.IndexedRootSizePolicies),
             MaxJournalCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(settings.IndexMaxJournalCatchupRecords),
+            RescanOnJournalGap = settings.IndexRescanOnJournalGap,
             PostBuildCatchUpThresholdChanges = AppSettings.NormalizeIndexPostBuildCatchUpThresholdChanges(
                 settings.IndexPostBuildCatchUpThresholdChanges),
             FileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds(settings.FileIoTimeoutSeconds),

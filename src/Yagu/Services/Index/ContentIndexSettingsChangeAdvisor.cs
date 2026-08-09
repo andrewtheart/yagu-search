@@ -99,6 +99,7 @@ public static class ContentIndexSettingsChangeAdvisor
         "IndexRemovableDrivePolicy",
         "IndexMaxJournalCatchupMB",
         "IndexMaxJournalCatchupRecords",
+        "IndexRescanOnJournalGap",
         "IndexPostBuildCatchUpThresholdChanges",
         "IndexUseWatcherHints",
         "IndexMaxDeltaSegments",

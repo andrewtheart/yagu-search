@@ -432,12 +432,13 @@ public sealed class IndexBuildExecutorTests : IDisposable
     }
 
     [Fact]
-    public void Maintenance_AutomaticIncremental_UncertainFreshness_IsNotMistakenForFreshOrRebuilt()
+    public void Maintenance_AutomaticIncremental_UncertainFreshness_RescanDisabled_IsNotMistakenForFreshOrRebuilt()
     {
         BuildInitialIndex();
         using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
         IndexMaintenanceOperation operation = Maintenance(IndexMaintenanceOperation.ModeIncremental, _root);
         operation.AllowFullRebuildFallback = false;
+        operation.Settings.RescanOnJournalGap = false;
         var runtime = new IndexMaintenanceRuntime
         {
             CheckFreshness = static (_, _, cap) =>
@@ -453,6 +454,57 @@ public sealed class IndexBuildExecutorTests : IDisposable
 
         Assert.Equal(0, result.Built);
         Assert.Equal(0, result.Skipped);
+        Assert.Equal(1, result.Failed);
+        Assert.Equal("needsFullRebuild", Assert.Single(result.Roots).Outcome);
+        Assert.NotNull(new ContentIndexStore(_paths, ContentIndexManager.ScopeIdForRoot(_root)).TryOpenCurrent());
+    }
+
+    [Fact]
+    public void Maintenance_AutomaticIncremental_UncertainFreshness_AttemptsARescanBeforeGivingUp()
+    {
+        // A wrapped journal is exactly the case a rescan can recover, so unprovable freshness must reach the
+        // refresh rather than being failed outright as it was before.
+        BuildInitialIndex();
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+        IndexMaintenanceOperation operation = Maintenance(IndexMaintenanceOperation.ModeIncremental, _root);
+        operation.AllowFullRebuildFallback = false;
+        bool refreshed = false;
+        var runtime = new IndexMaintenanceRuntime
+        {
+            CheckFreshness = static (_, _, _) => ContentIndexManager.ScopeFreshnessState.Uncertain,
+            Refresh = (_, _, _, _, _, _, _, _) =>
+            {
+                refreshed = true;
+                return IncrementalUpdateOutcome.SegmentAppended;
+            },
+        };
+
+        IndexMaintenanceSuccess result = IndexBuildExecutor.RunMaintenancePassUnderLease(
+            mutation, operation, CancellationToken.None, null, runtime);
+
+        Assert.True(refreshed);
+        Assert.Equal(1, result.Built);
+        Assert.Equal(0, result.Failed);
+        Assert.Equal(IndexMaintenanceActions.DeltaAppended, Assert.Single(result.Roots).Action);
+    }
+
+    [Fact]
+    public void Maintenance_AutomaticIncremental_UncertainFreshness_UnrecoverableByRescan_StillNeedsFullRebuild()
+    {
+        BuildInitialIndex();
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+        IndexMaintenanceOperation operation = Maintenance(IndexMaintenanceOperation.ModeIncremental, _root);
+        operation.AllowFullRebuildFallback = false;
+        var runtime = new IndexMaintenanceRuntime
+        {
+            CheckFreshness = static (_, _, _) => ContentIndexManager.ScopeFreshnessState.Uncertain,
+            Refresh = static (_, _, _, _, _, _, _, _) => IncrementalUpdateOutcome.NeedsFullRebuild,
+        };
+
+        IndexMaintenanceSuccess result = IndexBuildExecutor.RunMaintenancePassUnderLease(
+            mutation, operation, CancellationToken.None, null, runtime);
+
+        Assert.Equal(0, result.Built);
         Assert.Equal(1, result.Failed);
         Assert.Equal("needsFullRebuild", Assert.Single(result.Roots).Outcome);
         Assert.NotNull(new ContentIndexStore(_paths, ContentIndexManager.ScopeIdForRoot(_root)).TryOpenCurrent());

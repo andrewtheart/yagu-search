@@ -190,6 +190,10 @@
     <Compile Include="..\..\src\Yagu\Services\Index\IndexingCloseWarning.cs" Link="Source\Services\Index\IndexingCloseWarning.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexUiStatus.cs" Link="Source\Services\Index\ContentIndexUiStatus.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\UsnJournalReader.cs" Link="Source\Services\Index\UsnJournalReader.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\UsnFileRecordParser.cs" Link="Source\Services\Index\UsnFileRecordParser.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\VolumeChangeScanner.cs" Link="Source\Services\Index\VolumeChangeScanner.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\PerFileUsnChangeScanner.cs" Link="Source\Services\Index\PerFileUsnChangeScanner.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\MftUsnChangeScanner.cs" Link="Source\Services\Index\MftUsnChangeScanner.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\UsnJournalHeadroom.cs" Link="Source\Services\Index\UsnJournalHeadroom.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\FileIdentityReader.cs" Link="Source\Services\Index\FileIdentityReader.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\FileIdMap.cs" Link="Source\Services\Index\FileIdMap.cs" />

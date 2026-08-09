@@ -129,6 +129,10 @@
     <Compile Include="..\Yagu\Services\Index\TrigramQueryRpn.cs" Link="Linked\Index\TrigramQueryRpn.cs" />
     <Compile Include="..\Yagu\Services\Index\UsnJournalHeadroom.cs" Link="Linked\Index\UsnJournalHeadroom.cs" />
     <Compile Include="..\Yagu\Services\Index\UsnJournalReader.cs" Link="Linked\Index\UsnJournalReader.cs" />
+    <Compile Include="..\Yagu\Services\Index\UsnFileRecordParser.cs" Link="Linked\Index\UsnFileRecordParser.cs" />
+    <Compile Include="..\Yagu\Services\Index\VolumeChangeScanner.cs" Link="Linked\Index\VolumeChangeScanner.cs" />
+    <Compile Include="..\Yagu\Services\Index\PerFileUsnChangeScanner.cs" Link="Linked\Index\PerFileUsnChangeScanner.cs" />
+    <Compile Include="..\Yagu\Services\Index\MftUsnChangeScanner.cs" Link="Linked\Index\MftUsnChangeScanner.cs" />
     <Compile Include="..\Yagu\Services\Index\V3MappedLayeredQuerySession.cs" Link="Linked\Index\V3MappedLayeredQuerySession.cs" />
   </ItemGroup>
 

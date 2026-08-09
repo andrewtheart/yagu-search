@@ -949,6 +949,12 @@ public sealed class AppSettings
     public int IndexMaxJournalCatchupMB { get; set; } = DefaultIndexMaxJournalCatchupMB;
     /// <summary>Foreground journal catch-up record budget. Default 2,000,000 (plan §6.1).</summary>
     public int IndexMaxJournalCatchupRecords { get; set; } = DefaultIndexMaxJournalCatchupRecords;
+    /// <summary>When the change journal can no longer prove what changed — its retention window moved past
+    /// the index checkpoint while Yagu was closed, or the delta is larger than
+    /// <see cref="IndexMaxJournalCatchupRecords"/> — recover by rescanning the root's per-file change USNs
+    /// and re-indexing only the files that provably changed, instead of rebuilding the whole index.
+    /// Default true; disabling restores the previous full-rebuild behaviour.</summary>
+    public bool IndexRescanOnJournalGap { get; set; } = true;
     /// <summary>After a full build, automatically apply an incremental delta before publication when the
     /// journal contains more than this many changes since the build started. Zero catches up any non-empty
     /// delta; default 30,000.</summary>

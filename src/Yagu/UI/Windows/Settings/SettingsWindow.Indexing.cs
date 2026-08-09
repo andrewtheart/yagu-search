@@ -593,6 +593,9 @@ public sealed partial class SettingsWindow
             (s, v) => s.IndexMaxJournalCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(v),
             1000, 100000000,
             "Companion record cap for the catch-up limit above. Default 2,000,000.");
+        AddIndexToggle(resourcesGroup, "Recover from a lost change journal by rescanning instead of rebuilding",
+            s => s.IndexRescanOnJournalGap, (s, v) => s.IndexRescanOnJournalGap = v,
+            "Default on. Windows keeps only a limited window of file-system changes, so an index can fall outside it while Yagu is closed. Rather than rebuilding the whole folder, Yagu then asks each file for its own last-change record and re-reads only the files that actually changed \u2014 minutes instead of hours. An elevated session uses a faster whole-volume sweep automatically. When off, a lost journal forces a full rebuild.");
         AddIndexToggle(resourcesGroup, "Use file-system watcher hints for incremental updates",
             s => s.IndexUseWatcherHints, (s, v) => s.IndexUseWatcherHints = v,
             "Default off. When on, incremental updates use a file-system watcher as a low-latency hint about which folders changed. The change journal remains authoritative, so a watcher failure never affects correctness.");

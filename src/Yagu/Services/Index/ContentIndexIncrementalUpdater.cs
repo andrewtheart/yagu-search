@@ -156,14 +156,17 @@ public sealed partial class ContentIndexIncrementalUpdater
         UsnCheckpoint checkpoint,
         IndexMaintenanceSettings settings,
         DateTimeOffset builtUtc,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool commitCheckpointWhenUnchanged = false)
     {
         ArgumentNullException.ThrowIfNull(mutation);
         ArgumentNullException.ThrowIfNull(changed);
         ArgumentNullException.ThrowIfNull(deletedPaths);
         ArgumentNullException.ThrowIfNull(settings);
 
-        if (changed.Count == 0 && deletedPaths.Count == 0)
+        // A rescan that proves nothing changed still has to publish its barrier, otherwise the root stays
+        // permanently unprovable and every later pass repeats the rescan.
+        if (changed.Count == 0 && deletedPaths.Count == 0 && !commitCheckpointWhenUnchanged)
             return IncrementalUpdateOutcome.NoChanges;
 
         cancellationToken.ThrowIfCancellationRequested();

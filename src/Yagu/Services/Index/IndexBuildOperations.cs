@@ -162,6 +162,13 @@ public sealed class IndexMaintenanceSettings
     /// <c>AppSettings.DefaultIndexMaxJournalCatchupRecords</c>; the dispatching factory always sets it
     /// explicitly, so this literal only covers operations built without settings.</summary>
     public int MaxJournalCatchupRecords { get; set; } = 2_000_000;
+
+    /// <summary>When the change journal can no longer prove what changed (its retention window moved past
+    /// the index checkpoint, or the delta exceeds <see cref="MaxJournalCatchupRecords"/>), recover by
+    /// rescanning the root's per-file change USNs instead of rebuilding the whole index. Only files that
+    /// provably changed are re-read. Disabled → the pass falls back to a full rebuild as before.</summary>
+    public bool RescanOnJournalGap { get; set; } = true;
+
     public int PostBuildCatchUpThresholdChanges { get; set; } = -1;
     public int FileIoTimeoutSeconds { get; set; } = IndexBuildDefaults.FileIoTimeoutSeconds;
 }

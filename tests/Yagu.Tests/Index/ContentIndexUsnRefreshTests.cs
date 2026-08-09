@@ -799,4 +799,207 @@ public sealed class ContentIndexUsnRefreshTests : IDisposable
             _ => throw new OutOfMemoryException("read oom"));
         Assert.Throws<OutOfMemoryException>(() => applyOom.Refresh(_scopeId, new AppSettings(), DateTimeOffset.UtcNow));
     }
+
+    // ── Journal-gap recovery by rescan (instead of rebuilding the whole root) ──
+
+    private sealed class StubVolumeChangeScanner(VolumeChangeScanResult result) : IVolumeChangeScanner
+    {
+        public string Name => "stub";
+        public int Calls { get; private set; }
+
+        public VolumeChangeScanResult Scan(
+            string normalizedRoot, UsnCheckpoint since, IndexIngestionPolicy policy,
+            string excludedStorageRoot, int parallelism, Action<long>? progress, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return result;
+        }
+
+        public void Dispose() { }
+    }
+
+    /// <summary>Publishes a base whose root is a real directory, which the production rescan path requires
+    /// before it will trust a sweep (an absent drive must never "prove" that nothing changed).</summary>
+    private (ContentIndexStore Store, string ScopeId, UsnFileIdentity ChangedId) PublishBaseForRealRoot(string root)
+    {
+        string scopeId = ContentIndexManager.ScopeIdForRoot(root);
+        var identity = new UsnFileIdentity(4242, 0);
+        var builder = new ContentIndexGenerationBuilder(
+            OpenPolicy, identityProvider: _ => new FileIdentity(0x9, identity));
+        builder.AddDocument(Path.Combine(root, "a.txt"), Encoding.UTF8.GetBytes("alpha original content"));
+        var gen = builder.Build(scopeId, "vol", root, new UsnCheckpoint(1, 100), DateTimeOffset.UtcNow);
+        var store = new ContentIndexStore(_paths, scopeId, retainedGenerations: 4);
+        store.Publish(gen);
+        return (store, scopeId, identity);
+    }
+
+    private ContentIndexIncrementalRefresher NewRescanRefresher(
+        ContentIndexStore store,
+        string root,
+        ContentIndexFreshnessEvaluator.JournalReader journal,
+        IFileIdPathResolver resolver,
+        Func<string, IncrementalFileRead?> readAndClassify,
+        IVolumeChangeScanner scanner)
+        => new(store, OpenPolicy, _paths.IndexRoot, journal, _ => resolver, readAndClassify,
+            identityProvider: null, volumeBindingReader: null, scannerFactory: () => scanner);
+
+    [Fact]
+    public void Refresh_JournalGap_RecoversByRescanning_InsteadOfRebuildingTheWholeRoot()
+    {
+        string root = Path.Combine(_sandbox, "live-root");
+        Directory.CreateDirectory(root);
+        (ContentIndexStore store, string scopeId, UsnFileIdentity changedId) = PublishBaseForRealRoot(root);
+        string changedPath = Path.Combine(root, "a.txt");
+
+        var scanner = new StubVolumeChangeScanner(new VolumeChangeScanResult(
+            true, null, new[] { new UsnChange(changedId, 0) }, Array.Empty<string>(), 1));
+
+        var refresher = NewRescanRefresher(
+            store,
+            root,
+            (_, since) => new UsnReadResult(
+                UsnReadStatus.GapDetected, new UsnCheckpoint(since.JournalId, 9999), Array.Empty<UsnChange>()),
+            new FakeResolver(new() { [changedId] = changedPath }),
+            _ => Classified("alpha RESCANNED content"),
+            scanner);
+
+        IncrementalUpdateOutcome outcome = refresher.Refresh(scopeId, new AppSettings(), DateTimeOffset.UtcNow);
+
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, outcome);
+        Assert.Equal(1, scanner.Calls);
+        Assert.Equal(1, store.ActiveSegmentCount());
+        // The barrier captured before the sweep is now the trusted checkpoint, so the root is provable again.
+        Assert.Equal(9999, store.TryReadCurrentIncrementalManifest()!.FreshnessCheckpoint.NextUsn);
+    }
+
+    [Fact]
+    public void Refresh_JournalGap_RescanProvingNothingChanged_StillCommitsTheBarrier()
+    {
+        // Otherwise the root stays permanently unprovable and every later pass repeats the whole sweep.
+        string root = Path.Combine(_sandbox, "quiet-root");
+        Directory.CreateDirectory(root);
+        (ContentIndexStore store, string scopeId, _) = PublishBaseForRealRoot(root);
+
+        var scanner = new StubVolumeChangeScanner(new VolumeChangeScanResult(
+            true, null, Array.Empty<UsnChange>(), Array.Empty<string>(), 12));
+
+        var refresher = NewRescanRefresher(
+            store,
+            root,
+            (_, since) => new UsnReadResult(
+                UsnReadStatus.GapDetected, new UsnCheckpoint(since.JournalId, 4242), Array.Empty<UsnChange>()),
+            new FakeResolver(new()),
+            _ => null,
+            scanner);
+
+        IncrementalUpdateOutcome outcome = refresher.Refresh(scopeId, new AppSettings(), DateTimeOffset.UtcNow);
+
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, outcome);
+        Assert.Equal(4242, store.TryReadCurrentIncrementalManifest()!.FreshnessCheckpoint.NextUsn);
+    }
+
+    [Fact]
+    public void Refresh_JournalGap_UnprovableFilesAreTombstoned_NotTrusted()
+    {
+        string root = Path.Combine(_sandbox, "denied-root");
+        Directory.CreateDirectory(root);
+        (ContentIndexStore store, string scopeId, _) = PublishBaseForRealRoot(root);
+        string denied = IndexScopeIdentity.NormalizePath(Path.Combine(root, "a.txt"));
+
+        var scanner = new StubVolumeChangeScanner(new VolumeChangeScanResult(
+            true, null, Array.Empty<UsnChange>(), new[] { denied }, 1));
+
+        var refresher = NewRescanRefresher(
+            store,
+            root,
+            (_, since) => new UsnReadResult(
+                UsnReadStatus.GapDetected, new UsnCheckpoint(since.JournalId, 777), Array.Empty<UsnChange>()),
+            new FakeResolver(new()),
+            _ => null,
+            scanner);
+
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended,
+            refresher.Refresh(scopeId, new AppSettings(), DateTimeOffset.UtcNow));
+
+        // The file the sweep could not prove is shadowed, so searches read it live instead of trusting it.
+        var handle = store.TryOpenLayered()!;
+        Assert.Contains(denied, handle.Segments[0].RemovedPaths);
+    }
+
+    [Fact]
+    public void Refresh_JournalGap_RescanUnavailable_FallsBackToAFullRebuild()
+    {
+        string root = Path.Combine(_sandbox, "unavailable-root");
+        Directory.CreateDirectory(root);
+        (ContentIndexStore store, string scopeId, _) = PublishBaseForRealRoot(root);
+
+        var scanner = new StubVolumeChangeScanner(
+            VolumeChangeScanResult.Failed("the root was not completely enumerated"));
+
+        var refresher = NewRescanRefresher(
+            store,
+            root,
+            (_, since) => new UsnReadResult(UsnReadStatus.GapDetected, since, Array.Empty<UsnChange>()),
+            new FakeResolver(new()),
+            _ => null,
+            scanner);
+
+        Assert.Equal(IncrementalUpdateOutcome.NeedsFullRebuild,
+            refresher.Refresh(scopeId, new AppSettings(), DateTimeOffset.UtcNow));
+        Assert.Equal(0, store.ActiveSegmentCount());
+    }
+
+    [Fact]
+    public void Refresh_JournalReset_NeverRescans_BecauseUsnsAreRenumbered()
+    {
+        // A new journal id restarts USN numbering, so no file's stored USN can be compared to the old
+        // checkpoint. Only a rebuild is safe here.
+        string root = Path.Combine(_sandbox, "reset-root");
+        Directory.CreateDirectory(root);
+        (ContentIndexStore store, string scopeId, _) = PublishBaseForRealRoot(root);
+
+        var scanner = new StubVolumeChangeScanner(new VolumeChangeScanResult(
+            true, null, Array.Empty<UsnChange>(), Array.Empty<string>(), 0));
+
+        foreach (UsnReadStatus status in new[] { UsnReadStatus.JournalIdChanged, UsnReadStatus.CheckpointAhead })
+        {
+            var refresher = NewRescanRefresher(
+                store,
+                root,
+                (_, since) => new UsnReadResult(status, since, Array.Empty<UsnChange>()),
+                new FakeResolver(new()),
+                _ => null,
+                scanner);
+
+            Assert.Equal(IncrementalUpdateOutcome.NeedsFullRebuild,
+                refresher.Refresh(scopeId, new AppSettings(), DateTimeOffset.UtcNow));
+        }
+
+        Assert.Equal(0, scanner.Calls);
+    }
+
+    [Fact]
+    public void Refresh_JournalGap_RescanDisabled_KeepsThePreviousFullRebuildBehaviour()
+    {
+        string root = Path.Combine(_sandbox, "disabled-root");
+        Directory.CreateDirectory(root);
+        (ContentIndexStore store, string scopeId, _) = PublishBaseForRealRoot(root);
+
+        var scanner = new StubVolumeChangeScanner(new VolumeChangeScanResult(
+            true, null, Array.Empty<UsnChange>(), Array.Empty<string>(), 0));
+
+        var refresher = NewRescanRefresher(
+            store,
+            root,
+            (_, since) => new UsnReadResult(UsnReadStatus.GapDetected, since, Array.Empty<UsnChange>()),
+            new FakeResolver(new()),
+            _ => null,
+            scanner);
+
+        var settings = new AppSettings { IndexRescanOnJournalGap = false };
+
+        Assert.Equal(IncrementalUpdateOutcome.NeedsFullRebuild,
+            refresher.Refresh(scopeId, settings, DateTimeOffset.UtcNow));
+        Assert.Equal(0, scanner.Calls);
+    }
 }
