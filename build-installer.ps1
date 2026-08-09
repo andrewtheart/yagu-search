@@ -50,6 +50,20 @@
 .PARAMETER CopilotPath
   Optional explicit path to the Copilot CLI used by the canonical workflow for
   comprehensive release-note generation.
+
+.PARAMETER SignCertThumbprint
+  SHA-1 thumbprint of an Authenticode code-signing certificate (typically on a
+  hardware token). When supplied, every Yagu-authored binary in the staging tree AND
+  the produced setup EXE are signed and verified; without it the build is unsigned
+  exactly as before. Signing is all-or-nothing on purpose: Yagu refuses to launch a
+  worker or install an update whose publisher does not match the running build.
+
+.PARAMETER SignTimestampUrl
+  RFC 3161 timestamp server used when signing. Defaults to DigiCert's.
+
+.PARAMETER SignToolPath
+  Optional explicit path to signtool.exe. Defaults to PATH, then the newest Windows
+  SDK signing tools.
 #>
 [CmdletBinding()]
 param(
@@ -64,7 +78,10 @@ param(
   [switch]$SkipRelease,
   [string]$CopilotPath,
   [ValidateSet('Prompt', 'Draft', 'Published')]
-  [string]$ReleaseMode = 'Prompt'
+  [string]$ReleaseMode = 'Prompt',
+  [string]$SignCertThumbprint,
+  [string]$SignTimestampUrl = 'http://timestamp.digicert.com',
+  [string]$SignToolPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -97,6 +114,11 @@ if ($Push) {
   if (-not [string]::IsNullOrWhiteSpace($InnoSetupPath)) { $releaseParams['InnoSetupPath'] = $InnoSetupPath }
   if (-not [string]::IsNullOrWhiteSpace($OcrPayloadCacheDir)) { $releaseParams['OcrPayloadCacheDir'] = $OcrPayloadCacheDir }
   if (-not [string]::IsNullOrWhiteSpace($CopilotPath)) { $releaseParams['CopilotPath'] = $CopilotPath }
+  if (-not [string]::IsNullOrWhiteSpace($SignCertThumbprint)) {
+    $releaseParams['SignCertThumbprint'] = $SignCertThumbprint
+    $releaseParams['SignTimestampUrl'] = $SignTimestampUrl
+    if (-not [string]::IsNullOrWhiteSpace($SignToolPath)) { $releaseParams['SignToolPath'] = $SignToolPath }
+  }
 
   & $canonicalReleaseScript @releaseParams
   return
@@ -120,6 +142,26 @@ if (Test-Path -LiteralPath $webView2PrereqHelper) {
 $everythingPrereqHelper = Join-Path $repoRoot 'scripts\everything-prereq.ps1'
 if (Test-Path -LiteralPath $everythingPrereqHelper) {
   . $everythingPrereqHelper
+}
+
+# Opt-in Authenticode signing. Resolved BEFORE any build work so a missing token,
+# expired certificate, or missing signtool fails in seconds instead of after a
+# multi-minute Native AOT publish.
+$signBuild = -not [string]::IsNullOrWhiteSpace($SignCertThumbprint)
+$signCert = $null
+if ($signBuild) {
+  $codeSigningHelper = Join-Path $repoRoot 'scripts\code-signing.ps1'
+  if (-not (Test-Path -LiteralPath $codeSigningHelper)) {
+    throw "Code-signing helper not found: $codeSigningHelper"
+  }
+  . $codeSigningHelper
+  $signCert = Resolve-YaguSigningCertificate -Thumbprint $SignCertThumbprint
+  $SignCertThumbprint = $signCert.Thumbprint
+  $SignToolPath = Resolve-YaguSignTool -RequestedPath $SignToolPath
+  Write-Host "Code signing ENABLED"
+  Write-Host "  Certificate: $($signCert.Subject) (expires $($signCert.NotAfter.ToString('yyyy-MM-dd')))"
+  Write-Host "  signtool:    $SignToolPath"
+  Write-Host "  Timestamp:   $SignTimestampUrl"
 }
 # Read version from build-version.txt
 $versionFile = Join-Path $projectDir 'Properties\build-version.txt'
@@ -262,10 +304,24 @@ foreach ($arch in $architectures) {
   Write-Host "Installer app version: $version"
   Write-Host "Staged $(( Get-ChildItem -LiteralPath $stagingDir -File -Recurse ).Count) files."
 
+  # Step 2c: Sign every Yagu-authored staged binary (app, Rust core, all three workers)
+  # BEFORE Inno compresses them into the setup EXE. Third-party payloads keep their
+  # vendor signatures.
+  if ($signBuild) {
+    $signable = Get-YaguSignableStagedFile -StagingDir $stagingDir
+    if ($signable.Count -eq 0) {
+      throw "Code signing was requested but no Yagu binaries were found under $stagingDir."
+    }
+    Invoke-YaguAuthenticodeSign -Path $signable -CertThumbprint $SignCertThumbprint `
+      -TimestampUrl $SignTimestampUrl -SignToolPath $SignToolPath -Description "Yagu $version"
+  }
+
   # Step 3: Compile installer for this architecture
   Write-Host "Compiling installer ($arch)..."
   $isccArgs = @("/DMyAppVersion=$version", "/DYaguArch=$arch", "/DStagingDir=$stagingDir")
   if ($IncludeOcr) { $isccArgs += '/DIncludeOcr=1' }
+  # Tells the [Code] section this build is signed, so it does not abort under Smart App Control.
+  if ($signBuild) { $isccArgs += '/DYaguSigned=1' }
   & $InnoSetupPath @isccArgs $issFile
   if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compilation ($arch) failed with exit code $LASTEXITCODE."
@@ -274,6 +330,13 @@ foreach ($arch in $architectures) {
   $ocrSuffix = if ($IncludeOcr) { '-offline' } else { '' }
   $installerExe = Join-Path $outputDir "YaguSetup-$version-$arch$ocrSuffix.exe"
   if (Test-Path -LiteralPath $installerExe) {
+    # Sign the setup EXE itself: Yagu's in-app updater rejects a downloaded installer
+    # whose publisher does not match the running build.
+    if ($signBuild) {
+      Invoke-YaguAuthenticodeSign -Path @($installerExe) -CertThumbprint $SignCertThumbprint `
+        -TimestampUrl $SignTimestampUrl -SignToolPath $SignToolPath -Description "Yagu $version Setup"
+    }
+
     $rootInstallerExe = Join-Path $installerDir (Split-Path -Leaf $installerExe)
     # Keep only the newest installer for THIS architecture + edition in the repo installer\ folder.
     Get-ChildItem -LiteralPath $installerDir -Filter "YaguSetup-*-$arch$ocrSuffix.exe" -File |

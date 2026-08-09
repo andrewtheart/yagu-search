@@ -76,6 +76,17 @@
   Optional explicit path to the Copilot CLI executable used to generate release notes when
   -Push is used without -SkipRelease. If omitted, the script resolves 'copilot' from PATH.
 
+.PARAMETER SignCertThumbprint
+  SHA-1 thumbprint of an Authenticode code-signing certificate. Passed through to
+  build-installer.ps1, which signs every Yagu-authored binary plus the setup EXE of each
+  variant. Omit it to build unsigned installers.
+
+.PARAMETER SignTimestampUrl
+  RFC 3161 timestamp server used when signing. Passed through to build-installer.ps1.
+
+.PARAMETER SignToolPath
+  Optional explicit path to signtool.exe. Passed through to build-installer.ps1.
+
 .EXAMPLE
   .\build-all-installers.ps1
   Builds all four variants (x64, x86, arm64, x64-offline).
@@ -121,7 +132,10 @@ param(
   [switch]$SkipRelease,
   [string]$CopilotPath,
   [ValidateSet('Prompt', 'Draft', 'Published')]
-  [string]$ReleaseMode = 'Prompt'
+  [string]$ReleaseMode = 'Prompt',
+  [string]$SignCertThumbprint,
+  [string]$SignTimestampUrl = 'http://timestamp.digicert.com',
+  [string]$SignToolPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -704,6 +718,7 @@ if ($WhatIfPreference) {
     $cmd = "build-installer.ps1 -Architecture $($spec.Architecture)"
     if ($spec.IncludeOcr) { $cmd += ' -IncludeOcr' }
     if ($SkipBuild) { $cmd += ' -SkipBuild' }
+    if (-not [string]::IsNullOrWhiteSpace($SignCertThumbprint)) { $cmd += " -SignCertThumbprint $SignCertThumbprint" }
     Write-Host ("  {0,-8} -> {1}" -f $name, $cmd)
   }
   if ($Commit -or $Push) {
@@ -783,6 +798,11 @@ foreach ($name in $requested) {
   $params['SkipVersionIncrement'] = $true
   if (-not [string]::IsNullOrWhiteSpace($InnoSetupPath)) { $params['InnoSetupPath'] = $InnoSetupPath }
   if (-not [string]::IsNullOrWhiteSpace($OcrPayloadCacheDir)) { $params['OcrPayloadCacheDir'] = $OcrPayloadCacheDir }
+  if (-not [string]::IsNullOrWhiteSpace($SignCertThumbprint)) {
+    $params['SignCertThumbprint'] = $SignCertThumbprint
+    $params['SignTimestampUrl'] = $SignTimestampUrl
+    if (-not [string]::IsNullOrWhiteSpace($SignToolPath)) { $params['SignToolPath'] = $SignToolPath }
+  }
 
   $success = $true
   $errorMessage = $null
@@ -829,6 +849,7 @@ if ($SkipReadmeUpdate) {
 else {
   try {
     Update-ReadmeDownloadTable -ReadmePath (Join-Path $repoRoot 'README.md') -InstallerDir $installerDir
+    Update-ReadmeDownloadTable -ReadmePath (Join-Path $repoRoot 'installer\README.md') -InstallerDir $installerDir
   }
   catch {
     Write-Warning "README download-table update failed: $($_.Exception.Message)"
@@ -872,7 +893,8 @@ if ($Commit -or $Push) {
     $releaseAllowedPaths = @(
       'src/Yagu/Properties/build-version.txt',
       'src/Yagu/Properties/AppInfo.g.cs',
-      'README.md'
+      'README.md',
+      'installer/README.md'
     )
     # Edits made while the build was running are not in the built binaries; set them aside (with consent)
     # so this run still finishes instead of orphaning the version bump and the freshly built installers.

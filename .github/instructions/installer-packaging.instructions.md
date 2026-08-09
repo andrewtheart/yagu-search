@@ -33,8 +33,26 @@ Runtime, which the installer bundles and installs. Building from source needs th
 - Validate ISS edits by compiling per arch with `C:\Program Files (x86)\Inno Setup 6\ISCC.exe`.
 - `[Code]` has no .NET-runtime logic; it keeps `InstallWindowsAppRuntime()` (ssPostInstall, `Abort`
   on failure), the WebView2/Everything install-time steps, the `/VERBOSELOG` registry override, the
-  Smart App Control enforce gate (`InitializeSetup` cancels setup when SAC is enforcing), and
-  context-menu registry cleanup on uninstall.
+  Smart App Control enforce gate (`InitializeSetup` cancels setup when SAC is enforcing — compiled
+  out via `#ifndef YaguSigned` for signed builds), and context-menu registry cleanup on uninstall.
+
+## Code signing (opt-in)
+
+`build-installer.ps1 -SignCertThumbprint <sha1>` (also accepted and forwarded by
+`build-all-installers.ps1`) signs the build via `scripts/code-signing.ps1`; omit it and everything
+stays unsigned as before. Certificate/`signtool` resolution happens **before** any build work so a
+missing token fails in seconds rather than after a Native AOT publish.
+
+- Signing is **all-or-nothing**: `Get-YaguSignableStagedFile` returns `Yagu.exe`, `yagu_core.dll`,
+  and the three worker exe/dll pairs, and the setup EXE is signed after ISCC. Never sign only the app —
+  `AuthenticodeVerifier.IsWorkerTrustedForHost` blocks workers whose publisher differs from a signed
+  host, and `IsInstallerTrustedForHostPublisher` blocks in-app updates unless host and installer share
+  a publisher.
+- All files go through **one** `signtool` invocation (hardware tokens prompt per invocation), with
+  `/fd SHA256 /tr <rfc3161> /td SHA256`, followed by `signtool verify /pa /all` — a build that signs
+  but cannot verify must fail, since Yagu's own `WinVerifyTrust` gate would reject it at runtime.
+- Third-party payloads (WAR, WebView2, Everything, PaddleOCR natives, pdftotext) keep their vendor
+  signatures and are never re-signed.
 
 ## Release assets
 

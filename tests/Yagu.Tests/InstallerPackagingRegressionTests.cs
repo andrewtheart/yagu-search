@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Yagu.Tests;
 
 public sealed class InstallerPackagingRegressionTests
@@ -341,6 +343,78 @@ public sealed class InstallerPackagingRegressionTests
         // The check runs in InitializeSetup and cancels setup before any files are copied.
         Assert.Contains("function InitializeSetup(): Boolean;", inno);
         Assert.Contains("if SmartAppControlEnforced() then", inno);
+
+        // Signed builds are compiled with /DYaguSigned=1 and skip the gate: SAC allows signed apps.
+        Assert.Contains("#ifndef YaguSigned", inno);
+    }
+
+    [Fact]
+    public void CodeSigning_IsOptInAndCoversEveryYaguBinaryPlusTheInstaller()
+    {
+        string root = FindRepoRoot();
+        string buildInstaller = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
+        string signing = File.ReadAllText(Path.Combine(root, "scripts", "code-signing.ps1"));
+        string buildAll = File.ReadAllText(Path.Combine(root, "build-all-installers.ps1"));
+
+        // Opt-in: no thumbprint means the build stays unsigned and never touches signtool.
+        Assert.Contains("[string]$SignCertThumbprint", buildInstaller);
+        Assert.Contains("$signBuild = -not [string]::IsNullOrWhiteSpace($SignCertThumbprint)", buildInstaller);
+        Assert.Contains("if ($signBuild) {", buildInstaller);
+
+        // Signing is all-or-nothing: IsWorkerTrustedForHost rejects workers whose publisher differs
+        // from a signed host, and IsInstallerTrustedForHostPublisher rejects updates whose publisher
+        // differs from the running build. Signing only Yagu.exe would break OCR, semantic search, and
+        // in-app updates.
+        Assert.Contains("$_.Name -like 'Yagu*' -or $_.Name -eq 'yagu_core.dll'", signing);
+        Assert.Contains("Get-YaguSignableStagedFile -StagingDir $stagingDir", buildInstaller);
+        Assert.Contains("Invoke-YaguAuthenticodeSign -Path @($installerExe)", buildInstaller);
+
+        // Staged binaries must be signed BEFORE Inno compresses them into the setup EXE.
+        int signStaged = buildInstaller.IndexOf("Get-YaguSignableStagedFile", StringComparison.Ordinal);
+        int compile = buildInstaller.IndexOf("& $InnoSetupPath @isccArgs", StringComparison.Ordinal);
+        Assert.True(signStaged >= 0 && compile > signStaged, "Staged binaries must be signed before the Inno compile step.");
+
+        // One signtool invocation (hardware tokens prompt per invocation), SHA-256 + RFC 3161
+        // timestamp, and a verify pass so a signed-but-untrusted build fails here instead of at runtime.
+        Assert.Contains("'/fd', 'SHA256'", signing);
+        Assert.Contains("'/tr', $TimestampUrl", signing);
+        Assert.Contains("'/td', 'SHA256'", signing);
+        Assert.Contains("$verifyArgs = @('verify', '/pa', '/all', '/q') + $files", signing);
+        Assert.Contains("throw \"signtool verify failed", signing);
+
+        // The certificate is resolved before any build work so a missing token fails fast.
+        int resolveCert = buildInstaller.IndexOf("Resolve-YaguSigningCertificate", StringComparison.Ordinal);
+        int publish = buildInstaller.IndexOf("dotnet publish @publishArgs", StringComparison.Ordinal);
+        Assert.True(resolveCert >= 0 && publish > resolveCert, "The signing certificate must be resolved before the publish step.");
+
+        // Signed builds tell the installer script to drop the Smart App Control abort.
+        Assert.Contains("$isccArgs += '/DYaguSigned=1'", buildInstaller);
+
+        // The multi-variant release workflow forwards the signing options to every variant.
+        Assert.Contains("$params['SignCertThumbprint'] = $SignCertThumbprint", buildAll);
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_KeepsBothDownloadTablesOnTheSameRelease()
+    {
+        string root = FindRepoRoot();
+        string buildAll = File.ReadAllText(Path.Combine(root, "build-all-installers.ps1"));
+
+        // installer/README.md drifted 24 versions behind because only the root README was
+        // refreshed after a build. Both tables are now rewritten by the same run...
+        Assert.Contains("Update-ReadmeDownloadTable -ReadmePath (Join-Path $repoRoot 'README.md')", buildAll);
+        Assert.Contains(@"Update-ReadmeDownloadTable -ReadmePath (Join-Path $repoRoot 'installer\README.md')", buildAll);
+
+        // ...and the post-build guard must permit the second file, or every release aborts with
+        // "Unexpected post-build change(s) will not be committed or pushed".
+        Assert.Contains("'installer/README.md'", buildAll);
+
+        // Both tables must advertise the same release; a mismatch means one was left stale.
+        var rx = new Regex(@"YaguSetup-([0-9.]+)-x64\.exe");
+        string rootVersion = rx.Match(File.ReadAllText(Path.Combine(root, "README.md"))).Groups[1].Value;
+        string installerVersion = rx.Match(File.ReadAllText(Path.Combine(root, "installer", "README.md"))).Groups[1].Value;
+        Assert.False(string.IsNullOrEmpty(rootVersion), "README.md has no x64 download row.");
+        Assert.Equal(rootVersion, installerVersion);
     }
 
     [Fact]

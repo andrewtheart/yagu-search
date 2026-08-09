@@ -186,11 +186,13 @@ begin
 end;
 
 { Runs before the wizard is shown. Abort the install when Smart App Control is enforcing, because
-  the unsigned per-machine build cannot run on such a machine. Returning False here cancels setup
-  without copying any files. }
+  an unsigned per-machine build cannot run on such a machine. Returning False here cancels setup
+  without copying any files. Builds compiled with /DYaguSigned=1 (build-installer.ps1
+  -SignCertThumbprint) carry an Authenticode signature, so the gate is compiled out for them. }
 function InitializeSetup(): Boolean;
 begin
   Result := True;
+#ifndef YaguSigned
   if SmartAppControlEnforced() then
   begin
     Result := False;
@@ -201,11 +203,10 @@ begin
         'prevent Yagu from running after it is installed. Setup will now stop.' + #13#10#13#10 +
         'To install Yagu, turn Smart App Control off in Windows Security > App & browser control > ' +
         'Smart App Control settings, then run this installer again.' + #13#10#13#10 +
-        'Yagu is not code-signed because SignPath is not currently accepting applications for ' +
-        'open-source projects. Signing is planned for a future release, which will let Yagu run ' +
-        'with Smart App Control enabled.',
+        'This build of Yagu is not code-signed. Signed builds run with Smart App Control enabled.',
         mbCriticalError, MB_OK);
   end;
+#endif
 end;
 
 function InstallWindowsAppRuntime(): Boolean;

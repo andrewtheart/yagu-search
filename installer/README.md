@@ -14,14 +14,14 @@ files in this folder are configuration and this README.
 
 - **[⬇ Latest release — pick your installer](https://github.com/andrewtheart/yagu-search/releases/latest)**
 
-**Current version — direct downloads (v1.0.0.2380):**
+**Current release — direct downloads:**
 
 | Installer | Direct download |
 | --- | --- |
-| x64 (most PCs) | [YaguSetup-1.0.0.2380-x64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2380/YaguSetup-1.0.0.2380-x64.exe) (~163 MB) |
-| x64 · Offline (OCR + Everything bundled) | [YaguSetup-1.0.0.2380-x64-offline.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2380/YaguSetup-1.0.0.2380-x64-offline.exe) (~538 MB) |
-| Arm64 (Windows on ARM) | [YaguSetup-1.0.0.2380-arm64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2380/YaguSetup-1.0.0.2380-arm64.exe) (~163 MB) |
-| x86 (32-bit Windows) | [YaguSetup-1.0.0.2380-x86.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2380/YaguSetup-1.0.0.2380-x86.exe) (~144 MB) |
+| x64 (most PCs) | [YaguSetup-1.0.0.2404-x64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2404/YaguSetup-1.0.0.2404-x64.exe) (~194 MB) |
+| x64 · Offline (OCR + Everything bundled) | [YaguSetup-1.0.0.2404-x64-offline.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2404/YaguSetup-1.0.0.2404-x64-offline.exe) (~484 MB) |
+| Arm64 (Windows on ARM) | [YaguSetup-1.0.0.2404-arm64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2404/YaguSetup-1.0.0.2404-arm64.exe) (~191 MB) |
+| x86 (32-bit Windows) | [YaguSetup-1.0.0.2404-x86.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2404/YaguSetup-1.0.0.2404-x86.exe) (~172 MB) |
 
 See the [README "Download Installer" section](../README.md#download-installer) for which edition to
 pick and details about offline/OCR support.
@@ -51,6 +51,35 @@ The publish step uploads the on-disk `YaguSetup-<version>-*.exe` files here as t
 and rewrites the README download table to point at that release. Unless `-ReleaseMode Draft` or
 `-ReleaseMode Published` is supplied, the scripts ask whether the release should remain a draft for
 review or be published officially as the latest release.
+
+## Authenticode code signing (optional)
+
+Builds are unsigned by default. Pass a code-signing certificate thumbprint to sign a release:
+
+```powershell
+.\build-all-installers.ps1 -SignCertThumbprint <40-hex-sha1-thumbprint> -Push
+.\build-installer.ps1 -Architecture x64 -SignCertThumbprint <40-hex-sha1-thumbprint>
+```
+
+The certificate must be in `Cert:\CurrentUser\My` or `Cert:\LocalMachine\My` (insert the hardware
+token first). `signtool.exe` is resolved from `PATH` or the newest Windows SDK; override either with
+`-SignToolPath` and `-SignTimestampUrl`.
+
+Signing is **all-or-nothing by design**. Each variant signs `Yagu.exe`, `yagu_core.dll`, and all
+three worker executables (`Yagu.OcrWorker.exe`, `Yagu.SemanticWorker.exe`, `Yagu.IndexWorker.exe`)
+before Inno compresses the staging tree, then signs the setup EXE itself — because at runtime:
+
+- `AuthenticodeVerifier.IsWorkerTrustedForHost` refuses to launch a worker whose publisher does not
+  match a signed `Yagu.exe`, so signing the app alone would break OCR and semantic search.
+- `AuthenticodeVerifier.IsInstallerTrustedForHostPublisher` refuses a downloaded update unless both
+  the running build and the installer are signed by the same publisher — this is why in-app updates
+  currently fail with "the running Yagu build is not Authenticode-signed".
+
+Signed builds also compile with `/DYaguSigned=1`, which removes the Smart App Control enforce gate
+in `yagu-installer.iss` that otherwise cancels setup on SAC-protected machines.
+
+Third-party payloads (Windows App Runtime, WebView2, Everything, PaddleOCR natives, `pdftotext`)
+keep their vendor signatures and are never re-signed.
 
 ## License information
 
