@@ -1,12 +1,14 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.System;
+using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
 using Yagu.Services.Logging;
@@ -475,6 +477,9 @@ public sealed partial class MainWindow
         {
             ApplyResultsCompactState(args.ItemContainer, _resultsCompactMode);
             SyncFileGroupCheckBoxState(args.ItemContainer, args.Item as FileGroup);
+
+            if (ResultRowAccessibleName.For(args.Item) is { } accessibleName)
+                AutomationProperties.SetName(args.ItemContainer, accessibleName);
 
             if (args.Item is FileGroup g && g.IsExpanded)
                 _ = EnsureVisibleResultsForExpandedGroupFromContainerAsync(g);

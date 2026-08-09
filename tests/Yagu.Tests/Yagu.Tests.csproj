@@ -62,6 +62,7 @@
     <Compile Include="..\..\src\Yagu\Models\ResultGroupHeaderRow.cs" Link="Source\Models\ResultGroupHeaderRow.cs" />
     <Compile Include="..\..\src\Yagu\Models\ResultRowProjection.cs" Link="Source\Models\ResultRowProjection.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\BinaryDetector.cs" Link="Source\Helpers\BinaryDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\ResultRowAccessibleName.cs" Link="Source\Helpers\ResultRowAccessibleName.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\AppUpdateModeChoices.cs" Link="Source\Helpers\AppUpdateModeChoices.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SearchActivityVisuals.cs" Link="Source\Helpers\SearchActivityVisuals.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SessionPickerList.cs" Link="Source\Helpers\SessionPickerList.cs" />

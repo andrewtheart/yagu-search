@@ -1,12 +1,14 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.System;
+using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
 using Yagu.ViewModels;
@@ -42,6 +44,8 @@ public sealed partial class MainWindow
                 g.IsExpanded = false;
                 return;
             }
+
+            UpdateFileGroupAccessibleName(g, isExpanded: true);
 
             try
             {
@@ -94,7 +98,24 @@ public sealed partial class MainWindow
     private void OnFileGroupCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
     {
         if (sender.DataContext is FileGroup g)
+        {
+            UpdateFileGroupAccessibleName(g, isExpanded: false);
             _ = ClearVisibleResultsAfterCollapseAsync(g);
+        }
+    }
+
+    private void UpdateFileGroupAccessibleName(FileGroup group, bool isExpanded)
+    {
+        if (ResultsList.ContainerFromItem(group) is DependencyObject container)
+        {
+            AutomationProperties.SetName(
+                container,
+                ResultRowAccessibleName.ForFileGroup(
+                    group.FileName,
+                    group.DirectoryName,
+                    group.MatchCount,
+                    isExpanded));
+        }
     }
 
     private async Task ClearVisibleResultsAfterCollapseAsync(FileGroup group)
