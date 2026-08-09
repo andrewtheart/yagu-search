@@ -9,6 +9,20 @@ public sealed class StartupDialogProgressTests
         "UI", "Windows", "MainWindow", "MainWindow.StartupDialogProgress.cs");
     private static readonly string YaguDialog = ReadAppFile(
         "UI", "Windows", "YaguDialog.cs");
+    private static readonly string TestSettingsIsolation = File.ReadAllText(
+        Path.Combine(RepoRoot, "tests", "Yagu.Tests", "TestSettingsIsolation.cs"));
+
+    [Fact]
+    public void TestHarness_SuppressesStartupDialogsForInheritedChildProcesses()
+    {
+        Assert.Contains(
+            "SuppressStartupDialogsEnvVar = \"YAGU_TEST_SUPPRESS_STARTUP_DIALOGS\"",
+            StartupProgress);
+        Assert.Contains("if (!SuppressStartupDialogsForTest)", StartupChecks);
+        Assert.Contains(
+            "Environment.SetEnvironmentVariable(SuppressStartupDialogsEnvVar, \"1\");",
+            TestSettingsIsolation);
+    }
 
     [Fact]
     public void StartupChain_PreparesOnePlanBeforeShowingSerializedSteps()

@@ -22,8 +22,13 @@ $Child = [System.Windows.Automation.TreeScope]::Children
 $Tog   = [System.Windows.Automation.TogglePattern]::Pattern
 $Inv   = [System.Windows.Automation.InvokePattern]::Pattern
 
-$settings = Join-Path $env:APPDATA 'Yagu\settings.json'
+$settings = if ([string]::IsNullOrWhiteSpace($env:YAGU_SETTINGS_FILE)) {
+    Join-Path $env:APPDATA 'Yagu\settings.json'
+} else {
+    $env:YAGU_SETTINGS_FILE
+}
 $backup   = $null
+$settingsExisted = Test-Path $settings
 $launched = $null
 $failures = @()
 
@@ -33,16 +38,26 @@ function Check($name, $cond, $detail) {
 }
 
 try {
-    # Snapshot settings and force MultilineSearchDefault=false so the "off by default" check is
-    # deterministic regardless of the machine's current saved default.
-    if (Test-Path $settings) {
+    # Snapshot the isolated child-process settings and force Traditional query mode. Inline search
+    # toggles are intentionally hidden in Semantic mode, which is the hardware default on GPU PCs.
+    if ($settingsExisted) {
         $backup = [IO.File]::ReadAllText($settings)
-        try {
-            $j = $backup | ConvertFrom-Json
-            $j.MultilineSearchDefault = $false
-            [IO.File]::WriteAllText($settings, ($j | ConvertTo-Json -Depth 30))
-        } catch { }
     }
+    $settingsDirectory = Split-Path -Parent $settings
+    if ($settingsDirectory) { [IO.Directory]::CreateDirectory($settingsDirectory) | Out-Null }
+    $j = if ($backup) { $backup | ConvertFrom-Json } else { [pscustomobject]@{} }
+    foreach ($entry in @(
+        @{ Name = 'HasChosenQueryMode'; Value = $true },
+        @{ Name = 'LastQueryModeIsSemantic'; Value = $false },
+        @{ Name = 'DefaultToTraditionalSearchMode'; Value = $true }
+    )) {
+        if ($j.PSObject.Properties.Name -contains $entry.Name) {
+            $j.($entry.Name) = $entry.Value
+        } else {
+            $j | Add-Member -NotePropertyName $entry.Name -NotePropertyValue $entry.Value
+        }
+    }
+    [IO.File]::WriteAllText($settings, ($j | ConvertTo-Json -Depth 30))
 
     # Ensure a clean single-instance environment: kill dev-build Yagu; bail if any other Yagu runs.
     Get-Process Yagu -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*\Yagu\bin\*' } | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -50,7 +65,7 @@ try {
     $other = Get-Process Yagu -ErrorAction SilentlyContinue
     if ($other) { Write-Host "SKIP: another Yagu instance is running ($($other[0].Path)); close it to run the GUI test."; exit 2 }
 
-    Start-Process -FilePath $Exe | Out-Null
+    Start-Process -FilePath $Exe -ArgumentList '--window-mode traditional' | Out-Null
     Start-Sleep -Seconds 6
     # The launcher relaunches detached; find the live dev-build GUI process.
     $proc = Get-Process Yagu -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*\Yagu\bin\*' -and -not $_.HasExited } | Select-Object -First 1
@@ -109,4 +124,5 @@ catch {
 finally {
     if ($launched) { try { Stop-Process -Id $launched.Id -Force -ErrorAction SilentlyContinue } catch { } }
     if ($null -ne $backup) { try { [IO.File]::WriteAllText($settings, $backup) } catch { } }
+    elseif (-not $settingsExisted) { try { Remove-Item -LiteralPath $settings -Force -ErrorAction SilentlyContinue } catch { } }
 }

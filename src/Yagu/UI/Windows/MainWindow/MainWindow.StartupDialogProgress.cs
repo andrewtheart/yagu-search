@@ -5,6 +5,13 @@ namespace Yagu;
 /// <summary>Predicts and tracks the guarded setup steps shown during the awaited startup-modal chain.</summary>
 public sealed partial class MainWindow
 {
+    private const string SuppressStartupDialogsEnvVar = "YAGU_TEST_SUPPRESS_STARTUP_DIALOGS";
+
+    private static bool SuppressStartupDialogsForTest => string.Equals(
+        Environment.GetEnvironmentVariable(SuppressStartupDialogsEnvVar),
+        "1",
+        StringComparison.Ordinal);
+
     private enum StartupDialogStep
     {
         TelemetryConsent,

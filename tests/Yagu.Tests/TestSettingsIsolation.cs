@@ -16,9 +16,15 @@ namespace Yagu.Tests;
 /// </summary>
 internal static class TestSettingsIsolation
 {
+    internal const string SuppressStartupDialogsEnvVar = "YAGU_TEST_SUPPRESS_STARTUP_DIALOGS";
+
     [ModuleInitializer]
     internal static void RedirectSettingsAwayFromRealUserSettings()
     {
+        // Child GUI processes inherit this flag and bypass only the first-run startup-modal chain.
+        // Headed and Slow tests drive the search UI itself and are not onboarding-dialog tests.
+        Environment.SetEnvironmentVariable(SuppressStartupDialogsEnvVar, "1");
+
         // Respect an explicit override (e.g. a test that points a child process at its own file).
         if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(SettingsService.SettingsFileOverrideEnvVar)))
             return;

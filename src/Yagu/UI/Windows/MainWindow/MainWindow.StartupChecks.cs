@@ -69,21 +69,24 @@ public sealed partial class MainWindow
         // checks off the UI thread after showing "Indexing: preparing..." and makes the load cancellable
         // so a user-started search can pause it instead of competing for memory and disk.
         ViewModel.StartContentIndexWarmup(ViewModel.Directory);
-        StartupDialogPlan startupDialogPlan = await PrepareStartupDialogPlanAsync();
-        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.TelemetryConsent, ShowTelemetryConsentIfNeededAsync);
-        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.WindowMode, CheckFirstRunWindowModeAsync);
-        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.ResultTempLocation, CheckFirstRunResultStoreTempLocationAsync);
-        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.Everything, CheckEverythingAsync);
-        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.ContextMenu, CheckFirstRunContextMenuAsync);
-        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.IndexOnboarding, CheckFirstRunIndexOnboardingAsync);
-        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.FontContrast, ShowFontContrastWarningIfNeededAsync);
-        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.CpuSemanticWarning, ShowCpuSemanticWarningIfNeededAsync);
-        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.SemanticQualification, OfferSemanticModelQualificationIfNeededAsync);
-        // Update checks: the one-time consent prompt (only on a fresh install / undecided user) stays in
-        // the awaited startup-modal chain so it never races or stacks with first-run, telemetry, indexing,
-        // or semantic dialogs. The Automatic-mode background check is fire-and-forget and only ever
-        // surfaces a non-modal banner (never a launch modal), so it can't delay startup.
-        await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.AppUpdateConsent, MaybeShowAppUpdateConsentPromptAsync);
+        if (!SuppressStartupDialogsForTest)
+        {
+            StartupDialogPlan startupDialogPlan = await PrepareStartupDialogPlanAsync();
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.TelemetryConsent, ShowTelemetryConsentIfNeededAsync);
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.WindowMode, CheckFirstRunWindowModeAsync);
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.ResultTempLocation, CheckFirstRunResultStoreTempLocationAsync);
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.Everything, CheckEverythingAsync);
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.ContextMenu, CheckFirstRunContextMenuAsync);
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.IndexOnboarding, CheckFirstRunIndexOnboardingAsync);
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.FontContrast, ShowFontContrastWarningIfNeededAsync);
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.CpuSemanticWarning, ShowCpuSemanticWarningIfNeededAsync);
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.SemanticQualification, OfferSemanticModelQualificationIfNeededAsync);
+            // Update checks: the one-time consent prompt (only on a fresh install / undecided user) stays in
+            // the awaited startup-modal chain so it never races or stacks with first-run, telemetry, indexing,
+            // or semantic dialogs. The Automatic-mode background check is fire-and-forget and only ever
+            // surfaces a non-modal banner (never a launch modal), so it can't delay startup.
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.AppUpdateConsent, MaybeShowAppUpdateConsentPromptAsync);
+        }
         _ = MaybeRunAutomaticAppUpdateCheckAsync();
 
         if (_autoSearchOnLoad)
