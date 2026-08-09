@@ -3049,7 +3049,22 @@ safeguard overrides it to one lane for rotational roots. The
 <strong>post-build catch-up threshold</strong> (default 30,000 journal
 changes; 0 = any non-empty interval) controls whether a full build
 immediately applies changes that arrived while its crawl was running.
-The remaining controls include <strong>use file-system watcher
+<strong>Recover from a lost change journal by rescanning instead of
+rebuilding</strong> (on by default) decides what happens when Windows’
+change journal can no longer prove what changed — its retention window
+is finite, so an index falls outside it if Yagu is closed for long
+enough, and a busy system drive can pass that point in only a few hours.
+Instead of rebuilding the whole folder, Yagu asks each file for its own
+last-change record and re-reads only the files that actually changed,
+which typically turns an hours-long rebuild into minutes. This is exact
+rather than a timestamp guess: the record is written by the file system
+on every change. A file whose record cannot be read is re-read or read
+live rather than trusted, and if any folder fails to enumerate the
+rescan is abandoned in favour of a full rebuild. An elevated session
+automatically uses a faster whole-volume sweep; Yagu never asks for
+elevation to do this. A rescan cannot help if the journal was reset or
+recreated, because that renumbers every record — only a rebuild is safe
+then. The remaining controls include <strong>use file-system watcher
 hints</strong> (off by default; a latency hint only — the change journal
 stays authoritative), the <strong>maximum delta segments</strong>
 (default 8), and the <strong>compaction size threshold</strong> (default
