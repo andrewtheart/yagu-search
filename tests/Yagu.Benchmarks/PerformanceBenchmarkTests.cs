@@ -534,14 +534,15 @@ public sealed class PerformanceBenchmarkTests : IDisposable
     [Fact]
     public async Task FileListerOnly_Throughput()
     {
-        // Filename-only search with a no-match query — measures pure discovery/listing
-        // throughput with zero content scanning and zero match production.
+        // Enumerate FileLister directly to measure pure discovery/listing throughput
+        // with zero content scanning and zero match production.
         var metrics = await RunTimedSearchAsync(
             scenarioName: "FileListerOnly",
-            query: "ZZZZZ_NO_MATCH_ZZZZZ",
+            query: string.Empty,
             useRegex: false,
             caseSensitive: false,
-            searchMode: SearchMode.FileNames);
+            searchMode: SearchMode.FileNames,
+            listFilesOnly: true);
 
         AssertMinimumThroughput(metrics, "FileListerOnly");
         Assert.Equal(0, metrics.TotalMatches);
@@ -587,7 +588,8 @@ public sealed class PerformanceBenchmarkTests : IDisposable
         bool skipBinary = true,
         bool multiline = false,
         MultilineEngineKind multilineEngine = MultilineEngineKind.Regex,
-        string? overrideDirectory = null)
+        string? overrideDirectory = null,
+        bool listFilesOnly = false)
     {
         // Force managed backend so the test works without Everything installed.
         var previousBackend = FileLister.Backend;
@@ -659,7 +661,6 @@ public sealed class PerformanceBenchmarkTests : IDisposable
                 MaxMultilineBytes = SearchOptions.DefaultMaxMultilineBytes,
             };
 
-            var svc = new SearchService();
             int totalMatches = 0;
             int totalFilesScanned = 0;
             long totalBytesScanned = 0;
@@ -670,42 +671,54 @@ public sealed class PerformanceBenchmarkTests : IDisposable
 
             try
             {
-                await foreach (var evt in svc.SearchAsync(options, cts.Token))
+                if (listFilesOnly)
                 {
-                    switch (evt)
+                    var lister = new FileLister();
+                    await foreach (var _ in lister.ListFilesAsync(effectiveDir, [], maxFiles: 0, cts.Token))
+                        totalFilesScanned++;
+                    fallbackReason = lister.FallbackReason;
+                    completed = true;
+                }
+                else
+                {
+                    var svc = new SearchService();
+                    await foreach (var evt in svc.SearchAsync(options, cts.Token))
                     {
-                        case SearchEvent.Match:
-                            totalMatches++;
-                            if (firstMatchMs is null)
-                            {
-                                firstMatchMs = firstMatchSw!.Elapsed.TotalMilliseconds;
-                                firstMatchSw = null;
-                            }
-                            break;
-                        case SearchEvent.MatchBatch mb:
-                            totalMatches += mb.Results.Count;
-                            if (firstMatchMs is null && mb.Results.Count > 0)
-                            {
-                                firstMatchMs = firstMatchSw!.Elapsed.TotalMilliseconds;
-                                firstMatchSw = null;
-                            }
-                            break;
-                        case SearchEvent.Fallback fb:
-                            fallbackReason = fb.Reason;
-                            break;
-                        case SearchEvent.Progress p:
-                            totalFilesScanned = p.Snapshot.FilesScanned;
-                            totalBytesScanned = p.Snapshot.BytesScanned;
-                            filesWithMatches = p.Snapshot.FilesWithMatches;
-                            break;
-                        case SearchEvent.Completed summary:
-                            completed = true;
-                            totalFilesScanned = summary.Summary.FilesScanned;
-                            totalBytesScanned = summary.Summary.BytesScanned;
-                            filesWithMatches = summary.Summary.FilesWithMatches;
-                            totalMatches = summary.Summary.TotalMatches;
-                            cancelled = summary.Summary.Cancelled;
-                            break;
+                        switch (evt)
+                        {
+                            case SearchEvent.Match:
+                                totalMatches++;
+                                if (firstMatchMs is null)
+                                {
+                                    firstMatchMs = firstMatchSw!.Elapsed.TotalMilliseconds;
+                                    firstMatchSw = null;
+                                }
+                                break;
+                            case SearchEvent.MatchBatch mb:
+                                totalMatches += mb.Results.Count;
+                                if (firstMatchMs is null && mb.Results.Count > 0)
+                                {
+                                    firstMatchMs = firstMatchSw!.Elapsed.TotalMilliseconds;
+                                    firstMatchSw = null;
+                                }
+                                break;
+                            case SearchEvent.Fallback fb:
+                                fallbackReason = fb.Reason;
+                                break;
+                            case SearchEvent.Progress p:
+                                totalFilesScanned = p.Snapshot.FilesScanned;
+                                totalBytesScanned = p.Snapshot.BytesScanned;
+                                filesWithMatches = p.Snapshot.FilesWithMatches;
+                                break;
+                            case SearchEvent.Completed summary:
+                                completed = true;
+                                totalFilesScanned = summary.Summary.FilesScanned;
+                                totalBytesScanned = summary.Summary.BytesScanned;
+                                filesWithMatches = summary.Summary.FilesWithMatches;
+                                totalMatches = summary.Summary.TotalMatches;
+                                cancelled = summary.Summary.Cancelled;
+                                break;
+                        }
                     }
                 }
             }
@@ -827,6 +840,12 @@ public sealed class PerformanceBenchmarkTests : IDisposable
         // Sanity: we must have scanned something.
         Assert.True(metrics.FilesScanned > 0,
             $"[{scenario}] No files were scanned — check search directory '{metrics.Directory}'.");
+
+        if (GetEnvBool("YAGU_BENCHMARK_COVERAGE_MODE"))
+        {
+            _output.WriteLine($"[{scenario}] Throughput assertions skipped for instrumented coverage collection.");
+            return;
+        }
 
         double averageBytesPerFile = metrics.BytesScanned / (double)Math.Max(metrics.FilesScanned, 1);
 
@@ -1210,6 +1229,13 @@ public sealed class PerformanceBenchmarkTests : IDisposable
     {
         var raw = Environment.GetEnvironmentVariable(name);
         return int.TryParse(raw, out int v) && v > 0 ? v : defaultValue;
+    }
+
+    private static bool GetEnvBool(string name)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        return string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     // ───────────────────────── Metrics Model ─────────────────────────

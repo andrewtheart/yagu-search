@@ -87,7 +87,7 @@ public sealed class ContentIndexBenchmarkTests
             ["thresholdMs"] = thresholdMs,
         });
 
-        Assert.True(p95 <= thresholdMs,
+        AssertPerformanceBudget(p95 <= thresholdMs,
             $"[WarmPostingEvaluation] p95 {p95:F3} ms exceeds warm posting-evaluation budget {thresholdMs} ms " +
             $"(docCount={_docCount}). Set YAGU_INDEX_WARM_P95_MS to override on slow hardware.");
     }
@@ -201,7 +201,7 @@ public sealed class ContentIndexBenchmarkTests
             ["firstResultThresholdMs"] = firstResultThresholdMs,
         });
 
-        Assert.True(firstP95 <= firstResultThresholdMs,
+        AssertPerformanceBudget(firstP95 <= firstResultThresholdMs,
             $"[SafeLaneQuery] first-result p95 {firstP95:F3} ms exceeds {firstResultThresholdMs} ms " +
             $"(docCount={_docCount}). Set YAGU_INDEX_FIRSTRESULT_P95_MS to override.");
     }
@@ -251,7 +251,7 @@ public sealed class ContentIndexBenchmarkTests
         });
 
         Assert.True(prunedSample > 0, "[AfterScanDrainB1] expected a non-empty pruned set (captured identities).");
-        Assert.True(p95 <= thresholdMs,
+        AssertPerformanceBudget(p95 <= thresholdMs,
             $"[AfterScanDrainB1] quiescent B1 reconciliation p95 {p95:F3} ms over {prunedSample:N0} pruned aliases " +
             $"exceeds {thresholdMs} ms (docCount={_docCount}). Set YAGU_INDEX_B1_P95_MS to override.");
     }
@@ -307,7 +307,7 @@ public sealed class ContentIndexBenchmarkTests
             });
 
             Assert.True(okCount > 0, "[ColdWorkerQuery] no cold worker query succeeded — worker/engine mismatch?");
-            Assert.True(p95 <= thresholdMs,
+            AssertPerformanceBudget(p95 <= thresholdMs,
                 $"[ColdWorkerQuery] cold p95 {p95:F1} ms exceeds {thresholdMs} ms " +
                 $"(docCount={_docCount}). Set YAGU_INDEX_COLD_P95_MS to override on slow hardware.");
         }
@@ -394,7 +394,7 @@ public sealed class ContentIndexBenchmarkTests
             // absolute bound (mapped-page working set + a fresh-.NET baseline), not proportional to an 8x
             // managed-object expansion of the index size.
             double wsBudgetMb = GetEnvInt("YAGU_INDEX_WORKER_WS_MB", 512);
-            Assert.True(workerWsBytes == 0 || workerWsMb <= wsBudgetMb,
+            AssertPerformanceBudget(workerWsBytes == 0 || workerWsMb <= wsBudgetMb,
                 $"[WorkerQueryScope] worker peak WS {workerWsMb:F0} MB exceeds {wsBudgetMb} MB " +
                 $"(docCount={_docCount}, v3={v3Bytes / Megabyte} MB). Set YAGU_INDEX_WORKER_WS_MB to override.");
 
@@ -406,7 +406,7 @@ public sealed class ContentIndexBenchmarkTests
             // v3 here; a generous, env-overridable bound guards against a regression that would make the mapped
             // open expensive (which would make the warm-skip hurt first-search latency).
             double openBudgetMs = GetEnvInt("YAGU_INDEX_MAPPED_OPEN_MS", 400);
-            Assert.True(metrics.OpenMs <= openBudgetMs,
+            AssertPerformanceBudget(metrics.OpenMs <= openBudgetMs,
                 $"[WorkerQueryScope] cold mapped-open {metrics.OpenMs} ms exceeds {openBudgetMs} ms " +
                 $"(docCount={_docCount}, v3={v3Bytes / Megabyte} MB). Set YAGU_INDEX_MAPPED_OPEN_MS to override on slow hardware.");
         }
@@ -560,6 +560,17 @@ public sealed class ContentIndexBenchmarkTests
     {
         var raw = Environment.GetEnvironmentVariable(name);
         return int.TryParse(raw, out int value) && value > 0 ? value : fallback;
+    }
+
+    private void AssertPerformanceBudget(bool condition, string message)
+    {
+        if (string.Equals(Environment.GetEnvironmentVariable("YAGU_BENCHMARK_COVERAGE_MODE"), "1", StringComparison.OrdinalIgnoreCase))
+        {
+            _output.WriteLine("Performance budget assertion skipped for instrumented coverage collection.");
+            return;
+        }
+
+        Assert.True(condition, message);
     }
 
     // ───────────────────────── Worker discovery (mirrors IndexWorkerQuerySourceTests) ─────────────────────────

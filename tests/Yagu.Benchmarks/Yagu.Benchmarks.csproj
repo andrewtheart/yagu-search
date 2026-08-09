@@ -28,6 +28,10 @@
 
   <!-- xUnit test support for the throughput benchmarks (PerformanceBenchmarkTests). -->
   <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="10.0.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
     <PackageReference Include="xunit" Version="2.*" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.*">
@@ -78,6 +82,7 @@
     <Compile Include="..\..\src\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />
     <Compile Include="..\..\src\Yagu\Services\Logging\*.cs" Link="Source\Services\Logging\%(Filename)%(Extension)" />
     <Compile Include="..\..\src\Yagu\Services\DirectOutputSink.cs" Link="Source\Services\DirectOutputSink.cs" />
+    <Compile Include="..\..\src\Yagu\Services\ResultStoreDriveProfileDetector.cs" Link="Source\Services\ResultStoreDriveProfileDetector.cs" />
     <Compile Include="..\..\src\Yagu\Services\ResultStoreTempLocationService.cs" Link="Source\Services\ResultStoreTempLocationService.cs" />
     <Compile Include="..\..\src\Yagu\Native\NativeSearcher.cs" Link="Source\Native\NativeSearcher.cs" />
     <Compile Include="..\..\src\Yagu\Native\EverythingSdk.cs" Link="Source\Native\EverythingSdk.cs" />
