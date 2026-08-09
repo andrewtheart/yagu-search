@@ -28,6 +28,7 @@ public class YaguInput {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr dwExtraInfo);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
@@ -45,9 +46,16 @@ public class YaguInput {
     public const byte VK_CONTROL = 0x11;
     public const byte VK_A = 0x41;
     public const byte VK_SHIFT = 0x10;
+    public const byte VK_APPS = 0x5D;
     public const uint KEYEVENTF_KEYUP = 0x0002;
+    public const uint WM_KEYDOWN = 0x0100;
+    public const uint WM_KEYUP = 0x0101;
     public static void LeftClick() { mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, IntPtr.Zero); mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, IntPtr.Zero); }
     public static void RightClick() { mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, IntPtr.Zero); mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, IntPtr.Zero); }
+    public static bool OpenContextMenu(IntPtr hWnd) {
+        PostMessage(hWnd, WM_KEYDOWN, (IntPtr)VK_APPS, IntPtr.Zero);
+        return PostMessage(hWnd, WM_KEYUP, (IntPtr)VK_APPS, IntPtr.Zero);
+    }
     public static void ShiftLeftClick() {
         keybd_event(VK_SHIFT, 0, 0, IntPtr.Zero);
         System.Threading.Thread.Sleep(50);
@@ -103,7 +111,7 @@ public class YaguInput {
         t.Start();
     }
 }
-"@ -ErrorAction SilentlyContinue
+"@ -ErrorAction Stop
 
 $ErrorActionPreference = 'Stop'
 
@@ -373,13 +381,6 @@ function Click-Element([System.Windows.Automation.AutomationElement]$Element) {
     [System.Windows.Forms.Cursor]::Position = [System.Drawing.Point]::new($x, $y)
     Start-Sleep -Milliseconds 100
     [YaguInput]::LeftClick()
-}
-
-function RightClick-At([int]$X, [int]$Y) {
-    Activate-YaguWindow
-    [System.Windows.Forms.Cursor]::Position = [System.Drawing.Point]::new($X, $Y)
-    Start-Sleep -Milliseconds 200
-    [YaguInput]::RightClick()
 }
 
 function LeftClick-At([int]$X, [int]$Y) {
@@ -974,7 +975,20 @@ if ($clickTarget) {
     $rcStats = Count-CheckedFileCheckboxes -listElement $resultsList
     Write-Host ("  About to right-click at ({0},{1}). Checkbox state: total={2}, checked={3}, onscreen={4}, checkedOnscreen={5}" -f `
         $cx, $cy, $rcStats.Total, $rcStats.Checked, $rcStats.Onscreen, $rcStats.CheckedOnscreen)
-    RightClick-At $cx $cy
+    $focusCondition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::AutomationIdProperty, "FileGroupCheckBox")
+    $focusTarget = $resultsList.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants, $focusCondition)
+    if (-not $focusTarget) {
+        throw "Could not find a focusable file-group checkbox before opening the results context menu."
+    }
+    try { $focusTarget.SetFocus() } catch {
+        throw "Could not focus a file-group checkbox before opening the results context menu: $($_.Exception.Message)"
+    }
+    $h = Get-YaguWindowHandle
+    if ($h -eq [IntPtr]::Zero -or -not [YaguInput]::OpenContextMenu($h)) {
+        throw "Could not send the context-menu key to the Yagu window."
+    }
     Start-Sleep -Seconds 1
     $postRcStats = Count-CheckedFileCheckboxes -listElement $resultsList
     Write-Host ("  After right-click (menu open): total={0}, checked={1}, onscreen={2}, checkedOnscreen={3}" -f `
@@ -1010,7 +1024,9 @@ if ($clickTarget) {
     } else {
         Write-Host "  WARNING: Could not find 'Preview selected' menu item. Trying AutomationId..."
         # Dismiss any wrong menu first
-        [System.Windows.Forms.SendKeys]::SendWait("{ESC}")
+        try { [System.Windows.Forms.SendKeys]::SendWait("{ESC}") } catch {
+            Write-Host "  Warning: could not dismiss the context menu through SendKeys: $($_.Exception.Message)"
+        }
         Start-Sleep -Milliseconds 300
         # Fallback: use the AutomationId "CtxPreviewSelected" if the app exposes it
         $ctxBtn = Find-Element -Parent $yaguWindow -AutomationId "CtxPreviewSelected" -TimeoutSeconds 3

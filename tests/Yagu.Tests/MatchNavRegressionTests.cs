@@ -297,6 +297,9 @@ public sealed class MatchNavRegressionTests
                 ["PreviewMatchLineColor"] = "#FFFFFFFF",
                 ["PreviewTextFontFamily"] = "Consolas",
                 ["PreviewTextFontSize"] = 14,
+                ["HasChosenQueryMode"] = true,
+                ["LastQueryModeIsSemantic"] = false,
+                ["DefaultToTraditionalSearchMode"] = true,
                 // The corpus is created moments before the run, so Everything has not indexed it yet.
                 ["FileListerBackendIndex"] = 3,
                 ["EnableContentIndex"] = false,
