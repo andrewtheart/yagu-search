@@ -274,6 +274,45 @@ public sealed class EverythingSearchDialogRegressionTests
     }
 
     [Fact]
+    public void EverythingInstall_ShowsBusyIndicatorWhileVerifyingAndElevating()
+    {
+        string root = FindRepoRoot();
+        string startup = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string cli = File.ReadAllText(Path.Combine(root, "src", "Yagu", "CliRunner.cs"));
+
+        // The offline path has no download modal, so between consent and the Windows permission prompt
+        // the app used to sit silent while the certificate chain was built.
+        int launchStart = startup.IndexOf(
+            "private async Task<(Process? Process, string? SignatureFailure)> VerifyAndLaunchEverythingInstallerAsync",
+            StringComparison.Ordinal);
+        Assert.True(launchStart >= 0, "VerifyAndLaunchEverythingInstallerAsync not found.");
+        int launchEnd = startup.IndexOf("private async Task<bool> DownloadEverythingInstallerAsync", launchStart, StringComparison.Ordinal);
+        Assert.True(launchEnd > launchStart, "Could not bound the launch helper.");
+        string launch = startup[launchStart..launchEnd];
+
+        Assert.Contains("new ProgressBar { IsIndeterminate = true }", launch);
+        Assert.Contains("Title = \"Starting Everything Search setup\"", launch);
+        Assert.Contains("CloseButtonText = null,", launch);
+
+        // Both the chain build and the elevation prompt must run off the UI thread, otherwise the
+        // indicator freezes on its first frame — the exact symptom this replaced.
+        Assert.Contains("await Task.Run<(Process?, string?)>(() =>", launch);
+        int taskRun = launch.IndexOf("Task.Run<(Process?, string?)>", StringComparison.Ordinal);
+        int verify = launch.IndexOf("AuthenticodeVerifier.IsTrustedPublisher", StringComparison.Ordinal);
+        int runAs = launch.IndexOf("Verb = \"runas\"", StringComparison.Ordinal);
+        Assert.True(taskRun >= 0 && verify > taskRun && runAs > verify,
+            "Signature verification and elevation must both run inside the background launch.");
+
+        // The modal is always torn down before the caller shows anything else.
+        Assert.Contains("finally", launch);
+        Assert.Contains("dialog?.AcceptClose();", launch);
+
+        // The CLI cannot show a spinner, so it announces the same two slow steps instead.
+        Assert.Contains("Checking the installer signature", cli);
+        Assert.Contains("approve the Windows permission prompt", cli);
+    }
+
+    [Fact]
     public void YaguDialog_AutoSizesHeightToContent_SoTextIsNotClipped()
     {
         string dialog = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "YaguDialog.cs"));

@@ -1067,6 +1067,8 @@ internal static partial class CliRunner
                 // Refuse to run the installer elevated unless it carries a valid Authenticode
                 // signature from voidtools. HTTPS alone does not guarantee the payload is untampered
                 // (compromised mirror / MITM with a trusted cert) — OWASP A08 software integrity.
+                // Chain building can block on revocation lookups, so say what is happening first.
+                Console.Error.WriteLine("Checking the installer signature\u2026");
                 if (!AuthenticodeVerifier.IsTrustedPublisher(installerPath, EverythingAssetPaths.TrustedPublisher, out string signatureFailure))
                 {
                     if (!installerFromBundle) { try { File.Delete(installerPath); } catch { /* best effort */ } }
@@ -1074,7 +1076,7 @@ internal static partial class CliRunner
                     return;
                 }
 
-                Console.Error.WriteLine("Running installer \u2014 please complete the setup wizard...");
+                Console.Error.WriteLine("Running installer \u2014 approve the Windows permission prompt, then complete the setup wizard...");
 
                 var proc = Process.Start(new ProcessStartInfo
                 {
@@ -2181,9 +2183,19 @@ internal static partial class CliRunner
 
         if (args.IndexRemoveRootPath is not null)
         {
-            settings.IndexedRoots = IndexedRootsPolicy.Remove(settings.IndexedRoots, args.IndexRemoveRootPath);
+            string key = IndexScopeIdentity.NormalizePath(args.IndexRemoveRootPath);
+            settings.IndexedRoots = IndexedRootsPolicy.Remove(settings.IndexedRoots, key);
+            settings.IndexedRootFilters = settings.IndexedRootFilters
+                .Where(filter => !string.Equals(
+                    IndexScopeIdentity.NormalizePath(filter.Path ?? string.Empty),
+                    key,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            settings.IndexedRootSizePolicies = IndexSizeManagementPolicy.Remove(
+                settings.IndexedRootSizePolicies,
+                key);
             service.Save(settings);
-            Console.Out.WriteLine($"Removed indexed folder: {IndexScopeIdentity.NormalizePath(args.IndexRemoveRootPath)}");
+            Console.Out.WriteLine($"Removed indexed folder: {key}");
             return (int)ContentIndexExitCode.Success;
         }
 
@@ -2223,8 +2235,20 @@ internal static partial class CliRunner
         if (args.IndexSetRootSizePath is not null)
         {
             string key = IndexScopeIdentity.NormalizePath(args.IndexSetRootSizePath);
-            string mode = string.IsNullOrWhiteSpace(args.RootSizeMode)
-                ? string.Empty
+            // Without this the override is written for a folder that is never indexed, and because
+            // --index-list-roots only lists registered roots the user can never see or clear it again.
+            if (!IndexedRootsPolicy.Contains(settings.IndexedRoots, key))
+            {
+                Console.Error.WriteLine(
+                    $"error: {key} is not a registered indexed folder, so it has no size settings to override. " +
+                    "Add it with --index-add-root, or run --index-list-roots to see the registered folders.");
+                return (int)ContentIndexExitCode.InvalidArguments;
+            }
+            IndexedRootSizePolicy? existing = IndexSizeManagementPolicy.Find(
+                settings.IndexedRootSizePolicies,
+                key);
+            string mode = args.RootSizeMode is null
+                ? existing?.Mode ?? string.Empty
                 : IndexSizeManagementModes.Normalize(args.RootSizeMode);
             settings.IndexedRootSizePolicies = IndexSizeManagementPolicy.Set(
                 settings.IndexedRootSizePolicies,
@@ -2232,8 +2256,10 @@ internal static partial class CliRunner
                 {
                     Path = key,
                     Mode = mode,
-                    SizeBudgetMB = args.RootSizeBudgetMB ?? -1,
-                    MaxAutoCompactionSizeMB = args.RootMaxAutoCompactionSizeMB ?? -1,
+                    SizeBudgetMB = args.RootSizeBudgetMB ?? existing?.SizeBudgetMB ?? -1,
+                    MaxAutoCompactionSizeMB = args.RootMaxAutoCompactionSizeMB
+                        ?? existing?.MaxAutoCompactionSizeMB
+                        ?? -1,
                 });
             service.Save(settings);
             EffectiveIndexSizePolicy effective = IndexSizeManagementPolicy.Resolve(settings, key);
@@ -2245,9 +2271,13 @@ internal static partial class CliRunner
         if (args.IndexClearRootSizePath is not null)
         {
             string key = IndexScopeIdentity.NormalizePath(args.IndexClearRootSizePath);
+            bool hadOverride = settings.IndexedRootSizePolicies.Any(p =>
+                string.Equals(IndexScopeIdentity.NormalizePath(p.Path ?? string.Empty), key, StringComparison.OrdinalIgnoreCase));
             settings.IndexedRootSizePolicies = IndexSizeManagementPolicy.Remove(settings.IndexedRootSizePolicies, key);
             service.Save(settings);
-            Console.Out.WriteLine($"Cleared the size override for {key}; it now follows the global settings.");
+            Console.Out.WriteLine(hadOverride
+                ? $"Cleared the size override for {key}; it now follows the global settings."
+                : $"No size override was set for {key}; it already follows the global settings.");
             return (int)ContentIndexExitCode.Success;
         }
 
@@ -4352,13 +4382,43 @@ internal sealed class CliArgs
                 continue;
             }
             if (TryGetVal(raw, ref i, out string rsm, "--root-size-mode"))
-            { a.RootSizeMode = rsm.Trim('"'); continue; }
-            if (TryGetVal(raw, ref i, out string rsb, "--root-size-budget-mb")
-                && int.TryParse(rsb.Trim('"'), out int rsbValue))
-            { a.RootSizeBudgetMB = rsbValue; continue; }
-            if (TryGetVal(raw, ref i, out string rac, "--root-auto-compaction-cap-mb")
-                && int.TryParse(rac.Trim('"'), out int racValue))
-            { a.RootMaxAutoCompactionSizeMB = racValue; continue; }
+            {
+                string mode = rsm.Trim('"');
+                if (IndexSizeManagementModes.All.Any(m => string.Equals(m, mode, StringComparison.OrdinalIgnoreCase)))
+                {
+                    a.RootSizeMode = mode;
+                }
+                else
+                {
+                    Console.Error.WriteLine(
+                        $"warning: unknown size mode '{mode}' - ignored. " +
+                        $"Valid modes: {string.Join(", ", IndexSizeManagementModes.All)}.");
+                }
+                continue;
+            }
+            // The value must be consumed inside the body: reading it in the `if` condition and then
+            // short-circuiting on a failed parse skips the `continue` while `i` has already advanced,
+            // which walks the parser off the end of the argument array.
+            if (TryGetVal(raw, ref i, out string rsb, "--root-size-budget-mb"))
+            {
+                if (int.TryParse(rsb.Trim('"'), out int rsbValue) && rsbValue >= -1)
+                    a.RootSizeBudgetMB = rsbValue;
+                else
+                    Console.Error.WriteLine(
+                        $"warning: --root-size-budget-mb '{rsb}' must be -1 or a non-negative whole number of MB - ignored. " +
+                        "Use -1 to inherit the global setting or 0 for no limit.");
+                continue;
+            }
+            if (TryGetVal(raw, ref i, out string rac, "--root-auto-compaction-cap-mb"))
+            {
+                if (int.TryParse(rac.Trim('"'), out int racValue) && racValue >= -1)
+                    a.RootMaxAutoCompactionSizeMB = racValue;
+                else
+                    Console.Error.WriteLine(
+                        $"warning: --root-auto-compaction-cap-mb '{rac}' must be -1 or a non-negative whole number of MB - ignored. " +
+                        "Use -1 to inherit the global setting or 0 for no cap.");
+                continue;
+            }
             if (Eq(tok, "--index-set-root-filter"))
             {
                 i++;

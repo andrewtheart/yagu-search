@@ -4009,8 +4009,8 @@ live tail of the active <code>yagu.log</code>, with filters for every
 available log dimension: timestamp window, severity, category, and
 message/exception text. The reader uses shared access and never blocks
 Yagu’s writer. The panel also changes file and console log levels
-independently at runtime and saves both choices immediately. Hidden by
-default.</td>
+independently at runtime and saves both choices immediately. Close the
+panel with the <strong>×</strong> at its top right. On by default.</td>
 </tr>
 <tr>
 <td>Show build number in title bar</td>
@@ -5839,18 +5839,22 @@ semantic change prints the affected root’s rebuild command.</td>
 <tr>
 <td><code>--index-set-root-size &lt;path&gt; [--root-size-mode &lt;mode&gt;] [--root-size-budget-mb &lt;n&gt;] [--root-auto-compaction-cap-mb &lt;n&gt;]</code></td>
 <td>Set <strong>per-folder</strong> size management for one index.
-<code>&lt;mode&gt;</code> is <code>Off</code>, <code>Coalesce</code>,
-<code>Compact</code>, or <code>CoalesceThenCompact</code>. Use
-<code>-1</code> for either numeric value to inherit the global setting,
-<code>0</code> for “no limit”/“no cap”. At its size budget Yagu reclaims
-what it safely can and then pauses that index’s updates instead of
-letting it grow; searches still return every match, because files the
-index no longer covers are read live.</td>
+<code>&lt;path&gt;</code> must already be a registered indexed folder
+(see <code>--index-list-roots</code>); anything else is rejected rather
+than saved where you could never see it again. <code>&lt;mode&gt;</code>
+is <code>Off</code>, <code>Coalesce</code>, <code>Compact</code>, or
+<code>CoalesceThenCompact</code> — an unrecognized mode or a non-numeric
+size is reported and ignored instead of quietly applying a different
+value. Use <code>-1</code> for either numeric value to inherit the
+global setting, <code>0</code> for “no limit”/“no cap”. At its size
+budget Yagu reclaims what it safely can and then pauses that index’s
+updates instead of letting it grow; searches still return every match,
+because files the index no longer covers are read live.</td>
 </tr>
 <tr>
 <td><code>--index-clear-root-size &lt;path&gt;</code></td>
 <td>Remove one index’s size override so it follows the global settings
-again.</td>
+again. Says so plainly when there was no override to remove.</td>
 </tr>
 <tr>
 <td><code>--index-clear-root-filter &lt;path&gt;</code></td>

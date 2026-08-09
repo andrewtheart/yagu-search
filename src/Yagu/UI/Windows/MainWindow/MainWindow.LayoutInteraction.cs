@@ -32,6 +32,7 @@ public sealed partial class MainWindow
     // 250px option columns. Keeping this fixed prevents a wide search card from making every row
     // needlessly long while still leaving a small right inset after the longest control.
     private const double AdvancedOptionsDrawerWidth = 740;
+    private const double AdvancedOptionsFlyoutChromeWidth = 24;
 
     private void InitializeAdvancedOptionsDrawerStateTracking()
     {
@@ -45,9 +46,56 @@ public sealed partial class MainWindow
     /// <summary>True while the Advanced Options flyout drawer is open.</summary>
     private bool IsAdvancedOptionsDrawerOpen => AdvancedOptionsFlyout?.IsOpen == true;
 
+    private void OnAdvancedOptionsFlyoutOpening(object? sender, object e)
+        => UpdateAdvancedOptionsFlyoutPlacement();
+
+    private void UpdateAdvancedOptionsFlyoutPlacement()
+    {
+        AdvancedOptionsFlyout.Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedLeft;
+        try
+        {
+            double scale = Content?.XamlRoot?.RasterizationScale ?? 1.0;
+            if (scale <= 0)
+                scale = 1.0;
+
+            var displayArea = AppWindow is null
+                ? null
+                : Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                    AppWindow.Id,
+                    Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            if (displayArea is null || AppWindow is null)
+                return;
+
+            Windows.Foundation.Point togglePosition = AdvancedOptionsToggle
+                .TransformToVisual(null)
+                .TransformPoint(new Windows.Foundation.Point());
+            double anchorLeft = AppWindow.Position.X + (togglePosition.X * scale);
+            double anchorRight = anchorLeft + (AdvancedOptionsToggle.ActualWidth * scale);
+            double flyoutWidth = (AdvancedOptionsDrawerWidth + AdvancedOptionsFlyoutChromeWidth) * scale;
+            double workLeft = displayArea.WorkArea.X;
+            double workRight = displayArea.WorkArea.X + displayArea.WorkArea.Width;
+            double leftAlignedOverflow = Math.Max(0, workLeft - anchorLeft)
+                + Math.Max(0, (anchorLeft + flyoutWidth) - workRight);
+            double rightAlignedLeft = anchorRight - flyoutWidth;
+            double rightAlignedOverflow = Math.Max(0, workLeft - rightAlignedLeft)
+                + Math.Max(0, anchorRight - workRight);
+
+            if (rightAlignedOverflow < leftAlignedOverflow)
+            {
+                AdvancedOptionsFlyout.Placement =
+                    Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight;
+            }
+        }
+        catch
+        {
+            AdvancedOptionsFlyout.Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedLeft;
+        }
+    }
+
     private void OnAdvancedOptionsFlyoutOpened(object? sender, object e)
     {
         AdvancedOptionsExpandGlyph.Glyph = "\uE70E"; // chevron up
+        EnsureAdvancedOptionPlacementInitialized();
         SyncAdvancedOptionsDrawerWidth();
         UpdateAdvancedOptionsDrawerMaxHeight();
 

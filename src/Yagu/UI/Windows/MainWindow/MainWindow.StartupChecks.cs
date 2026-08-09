@@ -1025,30 +1025,24 @@ public sealed partial class MainWindow
             installerPath = tempPath;
         }
 
-        // Never run the installer elevated without confirming it is a genuine, untampered voidtools
-        // binary. HTTPS protects the transport, but a compromised mirror or MITM able to present a
-        // trusted certificate could still deliver a malicious payload (OWASP A08); the bundled copy
-        // is verified the same way in case it was swapped on disk.
-        if (!AuthenticodeVerifier.IsTrustedPublisher(installerPath, EverythingAssetPaths.TrustedPublisher, out string signatureFailure))
-        {
-            if (!installerFromBundle) TryDeleteFile(installerPath);
-            YaguLog.For("MainWindow").LogWarning("Refusing to run Everything installer: {SignatureFailure}", signatureFailure);
-            ViewModel.StatusText = "Everything Search installer failed signature verification and was not run. Using built-in file enumeration.";
-            return;
-        }
-
-        ViewModel.StatusText = "Running Everything Search installer \u2014 please complete the setup wizard\u2026";
-
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = installerPath,
-                Verb = "runas",
-                UseShellExecute = true,
-            };
+            (Process? proc, string? signatureFailure) = await VerifyAndLaunchEverythingInstallerAsync(installerPath);
 
-            var proc = Process.Start(psi);
+            // Never run the installer elevated without confirming it is a genuine, untampered voidtools
+            // binary. HTTPS protects the transport, but a compromised mirror or MITM able to present a
+            // trusted certificate could still deliver a malicious payload (OWASP A08); the bundled copy
+            // is verified the same way in case it was swapped on disk.
+            if (signatureFailure is not null)
+            {
+                if (!installerFromBundle) TryDeleteFile(installerPath);
+                YaguLog.For("MainWindow").LogWarning("Refusing to run Everything installer: {SignatureFailure}", signatureFailure);
+                ViewModel.StatusText = "Everything Search installer failed signature verification and was not run. Using built-in file enumeration.";
+                return;
+            }
+
+            ViewModel.StatusText = "Running Everything Search installer \u2014 please complete the setup wizard\u2026";
+
             if (proc != null)
             {
                 await proc.WaitForExitAsync();
@@ -1092,6 +1086,75 @@ public sealed partial class MainWindow
         {
             ViewModel.StatusText = $"Failed to install Everything: {ex.Message}. Using built-in file enumeration.";
             YaguLog.For("MainWindow").LogWarning(ex, "Everything install failed");
+        }
+    }
+
+    /// <summary>
+    /// Verifies the installer's publisher and launches it elevated, behind a modal busy indicator.
+    /// Both steps take long enough to look like a hang once the consent dialog has closed: building the
+    /// certificate chain can block on revocation lookups, and <c>runas</c> does not return until the
+    /// user answers the Windows permission prompt. Returns the started process (null when the shell
+    /// reported no process) and the signature failure, if any — a non-null failure means nothing ran.
+    /// </summary>
+    private async Task<(Process? Process, string? SignatureFailure)> VerifyAndLaunchEverythingInstallerAsync(string installerPath)
+    {
+        var body = new StackPanel { Spacing = 14 };
+        body.Children.Add(new TextBlock
+        {
+            Text = "Checking the installer's signature and asking Windows for permission to run it\u2026",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        body.Children.Add(new ProgressBar { IsIndeterminate = true });
+        body.Children.Add(new TextBlock
+        {
+            Text = "Approve the Windows permission prompt when it appears.",
+            FontSize = 12,
+            Opacity = 0.75,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        YaguDialog? dialog = null;
+        // No cancel button: by the time this is up the elevation request is already in flight, so an
+        // apparent "cancel" could not actually stop it. Declining the Windows prompt cancels it.
+        var dialogTask = YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Starting Everything Search setup",
+                TitleGlyph = "\uE721", // Search
+                Content = body,
+                CloseButtonText = null,
+                ShowTitleBar = false,
+                Width = 480,
+                Height = 240,
+            },
+            dlg => dialog = dlg);
+
+        ViewModel.StatusText = "Preparing the Everything Search installer\u2026";
+
+        try
+        {
+            // Off the UI thread so the indicator actually animates instead of freezing on the first frame.
+            return await Task.Run<(Process?, string?)>(() =>
+            {
+                if (!AuthenticodeVerifier.IsTrustedPublisher(installerPath, EverythingAssetPaths.TrustedPublisher, out string failure))
+                    return (null, failure);
+
+                return (Process.Start(new ProcessStartInfo
+                {
+                    FileName = installerPath,
+                    Verb = "runas",
+                    UseShellExecute = true,
+                }), null);
+            }).ConfigureAwait(true);
+        }
+        finally
+        {
+            // Always tear the modal down before the caller shows anything else, so the owner window is
+            // re-enabled first (a declined UAC prompt throws straight through here).
+            if (!dialogTask.IsCompleted)
+                dialog?.AcceptClose();
+            await dialogTask.ConfigureAwait(true);
         }
     }
 

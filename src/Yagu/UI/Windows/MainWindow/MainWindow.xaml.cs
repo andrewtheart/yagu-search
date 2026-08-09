@@ -232,7 +232,6 @@ public sealed partial class MainWindow : Window, IDisposable
         InitializeHelpKeyboardShortcut();
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
         InitializeAdvancedOptionsDrawerStateTracking();
-        InitializeAdvancedOptionPlacement();
         ApplyAppWindowTitle();
 
         // PreviewBlock's built-in text-selection swallows DoubleTapped by

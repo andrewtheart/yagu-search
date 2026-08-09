@@ -673,6 +673,9 @@ public sealed partial class SettingsWindow
                 return;
             _viewModel.Settings.IndexedRoots = IndexedRootsPolicy.Remove(_viewModel.Settings.IndexedRoots, _indexManageRoot);
             _viewModel.Settings.IndexedRootFilters = RemoveRootFilter(_viewModel.Settings.IndexedRootFilters, _indexManageRoot);
+            _viewModel.Settings.IndexedRootSizePolicies = IndexSizeManagementPolicy.Remove(
+                _viewModel.Settings.IndexedRootSizePolicies,
+                _indexManageRoot);
             _indexManageRoot = string.Empty;
             _indexManageScopeId = string.Empty;
             RefreshIndexedRootsRadios();

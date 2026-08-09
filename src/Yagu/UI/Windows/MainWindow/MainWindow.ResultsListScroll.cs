@@ -579,11 +579,17 @@ public sealed partial class MainWindow
             ApplyDrawerLabelSettings(headerGrid);
     }
 
+    /// <summary>The theme these labels must match. Read from the window's theme root, which is the
+    /// element Yagu sets <c>RequestedTheme</c> on: a descendant's <c>ActualTheme</c> can still report the
+    /// previous theme while a live switch is propagating down, which left default labels black on the
+    /// new dark surface.</summary>
+    private bool IsLightSurfaceTheme => RootGrid.ActualTheme == ElementTheme.Light;
+
     private void ApplyFileListOverlayFontSettings()
     {
         ResultsFileOverlayFileName.FontSize = ViewModel.FileListOverlayFontSize;
         ResultsFileOverlayFileName.FontFamily = new Microsoft.UI.Xaml.Media.FontFamily(ViewModel.FileListOverlayFontFamily);
-        bool isLight = ResultsFileOverlay.ActualTheme == ElementTheme.Light;
+        bool isLight = IsLightSurfaceTheme;
         var color = ResolveThemedLabelColor(
             ViewModel.FileListOverlayFontColor, AppSettings.DefaultFileListOverlayFontColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF), DrawerPrimaryLightColor, isLight);
@@ -595,7 +601,7 @@ public sealed partial class MainWindow
     {
         if (headerGrid is not Grid grid) return;
 
-        bool isLight = grid.ActualTheme == ElementTheme.Light;
+        bool isLight = IsLightSurfaceTheme;
         var fileNameBrush = new SolidColorBrush(ResolveThemedLabelColor(
             ViewModel.DrawerFileNameFontColor, AppSettings.DefaultDrawerFileNameFontColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF), DrawerPrimaryLightColor, isLight));

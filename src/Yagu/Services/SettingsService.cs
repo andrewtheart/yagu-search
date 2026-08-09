@@ -692,9 +692,9 @@ public sealed class AppSettings
     /// <summary>When true, show result-temp, content-index storage, and Yagu/worker RAM usage in the
     /// bottom status bar. Hidden by default and configurable under Developer Options.</summary>
     public bool ShowResourceUsageInStatusBar { get; set; }
-    /// <summary>When true, show the bottom-right live-log button and debug panel. Hidden by default
-    /// and configurable under Developer Options.</summary>
-    public bool ShowDebugPanel { get; set; }
+    /// <summary>When true, show the bottom-right live-log button and debug panel. On by default and
+    /// configurable under Developer Options.</summary>
+    public bool ShowDebugPanel { get; set; } = true;
     /// <summary>When true, append the app version/build number to the main title bar.</summary>
     public bool ShowBuildNumberInTitleBar { get; set; }
     /// <summary>When true, show the Auto-scroll checkbox in the results toolbar. Hidden by default.</summary>

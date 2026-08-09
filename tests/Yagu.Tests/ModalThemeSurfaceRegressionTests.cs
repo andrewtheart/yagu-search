@@ -39,6 +39,24 @@ public sealed class ModalThemeSurfaceRegressionTests
     }
 
     [Fact]
+    public void SettingsGroupBoxes_TrackTheWindowTheme_NotTheApplicationTheme()
+    {
+        string theme = ReadAppFile(Path.Combine("Services", "AppThemeService.cs"));
+        string settings = ReadAppFile(Path.Combine("UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+
+        Assert.Contains("public static void ApplyThemedGroupBoxSurface(Border surface)", theme);
+        Assert.Contains("surface.ActualThemeChanged += (_, _) => PaintGroupBoxSurface(surface);", theme);
+        Assert.Contains("AppThemeService.ApplyThemedGroupBoxSurface(groupBox);", settings);
+
+        // Yagu applies its theme as an element-level RequestedTheme, so an Application.Current.Resources
+        // lookup returns the APP theme's brush — light cards on a window switched to dark — and the
+        // resolved Brush is a snapshot that cannot follow a later switch either.
+        Assert.DoesNotContain("GetSettingsGroupBrush", settings);
+        Assert.DoesNotContain("LayerFillColorDefaultBrush", settings);
+        Assert.DoesNotContain("ControlStrokeColorDefaultBrush\", Windows.UI.Color", settings);
+    }
+
+    [Fact]
     public void ResultStoreTempLocationWindow_DropsHardcodedDarkSurfaceAndWhiteText()
     {
         // This dialog previously hardcoded a dark surface and white text, so it never honored the

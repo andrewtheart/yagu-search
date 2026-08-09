@@ -30,10 +30,26 @@ public sealed partial class MainWindow
 
     private readonly List<AdvancedOptionRegistration> _advancedOptionRegistrations = [];
     private readonly Dictionary<string, AdvancedOptionRegistration> _advancedOptionsById = new(StringComparer.Ordinal);
+    private bool _advancedOptionPlacementInitialized;
     private string? _draggedAdvancedOptionId;
     private string? _advancedOptionHoverTabKey;
     private string? _armedAdvancedOptionTargetTabKey;
     private DispatcherTimer? _advancedOptionHoverTimer;
+
+    /// <summary>
+    /// Builds the drag grips the first time the Advanced Options flyout opens. It cannot run during
+    /// window construction: the rows live inside the flyout, whose content is not in a live visual tree
+    /// until it is first shown, so every registration would silently find no parent and no grip would
+    /// ever be created.
+    /// </summary>
+    private void EnsureAdvancedOptionPlacementInitialized()
+    {
+        if (_advancedOptionPlacementInitialized)
+            return;
+
+        _advancedOptionPlacementInitialized = true;
+        InitializeAdvancedOptionPlacement();
+    }
 
     private void InitializeAdvancedOptionPlacement()
     {
@@ -59,7 +75,7 @@ public sealed partial class MainWindow
 
     private void RegisterAdvancedOption(string id, string label, string homeTabKey, FrameworkElement content)
     {
-        if (VisualTreeHelper.GetParent(content) is not Panel parent)
+        if (ResolveAdvancedOptionParentPanel(content) is not Panel parent)
             return;
 
         int homeIndex = parent.Children.IndexOf(content);
@@ -137,11 +153,16 @@ public sealed partial class MainWindow
         _advancedOptionsById[id] = registration;
     }
 
+    /// <summary>The panel a row currently sits in. Falls back to the logical parent because the visual
+    /// tree is only populated once the hosting flyout has been shown.</summary>
+    private static Panel? ResolveAdvancedOptionParentPanel(FrameworkElement element)
+        => VisualTreeHelper.GetParent(element) as Panel ?? element.Parent as Panel;
+
     private void RebuildAdvancedOptionPlacement()
     {
         foreach (AdvancedOptionRegistration registration in _advancedOptionRegistrations)
         {
-            if (VisualTreeHelper.GetParent(registration.Wrapper) is Panel parent)
+            if (ResolveAdvancedOptionParentPanel(registration.Wrapper) is Panel parent)
                 parent.Children.Remove(registration.Wrapper);
         }
 

@@ -33,6 +33,8 @@ public sealed class SettingsWindowRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
     private static readonly string SettingsWindowIndexRebuildAdviceSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.IndexRebuildAdvice.cs"));
+    private static readonly string SettingsWindowIndexingActionsSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.IndexingActions.cs"));
     private static readonly string SettingsWindowXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml"));
     private static readonly string SettingsServiceSource = File.ReadAllText(
@@ -79,6 +81,14 @@ public sealed class SettingsWindowRegressionTests
     public void SettingsWindowXaml_HasMicaBackdrop()
     {
         Assert.Contains("<MicaBackdrop />", SettingsWindowXaml);
+    }
+
+    [Fact]
+    public void RemovingAnIndexedRoot_ClearsItsPerRootSizePolicy()
+    {
+        Assert.Contains(
+            "_viewModel.Settings.IndexedRootSizePolicies = IndexSizeManagementPolicy.Remove(",
+            SettingsWindowIndexingActionsSource);
     }
 
     [Fact]
@@ -357,10 +367,13 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("DrawerSecondaryLightColor = Windows.UI.Color.FromArgb(0x9E, 0x00, 0x00, 0x00)", src);
         Assert.Contains("DrawerTertiaryLightColor = Windows.UI.Color.FromArgb(0x72, 0x00, 0x00, 0x00)", src);
 
-        // Drawer labels and the file-list overlay both resolve via the helper using
-        // the realized element's ActualTheme.
-        Assert.Contains("bool isLight = grid.ActualTheme == ElementTheme.Light;", src);
-        Assert.Contains("bool isLight = ResultsFileOverlay.ActualTheme == ElementTheme.Light;", src);
+        // Drawer labels and the file-list overlay both resolve via the helper using the window's theme
+        // ROOT. A descendant's ActualTheme can still report the old theme while a live switch is
+        // propagating, which left default labels black on the new dark surface.
+        Assert.Contains("private bool IsLightSurfaceTheme => RootGrid.ActualTheme == ElementTheme.Light;", src);
+        Assert.Contains("bool isLight = IsLightSurfaceTheme;", src);
+        Assert.DoesNotContain("bool isLight = grid.ActualTheme == ElementTheme.Light;", src);
+        Assert.DoesNotContain("bool isLight = ResultsFileOverlay.ActualTheme == ElementTheme.Light;", src);
         Assert.Contains("ViewModel.DrawerFileNameFontColor, AppSettings.DefaultDrawerFileNameFontColor", src);
         Assert.Contains("ViewModel.DrawerDirectoryFontColor, AppSettings.DefaultDrawerDirectoryFontColor", src);
         Assert.Contains("ViewModel.DrawerMetadataFontColor, AppSettings.DefaultDrawerMetadataFontColor", src);

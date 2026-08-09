@@ -20,6 +20,8 @@ public sealed class AdvancedOptionsTests
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
     private static readonly string MainWindowCodeBehindSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
+    private static readonly string LayoutInteractionSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.LayoutInteraction.cs"));
 
     // ══════════════════════════════════════════════════════════════════
     // Tab switching logic
@@ -164,6 +166,35 @@ public sealed class AdvancedOptionsTests
         Assert.Contains("private const string AdvancedOptionDragDataFormat = \"Yagu.AdvancedOption\";", AdvancedOptionPlacementSource);
         Assert.Contains("args.Data.SetData(AdvancedOptionDragDataFormat, id);", AdvancedOptionPlacementSource);
         Assert.Contains("e.DataView.Contains(AdvancedOptionDragDataFormat)", AdvancedOptionPlacementSource);
+    }
+
+    [Fact]
+    public void OptionPlacement_IsBuiltWhenTheFlyoutFirstOpens_NotDuringWindowConstruction()
+    {
+        // The rows live inside the Advanced Options flyout, whose content is not in a live visual tree
+        // during window construction. Registering there made every lookup find no parent, so no drag
+        // grip was ever created and the whole move-between-tabs feature silently did nothing.
+        string layout = File.ReadAllText(
+            Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.LayoutInteraction.cs"));
+        string ctor = MainWindowCodeBehindSource;
+
+        Assert.Contains("EnsureAdvancedOptionPlacementInitialized();", layout);
+        Assert.DoesNotContain("InitializeAdvancedOptionPlacement();", ctor);
+
+        string opened = ExtractSourceWindow(layout, "private void OnAdvancedOptionsFlyoutOpened", 600);
+        Assert.Contains("EnsureAdvancedOptionPlacementInitialized();", opened);
+
+        Assert.Contains("private bool _advancedOptionPlacementInitialized;", AdvancedOptionPlacementSource);
+        string ensure = ExtractSourceWindow(AdvancedOptionPlacementSource, "private void EnsureAdvancedOptionPlacementInitialized", 400);
+        AssertContainsInOrder(ensure,
+            "if (_advancedOptionPlacementInitialized)",
+            "return;",
+            "_advancedOptionPlacementInitialized = true;",
+            "InitializeAdvancedOptionPlacement();");
+
+        // The parent lookup must not depend on visual-tree realization alone.
+        Assert.Contains("VisualTreeHelper.GetParent(element) as Panel ?? element.Parent as Panel", AdvancedOptionPlacementSource);
+        Assert.Contains("if (ResolveAdvancedOptionParentPanel(content) is not Panel parent)", AdvancedOptionPlacementSource);
     }
 
     [Fact]
@@ -813,6 +844,18 @@ public sealed class AdvancedOptionsTests
 
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(
             MainWindowXaml, "<ColumnDefinition Width=\"290\" />").Count);
+    }
+
+    [Fact]
+    public void Drawer_UsesTheMonitorEdgeWithTheLeastHorizontalOverflow()
+    {
+        string flyout = ExtractXamlElement("x:Name=\"AdvancedOptionsFlyout\"", 1000);
+        Assert.Contains("Opening=\"OnAdvancedOptionsFlyoutOpening\"", flyout);
+        Assert.Contains("displayArea.WorkArea.X + displayArea.WorkArea.Width", LayoutInteractionSource);
+        Assert.Contains("AdvancedOptionsDrawerWidth + AdvancedOptionsFlyoutChromeWidth", LayoutInteractionSource);
+        Assert.Contains("rightAlignedOverflow < leftAlignedOverflow", LayoutInteractionSource);
+        Assert.Contains("FlyoutPlacementMode.BottomEdgeAlignedRight", LayoutInteractionSource);
+        Assert.Contains("FlyoutPlacementMode.BottomEdgeAlignedLeft", LayoutInteractionSource);
     }
 
     [Theory]

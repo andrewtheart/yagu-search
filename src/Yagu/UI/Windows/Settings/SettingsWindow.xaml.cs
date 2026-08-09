@@ -2394,25 +2394,18 @@ public sealed partial class SettingsWindow : Window
         });
         content.Children.Add(body);
 
-        parent.Children.Add(new Border
+        var groupBox = new Border
         {
             Margin = new Thickness(0, 8, 0, 4),
             Padding = new Thickness(14, 12, 14, 14),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
-            BorderBrush = GetSettingsGroupBrush("ControlStrokeColorDefaultBrush", Windows.UI.Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF)),
-            Background = GetSettingsGroupBrush("LayerFillColorDefaultBrush", Windows.UI.Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
             Child = content,
-        });
+        };
+        AppThemeService.ApplyThemedGroupBoxSurface(groupBox);
+        parent.Children.Add(groupBox);
 
         return body;
-    }
-
-    private static Brush GetSettingsGroupBrush(string resourceKey, Windows.UI.Color fallback)
-    {
-        if (Application.Current.Resources.TryGetValue(resourceKey, out object resource) && resource is Brush brush)
-            return brush;
-        return new SolidColorBrush(fallback);
     }
 
     private static string SettingsGroupIcon(string header) => header switch
@@ -4141,7 +4134,7 @@ public sealed partial class SettingsWindow : Window
             diagnosticsGroup.Children.Add(showDebugPanel);
             diagnosticsGroup.Children.Add(new TextBlock
             {
-                Text = "Shows a bottom-right log button with a live, filterable tail of yagu.log and independent runtime file/console level controls. Hidden by default.",
+                Text = "Shows a bottom-right log button with a live, filterable tail of yagu.log and independent runtime file/console level controls. On by default.",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,

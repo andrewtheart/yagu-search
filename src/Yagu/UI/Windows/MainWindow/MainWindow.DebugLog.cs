@@ -62,6 +62,8 @@ public sealed partial class MainWindow
 
     private void OnDebugLogFlyoutClosed(object? sender, object e) => _debugLogTimer?.Stop();
 
+    private void OnDebugLogCloseClicked(object sender, RoutedEventArgs e) => DebugLogFlyout.Hide();
+
     private void OnDebugLogRefreshNow(object sender, RoutedEventArgs e) => RefreshDebugLogTail();
 
     private void RefreshDebugLogTail()

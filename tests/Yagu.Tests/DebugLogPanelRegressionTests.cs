@@ -16,15 +16,17 @@ public sealed class DebugLogPanelRegressionTests
     private static readonly string MainViewModel = MainViewModelPartials.Text;
 
     [Fact]
-    public void Setting_DefaultsOffAndRoundTrips()
+    public void Setting_DefaultsOnAndRoundTrips()
     {
-        Assert.False(new Yagu.Services.AppSettings().ShowDebugPanel);
+        Assert.True(new Yagu.Services.AppSettings().ShowDebugPanel);
         string directory = Path.Combine(Path.GetTempPath(), "yagu-debug-panel-setting-" + Guid.NewGuid().ToString("N"));
         string path = Path.Combine(directory, "settings.json");
         try
         {
             Directory.CreateDirectory(directory);
             var service = new Yagu.Services.SettingsService(path);
+            service.Save(new Yagu.Services.AppSettings { ShowDebugPanel = false });
+            Assert.False(service.Load().ShowDebugPanel);
             service.Save(new Yagu.Services.AppSettings { ShowDebugPanel = true });
             Assert.True(service.Load().ShowDebugPanel);
         }
@@ -35,10 +37,10 @@ public sealed class DebugLogPanelRegressionTests
     }
 
     [Fact]
-    public void DeveloperOption_IsDefaultOffPersistedAndControlsBottomRightButton()
+    public void DeveloperOption_IsDefaultOnPersistedAndControlsBottomRightButton()
     {
-        Assert.Contains("public bool ShowDebugPanel { get; set; }", SettingsService);
-        Assert.Contains("[ObservableProperty] public partial bool ShowDebugPanel { get; set; }", MainViewModel);
+        Assert.Contains("public bool ShowDebugPanel { get; set; } = true;", SettingsService);
+        Assert.Contains("[ObservableProperty] public partial bool ShowDebugPanel { get; set; } = true;", MainViewModel);
         Assert.Contains("ShowDebugPanel = _settings.ShowDebugPanel;", MainViewModel);
         Assert.Contains("_settings.ShowDebugPanel = ShowDebugPanel;", MainViewModel);
         Assert.Contains("public Microsoft.UI.Xaml.Visibility DebugPanelButtonVisibility =>", MainViewModel);
@@ -94,6 +96,35 @@ public sealed class DebugLogPanelRegressionTests
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(MainWindowDebugLog, "await ViewModel.PersistSettingsAsync\\(\\);"));
         Assert.Contains("_debugLogTimer?.Stop();", MainWindowDebugLog);
         Assert.Contains("DisposeDebugLogPanel();", MainWindowCodeBehind);
+    }
+
+    [Fact]
+    public void LiveTail_ClosesFromABareGlyphWithNoButtonChrome()
+    {
+        int start = MainWindowXaml.IndexOf("x:Name=\"DebugLogCloseButton\"", StringComparison.Ordinal);
+        Assert.True(start >= 0, "The live-log header must expose a close button.");
+        int end = MainWindowXaml.IndexOf("</Button>", start, StringComparison.Ordinal);
+        string close = MainWindowXaml[start..end];
+
+        // Top-right of the header, next to the status text.
+        Assert.Contains("Grid.Column=\"2\"", close);
+        Assert.Contains("Glyph=\"&#xE711;\"", close);
+        Assert.Contains("Click=\"OnDebugLogCloseClicked\"", close);
+        Assert.Contains("AutomationProperties.Name=\"Close the live log\"", close);
+
+        // "Bare x": no border and every background/border visual state stays transparent, so no square
+        // appears at rest, on hover, or while pressed.
+        Assert.Contains("BorderThickness=\"0\"", close);
+        foreach (string key in new[]
+                 {
+                     "ButtonBackground", "ButtonBackgroundPointerOver", "ButtonBackgroundPressed", "ButtonBackgroundDisabled",
+                     "ButtonBorderBrush", "ButtonBorderBrushPointerOver", "ButtonBorderBrushPressed", "ButtonBorderBrushDisabled",
+                 })
+        {
+            Assert.Contains($"<SolidColorBrush x:Key=\"{key}\" Color=\"Transparent\" />", close);
+        }
+
+        Assert.Contains("private void OnDebugLogCloseClicked(object sender, RoutedEventArgs e) => DebugLogFlyout.Hide();", MainWindowDebugLog);
     }
 
     [Fact]

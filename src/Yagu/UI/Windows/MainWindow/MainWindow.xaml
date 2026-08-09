@@ -781,6 +781,7 @@
                         <Flyout x:Name="AdvancedOptionsFlyout"
                                 Placement="BottomEdgeAlignedLeft"
                                 ShouldConstrainToRootBounds="False"
+                            Opening="OnAdvancedOptionsFlyoutOpening"
                                 Opened="OnAdvancedOptionsFlyoutOpened"
                                 Closing="OnAdvancedOptionsFlyoutClosing"
                                 Closed="OnAdvancedOptionsFlyoutClosed">
@@ -2850,6 +2851,7 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                         <FontIcon Glyph="&#xE9D9;" FontSize="16" />
@@ -2859,6 +2861,26 @@
                                                HorizontalAlignment="Right" VerticalAlignment="Center"
                                                FontFamily="Consolas" FontSize="11" Opacity="0.65"
                                                TextTrimming="CharacterEllipsis" MaxWidth="620" />
+                                    <Button x:Name="DebugLogCloseButton" Grid.Column="2"
+                                            Width="20" Height="20" MinWidth="0" MinHeight="0" Padding="0"
+                                            BorderThickness="0"
+                                            VerticalAlignment="Center"
+                                            Click="OnDebugLogCloseClicked"
+                                            AutomationProperties.Name="Close the live log"
+                                            ToolTipService.ToolTip="Close the live log">
+                                        <!-- Every state stays transparent so the glyph reads as a bare x, with no button chrome. -->
+                                        <Button.Resources>
+                                            <SolidColorBrush x:Key="ButtonBackground" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ButtonBorderBrush" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ButtonBorderBrushDisabled" Color="Transparent" />
+                                        </Button.Resources>
+                                        <FontIcon Glyph="&#xE711;" FontSize="12" Opacity="0.7" />
+                                    </Button>
                                 </Grid>
 
                                 <Grid Grid.Row="1" Padding="14,8,14,4" ColumnSpacing="8">

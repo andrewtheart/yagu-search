@@ -108,6 +108,30 @@ public static class AppThemeService
             : ColorHelper.FromArgb(0xFF, 0x20, 0x20, 0x20));
     }
 
+    /// <summary>
+    /// Paints a settings group-box card from the <b>element's</b> theme, and re-paints it whenever that
+    /// theme changes. An <c>Application.Current.Resources</c> lookup cannot be used here: it resolves
+    /// against the application theme, while Yagu applies its Auto/Dark/Light choice as an element-level
+    /// <c>RequestedTheme</c>, so a window switched to Dark on a Light machine would keep light-theme
+    /// cards. A resolved <see cref="Brush"/> is also a one-time snapshot and never follows a live switch.
+    /// </summary>
+    public static void ApplyThemedGroupBoxSurface(Border surface)
+    {
+        PaintGroupBoxSurface(surface);
+        surface.ActualThemeChanged += (_, _) => PaintGroupBoxSurface(surface);
+    }
+
+    private static void PaintGroupBoxSurface(Border surface)
+    {
+        bool light = ResolveSurfaceTheme(surface) == ElementTheme.Light;
+        surface.Background = new SolidColorBrush(light
+            ? ColorHelper.FromArgb(0x80, 0xFF, 0xFF, 0xFF)
+            : ColorHelper.FromArgb(0x12, 0xFF, 0xFF, 0xFF));
+        surface.BorderBrush = new SolidColorBrush(light
+            ? ColorHelper.FromArgb(0x18, 0x00, 0x00, 0x00)
+            : ColorHelper.FromArgb(0x55, 0xFF, 0xFF, 0xFF));
+    }
+
     private static ElementTheme ResolveSurfaceTheme(FrameworkElement element)
     {
         if (element.RequestedTheme != ElementTheme.Default)
