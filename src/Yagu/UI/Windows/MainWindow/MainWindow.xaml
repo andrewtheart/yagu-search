@@ -107,6 +107,10 @@
                         <MenuFlyoutItem Text="Open with default application" Click="OnOpenFileGroupWithDefaultApplication" Tag="{x:Bind FilePath}">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7AC;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="More options..." Click="OnShowFileGroupShellContextMenu" Tag="{x:Bind FilePath}">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE712;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
                     </MenuFlyout>
                 </Grid.ContextFlyout>
                 <Grid.ColumnDefinitions>

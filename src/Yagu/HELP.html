@@ -1794,6 +1794,11 @@ line.</td>
 <td>Opens the right-clicked file with its Windows default
 application.</td>
 </tr>
+<tr>
+<td>More options…</td>
+<td>Opens the traditional Windows Explorer context menu for the
+right-clicked file.</td>
+</tr>
 </tbody>
 </table>
 <p><strong>On a match line:</strong></p>
@@ -2735,7 +2740,12 @@ accelerate searches in any descendant, so prefer one useful common root
 instead of overlapping parent/child entries.</li>
 <li>Optionally set <strong>Filters…</strong> before building. Global and
 per-folder build filters control what is stored; excluded or oversized
-files still live-scan.</li>
+files still live-scan. A literal absolute directory such as
+<code>C:/Windows/System32</code> or <code>C:\Windows\System32</code>
+excludes that directory and all descendants; slash style and letter case
+are ignored. Separate entries with <code>;</code> — a comma inside a
+literal path (<code>C:\Program Files\Acme, Inc</code>) is kept as part
+of the folder name.</li>
 <li>Choose <strong>Build now</strong>. Whole drives and very
 large/system folders require confirmation. The build runs in the
 background and uses an isolated worker by default.</li>
@@ -2748,6 +2758,16 @@ for health. After a search, the coverage summary and optional per-result
 <strong>indexed</strong> badge show whether acceleration was actually
 used.</li>
 </ol>
+<p>On the one-time first-run whole-drive setup, Yagu proposes editable,
+preselected per-root exclusions for <code>Windows</code>, both
+<code>Program Files</code> folders,
+<code>ProgramData\Package Cache</code>, <code>$Recycle.Bin</code>,
+<code>System Volume Information</code>, <code>Recovery</code>, and
+<code>PerfLogs</code>. These folders usually contain operating-system,
+installed-application, recovery, or filesystem metadata rather than
+personal search content. You can clear any suggestion before building or
+edit it later under <strong>Settings ▸ Indexing ▸ Filters…</strong>; a
+narrow root receives only exclusions for paths it actually contains.</p>
 <p>During the first build, Yagu crawls the selected folder, reads
 eligible files, writes private staged index data, validates it, and then
 publishes the complete generation atomically. You can continue using
@@ -2763,6 +2783,17 @@ delta. A file changed after the last update is never trusted as
 unchanged: it is scanned live until represented by a committed update.
 Watcher events can request maintenance sooner, but the journal remains
 authoritative and catches changes made while Yagu was closed.</p>
+<p>An incremental update runs in named phases, and the status-bar
+indicator reports the one currently running: <strong>Updating
+index…</strong> while journal records are resolved to paths and changed
+content is read, <strong>Merging changes…</strong> while those changes
+are folded into a new segment, <strong>Writing index update…</strong>,
+<strong>Publishing index update…</strong>, and <strong>Compacting
+index…</strong>. On a large index the phases after resolution can take
+longer than resolution itself, so each reports separately instead of
+sharing one label. The log records the per-phase durations of every
+appended delta, which is the fastest way to see which phase dominates a
+slow update.</p>
 <h4 id="what-search-and-status-messages-mean">What search and status
 messages mean</h4>
 <table>
@@ -3276,6 +3307,21 @@ advice because they change how existing indexes are used or maintained,
 not their stored meaning. The prompt is advisory—search correctness is
 preserved by live-scan/fallback before rebuilding—and rebuilding several
 roots is always an explicit, cancellable choice.</p>
+<p>If indexing is already active when you accept that recommendation,
+the primary action says <strong>Stop and rebuild now</strong>. Yagu
+cancels and drains the current tracked operation first, discards its
+incomplete staged full-build data, obtains a fresh cancellation token,
+and then starts the replacement. The previous complete index remains
+active until the replacement commits. If the running operation does not
+stop within a minute, nothing is rebuilt and the tab says so, so a
+wedged operation can never leave the rebuild half-started.</p>
+<p>Upgrade note: earlier versions ignored a literal absolute path in the
+build filters, so such an entry did nothing. It now excludes that
+directory and everything below it. If your saved filters contain one,
+Yagu shows a one-time notice at launch naming the affected folders.
+Searches stay correct in the meantime — anything the index does not
+cover is scanned live — and the existing index keeps the newly excluded
+files until you rebuild it.</p>
 <h4 id="diagnostics-and-overlapping-roots">Diagnostics and overlapping
 roots</h4>
 <p><strong>Local fragmentation and query-open diagnostics.</strong>

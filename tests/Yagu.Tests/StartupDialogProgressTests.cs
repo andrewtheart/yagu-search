@@ -36,6 +36,7 @@ public sealed class StartupDialogProgressTests
             "StartupDialogStep.Everything, CheckEverythingAsync",
             "StartupDialogStep.ContextMenu, CheckFirstRunContextMenuAsync",
             "StartupDialogStep.IndexOnboarding, CheckFirstRunIndexOnboardingAsync",
+            "StartupDialogStep.IndexLiteralPathFilters, ShowIndexLiteralPathFilterNoticeIfNeededAsync",
             "StartupDialogStep.FontContrast, ShowFontContrastWarningIfNeededAsync",
             "StartupDialogStep.CpuSemanticWarning, ShowCpuSemanticWarningIfNeededAsync",
             "StartupDialogStep.SemanticQualification, OfferSemanticModelQualificationIfNeededAsync",
@@ -100,6 +101,7 @@ public sealed class StartupDialogProgressTests
             "Everything",
             "ContextMenu",
             "IndexOnboarding",
+            "IndexLiteralPathFilters",
             "FontContrast",
             "CpuSemanticWarning",
             "SemanticQualification",
@@ -108,6 +110,8 @@ public sealed class StartupDialogProgressTests
         {
             Assert.Contains($"steps.Add(StartupDialogStep.{step});", StartupProgress);
         }
+
+        Assert.Contains("if (WillShowIndexLiteralPathFilterNotice())", StartupProgress);
     }
 
     [Fact]

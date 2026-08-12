@@ -1,3 +1,5 @@
+using Yagu.Helpers;
+
 namespace Yagu.Services.Index;
 
 /// <summary>App-only adapters that create worker-safe ingestion policies from persisted settings.</summary>
@@ -36,7 +38,7 @@ public sealed partial class IndexIngestionPolicy
         var list = new List<string>();
         if (string.IsNullOrWhiteSpace(raw))
             return list;
-        foreach (string part in raw.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (string part in GlobMatcher.SplitPatternList(raw))
             list.Add(part);
         return list;
     }

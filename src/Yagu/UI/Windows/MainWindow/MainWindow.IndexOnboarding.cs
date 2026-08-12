@@ -733,6 +733,77 @@ public sealed partial class MainWindow
         _settingsWindow?.SelectTabByHeader("Indexing");
     }
 
+    /// <summary>True when the one-time literal-path filter notice still has something to report.</summary>
+    private bool WillShowIndexLiteralPathFilterNotice()
+        => !ViewModel.Settings.HasPromptedIndexLiteralPathFilters
+            && IndexedRootFilterPolicy.FindRootsAffectedByLiteralPathFilters(ViewModel.Settings).Count > 0;
+
+    /// <summary>
+    /// One-time notice that a literal absolute path in the build filters now excludes that directory and
+    /// every descendant. Earlier builds treated such an entry as inert, so an index built then still stores
+    /// files the filters now reject. Advisory only — those extra files are still valid search results, and a
+    /// rebuild is the user's choice. Never throws.
+    /// </summary>
+    private async Task ShowIndexLiteralPathFilterNoticeIfNeededAsync()
+    {
+        if (ViewModel.Settings.HasPromptedIndexLiteralPathFilters)
+            return;
+
+        IReadOnlyList<string> roots =
+            IndexedRootFilterPolicy.FindRootsAffectedByLiteralPathFilters(ViewModel.Settings);
+        if (roots.Count == 0)
+        {
+            ViewModel.Settings.HasPromptedIndexLiteralPathFilters = true;
+            await ViewModel.PersistSettingsAsync();
+            return;
+        }
+
+        // Belt-and-braces: if another owned modal is still up, retry next launch (don't mark shown yet).
+        if (YaguDialog.HasOpenOwnedWindow(_hwnd))
+            return;
+
+        try
+        {
+            string rootList = string.Join("\n", roots.Take(5).Select(root => $"\u2022 {root}"));
+            if (roots.Count > 5)
+                rootList += $"\n\u2022 and {roots.Count - 5} more";
+
+            using var suggestionSuppression = ParkInputSuggestionsForModal();
+            YaguDialogResult result = await YaguDialog.ShowAsync(
+                _hwnd,
+                new YaguDialogOptions
+                {
+                    Title = "Index filters changed meaning",
+                    TitleGlyph = "\uE946", // Info
+                    Content =
+                        "Your content-index build filters contain a literal absolute path. Earlier versions "
+                        + "ignored such an entry; it now excludes that directory and everything below it.\n\n"
+                        + "This affects:\n"
+                        + rootList
+                        + "\n\nSearches stay correct either way — anything the index does not cover is scanned "
+                        + "live. The existing indexes still store the newly excluded files until you rebuild "
+                        + "them from Settings \u25B8 Indexing.",
+                    PrimaryButtonText = "Review indexing",
+                    CloseButtonText = "Later",
+                    DefaultButton = YaguDialogDefaultButton.Close,
+                    RequestedTheme = RootGrid.ActualTheme,
+                    Width = 640,
+                    Height = 380,
+                    ShowTitleBar = false,
+                    ShowTopRightCloseButton = true,
+                });
+
+            ViewModel.Settings.HasPromptedIndexLiteralPathFilters = true;
+            await ViewModel.PersistSettingsAsync();
+            if (result == YaguDialogResult.Primary)
+                OpenSettingsToIndexingTab();
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Showing the literal-path index filter notice failed.");
+        }
+    }
+
     /// <summary>
     /// The one-time first-run "add a folder to the index?" prompt. Shown once (tracked by
     /// <see cref="AppSettings.HasPromptedIndexOnboarding"/>); if the user chooses a folder it flows into
@@ -912,6 +983,10 @@ public sealed partial class MainWindow
         if (choices.FirstOrDefault(c => !IsAlreadyCovered(c)) is { } firstAddable)
             checkedPaths.Add(firstAddable);
 
+        string windowsDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        var selectedSuggestedExclusions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenSuggestedExclusions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         var triggerFlags = new (string Flag, string Display)[]
         {
             ("AtStartup", "When Yagu starts"),
@@ -990,6 +1065,52 @@ public sealed partial class MainWindow
                 FontSize = 12,
                 TextWrapping = TextWrapping.Wrap,
             });
+
+            var exclusionChecks = new List<(CheckBox Check, string Path)>();
+            if (applyFirstRunDriveIndexingProfile)
+            {
+                IReadOnlyList<IndexOnboardingFilterSuggestion> suggestions =
+                    IndexOnboardingPlan.SuggestedSystemExclusions(choices, windowsDirectory);
+                foreach (IndexOnboardingFilterSuggestion suggestion in suggestions)
+                {
+                    if (seenSuggestedExclusions.Add(suggestion.Path))
+                        selectedSuggestedExclusions.Add(suggestion.Path);
+                }
+
+                if (suggestions.Count > 0)
+                {
+                    panel.Children.Add(new TextBlock
+                    {
+                        Text = "Suggested exclusions for whole-drive indexing:",
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        Margin = new Thickness(0, 6, 0, 0),
+                    });
+                    panel.Children.Add(new TextBlock
+                    {
+                        Text = "These system folders rarely contain personal search content, so Yagu proposes skipping them. "
+                             + "They are selected by default, apply only when a chosen index root contains them, and can be changed later under Settings \u25B8 Indexing \u25B8 Filters.",
+                        Opacity = 0.75,
+                        FontSize = 12,
+                        TextWrapping = TextWrapping.Wrap,
+                    });
+                    foreach (IndexOnboardingFilterSuggestion suggestion in suggestions)
+                    {
+                        var label = new TextBlock
+                        {
+                            Text = $"{suggestion.Path}  \u2014  {suggestion.Description}",
+                            TextWrapping = TextWrapping.Wrap,
+                        };
+                        var check = new CheckBox
+                        {
+                            Content = label,
+                            MinWidth = 0,
+                            IsChecked = selectedSuggestedExclusions.Contains(suggestion.Path),
+                        };
+                        exclusionChecks.Add((check, suggestion.Path));
+                        panel.Children.Add(check);
+                    }
+                }
+            }
 
             // Build trigger(s): the same combinable choices as Settings ▸ Indexing so the user can decide up
             // front how these folders' indexes are kept up to date. None checked = Manual (only builds on
@@ -1138,6 +1259,13 @@ public sealed partial class MainWindow
                 if (cb.IsChecked == true && cb.Tag is string path)
                     checkedPaths.Add(path);
             }
+            foreach (var (check, path) in exclusionChecks)
+            {
+                if (check.IsChecked == true)
+                    selectedSuggestedExclusions.Add(path);
+                else
+                    selectedSuggestedExclusions.Remove(path);
+            }
             selectedTriggers.Clear();
             foreach (var (check, flag) in triggerChecks)
             {
@@ -1181,12 +1309,19 @@ public sealed partial class MainWindow
 
         // Resolve the selected build trigger(s) into the combined setting value ("Manual" if none).
         string buildTrigger = AppSettings.NormalizeIndexBuildTrigger(string.Join(",", selectedTriggers));
+        string[] firstRunExcludedPaths = applyFirstRunDriveIndexingProfile
+            ? IndexOnboardingPlan.SuggestedSystemExclusions(chosen, windowsDirectory)
+                .Select(suggestion => suggestion.Path)
+                .Where(selectedSuggestedExclusions.Contains)
+                .ToArray()
+            : Array.Empty<string>();
 
         await ViewModel.AddFoldersToIndexAndBuildAsync(
             chosen,
             buildTrigger,
             updateMode,
-            applyFirstRunDriveIndexingProfile);
+            applyFirstRunDriveIndexingProfile,
+            firstRunExcludedPaths);
 
         string folderList = chosen.Count == 1
             ? chosen[0]

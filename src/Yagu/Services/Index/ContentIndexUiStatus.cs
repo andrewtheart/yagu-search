@@ -255,6 +255,39 @@ public static class ContentIndexUiStatus
     public const int StatusLabelMaxLength = 31;
 
     /// <summary>
+    /// Status-bar label for a running build or incremental update. <paramref name="percent"/> is -1 when
+    /// unknown. Incremental phases get their own wording because publishing a delta is not a quick
+    /// finalization step — merging, serializing, and compacting can each dominate the pass on a large
+    /// index, and a single "finalizing" label made a multi-minute stage look stalled.
+    /// </summary>
+    public static string BuildActivityLabel(bool isIncremental, string? stage, int percent)
+    {
+        if (!isIncremental && !IndexUpdateStages.IsIncremental(stage))
+            return percent >= 0 ? $"Indexing… {percent}%" : "Indexing…";
+
+        return stage switch
+        {
+            IndexUpdateStages.Merging => percent >= 0 ? $"Merging changes… {percent}%" : "Merging changes…",
+            IndexUpdateStages.Writing => "Writing index update…",
+            IndexUpdateStages.Publishing => "Publishing index update…",
+            IndexUpdateStages.Compacting => "Compacting index…",
+            _ when percent >= 100 => "Finalizing index update…",
+            _ => percent >= 0 ? $"Updating index… {percent}%" : "Updating index…",
+        };
+    }
+
+    /// <summary>Tooltip sentence describing what an incremental update is currently doing.</summary>
+    public static string? BuildActivityDetail(string? stage) => stage switch
+    {
+        IndexUpdateStages.Resolving => "Resolving which files the change journal reports as changed, and reading their content.",
+        IndexUpdateStages.Merging => "Merging the resolved changes into a new index segment.",
+        IndexUpdateStages.Writing => "Writing the new index segment to disk.",
+        IndexUpdateStages.Publishing => "Publishing the new segment so searches can use it.",
+        IndexUpdateStages.Compacting => "Compacting index layers now that the update is durable.",
+        _ => null,
+    };
+
+    /// <summary>
     /// Replaces a readiness card's "Yagu can build this in the background" explanation when a build or
     /// maintenance pass is already under way. Index mutation is serialized by a single cross-process writer
     /// lease, so a second pass cannot start until the running one finishes — offering one would only fail

@@ -211,6 +211,9 @@ public sealed partial class MainViewModel
     // "Indexing…" tooltip. Reported periodically by the build via ReportIndexBuildProgress.
     private int _indexBuildPercent = -1;
 
+    // Which phase of an incremental update is running (see IndexUpdateStages), or null when unphased.
+    private string? _activeIndexBuildPhase;
+
     /// <summary>True while one or more background index builds are running (drives the "Indexing…" indicator).</summary>
     public bool IsIndexBuildActive => _activeIndexBuilds > 0;
 

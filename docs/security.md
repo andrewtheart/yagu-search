@@ -385,6 +385,24 @@ Search terms and filesystem locations persist in `%APPDATA%\Yagu\yagu.log` and c
 
 Move raw query/path logging to Verbose, log lengths or redacted values at Warning, and apply path/query scrubbing where full values are unnecessary.
 
+### L-4: The Explorer context menu loads third-party shell extensions in-process
+
+**Evidence**
+
+- `src/Yagu/Helpers/ShellContextMenu.cs` builds the menu via `IShellFolder::GetUIObjectOf` → `IContextMenu::QueryContextMenu`, reached from the file-header **More options...** command in `src/Yagu/UI/Windows/MainWindow/MainWindow.PreviewCommands.cs`.
+
+**Impact and conditions**
+
+Constructing and invoking the shell menu maps every registered context-menu handler for the item into the Yagu process, so faulty or malicious third-party extension code runs at Yagu's integrity level. This is the same exposure Explorer accepts, it is reached only by explicit user action on a path Yagu has verified exists, and Yagu never invokes a verb the user did not pick. There is no way to host the traditional menu without loading these handlers.
+
+**Mitigations in place**
+
+- The command is opt-in per invocation; nothing is loaded until the user chooses **More options...**.
+- Extended (Shift-only) verbs are shown only while Shift is held, matching Explorer.
+- Handler failures are caught and reported as a status message rather than propagating.
+
+**Residual risk accepted.** Revisit only if handlers need to be hosted out-of-process.
+
 ---
 
 ## Existing controls that appear sound

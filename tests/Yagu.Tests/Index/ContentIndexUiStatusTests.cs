@@ -11,6 +11,75 @@ namespace Yagu.Tests.Index;
 /// </summary>
 public sealed class ContentIndexUiStatusTests
 {
+    [Theory]
+    [InlineData(false, null, 42, "Indexing… 42%")]
+    [InlineData(false, null, -1, "Indexing…")]
+    [InlineData(true, null, 42, "Updating index… 42%")]
+    [InlineData(true, IndexUpdateStages.Incremental, -1, "Updating index…")]
+    [InlineData(true, IndexUpdateStages.Resolving, 55, "Updating index… 55%")]
+    [InlineData(true, IndexUpdateStages.Merging, -1, "Merging changes…")]
+    [InlineData(true, IndexUpdateStages.Merging, 70, "Merging changes… 70%")]
+    [InlineData(true, IndexUpdateStages.Writing, 88, "Writing index update…")]
+    [InlineData(true, IndexUpdateStages.Publishing, 94, "Publishing index update…")]
+    [InlineData(true, IndexUpdateStages.Compacting, 97, "Compacting index…")]
+    public void BuildActivityLabel_NamesTheRunningPhase(bool incremental, string? stage, int percent, string expected)
+    {
+        string label = ContentIndexUiStatus.BuildActivityLabel(incremental, stage, percent);
+
+        Assert.Equal(expected, label);
+        Assert.True(label.Length <= ContentIndexUiStatus.StatusLabelMaxLength, label);
+    }
+
+    [Fact]
+    public void BuildActivityLabel_OnlyFallsBackToFinalizingWhenThePhaseIsUnknown()
+    {
+        Assert.Equal("Finalizing index update…", ContentIndexUiStatus.BuildActivityLabel(true, null, 100));
+        // A known late phase must name itself instead of the old catch-all.
+        Assert.Equal("Compacting index…", ContentIndexUiStatus.BuildActivityLabel(true, IndexUpdateStages.Compacting, 100));
+    }
+
+    [Fact]
+    public void BuildActivityLabel_IncrementalStageImpliesAnUpdateEvenWhenTheFlagIsStale()
+        => Assert.Equal(
+            "Merging changes… 70%",
+            ContentIndexUiStatus.BuildActivityLabel(isIncremental: false, IndexUpdateStages.Merging, 70));
+
+    [Fact]
+    public void BuildActivityDetail_DescribesEveryIncrementalPhase()
+    {
+        foreach (string stage in new[]
+        {
+            IndexUpdateStages.Resolving,
+            IndexUpdateStages.Merging,
+            IndexUpdateStages.Writing,
+            IndexUpdateStages.Publishing,
+            IndexUpdateStages.Compacting,
+        })
+        {
+            Assert.False(string.IsNullOrWhiteSpace(ContentIndexUiStatus.BuildActivityDetail(stage)), stage);
+        }
+
+        Assert.Null(ContentIndexUiStatus.BuildActivityDetail(IndexUpdateStages.Incremental));
+        Assert.Null(ContentIndexUiStatus.BuildActivityDetail(null));
+    }
+
+    [Fact]
+    public void IndexUpdateStages_AllPhasesCountAsIncremental_AndAdvanceMonotonically()
+    {
+        Assert.True(IndexUpdateStages.IsIncremental(IndexUpdateStages.Resolving));
+        Assert.True(IndexUpdateStages.IsIncremental(IndexUpdateStages.Merging));
+        Assert.True(IndexUpdateStages.IsIncremental(IndexUpdateStages.Writing));
+        Assert.True(IndexUpdateStages.IsIncremental(IndexUpdateStages.Publishing));
+        Assert.True(IndexUpdateStages.IsIncremental(IndexUpdateStages.Compacting));
+        Assert.False(IndexUpdateStages.IsIncremental("rawBuild"));
+        Assert.False(IndexUpdateStages.IsIncremental(null));
+
+        Assert.True(IndexUpdateStages.ResolveCeiling < IndexUpdateStages.MergeCeiling);
+        Assert.True(IndexUpdateStages.MergeCeiling <= IndexUpdateStages.PublishFloor);
+        Assert.True(IndexUpdateStages.PublishFloor < IndexUpdateStages.CompactFloor);
+        Assert.True(IndexUpdateStages.CompactFloor < 100);
+    }
+
     [Fact]
     public void ProvenanceFor_FreshMember_IsIndexAccelerated()
         => Assert.Equal(

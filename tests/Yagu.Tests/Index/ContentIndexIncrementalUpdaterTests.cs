@@ -102,6 +102,72 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
     }
 
     [Fact]
+    public void ApplyUnderLease_ReportsOnlyExecutedPhasesInMonotonicOrder()
+    {
+        var store = NewStore();
+        PublishBase(store, (@"C:\r\a.txt", "alpha"), (@"C:\r\gone.txt", "delete me"));
+        var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
+        var progress = new List<(int Percent, string Stage)>();
+
+        using IndexMutationContext mutation = store.AcquireMutationContext();
+        IncrementalUpdateOutcome outcome = updater.ApplyUnderLease(
+            mutation,
+            _scopeId,
+            "vol",
+            _root,
+            new[] { Change(@"C:\r\b.txt", "the planner is new here") },
+            new[] { IndexScopeIdentity.NormalizePath(@"C:\r\gone.txt") },
+            new UsnCheckpoint(2, 200),
+            IndexBuildOperationFactory.CreateMaintenanceSettings(Settings()),
+            DateTimeOffset.UtcNow,
+            progress: (percent, stage) => progress.Add((percent, stage)));
+
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, outcome);
+        Assert.Equal(
+            new[] { IndexUpdateStages.Merging, IndexUpdateStages.Writing, IndexUpdateStages.Publishing },
+            progress.Select(item => item.Stage).Distinct());
+        Assert.DoesNotContain(progress, item => item.Stage == IndexUpdateStages.Compacting);
+        Assert.True(progress.Zip(progress.Skip(1), (left, right) => left.Percent <= right.Percent).All(value => value));
+    }
+
+    [Fact]
+    public void ApplyUnderLease_WhenCompactionRuns_ReportsCompactingPhase()
+    {
+        var store = NewStore();
+        PublishBase(store, (@"C:\r\a.txt", "alpha base"));
+        var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
+        AppSettings settings = Settings(maxSegments: 1, thresholdMB: 4096);
+
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, updater.Apply(
+            _scopeId,
+            "vol",
+            _root,
+            new[] { Change(@"C:\r\s0.txt", "first segment") },
+            Array.Empty<string>(),
+            new UsnCheckpoint(2, 200),
+            settings,
+            DateTimeOffset.UtcNow));
+
+        var progress = new List<(int Percent, string Stage)>();
+        using IndexMutationContext mutation = store.AcquireMutationContext();
+        IncrementalUpdateOutcome outcome = updater.ApplyUnderLease(
+            mutation,
+            _scopeId,
+            "vol",
+            _root,
+            new[] { Change(@"C:\r\s1.txt", "second segment") },
+            Array.Empty<string>(),
+            new UsnCheckpoint(3, 300),
+            IndexBuildOperationFactory.CreateMaintenanceSettings(settings),
+            DateTimeOffset.UtcNow,
+            progress: (percent, stage) => progress.Add((percent, stage)));
+
+        Assert.Equal(IncrementalUpdateOutcome.Compacted, outcome);
+        Assert.Contains(progress, item => item == (IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting));
+        Assert.True(progress.Zip(progress.Skip(1), (left, right) => left.Percent <= right.Percent).All(value => value));
+    }
+
+    [Fact]
     public void Apply_ChangedFileWithoutCapturedIdentity_InheritsBaseVolumeSerial()
     {
         const ulong volumeSerial = 0xCAFE;

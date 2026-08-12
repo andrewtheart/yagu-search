@@ -3005,10 +3005,11 @@ internal static partial class CliRunner
                   --index-add-root <path> Register a folder and print its build command when newly maintained.
                   --index-remove-root <path> Unregister a folder from content indexing.
                   --index-set-root-filter <path> [--root-include <globs>] [--root-exclude <globs>]
-                                          Set per-folder build-time globs for one root. Exclude globs add to
-                                          the global excludes; include globs re-admit paths a broader exclude
-                                          drops (e.g. index node_modules under just this folder). Omit both to clear;
-                                          semantic changes print the affected root's rebuild command.
+                                          Set per-folder build-time filters for one root. A literal absolute
+                                          directory (C:/path or C:\path, case-insensitive) matches all descendants.
+                                          Separate entries with ';' so a comma inside a literal path is kept.
+                                          Exclude globs add to the global excludes; include globs re-admit paths a
+                                          broader exclude drops. Omit both to clear; semantic changes print rebuild advice.
                   --index-clear-root-filter <path> Remove per-folder overrides and print rebuild advice.
                   --index-set-root-size <path> [--root-size-mode <mode>] [--root-size-budget-mb <n>]
                                                [--root-auto-compaction-cap-mb <n>]

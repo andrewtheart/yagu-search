@@ -85,7 +85,7 @@ public sealed partial class ContentIndexIncrementalRefresher
         string scopeId,
         IndexMaintenanceSettings settings,
         DateTimeOffset builtUtc,
-        Action<int>? progress = null,
+        Action<int, string>? progress = null,
         CancellationToken cancellationToken = default)
     {
         using IndexMutationContext mutation = _store.AcquireMutationContext();
@@ -97,7 +97,7 @@ public sealed partial class ContentIndexIncrementalRefresher
         string scopeId,
         IndexMaintenanceSettings settings,
         DateTimeOffset builtUtc,
-        Action<int>? progress = null,
+        Action<int, string>? progress = null,
         CancellationToken cancellationToken = default)
         => RefreshWithDetailsUnderLease(
             mutation,
@@ -114,7 +114,7 @@ public sealed partial class ContentIndexIncrementalRefresher
         IndexMaintenanceSettings settings,
         DateTimeOffset builtUtc,
         int minimumJournalChanges,
-        Action<int>? progress = null,
+        Action<int, string>? progress = null,
         CancellationToken cancellationToken = default)
         => RefreshWithDetailsUnderLease(
             mutation,
@@ -131,7 +131,7 @@ public sealed partial class ContentIndexIncrementalRefresher
         IndexMaintenanceSettings settings,
         DateTimeOffset builtUtc,
         int? minimumJournalChanges,
-        Action<int>? progress,
+        Action<int, string>? progress,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(mutation);
@@ -225,7 +225,7 @@ public sealed partial class ContentIndexIncrementalRefresher
                     _policy,
                     _excludedStorageRoot,
                     RescanParallelism,
-                    progress is null ? null : _ => progress(-1),
+                    progress is null ? null : _ => progress(-1, IndexUpdateStages.Resolving),
                     cancellationToken);
 
                 if (scan.Succeeded)
@@ -306,13 +306,15 @@ public sealed partial class ContentIndexIncrementalRefresher
                 _readAndClassify,
                 path => IndexedRootsPolicy.Covers(root, path)
                     && !IndexedRootsPolicy.Covers(_excludedStorageRoot, path),
-                progress is null ? null : (done, total) => progress(total <= 0 ? -1 : Math.Clamp(done * 99 / total, 0, 99)),
+                progress is null ? null : (done, total) => progress(
+                    total <= 0 ? -1 : Math.Clamp(done * IndexUpdateStages.ResolveCeiling / total, 0, IndexUpdateStages.ResolveCeiling),
+                    IndexUpdateStages.Resolving),
                 cancellationToken);
 
             YaguLog.For("ContentIndex").LogInformation(
                 "Incremental refresh: scope={Scope} resolved {ChangeCount} journal change(s) → {ChangedCount} changed, {DeletedCount} deleted.",
                 scopeId, read.Changes.Count, resolved.Changed.Count, resolved.Deleted.Count);
-            progress?.Invoke(100);
+            progress?.Invoke(IndexUpdateStages.ResolveCeiling, IndexUpdateStages.Resolving);
 
             IReadOnlyList<string> deletedPaths = resolved.Deleted;
             if (rescanTombstones.Count > 0)
@@ -335,8 +337,10 @@ public sealed partial class ContentIndexIncrementalRefresher
             IncrementalUpdateOutcome outcome = updater.ApplyUnderLease(
                 mutation, scopeId, volumeIdentity, root, resolved.Changed, deletedPaths,
                 read.NextCheckpoint, settings, builtUtc, cancellationToken,
-                commitCheckpointWhenUnchanged: recoveredByRescan);
+                commitCheckpointWhenUnchanged: recoveredByRescan,
+                progress: progress);
             YaguLog.For("ContentIndex").LogInformation("Incremental refresh: scope={Scope} outcome={Outcome}.", scopeId, outcome);
+            progress?.Invoke(100, IndexUpdateStages.Incremental);
             return Complete(outcome, read.Changes.Count, thresholdExceeded);
         }
         catch (OperationCanceledException)

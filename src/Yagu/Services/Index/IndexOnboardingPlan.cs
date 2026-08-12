@@ -1,5 +1,8 @@
 namespace Yagu.Services.Index;
 
+/// <summary>A conservative build-time exclusion proposed during first-run drive indexing.</summary>
+public readonly record struct IndexOnboardingFilterSuggestion(string Path, string Description);
+
 /// <summary>
 /// Pure helpers for the "add a folder to the content index" onboarding flow — the clickable status-bar
 /// prompt (shown when a searched folder has no index) and the one-time first-run prompt. It computes the
@@ -95,6 +98,60 @@ public static class IndexOnboardingPlan
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Returns conservative system-path exclusions covered by at least one candidate index root. Windows,
+    /// installed-program, and package-cache folders are proposed only on the Windows drive; filesystem
+    /// metadata, recovery, recycle-bin, and performance-log folders are proposed on every covered drive.
+    /// The caller presents these as optional, preselected choices rather than silently applying them.
+    /// </summary>
+    public static IReadOnlyList<IndexOnboardingFilterSuggestion> SuggestedSystemExclusions(
+        IEnumerable<string>? candidateRoots,
+        string? windowsDirectory = null)
+    {
+        List<string> roots = IndexedRootsPolicy.Normalize(candidateRoots);
+        if (roots.Count == 0)
+            return Array.Empty<IndexOnboardingFilterSuggestion>();
+
+        var suggestions = new List<IndexOnboardingFilterSuggestion>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddIfCovered(string path, string description)
+        {
+            string normalized = SafeNormalize(path);
+            if (!roots.Any(root => IndexedRootsPolicy.Covers(root, normalized))
+                || !seen.Add(normalized))
+            {
+                return;
+            }
+            suggestions.Add(new IndexOnboardingFilterSuggestion(normalized, description));
+        }
+
+        string windows = SafeNormalize(windowsDirectory
+            ?? Environment.GetFolderPath(Environment.SpecialFolder.Windows));
+        string windowsDrive = Path.GetPathRoot(windows) ?? string.Empty;
+        if (windowsDrive.Length > 0)
+        {
+            AddIfCovered(windows, "Windows operating-system files");
+            AddIfCovered(Path.Combine(windowsDrive, "Program Files"), "installed 64-bit applications");
+            AddIfCovered(Path.Combine(windowsDrive, "Program Files (x86)"), "installed 32-bit applications");
+            AddIfCovered(Path.Combine(windowsDrive, "ProgramData", "Package Cache"), "installer package cache");
+        }
+
+        foreach (string driveRoot in roots
+            .Select(Path.GetPathRoot)
+            .Where(static root => !string.IsNullOrWhiteSpace(root))
+            .Select(static root => SafeNormalize(root!))
+            .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            AddIfCovered(Path.Combine(driveRoot, "$Recycle.Bin"), "deleted-file storage");
+            AddIfCovered(Path.Combine(driveRoot, "System Volume Information"), "restore points and filesystem metadata");
+            AddIfCovered(Path.Combine(driveRoot, "Recovery"), "Windows recovery files");
+            AddIfCovered(Path.Combine(driveRoot, "PerfLogs"), "system performance logs");
+        }
+
+        return suggestions;
     }
 
     private static string SafeNormalize(string path)

@@ -36,6 +36,8 @@ public sealed class PreviewCoreRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
     private static readonly string Win32FileDialogSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "Helpers", "Win32FileDialog.cs"));
+    private static readonly string ShellContextMenuSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "Helpers", "ShellContextMenu.cs"));
     private static readonly string AppXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "App.xaml"));
     private static readonly string TerminalHtml = File.ReadAllText(
@@ -1127,7 +1129,7 @@ public sealed class PreviewCoreRegressionTests
             "CollapseAdvancedOptionsForSearch();",
             "await SubmitSearchWithSlowModelWatchAsync();");
 
-        string autoSearch = ExtractMethodWindow(MainWindowSource, "OnContentLoaded", 4600);
+        string autoSearch = ExtractMethodWindow(MainWindowSource, "OnContentLoaded", 4800);
         AssertContainsInOrder(autoSearch,
             "if (await RunPreSearchWarningGatesAsync())",
             "CollapseAdvancedOptionsForSearch();",
@@ -2802,7 +2804,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("Click=\"OnPreviewSelectedFiles\"", headerFlyout);
         Assert.Contains("Tag=\"{x:Bind FilePath}\"", headerFlyout);
 
-        string opening = ExtractMethodWindow(MainWindowSource, "OnFileHeaderContextMenuOpening", window: 1800);
+        string opening = ExtractMethodWindow(MainWindowSource, "OnFileHeaderContextMenuOpening", window: 2200);
         AssertContainsInOrder(opening,
             "var contextGroup = GetFileHeaderContextGroup(flyout)",
             "flyout.Items.OfType<MenuFlyoutItem>()",
@@ -2870,7 +2872,7 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void FileHeaderContextMenu_OpensFileWithDefaultApplicationFromLastItem()
+    public void FileHeaderContextMenu_OpensFileWithDefaultApplication()
     {
         string headerFlyout = ExtractXamlWindow(
             "<MenuFlyout Opening=\"OnFileHeaderContextMenuOpening\"", 3200);
@@ -2878,6 +2880,8 @@ public sealed class PreviewCoreRegressionTests
             "Text=\"Save Selected Files With Content…\"",
             "<MenuFlyoutSeparator />",
             "Text=\"Open with default application\" Click=\"OnOpenFileGroupWithDefaultApplication\" Tag=\"{x:Bind FilePath}\"",
+            "<MenuFlyoutSeparator />",
+            "Text=\"More options...\" Click=\"OnShowFileGroupShellContextMenu\" Tag=\"{x:Bind FilePath}\"",
             "</MenuFlyout>");
 
         string openDefault = ExtractMethodWindow(
@@ -2886,6 +2890,75 @@ public sealed class PreviewCoreRegressionTests
             "sender is not FrameworkElement { Tag: string path } || string.IsNullOrWhiteSpace(path)",
             "Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });",
             "Failed to open in default application: {Path}");
+    }
+
+    [Fact]
+    public void FileHeaderContextMenu_MoreOptionsHostsTraditionalExplorerMenu()
+    {
+        string handler = ExtractMethodWindow(
+            MainWindowSource, "OnShowFileGroupShellContextMenu", window: 2200);
+        AssertContainsInOrder(handler,
+            "FileGroup? group = GetFileHeaderContextGroup(sender);",
+            "group.IsArchiveEntry",
+            "ZipArchiveSearcher.SplitArchivePath(group.FilePath).ArchivePath",
+            "(int X, int Y)? origin = _fileHeaderContextMenuScreenPoint;",
+            "DispatcherQueue.TryEnqueue(() => ShowFileGroupShellContextMenu(path, origin));");
+
+        // The native menu anchors where the WinUI flyout opened, not where "More options..." was clicked.
+        string opening = ExtractMethodWindow(
+            MainWindowSource, "OnFileHeaderContextMenuOpening", window: 700);
+        Assert.Contains("_fileHeaderContextMenuScreenPoint =", opening);
+        Assert.Contains("ShellContextMenu.TryGetCursorPosition(out int contextX, out int contextY)", opening);
+
+        string showMenu = ExtractMethodWindow(
+            MainWindowSource, "ShowFileGroupShellContextMenu", window: 2200);
+        AssertContainsInOrder(showMenu,
+            "if (!File.Exists(path) && !Directory.Exists(path))",
+            "ViewModel.StatusText = $\"File no longer exists: {path}\";",
+            "Helpers.ShellContextMenu.ShowAt(GetMainWindowHandle(), path, point.X, point.Y);",
+            "Helpers.ShellContextMenu.ShowAtCursor(GetMainWindowHandle(), path);",
+            "Failed to show Explorer context menu: {Path}");
+        Assert.Contains("TpmReturnCommand | TpmRightButton | TpmLeftAlign | TpmTopAlign", ShellContextMenuSource);
+
+        Assert.Contains("SHParseDisplayName(path, IntPtr.Zero, out itemPidl", ShellContextMenuSource);
+        Assert.Contains("SHBindToParent(itemPidl, in IID_IShellFolder", ShellContextMenuSource);
+        Assert.Contains("VtableSlot_GetUiObjectOf", ShellContextMenuSource);
+        Assert.Contains("SetWindowSubclass(owner, menuWindowProc", ShellContextMenuSource);
+        Assert.Contains("TryHandleShellMenuMessage(contextMenu2, contextMenu3", ShellContextMenuSource);
+        Assert.Contains("TrackPopupMenuEx(", ShellContextMenuSource);
+        Assert.Contains("if (selectedCommand == 0)", ShellContextMenuSource);
+        Assert.Contains("uint commandOffset = selectedCommand - CommandIdFirst;", ShellContextMenuSource);
+        Assert.Contains("VtableSlot_InvokeCommand", ShellContextMenuSource);
+        Assert.Contains("GC.KeepAlive(menuWindowProc);", ShellContextMenuSource);
+        Assert.Contains("ArgumentException.ThrowIfNullOrWhiteSpace(path);", ShellContextMenuSource);
+        Assert.Contains("if (owner == IntPtr.Zero)", ShellContextMenuSource);
+        Assert.Contains("if (!subclassInstalled)", ShellContextMenuSource);
+
+        AssertContainsInOrder(ShellContextMenuSource,
+            "finally",
+            "RemoveWindowSubclass(owner, menuWindowProc, ShellMenuSubclassId);",
+            "DestroyMenu(menu);",
+            "Release(contextMenu3);",
+            "Release(contextMenu2);",
+            "Release(contextMenu);",
+            "Release(parentFolder);",
+            "Marshal.FreeCoTaskMem(childPidlArray);",
+            "CoTaskMemFree(itemPidl);");
+
+        // Extended verbs stay Shift-gated, exactly as Explorer presents them.
+        AssertContainsInOrder(ShellContextMenuSource,
+            "uint queryFlags = CmfNormal;",
+            "if ((GetAsyncKeyState(VkShift) & 0x8000) != 0)",
+            "queryFlags |= CmfExtendedVerbs;",
+            "queryContextMenu(contextMenu, menu, 0, CommandIdFirst, CommandIdLast, queryFlags)");
+
+        // Native AOT: vtable calls go through unmanaged function pointers, never COM interop or
+        // per-call delegate marshalling stubs.
+        Assert.Contains("delegate* unmanaged[Stdcall]<", ShellContextMenuSource);
+        Assert.DoesNotContain("Marshal.GetDelegateForFunctionPointer", ShellContextMenuSource);
+        Assert.DoesNotContain("[ComImport]", ShellContextMenuSource);
+        Assert.DoesNotContain("Marshal.GetObjectForIUnknown", ShellContextMenuSource);
+        Assert.DoesNotContain("Marshal.ReleaseComObject", ShellContextMenuSource);
     }
 
     [Fact]

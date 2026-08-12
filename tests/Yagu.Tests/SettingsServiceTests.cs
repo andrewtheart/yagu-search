@@ -902,6 +902,21 @@ public class SettingsServiceNewFieldTests
         => Assert.Empty(new AppSettings().ContentIndexLiveScanWarningDismissedRoots);
 
     [Fact]
+    public void IndexLiteralPathFilterNotice_DefaultsFalseAndRoundTrips()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "qg-index-filter-notice-" + Guid.NewGuid() + ".json");
+        try
+        {
+            Assert.False(new AppSettings().HasPromptedIndexLiteralPathFilters);
+            var service = new SettingsService(path);
+            service.Save(new AppSettings { HasPromptedIndexLiteralPathFilters = true });
+
+            Assert.True(service.Load().HasPromptedIndexLiteralPathFilters);
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
+    [Fact]
     public void SemanticModelQualificationFields_DefaultToNotCompletedEmptyAlias()
     {
         var s = new AppSettings();

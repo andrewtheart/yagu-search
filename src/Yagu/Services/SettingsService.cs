@@ -1219,6 +1219,9 @@ public sealed class AppSettings
     public bool HasCompletedFirstRun { get; set; }
     /// <summary>Whether the one-time "add a folder to the content index" onboarding prompt has been shown.</summary>
     public bool HasPromptedIndexOnboarding { get; set; }
+    /// <summary>Whether the one-time notice about literal absolute paths in index filters now excluding whole
+    /// subtrees (they were previously inert) has been shown.</summary>
+    public bool HasPromptedIndexLiteralPathFilters { get; set; }
     /// <summary>Whether the one-time first-launch "choose your window style" (launcher vs traditional) prompt has been shown.</summary>
     public bool HasPromptedWindowMode { get; set; }
     /// <summary>Whether the first file-drawer introductory tooltip has been shown.</summary>

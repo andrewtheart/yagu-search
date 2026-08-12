@@ -80,6 +80,7 @@
     <Compile Include="..\Yagu\Services\Index\ContentIndexGenerationSerializer.cs" Link="Linked\Index\ContentIndexGenerationSerializer.cs" />
     <Compile Include="..\Yagu\Services\Index\ContentIndexIncrementalRefresher.cs" Link="Linked\Index\ContentIndexIncrementalRefresher.cs" />
     <Compile Include="..\Yagu\Services\Index\ContentIndexIncrementalUpdater.cs" Link="Linked\Index\ContentIndexIncrementalUpdater.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexUpdateStages.cs" Link="Linked\Index\IndexUpdateStages.cs" />
     <Compile Include="..\Yagu\Services\Index\ContentIndexManager.cs" Link="Linked\Index\ContentIndexManager.cs" />
     <Compile Include="..\Yagu\Services\Index\IndexedRootsPolicy.cs" Link="Linked\Index\IndexedRootsPolicy.cs" />
     <Compile Include="..\Yagu\Services\Index\ContentIndexStore.cs" Link="Linked\Index\ContentIndexStore.cs" />

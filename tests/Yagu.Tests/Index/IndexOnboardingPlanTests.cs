@@ -131,4 +131,67 @@ public sealed class IndexOnboardingPlanTests
     {
         Assert.False(IndexOnboardingPlan.IsLikelyLargeRoot(@"\\server\share\projects"));
     }
+
+    [Fact]
+    public void SuggestedSystemExclusions_WholeSystemDrive_ReturnsConservativeCoveredPaths()
+    {
+        IReadOnlyList<IndexOnboardingFilterSuggestion> suggestions =
+            IndexOnboardingPlan.SuggestedSystemExclusions([@"C:\"], @"C:\Windows");
+        IReadOnlyList<IndexOnboardingFilterSuggestion> defaults =
+            IndexOnboardingPlan.SuggestedSystemExclusions([@"C:\"]);
+
+        Assert.Contains(suggestions, item => item.Path == @"C:\Windows");
+        Assert.Contains(suggestions, item => item.Path == @"C:\Program Files");
+        Assert.Contains(suggestions, item => item.Path == @"C:\Program Files (x86)");
+        Assert.Contains(suggestions, item => item.Path == @"C:\ProgramData\Package Cache");
+        Assert.Contains(suggestions, item => item.Path == @"C:\$Recycle.Bin");
+        Assert.Contains(suggestions, item => item.Path == @"C:\System Volume Information");
+        Assert.Contains(suggestions, item => item.Path == @"C:\Recovery");
+        Assert.Contains(suggestions, item => item.Path == @"C:\PerfLogs");
+        Assert.Contains(defaults, item => item.Description == "Windows operating-system files");
+    }
+
+    [Fact]
+    public void SuggestedSystemExclusions_NarrowRoot_DoesNotProposePathsOutsideIt()
+    {
+        IReadOnlyList<IndexOnboardingFilterSuggestion> suggestions =
+            IndexOnboardingPlan.SuggestedSystemExclusions([@"C:\Users\andre"], @"C:\Windows");
+
+        Assert.Empty(suggestions);
+    }
+
+    [Fact]
+    public void SuggestedSystemExclusions_NonSystemDrive_OnlyReturnsDriveMetadataPaths()
+    {
+        IReadOnlyList<IndexOnboardingFilterSuggestion> suggestions =
+            IndexOnboardingPlan.SuggestedSystemExclusions([@"D:\"], @"C:\Windows");
+
+        Assert.DoesNotContain(suggestions, item => item.Path.StartsWith(@"C:\", System.StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(suggestions, item => item.Path == @"D:\$Recycle.Bin");
+        Assert.Contains(suggestions, item => item.Path == @"D:\System Volume Information");
+    }
+
+    [Theory]
+    [MemberData(nameof(EmptyCandidateRoots))]
+    public void SuggestedSystemExclusions_NoCandidateRoots_ReturnsEmpty(IEnumerable<string>? roots)
+        => Assert.Empty(IndexOnboardingPlan.SuggestedSystemExclusions(roots, @"C:\Windows"));
+
+    public static IEnumerable<object?[]> EmptyCandidateRoots()
+    {
+        yield return [null];
+        yield return [Array.Empty<string>()];
+        yield return [new[] { "", "   " }];
+    }
+
+    [Theory]
+    [InlineData("Windows")]
+    [InlineData("   ")]
+    public void SuggestedSystemExclusions_UnrootedWindowsDirectory_SkipsSystemPaths(string windowsDirectory)
+    {
+        IReadOnlyList<IndexOnboardingFilterSuggestion> suggestions =
+            IndexOnboardingPlan.SuggestedSystemExclusions([@"C:\"], windowsDirectory);
+
+        Assert.DoesNotContain(suggestions, item => item.Description.Contains("operating-system"));
+        Assert.Contains(suggestions, item => item.Path == @"C:\$Recycle.Bin");
+    }
 }

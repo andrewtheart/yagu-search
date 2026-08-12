@@ -157,7 +157,8 @@ public sealed partial class ContentIndexIncrementalUpdater
         IndexMaintenanceSettings settings,
         DateTimeOffset builtUtc,
         CancellationToken cancellationToken = default,
-        bool commitCheckpointWhenUnchanged = false)
+        bool commitCheckpointWhenUnchanged = false,
+        Action<int, string>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(mutation);
         ArgumentNullException.ThrowIfNull(changed);
@@ -233,19 +234,33 @@ public sealed partial class ContentIndexIncrementalUpdater
             segmentBuilder.SeedVolumeBinding(boundVolume);
         else
             segmentBuilder.SeedVolumeSerialNumber(baseManifest.VolumeSerialNumber);
+
+        var phaseTimer = System.Diagnostics.Stopwatch.StartNew();
+        int mergeTotal = changed.Count + deletedPaths.Count;
+        int merged = 0;
+        int lastMergePercent = -1;
+        progress?.Invoke(IndexUpdateStages.MergeFloor, IndexUpdateStages.Merging);
         foreach (IncrementalChange change in changed)
         {
             cancellationToken.ThrowIfCancellationRequested();
             segmentBuilder.AddChangedClassified(change.Path, change.Classification, change.Identity);
+            ReportMerge(++merged);
         }
         foreach (string deleted in deletedPaths)
         {
             cancellationToken.ThrowIfCancellationRequested();
             segmentBuilder.AddTombstone(deleted);
+            ReportMerge(++merged);
         }
+        long mergeMs = phaseTimer.ElapsedMilliseconds;
 
+        progress?.Invoke(IndexUpdateStages.WriteFloor, IndexUpdateStages.Writing);
+        phaseTimer.Restart();
         ContentIndexDeltaSegment segment = segmentBuilder.Build(scopeId, volumeIdentity, normalizedRootPath, checkpoint, builtUtc);
+        long buildMs = phaseTimer.ElapsedMilliseconds;
 
+        progress?.Invoke(IndexUpdateStages.PublishFloor, IndexUpdateStages.Publishing);
+        phaseTimer.Restart();
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -258,12 +273,15 @@ public sealed partial class ContentIndexIncrementalUpdater
             return IncrementalUpdateOutcome.NeedsFullRebuild;
         }
 
-        YaguLog.For("ContentIndex").LogInformation("Incremental update for scope {Scope}: appended delta segment ({ChangedCount} changed, {DeletedCount} deleted).", scopeId, changed.Count, deletedPaths.Count);
+        YaguLog.For("ContentIndex").LogInformation(
+            "Incremental update for scope {Scope}: appended delta segment ({ChangedCount} changed, {DeletedCount} deleted) — merge {MergeMs} ms, serialize {BuildMs} ms, publish {PublishMs} ms.",
+            scopeId, changed.Count, deletedPaths.Count, mergeMs, buildMs, phaseTimer.ElapsedMilliseconds);
 
         int maxSegments = budgetMaxSegments;
         int thresholdMB = Math.Clamp(settings.CompactionThresholdMB, 1, 8192);
         if (_store.ActiveSegmentCount() > maxSegments && size.AllowsCoalescing)
         {
+            progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);
             try
             {
                 CoalesceSmallSegmentsUnderLease(mutation, maxSegments, cancellationToken, size);
@@ -309,6 +327,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                 return IncrementalUpdateOutcome.SegmentAppended;
 
             cancellationToken.ThrowIfCancellationRequested();
+            progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);
             YaguLog.For("ContentIndex").LogInformation("Incremental update for scope {Scope}: compaction bounds exceeded (maxSegments={MaxSegments}, thresholdMB={ThresholdMB}) → compacting layered index into a fresh base.", scopeId, maxSegments, thresholdMB);
             ContentIndexGeneration compacted = ContentIndexCompactor.Compact(handle, _policy, builtUtc);
             cancellationToken.ThrowIfCancellationRequested();
@@ -318,6 +337,18 @@ public sealed partial class ContentIndexIncrementalUpdater
         }
 
         return IncrementalUpdateOutcome.SegmentAppended;
+
+        void ReportMerge(int done)
+        {
+            if (progress is null || mergeTotal <= 0)
+                return;
+            int percent = IndexUpdateStages.MergeFloor
+                + (int)((long)done * (IndexUpdateStages.MergeCeiling - IndexUpdateStages.MergeFloor) / mergeTotal);
+            if (percent == lastMergePercent)
+                return;
+            lastMergePercent = percent;
+            progress(percent, IndexUpdateStages.Merging);
+        }
     }
 
     internal int CoalesceSmallSegmentsUnderLease(

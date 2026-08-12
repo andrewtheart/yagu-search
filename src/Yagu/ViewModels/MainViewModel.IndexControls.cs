@@ -117,6 +117,67 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(CanPauseIndexing));
     }
 
+    /// <summary>How long <see cref="CancelActiveIndexBuildForReplacementAsync"/> waits for the cancelled
+    /// operation to release its worker lease before giving up.</summary>
+    public static readonly TimeSpan IndexBuildDrainTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Stops the currently tracked index operation so an explicitly approved rebuild can replace it.
+    /// Unlike <see cref="PauseIndexing"/>, this does not enter the paused state or re-kick the cancelled
+    /// operation. It waits until the operation has released its worker lease, then rotates the shared
+    /// cancellation source so the replacement receives a fresh token. Returns false when the operation did
+    /// not drain within <see cref="IndexBuildDrainTimeout"/>, leaving the shared source untouched so the
+    /// caller can abandon the replacement instead of racing the single writer.
+    /// </summary>
+    public async Task<bool> CancelActiveIndexBuildForReplacementAsync(CancellationToken cancellationToken)
+    {
+        if (!_dispatcher.HasThreadAccess)
+        {
+            var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_dispatcher.TryEnqueue(async () =>
+                {
+                    try
+                    {
+                        completion.TrySetResult(
+                            await CancelActiveIndexBuildForReplacementAsync(cancellationToken).ConfigureAwait(true));
+                    }
+                    catch (Exception ex)
+                    {
+                        completion.TrySetException(ex);
+                    }
+                }))
+            {
+                throw new InvalidOperationException("Could not dispatch index cancellation to the UI thread.");
+            }
+
+            return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (IsIndexBuildActive)
+        {
+            YaguLog.For("ContentIndex").LogInformation(
+                "Stopping the active index operation before an explicitly approved replacement rebuild.");
+            _indexBuildCancellation?.Cancel();
+            DateTimeOffset deadline = DateTimeOffset.UtcNow + IndexBuildDrainTimeout;
+            while (IsIndexBuildActive)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (DateTimeOffset.UtcNow >= deadline)
+                {
+                    YaguLog.For("ContentIndex").LogWarning(
+                        "The active index operation did not stop within {Seconds}s; the replacement rebuild was abandoned.",
+                        (int)IndexBuildDrainTimeout.TotalSeconds);
+                    return false;
+                }
+                await Task.Delay(50, cancellationToken).ConfigureAwait(true);
+            }
+        }
+
+        _indexBuildCancellation?.Dispose();
+        _indexBuildCancellation = null;
+        return true;
+    }
+
     /// <summary>
     /// Resumes indexing after a pause: clears the pause, replaces the cancellation source, and re-starts the
     /// build for the folder that was building when paused (if any). Safe from any thread.
@@ -382,6 +443,7 @@ public sealed partial class MainViewModel
         if (!string.IsNullOrWhiteSpace(folder))
             _activeIndexBuildFolder = folder;
         _activeIndexBuildIsIncremental = isIncremental;
+        _activeIndexBuildPhase = null;
         _indexBuildPercent = -1; // fresh build starts at an unknown estimate
         ShowIndexBuildingStatus();
         OnPropertyChanged(nameof(IsIndexBuildActive));
@@ -428,10 +490,15 @@ public sealed partial class MainViewModel
             _indexBuildPercent = percent;
             changed = true;
         }
-        bool incremental = string.Equals(stage, "incremental", StringComparison.OrdinalIgnoreCase);
+        bool incremental = IndexUpdateStages.IsIncremental(stage);
         if (stage is not null && incremental != _activeIndexBuildIsIncremental)
         {
             _activeIndexBuildIsIncremental = incremental;
+            changed = true;
+        }
+        if (stage is not null && !string.Equals(stage, _activeIndexBuildPhase, StringComparison.Ordinal))
+        {
+            _activeIndexBuildPhase = stage;
             changed = true;
         }
 
@@ -545,15 +612,17 @@ public sealed partial class MainViewModel
         IndexStatusGlyph = "\uE895"; // Sync
         // Surface the estimate right in the status-bar text so the progress is visible at a glance, and
         // populate the custom tooltip's big percent + progress bar (below).
-        string activity = _activeIndexBuildIsIncremental ? "Updating index" : "Indexing";
-        IndexStatusText = _activeIndexBuildIsIncremental && _indexBuildPercent >= 100
-            ? "Finalizing index update\u2026"
-            : _indexBuildPercent >= 0 ? $"{activity}\u2026 {_indexBuildPercent}%" : $"{activity}\u2026";
+        IndexStatusText = ContentIndexUiStatus.BuildActivityLabel(
+            _activeIndexBuildIsIncremental,
+            _activeIndexBuildPhase,
+            _indexBuildPercent);
         if (_activeIndexBuildIsIncremental)
         {
             IndexStatusTooltip = string.IsNullOrWhiteSpace(_activeIndexBuildFolder)
                 ? "Updating the existing content index incrementally\u2026 This runs in the background; searches keep working and the current index remains available. Right-click to pause."
                 : $"Updating the existing content index for {_activeIndexBuildFolder} incrementally\u2026 This runs in the background; searches keep working and the current index remains available. Right-click to pause.";
+            if (ContentIndexUiStatus.BuildActivityDetail(_activeIndexBuildPhase) is { } phaseDetail)
+                IndexStatusTooltip = phaseDetail + "\n\n" + IndexStatusTooltip;
         }
         else
         {

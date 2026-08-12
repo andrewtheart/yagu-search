@@ -189,6 +189,7 @@
     <Compile Include="..\..\src\Yagu\Services\Index\IndexBuildProgressEstimate.cs" Link="Source\Services\Index\IndexBuildProgressEstimate.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\IndexingCloseWarning.cs" Link="Source\Services\Index\IndexingCloseWarning.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexUiStatus.cs" Link="Source\Services\Index\ContentIndexUiStatus.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexUpdateStages.cs" Link="Source\Services\Index\IndexUpdateStages.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\UsnJournalReader.cs" Link="Source\Services\Index\UsnJournalReader.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\UsnFileRecordParser.cs" Link="Source\Services\Index\UsnFileRecordParser.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\VolumeChangeScanner.cs" Link="Source\Services\Index\VolumeChangeScanner.cs" />

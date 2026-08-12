@@ -1249,17 +1249,53 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("ShowTopRightCloseButton = true", advice);
         Assert.Contains("Search results remain correct before rebuilding", advice);
         Assert.Contains("Rebuilding updates acceleration coverage", advice);
+        Assert.Contains("Stop and rebuild now", advice);
+        Assert.Contains("The current indexing operation will stop first", advice);
         Assert.Contains("RunRecommendedIndexRebuildsAsync(advice.AffectedRoots)", advice);
 
-        string rebuilds = ExtractMethod(advice, "RunRecommendedIndexRebuildsAsync", window: 7200);
+        string rebuilds = ExtractMethod(advice, "RunRecommendedIndexRebuildsAsync", window: 10000);
         AssertContainsInOrder(rebuilds,
             "IndexedRootsPolicy.Normalize(requestedRoots)",
+            "if (_viewModel.IsIndexBuildActive)",
+            "drainTimedOut = !await _viewModel.CancelActiveIndexBuildForReplacementAsync(cts.Token)",
+            "if (!drainTimedOut)",
+            "CancellationTokenSource.CreateLinkedTokenSource(",
+            "_viewModel.BeginIndexBuildActivity(roots[0]);",
             "for (int i = 0; i < roots.Length; i++)",
             "IndexBuildOperationFactory.CreateBuild(",
             "rebuild: true",
             "BuildFullScopePreferWorkerAsync(",
             "RefreshAllDriveIndexStatus();",
             "RefreshIndexStorageStatsAsync();");
+
+        // A wedged operation must not pin the tab on "stopping..." forever.
+        Assert.Contains("did not stop in time, so nothing was rebuilt", rebuilds);
+        Assert.Contains(
+            "public static readonly TimeSpan IndexBuildDrainTimeout",
+            MainViewModelPartials.Text);
+
+        string cancel = ExtractMethod(
+            MainViewModelPartials.Text,
+            "CancelActiveIndexBuildForReplacementAsync",
+            window: 5000);
+        Assert.Contains("if (!_dispatcher.HasThreadAccess)", cancel);
+        Assert.Contains("if (!_dispatcher.TryEnqueue(async () =>", cancel);
+        Assert.Contains("completion.TrySetException(ex);", cancel);
+        Assert.Contains("WaitAsync(cancellationToken)", cancel);
+        Assert.Contains("_indexBuildCancellation?.Cancel();", cancel);
+        Assert.Contains("cancellationToken.ThrowIfCancellationRequested();", cancel);
+        Assert.Contains("return false;", cancel);
+        Assert.Contains("_indexBuildCancellation?.Dispose();", cancel);
+        Assert.Contains("_indexBuildCancellation = null;", cancel);
+        Assert.DoesNotContain("IsIndexingPaused = true;", cancel);
+
+        AssertContainsInOrder(rebuilds,
+            "bool rebuildActivityStarted = false;",
+            "if (!drainTimedOut)",
+            "_viewModel.BeginIndexBuildActivity(roots[0]);",
+            "rebuildActivityStarted = true;",
+            "if (rebuildActivityStarted)",
+            "_viewModel.EndIndexBuildActivity();");
     }
 
     [Fact]

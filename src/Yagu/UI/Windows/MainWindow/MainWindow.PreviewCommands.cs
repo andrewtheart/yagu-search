@@ -787,6 +787,49 @@ public sealed partial class MainWindow
         catch (Exception ex) { YaguLog.For("MainWindow").LogWarning(ex, "Failed to open in default application: {Path}", path); }
     }
 
+    /// <summary>Screen point where the file-header context flyout was last opened.</summary>
+    private (int X, int Y)? _fileHeaderContextMenuScreenPoint;
+
+    private void OnShowFileGroupShellContextMenu(object sender, RoutedEventArgs e)
+    {
+        FileGroup? group = GetFileHeaderContextGroup(sender);
+        string? path = group is null
+            ? (sender as FrameworkElement)?.Tag as string
+            : group.IsArchiveEntry
+                ? ZipArchiveSearcher.SplitArchivePath(group.FilePath).ArchivePath
+                : group.FilePath;
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        (int X, int Y)? origin = _fileHeaderContextMenuScreenPoint;
+
+        // The owning MenuFlyout closes as this item is clicked. Open the native popup on the next
+        // dispatcher turn so that close does not immediately dismiss the Explorer menu too.
+        DispatcherQueue.TryEnqueue(() => ShowFileGroupShellContextMenu(path, origin));
+    }
+
+    private void ShowFileGroupShellContextMenu(string path, (int X, int Y)? origin)
+    {
+        if (!File.Exists(path) && !Directory.Exists(path))
+        {
+            ViewModel.StatusText = $"File no longer exists: {path}";
+            YaguLog.For("MainWindow").LogWarning("Explorer context menu target no longer exists: {Path}", path);
+            return;
+        }
+
+        try
+        {
+            if (origin is { } point)
+                Helpers.ShellContextMenu.ShowAt(GetMainWindowHandle(), path, point.X, point.Y);
+            else
+                Helpers.ShellContextMenu.ShowAtCursor(GetMainWindowHandle(), path);
+        }
+        catch (Exception ex)
+        {
+            ViewModel.StatusText = $"Could not open Explorer options for {Path.GetFileName(path)}.";
+            YaguLog.For("MainWindow").LogWarning(ex, "Failed to show Explorer context menu: {Path}", path);
+        }
+    }
+
     // ── Group mode menu handlers ──────────────────────────────────
 
     private void OnGroupModeNone(object sender, RoutedEventArgs e) { ViewModel.GroupModeIndex = (int)GroupMode.None; }
@@ -1594,6 +1637,13 @@ public sealed partial class MainWindow
 
     private void OnFileHeaderContextMenuOpening(object sender, object e)
     {
+        // Where the WinUI flyout is about to appear. "More options..." reuses it so the Explorer menu
+        // opens over the same spot instead of wherever the pointer ended up inside this flyout.
+        _fileHeaderContextMenuScreenPoint =
+            Helpers.ShellContextMenu.TryGetCursorPosition(out int contextX, out int contextY)
+                ? (contextX, contextY)
+                : null;
+
         if (sender is MenuFlyout flyout)
         {
             var contextGroup = GetFileHeaderContextGroup(flyout)
@@ -1625,7 +1675,8 @@ public sealed partial class MainWindow
             bool plural = count > 1;
             // Items layout: [0]=Preview, [1]=PreviewAll, [2]=Sep, [3]=CopyPath, [4]=OpenFolder,
             // [5]=Sep, [6]=CopyPaths, [7]=CopyWithContent, [8]=Sep, [9]=SavePaths,
-            // [10]=SaveWithContent, [11]=Sep, [12]=OpenWithDefaultApplication
+            // [10]=SaveWithContent, [11]=Sep, [12]=OpenWithDefaultApplication, [13]=Sep,
+            // [14]=MoreOptions
             foreach (var item in flyout.Items.OfType<MenuFlyoutItem>())
             {
                 if (item.Text.StartsWith("Copy Selected File Path", StringComparison.Ordinal))

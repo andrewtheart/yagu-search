@@ -258,6 +258,7 @@ public sealed class CliRunnerRegressionTests
         Assert.Contains("TryGetVal(raw, ref i, out v, \"--root-exclude\")", source);
         Assert.Contains("IndexedRootFilterPolicy.Normalize(filters)", source);
         Assert.Contains("IndexedRootFilterPolicy.Find(settings.IndexedRootFilters, root)", source);
+        Assert.Contains("directory (C:/path or C:\\path, case-insensitive) matches all descendants", source);
 
         // Backing args + the management short-circuit dispatch.
         Assert.Contains("public bool?            UseContentIndex { get; private set; }", source);

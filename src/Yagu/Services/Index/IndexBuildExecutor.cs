@@ -82,7 +82,7 @@ internal sealed class IndexMaintenanceRuntime
     public Func<IndexMutationContext, ContentIndexManager, IContentIndexPathProvider, int, string, bool> Reanchor { get; init; }
         = TryProductionReanchor;
 
-    public Func<IndexMutationContext, IContentIndexPathProvider, int, string, IndexIngestionPolicy, IndexMaintenanceSettings, CancellationToken, Action<int>?, IncrementalUpdateOutcome> Refresh { get; init; }
+    public Func<IndexMutationContext, IContentIndexPathProvider, int, string, IndexIngestionPolicy, IndexMaintenanceSettings, CancellationToken, Action<int, string>?, IncrementalUpdateOutcome> Refresh { get; init; }
         = RunProductionRefresh;
 
     private static bool TryProductionReanchor(
@@ -102,7 +102,7 @@ internal sealed class IndexMaintenanceRuntime
         IndexIngestionPolicy policy,
         IndexMaintenanceSettings settings,
         CancellationToken cancellationToken,
-        Action<int>? progress)
+        Action<int, string>? progress)
         => RunProductionRefreshWithDetails(
             mutation,
             paths,
@@ -131,7 +131,7 @@ internal sealed class IndexMaintenanceRuntime
             operation.PostBuildCatchUpSettings,
             threshold,
             cancellationToken,
-            progress);
+            progress is null ? null : (percent, _) => progress(percent));
         return new PostBuildCatchUpResult(
             Checked: true,
             ThresholdChanges: threshold,
@@ -150,7 +150,7 @@ internal sealed class IndexMaintenanceRuntime
         IndexMaintenanceSettings settings,
         int? minimumJournalChanges,
         CancellationToken cancellationToken,
-        Action<int>? progress)
+        Action<int, string>? progress)
     {
         string scopeId = ContentIndexManager.ScopeIdForRoot(root);
         var store = new ContentIndexStore(paths, scopeId, retainedGenerations);
@@ -442,7 +442,7 @@ internal static class IndexBuildExecutor
                     continue;
                 }
 
-                progress?.Invoke(root, -1, "incremental");
+                progress?.Invoke(root, -1, IndexUpdateStages.Incremental);
                 IncrementalUpdateOutcome outcome = runtime.Refresh(
                     mutation,
                     paths,
@@ -451,7 +451,7 @@ internal static class IndexBuildExecutor
                     policy,
                     operation.Settings,
                     cancellationToken,
-                    pct => progress?.Invoke(root, pct, "incremental"));
+                    (pct, phase) => progress?.Invoke(root, pct, phase));
                 switch (outcome)
                 {
                     case IncrementalUpdateOutcome.SegmentAppended:

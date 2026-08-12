@@ -222,6 +222,61 @@ public sealed class GlobMatcherBranchCoverageTests
         Assert.True(m.Matches(@"C:\project\src\nested\file.cs"));
     }
 
+    [Theory]
+    [InlineData(@"C:/windows/system32", @"C:\Windows\System32\drivers\etc\hosts")]
+    [InlineData(@"C:\windows\system32", @"c:/WINDOWS/system32/config/SAM")]
+    public void AbsoluteDirectoryPath_ExcludesDescendants_IgnoringSlashStyleAndCase(string pattern, string path)
+    {
+        var m = new GlobMatcher([], [pattern]);
+
+        Assert.False(m.Matches(pattern));
+        Assert.False(m.Matches(path));
+        Assert.True(m.Matches(@"C:\Windows\System32-old\keep.txt"));
+    }
+
+    [Fact]
+    public void SplitPatternList_KeepsCommasInsideLiteralPaths()
+    {
+        Assert.Equal(
+            [@"C:\Program Files\Acme, Inc", "**/bin/**"],
+            GlobMatcher.SplitPatternList(@"C:\Program Files\Acme, Inc; **/bin/**"));
+    }
+
+    [Theory]
+    [InlineData(@"C:\a, C:\b", new[] { @"C:\a", @"C:\b" })]
+    [InlineData(@"C:\a, *.min.js", new[] { @"C:\a", "*.min.js" })]
+    [InlineData(@"C:\a, ?oot", new[] { @"C:\a", "?oot" })]
+    [InlineData(@"C:\a,", new[] { @"C:\a," })]
+    [InlineData("ts, cs; json", new[] { "ts", "cs", "json" })]
+    [InlineData("", new string[0])]
+    public void SplitPatternList_SplitsOnCommaWhenTheNextItemStartsANewPattern(string raw, string[] expected)
+    {
+        Assert.Equal(expected, GlobMatcher.SplitPatternList(raw));
+    }
+
+    [Theory]
+    [InlineData("", false)]
+    [InlineData("C:", false)]
+    [InlineData(@"1:\root", false)]
+    [InlineData("C:relative", false)]
+    [InlineData(@"C:\root", true)]
+    [InlineData("C:/root", true)]
+    [InlineData(@"\\server\share", true)]
+    [InlineData("//server/share", true)]
+    [InlineData(@"\server", false)]
+    public void IsRootedPathStart_RecognizesOnlyDriveAndUncRoots(string path, bool expected)
+        => Assert.Equal(expected, GlobMatcher.IsRootedPathStart(path));
+
+    [Fact]
+    public void LiteralPathWithComma_ExcludesItsSubtreeWithoutSplitting()
+    {
+        var m = new GlobMatcher([], [@"C:\Program Files\Acme, Inc"]);
+
+        Assert.False(m.Matches(@"C:\Program Files\Acme, Inc\readme.txt"));
+        Assert.True(m.Matches(@"C:\Program Files\Acme\readme.txt"));
+        Assert.True(m.Matches(@"C:\Inc\readme.txt"));
+    }
+
     // ═══════════════════════════════════════════════════════════════
     //  Regex timeout — catastrophic backtracking is caught and treated
     //  as "no match" instead of throwing (IsRegexMatch catch branch).

@@ -358,6 +358,7 @@ Below the toolbar is a filter bar:
 | Save Selected File Paths… | Saves checked file paths to a text file. |
 | Save Selected Files With Content… | Saves checked files with matched content to a text file. |
 | Open with default application | Opens the right-clicked file with its Windows default application. |
+| More options... | Opens the traditional Windows Explorer context menu for the right-clicked file. |
 
 **On a match line:**
 
@@ -645,14 +646,18 @@ Acceleration is deliberately conservative. Literal, whole-word/exact, and a safe
 
 1. Open **Settings ▸ Indexing**, or use the index glyph beside the directory box/status-bar index indicator.
 2. Add the folder you want Yagu to maintain. A registered parent can accelerate searches in any descendant, so prefer one useful common root instead of overlapping parent/child entries.
-3. Optionally set **Filters…** before building. Global and per-folder build filters control what is stored; excluded or oversized files still live-scan.
+3. Optionally set **Filters…** before building. Global and per-folder build filters control what is stored; excluded or oversized files still live-scan. A literal absolute directory such as `C:/Windows/System32` or `C:\Windows\System32` excludes that directory and all descendants; slash style and letter case are ignored. Separate entries with `;` — a comma inside a literal path (`C:\Program Files\Acme, Inc`) is kept as part of the folder name.
 4. Choose **Build now**. Whole drives and very large/system folders require confirmation. The build runs in the background and uses an isolated worker by default.
 5. Leave **Use the index for searches by default** on, or use Advanced Options ▸ **Use content index** per search. The CLI equivalents are `--use-index` and `--no-index`.
 6. Watch the status-bar indicator or **Manage Indexes** for health. After a search, the coverage summary and optional per-result **indexed** badge show whether acceleration was actually used.
 
+On the one-time first-run whole-drive setup, Yagu proposes editable, preselected per-root exclusions for `Windows`, both `Program Files` folders, `ProgramData\Package Cache`, `$Recycle.Bin`, `System Volume Information`, `Recovery`, and `PerfLogs`. These folders usually contain operating-system, installed-application, recovery, or filesystem metadata rather than personal search content. You can clear any suggestion before building or edit it later under **Settings ▸ Indexing ▸ Filters…**; a narrow root receives only exclusions for paths it actually contains.
+
 During the first build, Yagu crawls the selected folder, reads eligible files, writes private staged index data, validates it, and then publishes the complete generation atomically. You can continue using Yagu; builds pause during searches by default. A first build has no resumable percentage checkpoint: cancelling or exiting discards that private partial build and the next full build starts over. Once a complete generation exists, it remains usable until a newer complete generation commits.
 
 For ongoing maintenance, **Automatic incremental** is the recommended update mode. Yagu replays the Windows change journal from the last committed checkpoint and publishes a small immutable delta. A file changed after the last update is never trusted as unchanged: it is scanned live until represented by a committed update. Watcher events can request maintenance sooner, but the journal remains authoritative and catches changes made while Yagu was closed.
+
+An incremental update runs in named phases, and the status-bar indicator reports the one currently running: **Updating index…** while journal records are resolved to paths and changed content is read, **Merging changes…** while those changes are folded into a new segment, **Writing index update…**, **Publishing index update…**, and **Compacting index…**. On a large index the phases after resolution can take longer than resolution itself, so each reports separately instead of sharing one label. The log records the per-phase durations of every appended delta, which is the fastest way to see which phase dominates a slow update.
 
 #### What search and status messages mean
 
@@ -700,6 +705,10 @@ The completed-search summary is the authoritative answer for that run. A green o
 #### When settings require a rebuild
 
 **Rebuild advice after settings changes.** When saved settings change what a build stores, Yagu identifies the minimal maintained-folder set and offers an explicit staged rebuild. This applies to the index data location, maximum indexed file size, hidden-file and reparse-point policies, global build-time excluded globs/extensions, per-folder filters, newly added/broadened roots, and enabling PDF-text, image-text, or format-v3 build output. Enabling additive output recommends a rebuild; disabling it applies immediately and does not require one. Query-family switches, query budgets/parallelism, scheduling, build resources, journal limits, compaction thresholds, retention/cleanup, telemetry, and status/provenance settings do **not** trigger rebuild advice because they change how existing indexes are used or maintained, not their stored meaning. The prompt is advisory—search correctness is preserved by live-scan/fallback before rebuilding—and rebuilding several roots is always an explicit, cancellable choice.
+
+If indexing is already active when you accept that recommendation, the primary action says **Stop and rebuild now**. Yagu cancels and drains the current tracked operation first, discards its incomplete staged full-build data, obtains a fresh cancellation token, and then starts the replacement. The previous complete index remains active until the replacement commits. If the running operation does not stop within a minute, nothing is rebuilt and the tab says so, so a wedged operation can never leave the rebuild half-started.
+
+Upgrade note: earlier versions ignored a literal absolute path in the build filters, so such an entry did nothing. It now excludes that directory and everything below it. If your saved filters contain one, Yagu shows a one-time notice at launch naming the affected folders. Searches stay correct in the meantime — anything the index does not cover is scanned live — and the existing index keeps the newly excluded files until you rebuild it.
 
 #### Diagnostics and overlapping roots
 

@@ -42,7 +42,8 @@ public sealed partial class MainViewModel
         IReadOnlyList<string> folders,
         string? buildTrigger,
         string? updateMode = null,
-        bool applyFirstRunDriveIndexingProfile = false)
+        bool applyFirstRunDriveIndexingProfile = false,
+        IReadOnlyList<string>? firstRunExcludedPaths = null)
     {
         if (folders is null || folders.Count == 0)
             return;
@@ -72,6 +73,20 @@ public sealed partial class MainViewModel
             string effectiveRoot = IndexedRootsPolicy.FindBestCoveringRoot(_settings.IndexedRoots, root) ?? root;
             if (!effectiveRoots.Contains(effectiveRoot, StringComparer.OrdinalIgnoreCase))
                 effectiveRoots.Add(effectiveRoot);
+        }
+
+        if (firstRunExcludedPaths is { Count: > 0 })
+        {
+            foreach (string effectiveRoot in effectiveRoots)
+            {
+                string[] coveredExclusions = firstRunExcludedPaths
+                    .Where(path => IndexedRootsPolicy.Covers(effectiveRoot, path))
+                    .ToArray();
+                _settings.IndexedRootFilters = IndexedRootFilterPolicy.AddExcludedPaths(
+                    _settings.IndexedRootFilters,
+                    effectiveRoot,
+                    coveredExclusions);
+            }
         }
 
         await PersistSettingsAsync().ConfigureAwait(true);

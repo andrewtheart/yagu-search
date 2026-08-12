@@ -361,7 +361,7 @@ public sealed class ContentIndexAutoBuilder
                     store, policyForRoot?.Invoke(root) ?? policy, _paths.IndexRoot,
                     journalReader, resolverFactory, readAndClassify, identityProvider);
                 IncrementalUpdateOutcome outcome = refresher.Refresh(scopeId, settings, DateTimeOffset.UtcNow,
-                    onProgress is null ? null : pct => onProgress(root, pct));
+                    onProgress is null ? null : (Action<int, string>)((pct, _) => onProgress(root, pct)));
                 YaguLog.For("ContentIndex").LogInformation("Incremental auto-refresh: '{Root}' stale → refresh outcome {Outcome}.", root, outcome);
 
                 switch (outcome)

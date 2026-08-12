@@ -287,7 +287,5 @@ public static class ContentIndexSettingsChangeAdvisor
     }
 
     private static string[] SplitList(string? value)
-        => (value ?? string.Empty).Split(
-            [',', ';'],
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        => [.. Yagu.Helpers.GlobMatcher.SplitPatternList(value)];
 }

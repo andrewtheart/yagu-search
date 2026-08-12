@@ -1216,7 +1216,7 @@ public sealed partial class SettingsWindow
 
         var excludeBox = new TextBox
         {
-            PlaceholderText = "e.g. **/bin/**, *.min.js",
+            PlaceholderText = "e.g. C:/Windows/System32, **/bin/**, *.min.js",
             TextWrapping = TextWrapping.Wrap,
             Text = existing?.ExcludeGlobs ?? string.Empty,
         };
@@ -1238,6 +1238,14 @@ public sealed partial class SettingsWindow
         });
         panel.Children.Add(new TextBlock { Text = "Exclude globs (added for this folder only):", FontSize = 12, Margin = new Thickness(0, 6, 0, 0) });
         panel.Children.Add(excludeBox);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "A literal absolute directory path excludes that folder and everything below it. Both C:/path and C:\\path forms work, and path matching ignores letter case. "
+                 + "Separate entries with ';' \u2014 a comma inside a literal path (\"C:\\Program Files\\Acme, Inc\") is kept as part of the folder name.",
+            Opacity = 0.75,
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+        });
         panel.Children.Add(new TextBlock { Text = "Include globs (re-admit paths a broader exclude drops):", FontSize = 12, Margin = new Thickness(0, 6, 0, 0) });
         panel.Children.Add(includeBox);
 

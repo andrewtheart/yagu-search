@@ -20,6 +20,7 @@ public sealed partial class MainWindow
         Everything,
         ContextMenu,
         IndexOnboarding,
+        IndexLiteralPathFilters,
         FontContrast,
         CpuSemanticWarning,
         SemanticQualification,
@@ -65,7 +66,7 @@ public sealed partial class MainWindow
         _preparedEverythingStartupDetection = await everythingTask.ConfigureAwait(true);
         _preparedContextMenuRegistered = await contextMenuTask.ConfigureAwait(true);
 
-        var steps = new List<StartupDialogStep>(10);
+        var steps = new List<StartupDialogStep>(11);
         if (!ViewModel.TelemetryConsentPromptShown)
             steps.Add(StartupDialogStep.TelemetryConsent);
         if (!ViewModel.Settings.HasPromptedWindowMode)
@@ -78,6 +79,8 @@ public sealed partial class MainWindow
             steps.Add(StartupDialogStep.ContextMenu);
         if (!ViewModel.Settings.HasPromptedIndexOnboarding && ViewModel.Settings.IndexedRoots.Count == 0)
             steps.Add(StartupDialogStep.IndexOnboarding);
+        if (WillShowIndexLiteralPathFilterNotice())
+            steps.Add(StartupDialogStep.IndexLiteralPathFilters);
         if (WillShowFontContrastStartupPrompt())
             steps.Add(StartupDialogStep.FontContrast);
         if (ViewModel.ShouldShowCpuSemanticWarning)

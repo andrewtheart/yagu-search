@@ -78,6 +78,7 @@ public sealed partial class MainWindow
             await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.Everything, CheckEverythingAsync);
             await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.ContextMenu, CheckFirstRunContextMenuAsync);
             await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.IndexOnboarding, CheckFirstRunIndexOnboardingAsync);
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.IndexLiteralPathFilters, ShowIndexLiteralPathFilterNoticeIfNeededAsync);
             await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.FontContrast, ShowFontContrastWarningIfNeededAsync);
             await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.CpuSemanticWarning, ShowCpuSemanticWarningIfNeededAsync);
             await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.SemanticQualification, OfferSemanticModelQualificationIfNeededAsync);

@@ -550,9 +550,9 @@ public sealed class ContentIndexUsnRefreshTests : IDisposable
             new IndexMaintenanceSettings(),
             DateTimeOffset.UtcNow,
             minimumJournalChanges: 0,
-            progress: percent =>
+            progress: (percent, _) =>
             {
-                if (percent == 100)
+                if (percent == IndexUpdateStages.ResolveCeiling)
                     throw new IOException("progress failed");
             },
             CancellationToken.None);
@@ -640,7 +640,7 @@ public sealed class ContentIndexUsnRefreshTests : IDisposable
             });
 
         IncrementalUpdateOutcome outcome = refresher.Refresh(
-            _scopeId, new AppSettings(), DateTimeOffset.UtcNow, progress.Add);
+            _scopeId, new AppSettings(), DateTimeOffset.UtcNow, (percent, _) => progress.Add(percent));
 
         Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, outcome);
         Assert.Equal(new[] { @"C:\r\a.txt" }, reads);

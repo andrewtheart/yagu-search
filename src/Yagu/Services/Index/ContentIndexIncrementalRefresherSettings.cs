@@ -6,7 +6,7 @@ public sealed partial class ContentIndexIncrementalRefresher
         string scopeId,
         AppSettings settings,
         DateTimeOffset builtUtc,
-        Action<int>? progress = null)
+        Action<int, string>? progress = null)
         => Refresh(
             scopeId,
             IndexBuildOperationFactory.CreateMaintenanceSettings(settings),

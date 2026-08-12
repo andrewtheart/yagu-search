@@ -361,25 +361,25 @@ public sealed class IndexBuildExecutorTests : IDisposable
             CheckFreshness = static (_, _, _) => ContentIndexManager.ScopeFreshnessState.Dirty,
             Refresh = (_, _, _, _, _, _, _, report) =>
             {
-                report?.Invoke(50);
-                report?.Invoke(100);
+                report?.Invoke(50, IndexUpdateStages.Resolving);
+                report?.Invoke(100, IndexUpdateStages.Incremental);
                 return refreshOutcome;
             },
         };
-        var progress = new List<int>();
+        var progress = new List<(int Percent, string Stage)>();
 
         IndexMaintenanceSuccess result = IndexBuildExecutor.RunMaintenancePassUnderLease(
             mutation,
             Maintenance(IndexMaintenanceOperation.ModeIncremental, _root),
             CancellationToken.None,
-            (_, percent, _) => progress.Add(percent),
+            (_, percent, stage) => progress.Add((percent, stage)),
             runtime);
 
         Assert.Equal(expectedBuilt, result.Built);
         Assert.Equal(expectedSkipped, result.Skipped);
         Assert.Equal(expectedAction, Assert.Single(result.Roots).Action);
-        Assert.Contains(50, progress);
-        Assert.Contains(100, progress);
+        Assert.Contains((50, IndexUpdateStages.Resolving), progress);
+        Assert.Contains((100, IndexUpdateStages.Incremental), progress);
     }
 
     [Fact]
@@ -603,7 +603,7 @@ public sealed class IndexBuildExecutorTests : IDisposable
             Refresh = static (_, _, _, _, _, _, _, report) =>
             {
                 Assert.NotNull(report);
-                report!(10); // adapter's outer progress observer is null; must remain a safe no-op
+                report!(10, IndexUpdateStages.Resolving); // adapter's outer progress observer is null; must remain a safe no-op
                 return IncrementalUpdateOutcome.NoChanges;
             },
         };

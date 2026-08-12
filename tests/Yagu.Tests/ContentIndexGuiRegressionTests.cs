@@ -1324,7 +1324,59 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("private async Task<bool> ConfirmLargeFolderIfNeededAsync(string folder)", IndexOnboardingSource);
         Assert.Contains("IndexOnboardingPlan.IsLikelyLargeRoot(folder)", IndexOnboardingSource);
         Assert.Contains("BoundedFileCount(folder, IndexOnboardingPlan.LargeFolderFileThreshold)", IndexOnboardingSource);
-        Assert.Contains("applyFirstRunDriveIndexingProfile);", IndexOnboardingSource);
+        Assert.Contains("applyFirstRunDriveIndexingProfile,", IndexOnboardingSource);
+    }
+
+    [Fact]
+    public void IndexOnboarding_FirstRunSuggestsEditableSystemPathExclusions()
+    {
+        Assert.Contains("IndexOnboardingPlan.SuggestedSystemExclusions(choices, windowsDirectory)", IndexOnboardingSource);
+        Assert.Contains("Suggested exclusions for whole-drive indexing:", IndexOnboardingSource);
+        Assert.Contains("selected by default", IndexOnboardingSource);
+        Assert.Contains("selectedSuggestedExclusions.Remove(path);", IndexOnboardingSource);
+        Assert.Contains("IndexOnboardingPlan.SuggestedSystemExclusions(chosen, windowsDirectory)", IndexOnboardingSource);
+        Assert.Contains("firstRunExcludedPaths);", IndexOnboardingSource);
+
+        string addFolders = ExtractFrom(
+            MainViewModelSource,
+            "public async Task AddFoldersToIndexAndBuildAsync(",
+            4200);
+        Assert.Contains("IReadOnlyList<string>? firstRunExcludedPaths = null", addFolders);
+        Assert.Contains("IndexedRootsPolicy.Covers(effectiveRoot, path)", addFolders);
+        Assert.Contains("IndexedRootFilterPolicy.AddExcludedPaths(", addFolders);
+        int mergeFilters = addFolders.IndexOf("IndexedRootFilterPolicy.AddExcludedPaths(", StringComparison.Ordinal);
+        int persist = addFolders.IndexOf("await PersistSettingsAsync()", StringComparison.Ordinal);
+        int startBuild = addFolders.IndexOf("StartBackgroundIndexBuild(effectiveRoot);", StringComparison.Ordinal);
+        Assert.True(mergeFilters >= 0 && mergeFilters < persist && persist < startBuild);
+
+        Assert.Contains("C:/Windows/System32", SettingsIndexingActionsSource);
+        Assert.Contains("path matching ignores letter case", SettingsIndexingActionsSource);
+    }
+
+    [Fact]
+    public void IndexOnboarding_LiteralPathFilterNoticeIsAOneTimeStartupStep()
+    {
+        // Sequenced through the awaited startup chain, not fired-and-forgotten.
+        Assert.Contains(
+            "await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.IndexLiteralPathFilters, ShowIndexLiteralPathFilterNoticeIfNeededAsync);",
+            StartupChecksSource);
+        Assert.Contains("public bool HasPromptedIndexLiteralPathFilters { get; set; }", SettingsServiceSource);
+
+        string notice = ExtractFrom(
+            IndexOnboardingSource,
+            "private async Task ShowIndexLiteralPathFilterNoticeIfNeededAsync()",
+            3000);
+        int guard = notice.IndexOf("if (ViewModel.Settings.HasPromptedIndexLiteralPathFilters)", StringComparison.Ordinal);
+        int find = notice.IndexOf("IndexedRootFilterPolicy.FindRootsAffectedByLiteralPathFilters(ViewModel.Settings)", StringComparison.Ordinal);
+        // Nothing to report: mark shown and stay silent.
+        int silent = notice.IndexOf("if (roots.Count == 0)", StringComparison.Ordinal);
+        // Another modal is up: retry next launch instead of burning the one-time flag.
+        int modalGuard = notice.IndexOf("if (YaguDialog.HasOpenOwnedWindow(_hwnd))", StringComparison.Ordinal);
+        int openSettings = notice.IndexOf("OpenSettingsToIndexingTab();", StringComparison.Ordinal);
+        Assert.True(guard >= 0 && guard < find && find < silent && silent < modalGuard && modalGuard < openSettings);
+        Assert.Contains("ShowTitleBar = false", notice);
+        Assert.Contains("Searches stay correct either way", notice);
+        Assert.Equal(2, notice.Split("ViewModel.Settings.HasPromptedIndexLiteralPathFilters = true;").Length - 1);
     }
 
     [Fact]
@@ -1502,12 +1554,38 @@ public sealed class ContentIndexGuiRegressionTests
     [Fact]
     public void MainViewModel_ShowsIndexingStateAndGuardsAgainstOverwrite()
     {
-        Assert.Contains("string activity = _activeIndexBuildIsIncremental ? \"Updating index\" : \"Indexing\";", MainViewModelSource);
-        Assert.Contains("? \"Finalizing index update\\u2026\"", MainViewModelSource);
-        Assert.Contains(": _indexBuildPercent >= 0 ? $\"{activity}\\u2026 {_indexBuildPercent}%\" : $\"{activity}\\u2026\";", MainViewModelSource);
+        Assert.Contains("IndexStatusText = ContentIndexUiStatus.BuildActivityLabel(", MainViewModelSource);
+        Assert.Contains("_activeIndexBuildPhase,", MainViewModelSource);
         Assert.Contains("private void ShowIndexBuildingStatus()", MainViewModelSource);
         // The availability + coverage updaters must not clobber the "Indexing…" indicator mid-build.
         Assert.Contains("if (_activeIndexBuilds > 0)", MainViewModelSource);
+    }
+
+    [Fact]
+    public void IncrementalUpdate_ReportsEachPhaseInsteadOfOneFinalizingLabel()
+    {
+        // Publishing a delta is the bulk of an update on a large index, so every post-resolution phase
+        // reports its own stage + percent rather than sitting on a single static label.
+        string refresher = Read("src", "Yagu", "Services", "Index", "ContentIndexIncrementalRefresher.cs");
+        Assert.Contains("IndexUpdateStages.Resolving", refresher);
+        Assert.Contains("done * IndexUpdateStages.ResolveCeiling / total", refresher);
+        Assert.Contains("progress: progress);", refresher);
+        Assert.DoesNotContain("progress?.Invoke(100);", refresher);
+
+        string updater = Read("src", "Yagu", "Services", "Index", "ContentIndexIncrementalUpdater.cs");
+        int signature = updater.IndexOf("Action<int, string>? progress = null", StringComparison.Ordinal);
+        int merge = updater.IndexOf("progress?.Invoke(IndexUpdateStages.MergeFloor, IndexUpdateStages.Merging);", StringComparison.Ordinal);
+        int perItem = updater.IndexOf("ReportMerge(++merged);", StringComparison.Ordinal);
+        int write = updater.IndexOf("progress?.Invoke(IndexUpdateStages.WriteFloor, IndexUpdateStages.Writing);", StringComparison.Ordinal);
+        int publish = updater.IndexOf("progress?.Invoke(IndexUpdateStages.PublishFloor, IndexUpdateStages.Publishing);", StringComparison.Ordinal);
+        int compact = updater.IndexOf("progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);", StringComparison.Ordinal);
+        Assert.True(signature >= 0 && signature < merge && merge < perItem && perItem < write && write < publish && publish < compact);
+        // Per-phase timings so a slow update can be attributed from the log alone.
+        Assert.Contains("merge {MergeMs} ms, serialize {BuildMs} ms, publish {PublishMs} ms", updater);
+
+        // The worker forwards the stage verbatim, so the phase survives the out-of-process hop.
+        string workerHost = Read("src", "Yagu.IndexWorker", "IndexWorkerBuildHost.cs");
+        Assert.Contains("ProgressStage = stage,", workerHost);
     }
 
     [Fact]
@@ -1517,7 +1595,7 @@ public sealed class ContentIndexGuiRegressionTests
         // the used space of the drive) and surfaces it both inline in the status text and, big, in a custom
         // tooltip (with a progress bar) modelled on the skip-breakdown overlay.
         Assert.Contains("public void ReportIndexBuildProgress(int percent)", MainViewModelSource);
-        Assert.Contains(": _indexBuildPercent >= 0 ? $\"{activity}\\u2026 {_indexBuildPercent}%\" : $\"{activity}\\u2026\";", MainViewModelSource);
+        Assert.Contains("IndexStatusText = ContentIndexUiStatus.BuildActivityLabel(", MainViewModelSource);
         // The VM drives the custom-tooltip percent surface (big number, progress bar value, visibility gate).
         Assert.Contains("IndexBuildPercentText = $\"{_indexBuildPercent}%\";", MainViewModelSource);
         Assert.Contains("IndexBuildPercentValue = _indexBuildPercent;", MainViewModelSource);
