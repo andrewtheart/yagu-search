@@ -14,6 +14,13 @@ public sealed class ContentIndexUiStatusTests
     [Theory]
     [InlineData(false, null, 42, "Indexing… 42%")]
     [InlineData(false, null, -1, "Indexing…")]
+    [InlineData(false, IndexBuildStages.RawBuild, 42, "Indexing files… 42%")]
+    [InlineData(false, IndexBuildStages.RawBuild, -1, "Indexing files…")]
+    [InlineData(false, IndexBuildStages.Pdf, 92, "Indexing PDF text… 92%")]
+    [InlineData(false, IndexBuildStages.Pdf, -1, "Indexing PDF text…")]
+    [InlineData(false, IndexBuildStages.Ocr, 97, "Indexing image text… 97%")]
+    [InlineData(false, IndexBuildStages.Ocr, -1, "Indexing image text…")]
+    [InlineData(false, IndexBuildStages.PostBuildCatchUp, 99, "Catching up file changes…")]
     [InlineData(true, null, 42, "Updating index… 42%")]
     [InlineData(true, IndexUpdateStages.Incremental, -1, "Updating index…")]
     [InlineData(true, IndexUpdateStages.Resolving, 55, "Updating index… 55%")]
@@ -22,6 +29,11 @@ public sealed class ContentIndexUiStatusTests
     [InlineData(true, IndexUpdateStages.Writing, 88, "Writing index update…")]
     [InlineData(true, IndexUpdateStages.Publishing, 94, "Publishing index update…")]
     [InlineData(true, IndexUpdateStages.Compacting, 97, "Compacting index…")]
+    [InlineData(true, IndexUpdateStages.CompactAnalyzing, 2, "Analyzing compaction…")]
+    [InlineData(true, IndexUpdateStages.CompactMerging, 50, "Compacting index… 50%")]
+    [InlineData(true, IndexUpdateStages.CompactMerging, -1, "Compacting index…")]
+    [InlineData(true, IndexUpdateStages.CompactPublishing, 100, "Publishing compacted index…")]
+    [InlineData(true, IndexUpdateStages.Deleting, -1, "Deleting index…")]
     public void BuildActivityLabel_NamesTheRunningPhase(bool incremental, string? stage, int percent, string expected)
     {
         string label = ContentIndexUiStatus.BuildActivityLabel(incremental, stage, percent);
@@ -45,22 +57,55 @@ public sealed class ContentIndexUiStatusTests
             ContentIndexUiStatus.BuildActivityLabel(isIncremental: false, IndexUpdateStages.Merging, 70));
 
     [Fact]
-    public void BuildActivityDetail_DescribesEveryIncrementalPhase()
+    public void BuildActivityDetail_DescribesEveryIndexingPhase()
     {
         foreach (string stage in new[]
         {
+            IndexBuildStages.RawBuild,
+            IndexBuildStages.Pdf,
+            IndexBuildStages.Ocr,
+            IndexBuildStages.PostBuildCatchUp,
+            IndexUpdateStages.Incremental,
             IndexUpdateStages.Resolving,
             IndexUpdateStages.Merging,
             IndexUpdateStages.Writing,
             IndexUpdateStages.Publishing,
             IndexUpdateStages.Compacting,
+            IndexUpdateStages.CompactAnalyzing,
+            IndexUpdateStages.CompactMerging,
+            IndexUpdateStages.CompactPublishing,
+            IndexUpdateStages.Deleting,
         })
         {
             Assert.False(string.IsNullOrWhiteSpace(ContentIndexUiStatus.BuildActivityDetail(stage)), stage);
         }
 
-        Assert.Null(ContentIndexUiStatus.BuildActivityDetail(IndexUpdateStages.Incremental));
         Assert.Null(ContentIndexUiStatus.BuildActivityDetail(null));
+    }
+
+    [Fact]
+    public void BuildActivityStages_CoversFullIncrementalAndExplicitCompactionStages()
+    {
+        Assert.Equal(
+            new[] { IndexBuildStages.RawBuild, IndexBuildStages.Pdf, IndexBuildStages.Ocr, IndexBuildStages.PostBuildCatchUp },
+            ContentIndexUiStatus.BuildActivityStages(false, IndexBuildStages.RawBuild).Select(stage => stage.Stage));
+        Assert.Equal(
+            new[] { IndexUpdateStages.Resolving, IndexUpdateStages.Merging, IndexUpdateStages.Writing, IndexUpdateStages.Publishing, IndexUpdateStages.Compacting },
+            ContentIndexUiStatus.BuildActivityStages(true, IndexUpdateStages.Merging).Select(stage => stage.Stage));
+        Assert.Equal(
+            new[] { IndexUpdateStages.CompactAnalyzing, IndexUpdateStages.CompactMerging, IndexUpdateStages.CompactPublishing },
+            ContentIndexUiStatus.BuildActivityStages(true, IndexUpdateStages.CompactMerging).Select(stage => stage.Stage));
+        Assert.Equal(
+            new[] { IndexUpdateStages.Deleting },
+            ContentIndexUiStatus.BuildActivityStages(true, IndexUpdateStages.Deleting).Select(stage => stage.Stage));
+
+        Assert.All(
+            ContentIndexUiStatus.BuildActivityStages(true, IndexUpdateStages.CompactMerging),
+            stage =>
+            {
+                Assert.False(string.IsNullOrWhiteSpace(stage.Title));
+                Assert.False(string.IsNullOrWhiteSpace(stage.Detail));
+            });
     }
 
     [Fact]
@@ -71,6 +116,7 @@ public sealed class ContentIndexUiStatusTests
         Assert.True(IndexUpdateStages.IsIncremental(IndexUpdateStages.Writing));
         Assert.True(IndexUpdateStages.IsIncremental(IndexUpdateStages.Publishing));
         Assert.True(IndexUpdateStages.IsIncremental(IndexUpdateStages.Compacting));
+        Assert.True(IndexUpdateStages.IsIncremental(IndexUpdateStages.Deleting));
         Assert.False(IndexUpdateStages.IsIncremental("rawBuild"));
         Assert.False(IndexUpdateStages.IsIncremental(null));
 
@@ -78,6 +124,27 @@ public sealed class ContentIndexUiStatusTests
         Assert.True(IndexUpdateStages.MergeCeiling <= IndexUpdateStages.PublishFloor);
         Assert.True(IndexUpdateStages.PublishFloor < IndexUpdateStages.CompactFloor);
         Assert.True(IndexUpdateStages.CompactFloor < 100);
+    }
+
+    [Fact]
+    public void IndexProgressReporter_MapsNestedMeasuredWorkMonotonicallyWithoutDuplicates()
+    {
+        var reported = new List<int>();
+        var reporter = new IndexProgressReporter(reported.Add);
+        Action<int> phase = Assert.IsType<Action<int>>(reporter.Slice(10, 90));
+
+        phase(0);
+        phase(25);
+        phase(25);
+        phase(75);
+        phase(100);
+        phase(50);
+
+        Assert.Equal(new[] { 10, 30, 70, 90 }, reported);
+        Assert.Equal(20, IndexProgressReporter.Scale(5, 10, 10, 30));
+        Assert.Equal(10, IndexProgressReporter.Scale(-1, 10, 10, 30));
+        Assert.Equal(30, IndexProgressReporter.Scale(20, 10, 10, 30));
+        Assert.Equal(10, IndexProgressReporter.Scale(5, 0, 10, 30));
     }
 
     [Fact]

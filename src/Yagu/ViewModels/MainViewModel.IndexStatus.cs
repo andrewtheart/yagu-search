@@ -214,6 +214,9 @@ public sealed partial class MainViewModel
     // Which phase of an incremental update is running (see IndexUpdateStages), or null when unphased.
     private string? _activeIndexBuildPhase;
 
+    /// <summary>The canonical stage currently reported by the active build/update worker.</summary>
+    public string? ActiveIndexBuildStage => _activeIndexBuildPhase;
+
     /// <summary>True while one or more background index builds are running (drives the "Indexing…" indicator).</summary>
     public bool IsIndexBuildActive => _activeIndexBuilds > 0;
 

@@ -397,6 +397,13 @@ function ShiftLeftClick-At([int]$X, [int]$Y) {
     [YaguInput]::ShiftLeftClick()
 }
 
+function RightClick-At([int]$X, [int]$Y) {
+    Activate-YaguWindow
+    [System.Windows.Forms.Cursor]::Position = [System.Drawing.Point]::new($X, $Y)
+    Start-Sleep -Milliseconds 150
+    [YaguInput]::RightClick()
+}
+
 function Toggle-Checkbox([System.Windows.Automation.AutomationElement]$Element) {
     $togglePattern = $Element.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
     if ($togglePattern) {
@@ -975,20 +982,10 @@ if ($clickTarget) {
     $rcStats = Count-CheckedFileCheckboxes -listElement $resultsList
     Write-Host ("  About to right-click at ({0},{1}). Checkbox state: total={2}, checked={3}, onscreen={4}, checkedOnscreen={5}" -f `
         $cx, $cy, $rcStats.Total, $rcStats.Checked, $rcStats.Onscreen, $rcStats.CheckedOnscreen)
-    $focusCondition = [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::AutomationIdProperty, "FileGroupCheckBox")
-    $focusTarget = $resultsList.FindFirst(
-        [System.Windows.Automation.TreeScope]::Descendants, $focusCondition)
-    if (-not $focusTarget) {
-        throw "Could not find a focusable file-group checkbox before opening the results context menu."
-    }
-    try { $focusTarget.SetFocus() } catch {
-        throw "Could not focus a file-group checkbox before opening the results context menu: $($_.Exception.Message)"
-    }
-    $h = Get-YaguWindowHandle
-    if ($h -eq [IntPtr]::Zero -or -not [YaguInput]::OpenContextMenu($h)) {
-        throw "Could not send the context-menu key to the Yagu window."
-    }
+    # The header MenuFlyout only opens on a real right-click over the header. The VK_APPS
+    # context-menu key targets the focused checkbox instead, so the flyout never opened and
+    # "Preview all selected (N)" was absent from the UIA tree.
+    RightClick-At $cx $cy
     Start-Sleep -Seconds 1
     $postRcStats = Count-CheckedFileCheckboxes -listElement $resultsList
     Write-Host ("  After right-click (menu open): total={0}, checked={1}, onscreen={2}, checkedOnscreen={3}" -f `

@@ -610,13 +610,30 @@ public sealed partial class MainWindow
         }
     }
 
-    private async void OnLoadSession(object sender, RoutedEventArgs e)
-    {
-        string previousStatusText = ViewModel.StatusText;
-        string? path = await ChooseSessionFileToLoadAsync(previousStatusText);
-        if (path is null) return;
+    private bool _sessionLoadDialogOpening;
 
-        await LoadSessionFileAsync(path);
+    private async void OnLoadSession(object sender, RoutedEventArgs e)
+        => await ShowLoadSessionDialogAsync().ConfigureAwait(true);
+
+    private async Task ShowLoadSessionDialogAsync()
+    {
+        if (_sessionLoadDialogOpening || !ViewModel.IsSessionIdle || YaguDialog.HasOpenOwnedWindow(_hwnd))
+            return;
+
+        _sessionLoadDialogOpening = true;
+        try
+        {
+            string previousStatusText = ViewModel.StatusText;
+            string? path = await ChooseSessionFileToLoadAsync(previousStatusText).ConfigureAwait(true);
+            if (path is null)
+                return;
+
+            await LoadSessionFileAsync(path).ConfigureAwait(true);
+        }
+        finally
+        {
+            _sessionLoadDialogOpening = false;
+        }
     }
 
     private async Task<string?> ChooseSessionFileToLoadAsync(string previousStatusText)
@@ -3031,6 +3048,8 @@ public sealed partial class MainWindow
             int cap = Math.Min(results.Count, EffectiveMaxMatchesPerSection);
             var matchLineNums = new HashSet<int>(results.Select(r => r.LineNumber));
             bool renderedFileNameOnlyPreview = false;
+            SearchResult? lineOverflowResult = null;
+            int lineOverflowNextLine = 0;
             foreach (var r in results)
             {
                 if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
@@ -3060,6 +3079,7 @@ public sealed partial class MainWindow
                 }
 
                 var lines = GetPreviewLines(r, allLines, previewLines, fullFile: isFileNameOnlyPreview);
+                int lastRenderedLine = 0;
                 foreach (var (line, lineNum) in lines)
                 {
                     if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
@@ -3071,6 +3091,7 @@ public sealed partial class MainWindow
                         isMatchLine && !isFileNameOnlyPreview ? _matchParagraphs : null, sn, out int addedParagraphs,
                         maxParagraphs: MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
                     parasInFile += addedParagraphs;
+                    lastRenderedLine = lineNum;
 
                     if (scrollTarget is not null && lineNum == r.LineNumber
                         && r.LineNumber == scrollTarget.LineNumber
@@ -3079,6 +3100,14 @@ public sealed partial class MainWindow
                         scrollBlock = section;
                         scrollPara = firstPara;
                     }
+                }
+
+                // A whole-file preview is one result, so the result-count overflow below can never report
+                // the lines the block budget dropped. Remember where to resume instead.
+                if (isFileNameOnlyPreview && allLines is { Length: > 0 } && lastRenderedLine > 0 && lastRenderedLine < allLines.Length)
+                {
+                    lineOverflowResult = r;
+                    lineOverflowNextLine = lastRenderedLine + 1;
                 }
 
                 renderedResults++;
@@ -3097,6 +3126,11 @@ public sealed partial class MainWindow
                     originalTotal: results.Count,
                     renderedSoFar: renderedResults,
                     noticePara: notice);
+            }
+            else if (lineOverflowResult is not null && allLines is { Length: > 0 })
+            {
+                var notice = AppendLineTruncationNotice(section, allLines.Length, lineOverflowNextLine - 1);
+                RegisterSectionLineOverflow(section, lineOverflowResult, allLines, previewLines, lineOverflowNextLine, notice);
             }
 
             fileSw.Stop();

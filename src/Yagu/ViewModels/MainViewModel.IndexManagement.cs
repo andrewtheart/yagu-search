@@ -516,12 +516,14 @@ public sealed partial class MainViewModel
                 operation,
                 useWorker,
                 token,
-                progress: p => ReportRebuildBlockingProgress(root, index, total,
-                    IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes)),
-                pdfProgress: p => ReportRebuildBlockingProgress(root, index, total,
-                    p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5)),
-                imageOcrProgress: p => ReportRebuildBlockingProgress(root, index, total,
-                    p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4))).ConfigureAwait(true);
+                progress: p => ReportFullBuildProgress(
+                    IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes), IndexBuildStages.RawBuild),
+                pdfProgress: p => ReportFullBuildProgress(
+                    p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5), IndexBuildStages.Pdf),
+                imageOcrProgress: p => ReportFullBuildProgress(
+                    p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4), IndexBuildStages.Ocr),
+                postBuildCatchUpProgress: _ => ReportFullBuildProgress(
+                    99, IndexBuildStages.PostBuildCatchUp)).ConfigureAwait(true);
             YaguLog.For("ContentIndex").LogInformation("Blocking index {Action} complete for '{Root}'.", rebuild ? "rebuild" : "build", root);
         }
         catch (OperationCanceledException)
@@ -544,6 +546,12 @@ public sealed partial class MainViewModel
         finally
         {
             EndIndexBuildActivity();
+        }
+
+        void ReportFullBuildProgress(int percent, string stage)
+        {
+            ReportIndexBuildProgress(root, percent, stage);
+            ReportRebuildBlockingProgress(root, index, total, percent);
         }
     }
 

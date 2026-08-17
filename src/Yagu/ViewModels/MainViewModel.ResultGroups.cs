@@ -16,6 +16,8 @@ public sealed partial class MainViewModel
 
     private void OnVisibleResultGroupsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        OnPropertyChanged(nameof(SelectAllFilesVisibility));
+
         if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is not null && (GroupMode == GroupMode.None || IsSearching))
         {
             ResultRows.AppendRange(e.NewItems.Cast<object>().ToList());

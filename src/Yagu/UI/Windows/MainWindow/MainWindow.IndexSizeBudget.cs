@@ -12,8 +12,8 @@ namespace Yagu;
 /// <para>
 /// The condition is easy to miss: the index is structurally healthy and searches stay complete, so
 /// nothing looks broken — it simply stops being maintained and quietly gets less useful. This dialog
-/// says that in plain language and applies the chosen fix in place, reporting the outcome inline
-/// rather than sending the user off to Settings.
+/// says that in plain language, closes as soon as the user chooses a remedy, and hands any ongoing
+/// work to the main-window index status indicator so the rest of the UI remains usable.
 /// </para>
 /// </summary>
 public sealed partial class MainWindow
@@ -63,21 +63,15 @@ public sealed partial class MainWindow
         IndexSizeBudgetDiagnosis diagnosis = await Task.Run(
             () => DiagnoseIndexSizeBudget(indexRoot)).ConfigureAwait(true);
         if (!diagnosis.AtBudget)
+        {
+            // The index may still be updating yet be unable to shed its accumulated history; that is a
+            // different problem with different wording and different fixes.
+            IndexReclamationDiagnosis reclamation = await Task.Run(
+                () => DiagnoseIndexReclamation(indexRoot)).ConfigureAwait(true);
+            if (reclamation.ReclamationBlocked)
+                await ShowIndexSizeAttentionDialogAsync(indexRoot, reclamation).ConfigureAwait(true);
             return;
-
-        var status = new TextBlock
-        {
-            TextWrapping = TextWrapping.Wrap,
-            FontSize = 12,
-            Opacity = 0.8,
-            Visibility = Visibility.Collapsed,
-        };
-        var progress = new ProgressBar
-        {
-            IsIndeterminate = true,
-            Height = 4,
-            Visibility = Visibility.Collapsed,
-        };
+        }
 
         var panel = new StackPanel { Spacing = 10, MinWidth = 520 };
         panel.Children.Add(new TextBlock
@@ -107,7 +101,6 @@ public sealed partial class MainWindow
             Margin = new Thickness(0, 6, 0, 0),
         });
 
-        var buttons = new List<Button>();
         YaguDialog? dialog = null;
         foreach (IndexSizeBudgetRemedy remedy in diagnosis.Remedies())
         {
@@ -118,9 +111,11 @@ public sealed partial class MainWindow
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Padding = new Thickness(14, 5, 14, 5),
             };
-            action.Click += async (_, _) => await ApplyIndexSizeBudgetRemedyAsync(
-                indexRoot, captured, diagnosis, buttons, status, progress, () => dialog?.Close());
-            buttons.Add(action);
+            action.Click += async (_, _) =>
+            {
+                dialog?.AcceptClose();
+                await ApplyIndexSizeBudgetRemedyAsync(indexRoot, captured, diagnosis).ConfigureAwait(true);
+            };
 
             panel.Children.Add(action);
             panel.Children.Add(new TextBlock
@@ -132,9 +127,6 @@ public sealed partial class MainWindow
                 Margin = new Thickness(0, 0, 0, 4),
             });
         }
-
-        panel.Children.Add(progress);
-        panel.Children.Add(status);
 
         await YaguDialog.ShowAsync(
             _hwnd,
@@ -177,66 +169,206 @@ public sealed partial class MainWindow
         }
     }
 
+    /// <summary>Measures what the index is made of and whether its history can still be reclaimed.</summary>
+    private IndexReclamationDiagnosis DiagnoseIndexReclamation(string indexRoot)
+    {
+        try
+        {
+            AppSettings settings = ViewModel.Settings;
+            var provider = DefaultContentIndexPathProvider.Create(settings.IndexStorageDirectory);
+            var manager = new ContentIndexManager(
+                provider, AppSettings.NormalizeIndexRetainedGenerationCount(settings.IndexRetainedGenerationCount));
+            return manager.DiagnoseReclamation(
+                indexRoot,
+                IndexSizeManagementPolicy.Resolve(settings, indexRoot),
+                AppSettings.NormalizeIndexMaxDeltaSegments(settings.IndexMaxDeltaSegments),
+                AppSettings.NormalizeIndexCompactionThresholdMB(settings.IndexCompactionThresholdMB));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Could not diagnose index reclamation for '{Root}'.", indexRoot);
+            return IndexReclamationDiagnosis.Healthy;
+        }
+    }
+
     /// <summary>
-    /// Applies one remedy without leaving the dialog. The settings-only remedies finish in place and
-    /// report inline; a rebuild hands off to the existing full-window build overlay, which is itself a
-    /// live, cancellable progress surface.
+    /// Explains an index that is <b>still updating</b> but can no longer reclaim the history those updates
+    /// leave behind, and applies the chosen fix. Deliberately does not offer the legacy "allow compaction"
+    /// action: that persisted an uncapped setting for the index and let a later background pass attempt an
+    /// unbounded fold. Compacting here is a one-shot, user-approved worker operation instead.
+    /// </summary>
+    private async Task ShowIndexSizeAttentionDialogAsync(string indexRoot, IndexReclamationDiagnosis diagnosis)
+    {
+        var panel = new StackPanel { Spacing = 10, MinWidth = 520 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = indexRoot,
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = diagnosis.Explain(),
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 13,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = diagnosis.ExplainWhyAutomaticCleanupIsUnavailable(),
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Opacity = 0.7,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Choose what to do:",
+            FontSize = 13,
+            Margin = new Thickness(0, 6, 0, 0),
+        });
+
+        YaguDialog? dialog = null;
+        foreach (IndexSizeAttentionRemedy remedy in diagnosis.Remedies())
+        {
+            IndexSizeAttentionRemedy captured = remedy;
+            var action = new Button
+            {
+                Content = IndexReclamationAdvisor.RemedyLabel(remedy),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(14, 5, 14, 5),
+            };
+            action.Click += async (_, _) =>
+            {
+                dialog?.AcceptClose();
+                await ApplyIndexSizeAttentionRemedyAsync(indexRoot, captured).ConfigureAwait(true);
+            };
+
+            panel.Children.Add(action);
+            panel.Children.Add(new TextBlock
+            {
+                Text = IndexReclamationAdvisor.RemedyDescription(remedy, diagnosis),
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 12,
+                Opacity = 0.7,
+                Margin = new Thickness(0, 0, 0, 4),
+            });
+        }
+
+        await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "This index is still updating, but it cannot be cleaned up",
+                Content = panel,
+                PrimaryButtonText = null,
+                CloseButtonText = "Decide later",
+                RequestedTheme = RootGrid.ActualTheme,
+                Width = 640,
+                Height = 640,
+                MaxContentHeight = 580,
+                ShowTitleBar = false,
+                ShowTopRightCloseButton = true,
+                TitleGlyph = "\uE7BA", // Warning
+            },
+            d => dialog = d);
+
+        ViewModel.RefreshAllDriveIndexStatus();
+    }
+
+    private async Task ApplyIndexSizeAttentionRemedyAsync(
+        string indexRoot,
+        IndexSizeAttentionRemedy remedy)
+    {
+        try
+        {
+            switch (remedy)
+            {
+                case IndexSizeAttentionRemedy.CompactNow:
+                    await CompactIndexNowAsync(indexRoot).ConfigureAwait(true);
+                    break;
+
+                case IndexSizeAttentionRemedy.Delete:
+                    await DeleteIndexInBackgroundAsync(indexRoot).ConfigureAwait(true);
+                    break;
+
+                case IndexSizeAttentionRemedy.ReviewSizeSettings:
+                    OpenSettingsToIndexingTab();
+                    break;
+
+                case IndexSizeAttentionRemedy.Rebuild:
+                    ViewModel.RebuildRegisteredIndexNow(indexRoot);
+                    break;
+            }
+
+            YaguLog.For("ContentIndex").LogInformation(
+                "User applied size-attention remedy {Remedy} to '{Root}'.", remedy, indexRoot);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Size-attention remedy {Remedy} failed for '{Root}'.", remedy, indexRoot);
+        }
+        finally
+        {
+            ViewModel.RefreshAllDriveIndexStatus();
+        }
+    }
+
+    /// <summary>
+    /// Runs one explicit compaction of <paramref name="indexRoot"/> in the short-lived maintenance worker.
+    /// It never persists an "uncapped" setting — the cap only governs automatic passes.
+    /// </summary>
+    private async Task CompactIndexNowAsync(string indexRoot)
+    {
+        AppSettings settings = ViewModel.Settings;
+        IndexMaintenanceOperation operation = IndexBuildOperationFactory.CreateMaintenance(
+            settings, new[] { indexRoot }, IndexMaintenanceOperation.ModeCompactOnly, rebuildWhenDirty: false);
+        var coordinator = new IndexBuildCoordinator();
+        ViewModel.BeginIndexBuildActivity(indexRoot, isIncremental: true);
+        ViewModel.ReportIndexBuildProgress(indexRoot, 2, IndexUpdateStages.CompactAnalyzing);
+        try
+        {
+            await coordinator.RunMaintenancePreferWorkerAsync(
+                operation,
+                settings.IndexUseNativeWorker,
+                ViewModel.IndexBuildCancellationToken,
+                (root, percent, stage) => DispatcherQueue.TryEnqueue(
+                    () => ViewModel.ReportIndexBuildProgress(root, percent, stage))).ConfigureAwait(true);
+        }
+        finally
+        {
+            ViewModel.EndIndexBuildActivity();
+        }
+    }
+
+    /// <summary>
+    /// Applies one remedy after the warning dialog has closed. Long-running work reports through the
+    /// bottom-right index status indicator; settings-only remedies refresh that status when persisted.
     /// </summary>
     private async Task ApplyIndexSizeBudgetRemedyAsync(
         string indexRoot,
         IndexSizeBudgetRemedy remedy,
-        IndexSizeBudgetDiagnosis diagnosis,
-        IReadOnlyList<Button> buttons,
-        TextBlock status,
-        ProgressBar progress,
-        Action closeDialog)
+        IndexSizeBudgetDiagnosis diagnosis)
     {
-        foreach (Button button in buttons)
-            button.IsEnabled = false;
-        progress.Visibility = Visibility.Visible;
-        status.Visibility = Visibility.Visible;
-        status.Text = "Working…";
-
         try
         {
             switch (remedy)
             {
                 case IndexSizeBudgetRemedy.RaiseBudget:
                     await SetIndexSizeOverrideAsync(indexRoot, budgetMB: diagnosis.SuggestedBudgetMB).ConfigureAwait(true);
-                    status.Text = $"Limit raised to {diagnosis.SuggestedBudgetMB:N0} MB. This index will start updating again at the next maintenance pass.";
                     break;
 
                 case IndexSizeBudgetRemedy.AllowCompaction:
                     // 0 = no cap, so the next pass may fold this index regardless of its size.
                     await SetIndexSizeOverrideAsync(indexRoot, compactionCapMB: 0).ConfigureAwait(true);
-                    status.Text = "Compaction enabled for this index. It will be compacted at the next maintenance pass, which briefly uses a lot of memory.";
                     break;
 
                 case IndexSizeBudgetRemedy.Delete:
-                    bool deleted = await Task.Run(() => DeleteIndexForRoot(indexRoot)).ConfigureAwait(true);
-                    status.Text = deleted
-                        ? "Index deleted. Searches read every file directly until you build it again."
-                        : "There was nothing stored to delete.";
-                    ViewModel.RefreshAllDriveIndexStatus();
+                    await DeleteIndexInBackgroundAsync(indexRoot).ConfigureAwait(true);
                     break;
 
                 case IndexSizeBudgetRemedy.Rebuild:
-                    status.Text = "Starting the rebuild…";
-                    // Close this dialog first: the rebuild shows its own full-window progress overlay.
-                    _ = Task.Run(async () =>
-                    {
-                        await Task.Delay(150).ConfigureAwait(false);
-                        DispatcherQueue.TryEnqueue(async void () =>
-                        {
-                            try { await ViewModel.RebuildCurrentIndexBlockingAsync(new[] { indexRoot }); }
-                            catch (Exception ex)
-                            {
-                                YaguLog.For("ContentIndex").LogWarning(ex, "Size-budget rebuild failed for '{Root}'.", indexRoot);
-                            }
-                        });
-                    });
-                    closeDialog();
-                    return;
+                    ViewModel.RebuildRegisteredIndexNow(indexRoot);
+                    break;
             }
 
             YaguLog.For("ContentIndex").LogInformation(
@@ -245,13 +377,24 @@ public sealed partial class MainWindow
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             YaguLog.For("ContentIndex").LogWarning(ex, "Size-budget remedy {Remedy} failed for '{Root}'.", remedy, indexRoot);
-            status.Text = $"That did not work: {ex.Message}";
-            foreach (Button button in buttons)
-                button.IsEnabled = true;
         }
         finally
         {
-            progress.Visibility = Visibility.Collapsed;
+            ViewModel.RefreshAllDriveIndexStatus();
+        }
+    }
+
+    private async Task DeleteIndexInBackgroundAsync(string indexRoot)
+    {
+        ViewModel.BeginIndexBuildActivity(indexRoot, isIncremental: true);
+        ViewModel.ReportIndexBuildProgress(indexRoot, -1, IndexUpdateStages.Deleting);
+        try
+        {
+            await Task.Run(() => DeleteIndexForRoot(indexRoot)).ConfigureAwait(true);
+        }
+        finally
+        {
+            ViewModel.EndIndexBuildActivity();
         }
     }
 

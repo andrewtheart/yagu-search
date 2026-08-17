@@ -72,10 +72,10 @@ public readonly record struct EffectiveIndexSizePolicy(
     public static EffectiveIndexSizePolicy Default { get; } = new(
         IndexSizeManagementModes.CoalesceThenCompact,
         SizeBudgetMB: 0,
-        MaxAutoCompactionSizeMB: 512,
-        CoalesceMaxSegmentMB: 256,
-        CoalesceMaxBatchMB: 1024,
-        CoalesceMinRun: 4,
+        MaxAutoCompactionSizeMB: 8192,
+        CoalesceMaxSegmentMB: 1024,
+        CoalesceMaxBatchMB: 4096,
+        CoalesceMinRun: 3,
         CoalesceMaxRunsPerPass: 8);
 
     /// <summary>True when this index may merge bounded contiguous runs of small segments.</summary>
@@ -100,10 +100,10 @@ public readonly record struct EffectiveIndexSizePolicy(
     /// True when an index of <paramref name="activeIndexBytes"/> may be folded in one automatic compaction.
     /// A zero cap removes the limit.
     /// <para>
-    /// Being over the storage budget deliberately does <b>not</b> lift this cap. Folding re-materializes
-    /// every layer in memory, so authorizing it for an oversized index would trade unbounded disk growth for
-    /// an unbounded memory spike. An index that cannot be compacted within its cap is instead held at the
-    /// budget by <see cref="ExceedsBudget"/> and reclaimed by an explicit rebuild.
+    /// Being over the storage budget deliberately does <b>not</b> lift this cap. The fold is memory-bounded,
+    /// but a large automatic pass still consumes substantial I/O and temporary disk space. An index that
+    /// cannot be compacted within its cap is instead held at the budget by <see cref="ExceedsBudget"/> and
+    /// reclaimed by an explicitly approved compaction or rebuild.
     /// </para>
     /// </summary>
     public bool AllowsCompactingIndexOf(long activeIndexBytes)

@@ -2858,8 +2858,9 @@ public class IsMemoryPressureRelievedTests
     [Fact]
     public void NoPressureConfig_ReturnsTrue()
     {
-        // pressurePercent=0 means no system memory threshold configured
-        bool relieved = SearchService.IsMemoryPressureRelieved(0, 0);
+        // pressurePercent=0 means no system memory threshold configured. The cap must be explicit: 0
+        // selects the automatic sub-GB cap, which makes the answer depend on the test host's own memory.
+        bool relieved = SearchService.IsMemoryPressureRelieved(long.MaxValue, 0);
         Assert.True(relieved);
     }
 
@@ -2874,8 +2875,8 @@ public class IsMemoryPressureRelievedTests
     [Fact]
     public void IsMemoryPressureHigh_NoCapNoThreshold_ReturnsFalse()
     {
-        // With no cap and no threshold, should not report high pressure
-        bool high = SearchService.IsMemoryPressureHigh(0, 0);
+        // Below an explicit cap and with no threshold, pressure is never reported high.
+        bool high = SearchService.IsMemoryPressureHigh(long.MaxValue, 0);
         Assert.False(high);
     }
 

@@ -78,7 +78,10 @@ public sealed class DebugLogPanelRegressionTests
             MainWindowXaml, "Height=\"28\" MinHeight=\"0\" Padding=\"8,0\" FontSize=\"11\""));
         Assert.Contains("Height=\"28\" MinHeight=\"0\" Padding=\"8,2\" FontSize=\"11\"", MainWindowXaml);
         Assert.Contains("Height=\"28\" MinHeight=\"0\" Padding=\"0\" FontSize=\"11\"", MainWindowXaml);
-        Assert.Contains("x:Name=\"DebugLogRefreshButton\" Grid.Column=\"3\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"DebugLogExportButton\" Grid.Column=\"3\"", MainWindowXaml);
+        Assert.Contains("ToolTipService.ToolTip=\"Export visible log entries\"", MainWindowXaml);
+        Assert.Contains("Click=\"OnDebugLogExportVisible\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"DebugLogRefreshButton\" Grid.Column=\"4\"", MainWindowXaml);
         Assert.Contains("ToolTipService.ToolTip=\"Refresh log now\"", MainWindowXaml);
         Assert.Contains("x:Name=\"DebugLogList\"", MainWindowXaml);
         Assert.Contains("x:DataType=\"services:LogTailEntry\"", MainWindowXaml);
@@ -96,6 +99,55 @@ public sealed class DebugLogPanelRegressionTests
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(MainWindowDebugLog, "await ViewModel.PersistSettingsAsync\\(\\);"));
         Assert.Contains("_debugLogTimer?.Stop();", MainWindowDebugLog);
         Assert.Contains("DisposeDebugLogPanel();", MainWindowCodeBehind);
+    }
+
+    [Fact]
+    public void LiveTail_AllTextIsSelectable_AndRowsCopyTheirCompleteRawEntry()
+    {
+        Assert.Contains("<Style TargetType=\"TextBlock\">", MainWindowXaml);
+        Assert.Contains("<Setter Property=\"IsTextSelectionEnabled\" Value=\"True\" />", MainWindowXaml);
+        Assert.Contains("<Grid.ContextFlyout>", MainWindowXaml);
+        Assert.Contains("Text=\"Copy log entry\"", MainWindowXaml);
+        Assert.Contains("Tag=\"{x:Bind RawText, Mode=OneWay}\"", MainWindowXaml);
+        Assert.Contains("Click=\"OnCopyDebugLogEntry\"", MainWindowXaml);
+        Assert.Contains("SetClipboardText(rawText, \"log entry\");", MainWindowDebugLog);
+    }
+
+    [Fact]
+    public void LiveTail_ExportsExactlyTheVisibleFilteredEntries()
+    {
+        Assert.Contains("string[] visibleEntries = _debugLogVisibleEntries.Select", MainWindowDebugLog);
+        Assert.Contains("entry => entry.RawText", MainWindowDebugLog);
+        Assert.Contains("Win32FileDialog.Save(", MainWindowDebugLog);
+        Assert.Contains("\"Export visible Yagu logs\"", MainWindowDebugLog);
+        Assert.Contains("File.WriteAllTextAsync(path, text, new UTF8Encoding", MainWindowDebugLog);
+        Assert.Contains("DebugLogExportButton.IsEnabled = filtered.Count > 0;", MainWindowDebugLog);
+        Assert.DoesNotContain("_debugLogEntries.Select(static entry => entry.RawText)", MainWindowDebugLog);
+    }
+
+    [Fact]
+    public void LiveTail_AlignsItsRightEdgeWithTheWindow()
+    {
+        Assert.Contains("x:Name=\"BottomStatusBar\" Grid.Row=\"6\" Padding=\"20,6,0,8\"", MainWindowXaml);
+        int buttonStart = MainWindowXaml.IndexOf("x:Name=\"DebugLogButton\"", StringComparison.Ordinal);
+        int flyoutStart = MainWindowXaml.IndexOf("<Button.Flyout>", buttonStart, StringComparison.Ordinal);
+        Assert.True(buttonStart >= 0 && flyoutStart > buttonStart);
+        string button = MainWindowXaml[buttonStart..flyoutStart];
+
+        // The glyph alone moves left inside the same fixed button. Keeping the button bounds unchanged
+        // preserves the flyout target and therefore the live-log overlay's right-edge alignment.
+        Assert.Contains("Width=\"24\" Height=\"16\" MinWidth=\"0\" MinHeight=\"0\" Padding=\"0\"", button);
+        Assert.Contains("<TranslateTransform X=\"-4\" />", button);
+        Assert.DoesNotContain("Margin=", button);
+        foreach (string key in new[]
+                 {
+                     "ButtonBackground", "ButtonBackgroundPointerOver", "ButtonBackgroundPressed", "ButtonBackgroundDisabled",
+                     "ButtonBorderBrush", "ButtonBorderBrushPointerOver", "ButtonBorderBrushPressed", "ButtonBorderBrushDisabled",
+                 })
+        {
+            Assert.Contains($"<SolidColorBrush x:Key=\"{key}\" Color=\"Transparent\" />", button);
+        }
+        Assert.Contains("Placement=\"TopEdgeAlignedRight\"", MainWindowXaml[flyoutStart..]);
     }
 
     [Fact]

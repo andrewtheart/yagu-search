@@ -379,6 +379,56 @@ public sealed class ContentIndexManagerMaintenanceTests : IDisposable
     }
 
     [Fact]
+    public void ActiveLayerHelpers_ReportBreakdownTrendAndReclamationWithoutOpeningContent()
+    {
+        PublishGeneration();
+        string scopeId = ContentIndexManager.ScopeIdForRoot(_root);
+        DateTimeOffset incrementalUtc = new(2026, 8, 16, 12, 0, 0, TimeSpan.Zero);
+        var segmentBuilder = new ContentIndexGenerationBuilder(Policy());
+        segmentBuilder.AddDocument(
+            Path.Combine(_root, "added.txt"),
+            Encoding.UTF8.GetBytes("added indexed content"));
+        ContentIndexGeneration added = segmentBuilder.Build(
+            scopeId,
+            "volume",
+            _root,
+            new UsnCheckpoint(1, 110),
+            incrementalUtc,
+            lastIncrementalUpdateUtc: incrementalUtc);
+        new ContentIndexStore(_paths, scopeId).PublishSegment(
+            new ContentIndexDeltaSegment(added, Array.Empty<string>()));
+
+        var manager = new ContentIndexManager(_paths);
+        ActiveLayerStorageBreakdown? breakdown = manager.TryReadActiveLayerStorageBreakdownForRoot(_root);
+        ActiveLayerStorageTrend? trend = manager.TryReadActiveLayerStorageTrendForRoot(_root);
+        IndexReclamationDiagnosis diagnosis = manager.DiagnoseReclamation(
+            _root,
+            EffectiveIndexSizePolicy.Default,
+            maxDeltaSegments: 8,
+            compactionThresholdMB: 256);
+
+        Assert.NotNull(breakdown);
+        Assert.Equal(1, breakdown!.Value.BaseCount);
+        Assert.Equal(1, breakdown.Value.IncrementalCount);
+        Assert.NotNull(trend);
+        Assert.Equal(breakdown.Value, trend!.Value.Breakdown);
+        Assert.Equal(incrementalUtc, trend.Value.OldestIncrementalBuiltUtc);
+        Assert.False(diagnosis.ReclamationBlocked);
+        Assert.Null(manager.TryReadActiveLayerStorageBreakdownForRoot("   "));
+        Assert.Null(manager.TryReadActiveLayerStorageTrendForRoot("   "));
+        Assert.Equal(IndexReclamationDiagnosis.Healthy, manager.DiagnoseReclamation(
+            "   ", EffectiveIndexSizePolicy.Default, 8, 256));
+        Assert.Equal(IndexReclamationDiagnosis.Healthy, manager.DiagnoseReclamation(
+            Path.Combine(_sandbox, "not-indexed"), EffectiveIndexSizePolicy.Default, 8, 256));
+        EffectiveIndexSizePolicy noCleanup = EffectiveIndexSizePolicy.Default with
+        {
+            Mode = IndexSizeManagementModes.Off,
+        };
+        Assert.Equal(IndexReclamationDiagnosis.Healthy, manager.DiagnoseReclamation(
+            _root, noCleanup, 8, 256));
+    }
+
+    [Fact]
     public void MaintenanceMethods_OrdinaryProviderFailuresReturnFalse()
     {
         var manager = new ContentIndexManager(new ThrowingPathProvider(_indexRoot));
@@ -386,6 +436,10 @@ public sealed class ContentIndexManagerMaintenanceTests : IDisposable
         Assert.False(manager.TryReanchorFreshScope(_root, FreshReader));
         Assert.False(manager.CompactScopeIfOverSegmented(
             _root, Policy(), new IndexMaintenanceSettings(), DateTimeOffset.UtcNow));
+        Assert.Null(manager.TryReadActiveLayerStorageBreakdownForRoot(_root));
+        Assert.Null(manager.TryReadActiveLayerStorageTrendForRoot(_root));
+        Assert.Equal(IndexReclamationDiagnosis.Healthy, manager.DiagnoseReclamation(
+            _root, EffectiveIndexSizePolicy.Default, 8, 256));
     }
 
     [Fact]

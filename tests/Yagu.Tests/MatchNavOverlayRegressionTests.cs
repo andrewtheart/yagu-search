@@ -345,12 +345,17 @@ public sealed class MatchNavOverlayRegressionTests
     }
 
     [Fact]
-    public void ApplyPreviewSectionBackgrounds_MarksOnlyActiveSectionBlockAsActive()
+    public void ApplyPreviewSectionBackgrounds_MarksOnlyTheFocusedSectionAsActive()
     {
-        string apply = Method("ApplyPreviewSectionBackgrounds", 500);
+        string apply = Method("ApplyPreviewSectionBackgrounds", 900);
         Assert.Contains("var activeBlock = _activeSectionNav?.Block;", apply);
-        Assert.Contains("bool isActive = child.Tag is RichTextBlock block && block == activeBlock;", apply);
-        Assert.Contains("ApplyPreviewSectionContentBackground(child, isActive);", apply);
+        Assert.Contains("ApplyPreviewSectionContentBackground(child, IsPreviewSectionFocused(child, activeBlock));", apply);
+        // A preview rebuild drops the expander a scroll-driven pre-focus was pointing at.
+        Assert.Contains("!PreviewSectionsPanel.Children.Contains(prefocused)", apply);
+
+        string focused = Method("IsPreviewSectionFocused", 400);
+        Assert.Contains("ReferenceEquals(expander, _prefocusedContinuationExpander)", focused);
+        Assert.Contains("expander.Tag is RichTextBlock block && block == activeBlock", focused);
     }
 
     // ── Diagnostic formatters (overlay geometry logging) ─────────────────────────

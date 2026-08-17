@@ -5,7 +5,11 @@ namespace Yagu.Services.Index;
 /// </summary>
 public enum IndexSizeBudgetRemedy
 {
-    /// <summary>Rebuild the index from scratch: collapses every accumulated layer into one small base.</summary>
+    /// <summary>
+    /// Rebuild the index from the source files: writes a fresh, memory-paged index and drops the
+    /// accumulated update history. A whole-drive rebuild still produces a paged index roughly the size of
+    /// the live corpus, so it is not a guaranteed collapse to one small base.
+    /// </summary>
     Rebuild,
 
     /// <summary>Raise this index's storage budget so maintenance resumes at the current size.</summary>
@@ -87,8 +91,8 @@ public readonly record struct IndexSizeBudgetDiagnosis(
             return merging;
 
         return merging
-            + $" Rebuilding the whole index into one compact file would work, but that is only done "
-            + $"automatically below {MaxAutoCompactionSizeMB:N0} MB because it briefly needs a lot of memory.";
+            + $" Compaction would work, but it is only started automatically below "
+            + $"{MaxAutoCompactionSizeMB:N0} MB to limit background I/O and temporary disk use.";
     }
 
     /// <summary>The remedies worth offering, best first.</summary>
@@ -151,14 +155,16 @@ public static class IndexSizeBudgetAdvisor
     public static string RemedyDescription(IndexSizeBudgetRemedy remedy, IndexSizeBudgetDiagnosis diagnosis) => remedy switch
     {
         IndexSizeBudgetRemedy.Rebuild =>
-            "Recommended. Builds the index again from scratch, which frees almost all of the space and "
-            + "starts keeping it up to date again. Your current index keeps working until the new one is ready.",
+            "Reads your files again and writes a fresh index, which removes the accumulated update history "
+            + "and starts keeping it up to date again. The new index is still as large as the content it "
+            + "covers, so a whole drive will not shrink to a small file. Your current index keeps working "
+            + "until the new one is ready.",
         IndexSizeBudgetRemedy.RaiseBudget =>
             $"Raises this index's limit to {diagnosis.SuggestedBudgetMB:N0} MB so it starts updating again "
             + "right away. It keeps the space it already uses and will grow further.",
         IndexSizeBudgetRemedy.AllowCompaction =>
             "Lets Yagu compact this index in place at its next update, which reclaims the space without a "
-            + "full rebuild. Compacting a large index briefly uses a lot of memory.",
+            + "full rebuild. The bounded-memory streaming pass uses temporary disk space and can do substantial I/O.",
         IndexSizeBudgetRemedy.Delete =>
             "Frees all of the space now. Searches still find everything by reading files directly, but "
             + "they lose this index's speed-up until you build it again.",

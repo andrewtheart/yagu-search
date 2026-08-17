@@ -23,6 +23,11 @@ public sealed partial class MainViewModel
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
+    public Microsoft.UI.Xaml.Visibility SelectAllFilesVisibility =>
+        ResultGroups.Count > 1
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
     public Microsoft.UI.Xaml.Visibility SkippedInfoVisibility =>
         FilesSkipped > 0
             ? Microsoft.UI.Xaml.Visibility.Visible

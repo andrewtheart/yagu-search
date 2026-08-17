@@ -151,10 +151,10 @@ public sealed class SearchServiceGateTests
     [Fact]
     public void IsMemoryPressureHigh_ReturnsBoolean()
     {
-        // Exercise with no cap — should not throw
-        bool result = SearchService.IsMemoryPressureHigh(0, 0);
-        // With a zero cap and zero pressure%, the default path returns false
-        // (effectiveCap becomes long.MaxValue so WS < cap)
+        // An explicit cap larger than any working set can be: nothing to shed, no threshold configured.
+        // (A zero cap is NOT neutral — it selects the automatic sub-GB cap, so the answer would depend on
+        // how much memory the test host happens to hold.)
+        bool result = SearchService.IsMemoryPressureHigh(long.MaxValue, 0);
         Assert.False(result);
     }
 
@@ -169,8 +169,8 @@ public sealed class SearchServiceGateTests
     [Fact]
     public void IsMemoryPressureRelieved_ReturnsBoolean()
     {
-        // With no cap, pressure is always relieved
-        bool result = SearchService.IsMemoryPressureRelieved(0, 0);
+        // Far below an explicit cap and with no threshold configured, pressure is always relieved.
+        bool result = SearchService.IsMemoryPressureRelieved(long.MaxValue, 0);
         Assert.True(result);
     }
 

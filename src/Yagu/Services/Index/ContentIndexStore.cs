@@ -100,6 +100,10 @@ public sealed class ContentIndexStore
     /// <summary>The scope's storage directory.</summary>
     public string ScopeDirectory => _scopeDir;
 
+    /// <summary>The shared index root, where a streaming merge creates its private workspace so the spool
+    /// and the prepared layer stay on the index volume.</summary>
+    internal string IndexRootDirectory => _paths.IndexRoot;
+
     internal IndexMutationContext AcquireMutationContext() => IndexMutationContext.Acquire(_paths);
 
     private string GenerationsDir => Path.Combine(_scopeDir, GenerationsSubdir);
@@ -815,6 +819,21 @@ public sealed class ContentIndexStore
         long TotalBytes);
 
     /// <summary>
+    /// Finds a bounded contiguous run of <b>incremental</b> active segments to merge. Full-build paging
+    /// layers are never selected: they are disjoint parts of one build, so merging them reclaims nothing
+    /// while paying the full merge cost. Only accumulated update history is eligible.
+    /// </summary>
+    internal bool TryFindIncrementalSegmentRun(
+        int minimumSegments,
+        int maximumSegments,
+        long maximumIndividualBytes,
+        long maximumTotalBytes,
+        out SegmentCoalesceRun? run)
+        => TryFindSmallSegmentRun(
+            minimumSegments, maximumSegments, maximumIndividualBytes, maximumTotalBytes, out run,
+            incrementalOnly: true);
+
+    /// <summary>
     /// Finds the oldest contiguous active run containing at least <paramref name="minimumSegments"/> small
     /// segments. Selection is manifest-only plus directory sizes: no content/posting file is opened. The
     /// individual and aggregate byte caps bound the memory/IO of the later merge independently of total
@@ -825,7 +844,8 @@ public sealed class ContentIndexStore
         int maximumSegments,
         long maximumIndividualBytes,
         long maximumTotalBytes,
-        out SegmentCoalesceRun? run)
+        out SegmentCoalesceRun? run,
+        bool incrementalOnly = false)
     {
         run = null;
         if (minimumSegments < 2 || maximumSegments < minimumSegments
@@ -886,6 +906,16 @@ public sealed class ContentIndexStore
                 }
 
                 bool isFullBuildPaging = IsFullBuildPagingLayer(baseManifest, segmentManifest!);
+                if (incrementalOnly && isFullBuildPaging)
+                {
+                    if (FinishRun())
+                    {
+                        run = selected;
+                        return true;
+                    }
+                    ResetRun();
+                    continue;
+                }
                 if (ids.Count > 0
                     && (ids.Count >= maximumSegments
                         || total > maximumTotalBytes - bytes
@@ -934,10 +964,50 @@ public sealed class ContentIndexStore
         SegmentCoalesceRun run,
         ContentIndexDeltaSegment mergedSegment)
     {
+        ArgumentNullException.ThrowIfNull(mergedSegment);
+        return TryReplaceSegmentRunCoreUnderLease(
+            mutation,
+            run,
+            tempDir =>
+            {
+                ContentIndexDeltaSegmentSerializer.Write(tempDir, mergedSegment);
+                if (ProduceV3QueryStructures)
+                {
+                    TryWriteV3Structures(tempDir,
+                        () => ContentIndexV3Format.Write(tempDir, mergedSegment.Added, mergedSegment.RemovedPaths));
+                }
+            });
+    }
+
+    /// <summary>
+    /// Publishes a merged segment that a streaming merge already wrote (and, when enabled, already produced
+    /// format-v3 sidecars for) in a private workspace. The prepared directory is moved into place and then
+    /// runs through the identical validate → mark → promote → redundant pointer flip → retention protocol as
+    /// an in-memory merge, so the crash/rollback guarantees and fault points are unchanged.
+    /// </summary>
+    internal bool TryReplacePreparedSegmentRunUnderLease(
+        IndexMutationContext mutation,
+        SegmentCoalesceRun run,
+        string preparedDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(preparedDirectory);
+        if (!Directory.Exists(preparedDirectory))
+            return false;
+        return TryReplaceSegmentRunCoreUnderLease(
+            mutation,
+            run,
+            tempDir => Directory.Move(preparedDirectory, tempDir));
+    }
+
+    private bool TryReplaceSegmentRunCoreUnderLease(
+        IndexMutationContext mutation,
+        SegmentCoalesceRun run,
+        Action<string> writeToTempDir)
+    {
         ArgumentNullException.ThrowIfNull(mutation);
         mutation.EnsureOwns(_paths);
         ArgumentNullException.ThrowIfNull(run);
-        ArgumentNullException.ThrowIfNull(mergedSegment);
+        ArgumentNullException.ThrowIfNull(writeToTempDir);
 
         SlotContents? active = null;
         foreach (SlotContents slot in ReadValidSlotsNewestFirst()) { active = slot; break; }
@@ -964,12 +1034,7 @@ public sealed class ContentIndexStore
         string finalDir = Path.Combine(SegmentsDir, segmentId);
 
         DeleteDirectorySafe(tempDir);
-        ContentIndexDeltaSegmentSerializer.Write(tempDir, mergedSegment);
-        if (ProduceV3QueryStructures)
-        {
-            TryWriteV3Structures(tempDir,
-                () => ContentIndexV3Format.Write(tempDir, mergedSegment.Added, mergedSegment.RemovedPaths));
-        }
+        writeToTempDir(tempDir);
             IndexMutationFaults.Hit(IndexMutationFaults.CoalesceWritten);
         if (!ContentIndexDeltaSegmentSerializer.TryValidateSerializedSegment(tempDir, out _))
         {
@@ -1222,6 +1287,68 @@ public sealed class ContentIndexStore
     }
 
     /// <summary>
+    /// Splits the active layers into base / full-build paging / incremental cohorts using the pointer
+    /// slot, layer manifests, and directory sizes only — never <c>content.bin</c> or postings. Returns
+    /// <see langword="null"/> when no trusted base is present or any active segment manifest is
+    /// unreadable, so a caller can never misclassify a layer it could not identify.
+    /// </summary>
+    public ActiveLayerStorageBreakdown? TryReadActiveLayerStorageBreakdown()
+        => TryReadActiveLayerStorageTrend()?.Breakdown;
+
+    /// <summary>
+    /// Reads the active storage cohorts plus the oldest/newest incremental-layer timestamps. Pointer,
+    /// manifests, and directory sizes only; never opens content or postings.
+    /// </summary>
+    public ActiveLayerStorageTrend? TryReadActiveLayerStorageTrend()
+    {
+        foreach (SlotContents slot in ReadValidSlotsNewestFirst())
+        {
+            string baseDir = Path.Combine(GenerationsDir, slot.GenerationId);
+            IndexManifest? baseManifest = ContentIndexGenerationSerializer.TryReadManifest(baseDir);
+            if (baseManifest is null)
+                continue;
+
+            long pagingBytes = 0;
+            int pagingCount = 0;
+            long incrementalBytes = 0;
+            int incrementalCount = 0;
+            DateTimeOffset? oldestIncrementalBuiltUtc = null;
+            DateTimeOffset? newestIncrementalBuiltUtc = null;
+            foreach (string segId in slot.SegmentIds)
+            {
+                string segmentDir = Path.Combine(SegmentsDir, segId);
+                IndexManifest? segmentManifest = ContentIndexGenerationSerializer.TryReadManifest(segmentDir);
+                if (segmentManifest is null)
+                    return null;
+
+                long bytes = DirectorySizeReader(segmentDir);
+                if (IsFullBuildPagingLayer(baseManifest, segmentManifest))
+                {
+                    pagingBytes += bytes;
+                    pagingCount++;
+                }
+                else
+                {
+                    incrementalBytes += bytes;
+                    incrementalCount++;
+                    DateTimeOffset builtUtc = segmentManifest.BuiltUtc;
+                    if (oldestIncrementalBuiltUtc is null || builtUtc < oldestIncrementalBuiltUtc)
+                        oldestIncrementalBuiltUtc = builtUtc;
+                    if (newestIncrementalBuiltUtc is null || builtUtc > newestIncrementalBuiltUtc)
+                        newestIncrementalBuiltUtc = builtUtc;
+                }
+            }
+
+            return new ActiveLayerStorageTrend(
+                new ActiveLayerStorageBreakdown(
+                    DirectorySizeReader(baseDir), 1, pagingBytes, pagingCount, incrementalBytes, incrementalCount),
+                oldestIncrementalBuiltUtc,
+                newestIncrementalBuiltUtc);
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Whether the layered index should be compacted into a fresh base (plan §11.4): the active segment
     /// count exceeds <paramref name="maxDeltaSegments"/> OR their accumulated size exceeds
     /// <paramref name="compactionThresholdMB"/>, whichever is hit first.
@@ -1240,6 +1367,20 @@ public sealed class ContentIndexStore
     /// base and the now-orphaned segments. This is just <see cref="Publish"/>; named for intent/tests.
     /// </summary>
     public PublishResult Compact(ContentIndexGeneration compactedBase) => Publish(compactedBase);
+
+    /// <summary>
+    /// Publishes a base that a streaming compaction already wrote in a private workspace. The prepared
+    /// directory is moved into the generations folder and then runs through the same staged validate →
+    /// mark → promote → single pointer flip → retention protocol as any other base, so the previous
+    /// generation stays intact as the rollback point until normal retention releases it.
+    /// </summary>
+    internal PublishResult CompactFromPreparedUnderLease(IndexMutationContext mutation, string preparedDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(preparedDirectory);
+        if (!Directory.Exists(preparedDirectory))
+            throw new InvalidDataException("The prepared compaction directory no longer exists.");
+        return PublishStagedBase(mutation, tempDir => Directory.Move(preparedDirectory, tempDir));
+    }
 
     internal PublishResult CompactUnderLease(IndexMutationContext mutation, ContentIndexGeneration compactedBase)
         => PublishUnderLease(mutation, compactedBase);

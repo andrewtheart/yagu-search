@@ -184,6 +184,7 @@ public static class ContentIndexConfigService
         AddInt("IndexRetainedGenerationCount", s => s.IndexRetainedGenerationCount, (s, v) => s.IndexRetainedGenerationCount = AppSettings.NormalizeIndexRetainedGenerationCount(v));
         AddInt("IndexStaleTemporaryHours", s => s.IndexStaleTemporaryHours, (s, v) => s.IndexStaleTemporaryHours = AppSettings.NormalizeIndexStaleTemporaryHours(v));
         AddInt("IndexQuarantineRetentionDays", s => s.IndexQuarantineRetentionDays, (s, v) => s.IndexQuarantineRetentionDays = AppSettings.NormalizeIndexQuarantineRetentionDays(v));
+        AddInt("IndexStorageHistoryRetentionDays", s => s.IndexStorageHistoryRetentionDays, (s, v) => s.IndexStorageHistoryRetentionDays = AppSettings.NormalizeIndexStorageHistoryRetentionDays(v));
         AddFlags("IndexBuildTrigger", s => s.IndexBuildTrigger, (s, v) => s.IndexBuildTrigger = AppSettings.NormalizeIndexBuildTrigger(v), "Manual", "WhenEnabled", "AtStartup", "WhenIdle", "Continuous", "OnSchedule");
         AddEnum("IndexScheduleMode", s => s.IndexScheduleMode, (s, v) => s.IndexScheduleMode = AppSettings.NormalizeIndexScheduleMode(v), "Interval", "Weekly");
         AddInt("IndexScheduleIntervalMinutes", s => s.IndexScheduleIntervalMinutes, (s, v) => s.IndexScheduleIntervalMinutes = AppSettings.NormalizeIndexScheduleIntervalMinutes(v));
@@ -212,6 +213,7 @@ public static class ContentIndexConfigService
         AddInt("IndexCoalesceMaxBatchMB", s => s.IndexCoalesceMaxBatchMB, (s, v) => s.IndexCoalesceMaxBatchMB = AppSettings.NormalizeIndexCoalesceMaxBatchMB(v));
         AddInt("IndexCoalesceMinRun", s => s.IndexCoalesceMinRun, (s, v) => s.IndexCoalesceMinRun = AppSettings.NormalizeIndexCoalesceMinRun(v));
         AddInt("IndexCoalesceMaxRunsPerPass", s => s.IndexCoalesceMaxRunsPerPass, (s, v) => s.IndexCoalesceMaxRunsPerPass = AppSettings.NormalizeIndexCoalesceMaxRunsPerPass(v));
+        AddBool("IndexHaltUpdatesWhenReclamationBlocked", s => s.IndexHaltUpdatesWhenReclamationBlocked, (s, v) => s.IndexHaltUpdatesWhenReclamationBlocked = v);
         AddBool("ShareAggregateIndexTelemetry", s => s.ShareAggregateIndexTelemetry, (s, v) => s.ShareAggregateIndexTelemetry = v);
         AddBool("IndexAutoRepair", s => s.IndexAutoRepair, (s, v) => s.IndexAutoRepair = v);
         AddBool("ShowIndexStatusInMainWindow", s => s.ShowIndexStatusInMainWindow, (s, v) => s.ShowIndexStatusInMainWindow = v);

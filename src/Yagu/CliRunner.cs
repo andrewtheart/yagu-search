@@ -2048,6 +2048,12 @@ internal static partial class CliRunner
             }
         }
 
+        if (args.IndexCompactRequested)
+            return RunIndexCompact(args, settings, manager);
+
+        if (args.IndexValidateRequested)
+            return RunIndexValidate(args, settings);
+
         if (args.IndexStatusRequested)
         {
             string root = ResolveIndexRoot(args.IndexStatusPath);
@@ -2085,6 +2091,7 @@ internal static partial class CliRunner
             Console.Out.WriteLine($"  scope:       {ContentIndexManager.ScopeIdForRoot(root)}");
             Console.Out.WriteLine($"  stored records: {status.DocumentCount:N0}");
             Console.Out.WriteLine($"  segments:    {status.SegmentCount:N0}");
+            WriteIndexLayerCohorts(manager, settings, root);
             Console.Out.WriteLine($"  created (UTC):  {status.CreatedUtc:u}");
             Console.Out.WriteLine($"  active generation built (UTC): {status.BuiltUtc:u}");
             if (status.LastIncrementalUpdateUtc is { } updated)
@@ -2362,6 +2369,122 @@ internal static partial class CliRunner
 
     private static string ResolveIndexRoot(string? path)
         => string.IsNullOrWhiteSpace(path) ? Directory.GetCurrentDirectory() : path.Trim('"');
+
+    /// <summary>
+    /// Reports what an index is actually made of. A paged full build writes its later pages into the
+    /// segment store, so "segments" alone cannot tell the user whether a clean-up would reclaim anything;
+    /// only the incremental cohort is accumulated update history.
+    /// </summary>
+    private static void WriteIndexLayerCohorts(ContentIndexManager manager, AppSettings settings, string root)
+    {
+        if (manager.TryReadActiveLayerStorageBreakdownForRoot(root) is not { } breakdown)
+            return;
+
+        Console.Out.WriteLine(
+            $"  layers:      base {ContentIndexUiStatus.FormatBytes(breakdown.BaseBytes)}"
+            + $", full-build pages {breakdown.FullBuildPagingCount:N0} ({ContentIndexUiStatus.FormatBytes(breakdown.FullBuildPagingBytes)})"
+            + $", update history {breakdown.IncrementalCount:N0} ({ContentIndexUiStatus.FormatBytes(breakdown.IncrementalBytes)})");
+
+        IndexReclamationDiagnosis diagnosis = manager.DiagnoseReclamation(
+            root,
+            IndexSizeManagementPolicy.Resolve(settings, root),
+            AppSettings.NormalizeIndexMaxDeltaSegments(settings.IndexMaxDeltaSegments),
+            AppSettings.NormalizeIndexCompactionThresholdMB(settings.IndexCompactionThresholdMB));
+        if (!diagnosis.CleanupDue)
+        {
+            Console.Out.WriteLine("  clean-up:    not needed");
+            return;
+        }
+        Console.Out.WriteLine(diagnosis.ReclamationBlocked
+            ? $"  clean-up:    due, but blocked - {diagnosis.ExplainWhyAutomaticCleanupIsUnavailable()}"
+            : "  clean-up:    due; the next maintenance pass can reclaim it automatically");
+        if (diagnosis.ReclamationBlocked)
+            Console.Out.WriteLine($"  compact:     Yagu.exe --cli --compact-index \"{root}\"");
+    }
+
+    /// <summary>
+    /// Explicit one-shot compaction, the CLI counterpart of the GUI's <b>Compact now</b>. It ignores the
+    /// automatic-compaction size cap for this run only and never persists a change to it.
+    /// </summary>
+    private static int RunIndexCompact(CliArgs args, AppSettings settings, ContentIndexManager manager)
+    {
+        string root = ResolveIndexRoot(args.IndexCompactPath);
+        IndexMetadataStatus status = manager.GetMetadataStatusForRoot(root);
+        if (!status.Exists || !status.MetadataReadable)
+        {
+            Console.Out.WriteLine($"No usable content index for {root} to compact.");
+            return (int)ContentIndexExitCode.UnsupportedScope;
+        }
+
+        using var cts = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancelHandler = (_, e) => { e.Cancel = true; cts.Cancel(); };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            IndexMaintenanceOperation operation = IndexBuildOperationFactory.CreateMaintenance(
+                settings, new[] { root }, IndexMaintenanceOperation.ModeCompactOnly, rebuildWhenDirty: false);
+            var coordinator = new IndexBuildCoordinator();
+            coordinator.RunMaintenancePreferWorkerAsync(
+                operation, settings.IndexUseNativeWorker, cts.Token).GetAwaiter().GetResult();
+            IndexMetadataStatus after = manager.GetMetadataStatusForRoot(root);
+            Console.Out.WriteLine($"Compacted the content index for {root}.");
+            Console.Out.WriteLine($"  segments:    {status.SegmentCount:N0} -> {after.SegmentCount:N0}");
+            WriteIndexLayerCohorts(manager, settings, root);
+            return (int)ContentIndexExitCode.Success;
+        }
+        catch (IndexWriteBusyException ex)
+        {
+            WriteError($"error: {ex.Message}");
+            return (int)ContentIndexExitCode.AlreadyRunning;
+        }
+        catch (OperationCanceledException)
+        {
+            WriteError("Compaction cancelled; the existing index is unchanged.");
+            return (int)ContentIndexExitCode.Cancelled;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            WriteError($"error: {ex.Message}");
+            return (int)ContentIndexExitCode.BuildFailure;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+        }
+    }
+
+    /// <summary>Read-only structural validation, the CLI counterpart of Settings ▸ Indexing ▸ Validate.</summary>
+    private static int RunIndexValidate(CliArgs args, AppSettings settings)
+    {
+        string root = ResolveIndexRoot(args.IndexValidatePath);
+        try
+        {
+            IndexValidationOperation operation = IndexBuildOperationFactory.CreateValidation(settings, root);
+            var coordinator = new IndexBuildCoordinator();
+            IndexValidationResult result = coordinator.ValidatePreferWorkerAsync(
+                operation, settings.IndexUseNativeWorker, CancellationToken.None).GetAwaiter().GetResult();
+            if (!result.Valid)
+            {
+                Console.Out.WriteLine($"No valid content index for {root}: {result.FailureReason}");
+                Console.Out.WriteLine("  searches safely live-scan this folder until it is rebuilt.");
+                return (int)ContentIndexExitCode.BuildFailure;
+            }
+            Console.Out.WriteLine($"Valid content index for {root}.");
+            Console.Out.WriteLine($"  stored records: {result.DocumentCount:N0}");
+            Console.Out.WriteLine($"  segments:    {result.SegmentCount:N0}");
+            return (int)ContentIndexExitCode.Success;
+        }
+        catch (IndexWriteBusyException ex)
+        {
+            WriteError($"error: {ex.Message}");
+            return (int)ContentIndexExitCode.AlreadyRunning;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            WriteError($"error: {ex.Message}");
+            return (int)ContentIndexExitCode.BuildFailure;
+        }
+    }
 
     private static int RunLoadSession(string path, bool vtEnabled)
     {
@@ -2993,7 +3116,16 @@ internal static partial class CliRunner
                                           catch up above IndexPostBuildCatchUpThresholdChanges, print
                                           a summary, and exit.
                   --rebuild-index [<path>] Force a full rebuild of the index for a scope.
-                  --index-status [<path>] Print the index manifest and last-build summary for a scope.
+                  --index-status [<path>] Print the index manifest and last-build summary for a scope,
+                                          including what its active layers are made of and whether the
+                                          accumulated update history can still be reclaimed automatically.
+                  --compact-index [<path>] Fold every active layer of one index into a fresh single index.
+                                          Runs as a bounded streaming pass in the maintenance worker,
+                                          ignores the automatic-compaction size cap for this run only,
+                                          and never changes that setting.
+                  --validate-index [<path>] Structurally validate a stored index (checksums, record
+                                          boundaries, and counts of every active layer) and report the
+                                          result. Read-only; never modifies the index.
                   --delete-index <path>   Delete the index for one scope.
                   --clear-indexes         Delete all local content-index data.
                   --index-config          Print every persisted Indexing setting and its value.
@@ -3016,8 +3148,8 @@ internal static partial class CliRunner
                                           Set one index's size management. <mode> is Off, Coalesce, Compact,
                                           or CoalesceThenCompact. An index only grows on its own (each update
                                           appends a segment); coalescing merges runs of small segments cheaply,
-                                          compaction folds everything into a fresh base but briefly loads the
-                                          index into memory, so the cap bounds it. At the size budget Yagu
+                                          while compaction streams everything into a fresh base. The cap limits
+                                          automatic background I/O and temporary disk work. At the size budget Yagu
                                           reclaims what it can and then pauses that index's updates instead of
                                           growing - searches still return every match. Use -1 for any numeric
                                           value to inherit the global setting.
@@ -4238,6 +4370,10 @@ internal sealed class CliArgs
     public string?          IndexRebuildPath { get; private set; }
     public bool             IndexStatusRequested { get; private set; }
     public string?          IndexStatusPath { get; private set; }
+    public bool             IndexCompactRequested { get; private set; }
+    public string?          IndexCompactPath { get; private set; }
+    public bool             IndexValidateRequested { get; private set; }
+    public string?          IndexValidatePath { get; private set; }
     public string?          IndexDeletePath { get; private set; }
     public bool             ClearIndexes { get; private set; }
     public bool             IndexConfigRequested { get; private set; }
@@ -4260,6 +4396,8 @@ internal sealed class CliArgs
     /// that short-circuits the normal search pipeline.</summary>
     public bool IsIndexManagementCommand =>
         IndexBuildRequested || IndexRebuildRequested || IndexStatusRequested
+        || IndexCompactRequested
+        || IndexValidateRequested
         || IndexDeletePath is not null || ClearIndexes || IndexConfigRequested
         || IndexListRoots || IndexAddRootPath is not null || IndexRemoveRootPath is not null
         || IndexSetRootFilterPath is not null || IndexClearRootFilterPath is not null
@@ -4344,6 +4482,18 @@ internal sealed class CliArgs
             {
                 a.IndexStatusRequested = true; i++;
                 if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexStatusPath = raw[i++].Trim('"'); }
+                continue;
+            }
+            if (Eq(tok, "--compact-index"))
+            {
+                a.IndexCompactRequested = true; i++;
+                if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexCompactPath = raw[i++].Trim('"'); }
+                continue;
+            }
+            if (Eq(tok, "--validate-index"))
+            {
+                a.IndexValidateRequested = true; i++;
+                if (i < raw.Length && !raw[i].StartsWith('-')) { a.IndexValidatePath = raw[i++].Trim('"'); }
                 continue;
             }
             if (Eq(tok, "--index-config"))

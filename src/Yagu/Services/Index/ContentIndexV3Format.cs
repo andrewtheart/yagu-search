@@ -531,6 +531,151 @@ internal sealed unsafe class ContentIndexV3BlockFile : IDisposable
         IndexMutationFaults.Hit(IndexMutationFaults.V3Published);
     }
 
+    /// <summary>
+    /// Streaming counterpart of <see cref="Write(string,ushort,ushort,byte[])"/> for bodies that must never
+    /// be materialized (a compacted whole-drive index). <paramref name="writeBody"/> emits the body to a
+    /// scratch file while every 64 KB block is hashed in flight; the header is then built from those hashes
+    /// and the final file is assembled header-first. On-disk bytes are identical to the in-memory writer for
+    /// the same body.
+    /// </summary>
+    internal static void WriteStreamed(
+        string path,
+        ushort sectionKind,
+        ushort formatVersion,
+        string scratchBodyPath,
+        Action<Stream, CancellationToken> writeBody,
+        CancellationToken cancellationToken = default,
+        IndexCompactionDiskGuard? diskGuard = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        ArgumentException.ThrowIfNullOrEmpty(scratchBodyPath);
+        ArgumentNullException.ThrowIfNull(writeBody);
+
+        List<ulong> blockHashes;
+        long bodyLength;
+        try
+        {
+            using var scratch = new FileStream(scratchBodyPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1024 * 1024);
+            using var hashing = new BlockHashingStream(new DiskGuardedStream(scratch, diskGuard));
+            writeBody(hashing, cancellationToken);
+            hashing.Flush();
+            hashing.CompleteFinalBlock();
+            blockHashes = hashing.BlockHashes;
+            bodyLength = hashing.BytesWritten;
+        }
+        catch
+        {
+            DeleteFileSafe(scratchBodyPath);
+            throw;
+        }
+
+        try
+        {
+            int blockCount = blockHashes.Count;
+            int headerBytes = 4 + 2 + 2 + 4 + 4 + 8 + blockCount * 8 + 8;
+            var header = new byte[headerBytes];
+            Span<byte> span = header;
+            BinaryPrimitives.WriteUInt32LittleEndian(span[0..], FileMagic);
+            BinaryPrimitives.WriteUInt16LittleEndian(span[4..], sectionKind);
+            BinaryPrimitives.WriteUInt16LittleEndian(span[6..], formatVersion);
+            BinaryPrimitives.WriteUInt32LittleEndian(span[8..], BlockSize);
+            BinaryPrimitives.WriteUInt32LittleEndian(span[12..], (uint)blockCount);
+            BinaryPrimitives.WriteUInt64LittleEndian(span[16..], (ulong)bodyLength);
+
+            const int hashTable = 24;
+            for (int b = 0; b < blockCount; b++)
+                BinaryPrimitives.WriteUInt64LittleEndian(span[(hashTable + (b * 8))..], blockHashes[b]);
+
+            int headerHashOffset = hashTable + (blockCount * 8);
+            BinaryPrimitives.WriteUInt64LittleEndian(span[headerHashOffset..], V3Fnv.Hash(span[0..headerHashOffset]));
+
+            string tmp = path + ".tmp";
+            using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1024 * 1024))
+            {
+                var guarded = new DiskGuardedStream(fs, diskGuard);
+                guarded.Write(header, 0, header.Length);
+                IndexMutationFaults.Hit(IndexMutationFaults.V3HeaderWritten);
+                using (var body = new FileStream(scratchBodyPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1024 * 1024, FileOptions.SequentialScan))
+                {
+                    var buffer = new byte[WriteChunkBytes];
+                    int read;
+                    while ((read = body.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        guarded.Write(buffer, 0, read);
+                    }
+                }
+                IndexMutationFaults.Hit(IndexMutationFaults.V3BodyWritten);
+                fs.Flush(flushToDisk: true);
+            }
+            IndexMutationFaults.Hit(IndexMutationFaults.V3FileClosed);
+            File.Move(tmp, path, overwrite: true);
+            IndexMutationFaults.Hit(IndexMutationFaults.V3Published);
+        }
+        finally
+        {
+            DeleteFileSafe(scratchBodyPath);
+        }
+    }
+
+    private static void DeleteFileSafe(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* scratch cleanup is best effort */ }
+    }
+
+    /// <summary>Write-through stream that hashes the body in fixed 64 KB blocks as it is produced, so a
+    /// streamed body never has to be re-read (or held) to build the block-hash table.</summary>
+    private sealed class BlockHashingStream(Stream inner) : Stream
+    {
+        private readonly byte[] _block = new byte[BlockSize];
+        private int _blockUsed;
+
+        public List<ulong> BlockHashes { get; } = [];
+
+        public long BytesWritten { get; private set; }
+
+        public void CompleteFinalBlock()
+        {
+            if (_blockUsed <= 0)
+                return;
+            BlockHashes.Add(V3Fnv.Hash(_block.AsSpan(0, _blockUsed)));
+            _blockUsed = 0;
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            inner.Write(buffer);
+            BytesWritten += buffer.Length;
+            while (!buffer.IsEmpty)
+            {
+                int take = Math.Min(BlockSize - _blockUsed, buffer.Length);
+                buffer[..take].CopyTo(_block.AsSpan(_blockUsed));
+                _blockUsed += take;
+                buffer = buffer[take..];
+                if (_blockUsed == BlockSize)
+                {
+                    BlockHashes.Add(V3Fnv.Hash(_block));
+                    _blockUsed = 0;
+                }
+            }
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+
+        public override void WriteByte(byte value) => Write([value]);
+
+        public override void Flush() => inner.Flush();
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
     public static ContentIndexV3BlockFile? Open(string path, ushort expectedSection, ushort expectedVersion)
     {
         if (!File.Exists(path))

@@ -5,6 +5,35 @@ namespace Yagu.Tests;
 public class SettingsServiceTests
 {
     [Fact]
+    public async Task SaveAsync_RoundTripsIndexMaintenanceFlags()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-async-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var service = new SettingsService(temp);
+            var settings = new AppSettings
+            {
+                IndexHaltUpdatesWhenReclamationBlocked = true,
+                IndexStreamingMergeDefaultsMigrated = false,
+                IndexAutomaticCompactionDefaultsMigrated = false,
+            };
+
+            await service.SaveAsync(settings);
+            AppSettings loaded = service.Load();
+
+            Assert.True(settings.IndexStreamingMergeDefaultsMigrated);
+            Assert.True(settings.IndexAutomaticCompactionDefaultsMigrated);
+            Assert.True(loaded.IndexHaltUpdatesWhenReclamationBlocked);
+            Assert.True(loaded.IndexStreamingMergeDefaultsMigrated);
+            Assert.True(loaded.IndexAutomaticCompactionDefaultsMigrated);
+        }
+        finally
+        {
+            File.Delete(temp);
+        }
+    }
+
+    [Fact]
     public void AdvancedOptionPlacements_RoundTrip()
     {
         string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");

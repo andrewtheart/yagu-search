@@ -346,6 +346,8 @@ public sealed class IndexBuildExecutorTests : IDisposable
     [InlineData(IncrementalUpdateOutcome.SegmentAppended, IndexMaintenanceActions.DeltaAppended, 1, 0)]
     [InlineData(IncrementalUpdateOutcome.Compacted, IndexMaintenanceActions.Compacted, 1, 0)]
     [InlineData(IncrementalUpdateOutcome.NoChanges, IndexMaintenanceActions.Skipped, 0, 1)]
+    [InlineData(IncrementalUpdateOutcome.SizeBudgetReached, IndexMaintenanceActions.SizeBudgetReached, 0, 1)]
+    [InlineData(IncrementalUpdateOutcome.ReclamationBlocked, IndexMaintenanceActions.ReclamationBlocked, 0, 1)]
     [InlineData(IncrementalUpdateOutcome.NeedsFullRebuild, IndexMaintenanceActions.Built, 1, 0)]
     [InlineData(IncrementalUpdateOutcome.NeedsCompatibilityRebuild, IndexMaintenanceActions.Built, 1, 0)]
     public void Maintenance_Incremental_MapsEveryRefreshOutcome(
@@ -380,6 +382,21 @@ public sealed class IndexBuildExecutorTests : IDisposable
         Assert.Equal(expectedAction, Assert.Single(result.Roots).Action);
         Assert.Contains((50, IndexUpdateStages.Resolving), progress);
         Assert.Contains((100, IndexUpdateStages.Incremental), progress);
+    }
+
+    [Fact]
+    public void Maintenance_CompactOnly_MissingIndexIsSkipped()
+    {
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+
+        IndexMaintenanceSuccess result = IndexBuildExecutor.RunMaintenancePassUnderLease(
+            mutation,
+            Maintenance(IndexMaintenanceOperation.ModeCompactOnly, Path.Combine(_sandbox, "missing")),
+            CancellationToken.None,
+            progress: null);
+
+        Assert.Equal(1, result.Skipped);
+        Assert.Equal(IndexMaintenanceActions.Skipped, Assert.Single(result.Roots).Action);
     }
 
     [Fact]

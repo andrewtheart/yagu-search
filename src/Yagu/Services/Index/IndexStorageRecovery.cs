@@ -57,7 +57,8 @@ internal static class IndexStorageRecovery
         foreach (string directory in SafeGetDirectories(paths.IndexRoot, fileSystem, ref failures))
         {
             string name = Path.GetFileName(directory);
-            if (name.StartsWith(BuildWorkspacePrefix, StringComparison.OrdinalIgnoreCase))
+            if (name.StartsWith(BuildWorkspacePrefix, StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith(IndexCompactionWorkspace.Prefix, StringComparison.OrdinalIgnoreCase))
             {
                 if (TryDelete(directory, fileSystem))
                 {

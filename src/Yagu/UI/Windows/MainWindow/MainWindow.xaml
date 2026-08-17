@@ -188,7 +188,7 @@
         </DataTemplate>
 
         <DataTemplate x:Key="FileGroupResultTemplate" x:DataType="models:FileGroup">
-            <Grid>
+            <Grid Margin="-29,0,0,0">
                 <!-- No-drawer (file-name-only) row: inset its header by the SAME padding the Expander applies
                      to its header content, so the selection radio lines up with the drawer rows' radio. -->
                 <ContentControl Content="{Binding}"
@@ -464,6 +464,7 @@
                         ItemsSource="{x:Bind ViewModel.DirectorySuggestions, Mode=OneWay}"
                         TextChanged="OnDirectoryTextChanged"
                         SizeChanged="OnSearchInputSizeChanged"
+                        PreviewKeyDown="OnSearchInputPreviewKeyDown"
                         SuggestionChosen="OnDirectorySuggestionChosen"
                         QuerySubmitted="OnDirectoryQuerySubmitted">
                         <AutoSuggestBox.ItemTemplate>
@@ -494,8 +495,10 @@
                     <!-- Pin + Index + Browse embedded at the trailing edge of the directory box (overlay,
                          like the query box's clear button). The star pins the current directory as the
                          startup default; the index glyph adds it to the content index; Browse opens the
-                         folder picker. -->
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                         folder picker. The first child is also the directory box's Tab destination and
+                         names the one-time Tab-destination callout (see MainWindow.TabTargets.cs). -->
+                    <StackPanel x:Name="DirectoryInlineControls"
+                                Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Stretch"
                                 Margin="0,1,1,1">
                         <StackPanel.Resources>
                             <!-- Selected (checked) look for the pin/index toggles: NO blue fill or border.
@@ -567,6 +570,7 @@
                         QuerySubmitted="OnQuerySubmitted"
                         TextChanged="OnQueryTextChanged"
                         SizeChanged="OnSearchInputSizeChanged"
+                        PreviewKeyDown="OnSearchInputPreviewKeyDown"
                         Loaded="OnQueryBoxLoaded"
                         LostFocus="OnQueryLostFocus">
                         <AutoSuggestBox.ItemTemplate>
@@ -696,7 +700,7 @@
                                 Style="{StaticResource SearchCardBottomIconButtonStyle}"
                                 Width="32" Height="32"
                                 IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
-                                ToolTipService.ToolTip="Load a previously saved .yagu-session file">
+                                ToolTipService.ToolTip="Load a previously saved .yagu-session file (Ctrl+O)">
                             <FontIcon Glyph="&#xE8E5;" FontSize="14" />
                         </Button>
                         <Button x:Name="PreSearchTerminalChevron"
@@ -1644,6 +1648,7 @@
                                   IsChecked="False"
                                   Width="24" Height="24" MinWidth="0" MinHeight="0" Padding="0"
                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  Visibility="{x:Bind ViewModel.SelectAllFilesVisibility, Mode=OneWay}"
                                   Loaded="OnSelectAllFilesLoaded"
                                   Indeterminate="OnSelectAllFilesIndeterminate"
                                   Checked="OnSelectAllFilesChecked"
@@ -1898,7 +1903,7 @@
                                         <Button x:Name="LoadSessionButton" Click="OnLoadSession" Background="Transparent" BorderThickness="0"
                                                 Padding="8,6" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
                                                 IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
-                                                ToolTipService.ToolTip="Load a previously saved .yagu-session file">
+                                                ToolTipService.ToolTip="Load a previously saved .yagu-session file (Ctrl+O)">
                                             <StackPanel Orientation="Horizontal" Spacing="10">
                                                 <FontIcon Glyph="&#xE8E5;" FontSize="14" />
                                                 <TextBlock Text="Load session" FontSize="12" VerticalAlignment="Center" />
@@ -2649,7 +2654,7 @@
         </Grid>
 
         <!-- Bottom status bar -->
-          <Grid x:Name="BottomStatusBar" Grid.Row="6" Padding="20,6,20,8"
+          <Grid x:Name="BottomStatusBar" Grid.Row="6" Padding="20,6,0,8"
               Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
               BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" ColumnSpacing="8">
             <Grid.Resources>
@@ -2820,7 +2825,21 @@
                         VerticalAlignment="Center"
                         Visibility="{x:Bind ViewModel.DebugPanelButtonVisibility, Mode=OneWay}"
                         ToolTipService.ToolTip="Open live Yagu log">
-                    <FontIcon Glyph="&#xE9D9;" FontSize="12" />
+                    <Button.Resources>
+                        <SolidColorBrush x:Key="ButtonBackground" Color="Transparent" />
+                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                        <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
+                        <SolidColorBrush x:Key="ButtonBorderBrush" Color="Transparent" />
+                        <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="Transparent" />
+                        <SolidColorBrush x:Key="ButtonBorderBrushDisabled" Color="Transparent" />
+                    </Button.Resources>
+                    <FontIcon Glyph="&#xE9D9;" FontSize="12">
+                        <FontIcon.RenderTransform>
+                            <TranslateTransform X="-4" />
+                        </FontIcon.RenderTransform>
+                    </FontIcon>
                     <Button.Flyout>
                         <Flyout x:Name="DebugLogFlyout"
                                 Placement="TopEdgeAlignedRight"
@@ -2841,6 +2860,9 @@
                                                                     Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
                                 <Grid.Resources>
                                     <local:DebugLogSeverityBrushConverter x:Key="DebugLogSeverityBrushConverter" />
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="IsTextSelectionEnabled" Value="True" />
+                                    </Style>
                                 </Grid.Resources>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -2953,6 +2975,7 @@
                                         <ColumnDefinition Width="150" />
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Spacing="3">
                                         <TextBlock Text="File level" FontSize="11" Opacity="0.75" />
@@ -2980,7 +3003,17 @@
                                             <x:String>Verbose</x:String>
                                         </ComboBox>
                                     </StackPanel>
-                                    <Button x:Name="DebugLogRefreshButton" Grid.Column="3"
+                                    <Button x:Name="DebugLogExportButton" Grid.Column="3"
+                                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                            Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                            Background="Transparent" BorderThickness="0"
+                                            IsEnabled="False"
+                                            AutomationProperties.Name="Export visible log entries"
+                                            ToolTipService.ToolTip="Export visible log entries"
+                                            Click="OnDebugLogExportVisible">
+                                        <FontIcon Glyph="&#xE9F9;" FontSize="12" />
+                                    </Button>
+                                    <Button x:Name="DebugLogRefreshButton" Grid.Column="4"
                                             HorizontalAlignment="Right" VerticalAlignment="Bottom"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
                                             Background="Transparent" BorderThickness="0"
@@ -3020,6 +3053,17 @@
                                         <DataTemplate x:DataType="services:LogTailEntry">
                                             <Grid Padding="8,4" ColumnSpacing="8"
                                                   ToolTipService.ToolTip="{x:Bind RawText, Mode=OneWay}">
+                                                <Grid.ContextFlyout>
+                                                    <MenuFlyout>
+                                                        <MenuFlyoutItem Text="Copy log entry"
+                                                                        Tag="{x:Bind RawText, Mode=OneWay}"
+                                                                        Click="OnCopyDebugLogEntry">
+                                                            <MenuFlyoutItem.Icon>
+                                                                <FontIcon Glyph="&#xE8C8;" />
+                                                            </MenuFlyoutItem.Icon>
+                                                        </MenuFlyoutItem>
+                                                    </MenuFlyout>
+                                                </Grid.ContextFlyout>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="88" />
                                                     <ColumnDefinition Width="68" />
@@ -3072,15 +3116,57 @@
                 <ThemeShadow />
             </Border.Shadow>
             <StackPanel MaxWidth="420" Spacing="10">
-                <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <Grid ColumnSpacing="10" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
                     <FontIcon x:Name="IndexStatusHoverIndexingIcon"
                               Glyph="&#xE8F1;" FontSize="28"
                               Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                               VerticalAlignment="Center"
                               AutomationProperties.Name="Indexing" />
-                    <TextBlock Text="Indexing overview"
+                    <TextBlock Grid.Column="1" Text="Indexing overview"
                                FontSize="15" FontWeight="SemiBold"
                                VerticalAlignment="Center" />
+                    <Button x:Name="IndexStorageHistoryButton" Grid.Column="2"
+                            Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                            Background="Transparent" BorderThickness="0"
+                            Click="OnIndexStorageHistoryClick"
+                            AutomationProperties.Name="Show index size history"
+                            ToolTipService.ToolTip="Show index size history">
+                        <FontIcon Glyph="&#xE9D2;" FontSize="14" />
+                    </Button>
+                </Grid>
+                <StackPanel x:Name="IndexStorageHistoryPanel" Spacing="7" Visibility="Collapsed">
+                    <Rectangle Height="1"
+                               Fill="{ThemeResource ControlStrokeColorDefaultBrush}"
+                               Opacity="0.7" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Index size history" FontSize="12" FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                        <ComboBox x:Name="IndexStorageHistoryFilter" Grid.Column="1"
+                                  Width="148" Height="28" MinHeight="0" Padding="8,0"
+                                  SelectionChanged="OnIndexStorageHistoryFilterChanged"
+                                  DropDownOpened="OnIndexStorageHistoryFilterDropDownOpened"
+                                  DropDownClosed="OnIndexStorageHistoryFilterDropDownClosed"
+                                  LostFocus="OnIndexStorageHistoryFilterLostFocus"
+                                  AutomationProperties.Name="Index size history disk filter" />
+                    </Grid>
+                    <Border BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="4"
+                            Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                        <Canvas x:Name="IndexStorageHistoryChart" Width="396" Height="190"
+                                AutomationProperties.Name="Index size over time line graph" />
+                    </Border>
+                    <TextBlock x:Name="IndexStorageHistorySummary"
+                               Text="Loading index size history…"
+                               FontSize="11" Opacity="0.78" TextWrapping="Wrap" />
                 </StackPanel>
                 <StackPanel Spacing="6" Visibility="{x:Bind ViewModel.IndexBuildPercentVisibility, Mode=OneWay}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
@@ -3098,6 +3184,22 @@
                 </StackPanel>
                 <TextBlock Text="{x:Bind ViewModel.IndexStatusTooltip, Mode=OneWay}"
                            TextWrapping="Wrap" FontSize="12" />
+                <StackPanel x:Name="IndexStatusActivityStagePanel"
+                            Spacing="6"
+                            Visibility="Collapsed">
+                    <Rectangle Height="1"
+                               Fill="{ThemeResource ControlStrokeColorDefaultBrush}"
+                               Opacity="0.7"
+                               Margin="0,2,0,2" />
+                    <TextBlock Text="Indexing stages"
+                               FontSize="12"
+                               FontWeight="SemiBold" />
+                    <ScrollViewer MaxHeight="240"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel x:Name="IndexStatusActivityStageRows" Spacing="8" />
+                    </ScrollViewer>
+                </StackPanel>
                 <StackPanel x:Name="IndexStatusAutomaticIndexingPanel"
                            Spacing="5"
                            Visibility="Collapsed">
@@ -3293,6 +3395,21 @@
                      ShouldConstrainToRootBounds="True"
                      MaxWidth="360"
                      Canvas.ZIndex="300" />
+
+        <!-- One-time "where should Tab go?" callout for the directory and search-pattern boxes.
+             Target, text and the two choice buttons are built in MainWindow.TabTargets.cs from
+             whichever control currently sits first inside the box. -->
+        <TeachingTip x:Name="TabTargetTeachingTip"
+                     IsOpen="False"
+                     Title="Where should Tab go?"
+                     PreferredPlacement="Bottom"
+                     ShouldConstrainToRootBounds="False"
+                     MaxWidth="380"
+                     Canvas.ZIndex="300">
+            <TeachingTip.IconSource>
+                <FontIconSource Glyph="&#xE765;" />
+            </TeachingTip.IconSource>
+        </TeachingTip>
 
         <!-- Warning shown when the user tries to generate/send a CLI command with no search pattern.
              Target/placement are set in code: anchored to the search-pattern box (QueryBox).

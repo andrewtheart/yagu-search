@@ -793,6 +793,30 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("RemoveAppFromSystemPath();", inno);
     }
 
+    [Fact]
+    public void Installer_UsesDarkBrandedWizardWithGeneratedArtwork()
+    {
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        Assert.Contains("WizardStyle=modern dark includetitlebar hidebevels", inno);
+        Assert.Contains(@"WizardImageFile=assets\wizard-dark.png", inno);
+        Assert.Contains(@"WizardSmallImageFile=assets\wizard-small-dark.png", inno);
+        // The tall panel only appears on the welcome page, so it must stay enabled.
+        Assert.Contains("DisableWelcomePage=no", inno);
+        Assert.Contains("WizardForm.WelcomeLabel1.Caption := 'Yagu'", inno);
+
+        // Dark surfaces make the classic dark-blue/red/green RTF tints unreadable.
+        Assert.Contains(@"'{\colortbl ;\red127\green196\blue255;\red255\green138\blue128;\red126\green231\blue135;}'", inno);
+
+        foreach (string asset in new[] { "wizard-dark.png", "wizard-small-dark.png" })
+            Assert.True(File.Exists(Path.Combine(root, "installer", "assets", asset)), $"Missing wizard artwork: {asset}");
+
+        Assert.True(
+            File.Exists(Path.Combine(root, "scripts", "build-installer-wizard-images.ps1")),
+            "The wizard artwork generator must stay alongside the committed PNGs so branding can be regenerated.");
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

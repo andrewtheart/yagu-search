@@ -82,8 +82,11 @@ public static class ContentIndexGenerationSerializer
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // content.bin is read by STREAMING (never as one byte[]): a compacted whole-drive layer can hold
+            // more than 2 GiB of trigram records, which no single .NET array can address. The other three
+            // files stay on the whole-file path — they are orders of magnitude smaller (a path table and a
+            // 17-bytes-per-document identity table).
             if (!TryReadChecksummed(Path.Combine(generationDir, ManifestFile), out byte[] manifestBytes, cancellationToken)
-                || !TryReadChecksummed(Path.Combine(generationDir, ContentFile), out byte[] contentBytes, cancellationToken)
                 || !TryReadChecksummed(Path.Combine(generationDir, AliasesFile), out byte[] aliasBytes, cancellationToken)
                 || !TryReadChecksummed(Path.Combine(generationDir, FileIdsFile), out byte[] fileIdBytes, cancellationToken))
             {
@@ -109,17 +112,28 @@ public static class ContentIndexGenerationSerializer
             int documentCount;
             TrigramPostingIndex? streamedPostings = null;
             List<IReadOnlyCollection<Trigram>>? documents = null;
+            string contentPath = Path.Combine(generationDir, ContentFile);
             if (retainDocuments)
             {
-                documents = DeserializeContent(contentBytes);
+                documents = TryDeserializeContentFile(contentPath, cancellationToken);
+                if (documents is null)
+                {
+                    YaguLog.For("ContentIndex").LogWarning("TryRead: content.bin is missing or failed its checksum in '{GenerationDir}' (treated as corrupt).", generationDir);
+                    return null;
+                }
                 documentCount = documents.Count;
             }
             else
             {
-                streamedPostings = TrigramPostingIndex.BuildFromContentBody(
-                    contentBytes,
+                streamedPostings = TrigramPostingIndex.TryBuildFromContentFile(
+                    contentPath,
                     out documentCount,
                     cancellationToken);
+                if (streamedPostings is null)
+                {
+                    YaguLog.For("ContentIndex").LogWarning("TryRead: content.bin is missing or failed its checksum in '{GenerationDir}' (treated as corrupt).", generationDir);
+                    return null;
+                }
             }
 
             // The fileids table must be 1:1 with content ids.
@@ -606,25 +620,24 @@ public static class ContentIndexGenerationSerializer
         writer.Flush();
     }
 
-    private static List<IReadOnlyCollection<Trigram>> DeserializeContent(byte[] bytes)
+    /// <summary>
+    /// Streams and checksum-validates a <c>content.bin</c> into its per-document trigram sets, or null when
+    /// the file is missing, truncated, malformed, or fails its digest. Streaming (rather than reading the
+    /// whole body into one array) is what lets a compacted layer exceed 2 GiB of content records.
+    /// </summary>
+    private static List<IReadOnlyCollection<Trigram>>? TryDeserializeContentFile(string contentPath, CancellationToken cancellationToken)
     {
-        using var ms = new MemoryStream(bytes);
-        using var reader = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
-        int docCount = reader.ReadInt32();
-        if (docCount < 0)
-            throw new InvalidDataException("Negative document count.");
-        var documents = new List<IReadOnlyCollection<Trigram>>(docCount);
-        for (int i = 0; i < docCount; i++)
+        using IndexContentFileReader? reader = IndexContentFileReader.Open(contentPath);
+        if (reader is null)
+            return null;
+        var documents = new List<IReadOnlyCollection<Trigram>>(reader.DocumentCount);
+        var buffer = new List<Trigram>();
+        while (reader.TryReadNext(buffer, out _))
         {
-            int trigramCount = reader.ReadInt32();
-            if (trigramCount < 0)
-                throw new InvalidDataException("Negative trigram count.");
-            var set = new List<Trigram>(trigramCount);
-            for (int j = 0; j < trigramCount; j++)
-                set.Add(Trigram.FromPacked(reader.ReadUInt32()));
-            documents.Add(set);
+            cancellationToken.ThrowIfCancellationRequested();
+            documents.Add(buffer.ToArray());
         }
-        return documents;
+        return reader.TryFinish() ? documents : null;
     }
 
     // ─────────────────────────── aliases.bin ───────────────────────────

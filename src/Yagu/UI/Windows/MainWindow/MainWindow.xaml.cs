@@ -40,8 +40,13 @@ public sealed partial class MainWindow : Window, IDisposable
     private bool _autoLoadOverflowInFlight;
     private long _suppressOverflowAutoLoadUntilTick;
     private long _lastPreviewManualScrollTick;
+    // Scroll-driven pre-focus of the continuation drawer the user is heading toward (paint only).
+    private Expander? _prefocusedContinuationExpander;
+    private double _lastContinuationPrefocusOffset = double.NaN;
     private const int AutoLoadChunkSize = 5;
     private const double OverflowPrefetchBufferViewports = 4.0;
+    /// <summary>How far past the viewport edge, in viewports, a continuation drawer is focused early.</summary>
+    private const double ContinuationDrawerPrefocusViewports = 1.0;
     private const int AutoLoadOverflowMaxMatchesPerFrame = 20;
     private const int MatchNavigationOverflowAutoLoadSuppressMs = 2_000;
     private const int SingleStepOverflowExpandMatches = 1;
@@ -81,6 +86,10 @@ public sealed partial class MainWindow : Window, IDisposable
     private const uint WmKeyDown = 0x0100;
     private const uint WmSysKeyDown = 0x0104;
     private const uint VkF1 = 0x70;
+    private const uint VkO = 0x4F;
+    private const int VkControl = 0x11;
+    private const int VkShift = 0x10;
+    private const int VkMenu = 0x12;
     private const uint MonitorDefaultToNearest = 0x00000002;
     private const int SW_RESTORE = 9;
 
@@ -114,6 +123,9 @@ public sealed partial class MainWindow : Window, IDisposable
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern short GetKeyState(int virtualKey);
 
     [DllImport("user32.dll")]
     private static extern int GetDpiForWindow(IntPtr hWnd);
@@ -349,6 +361,14 @@ public sealed partial class MainWindow : Window, IDisposable
                 // The all-drive health check completes asynchronously. Refresh the interactive rows in
                 // place when its snapshot arrives while the user is already hovering the indicator.
                 UpdateIndexStatusHoverActions();
+            }
+
+            if ((e.PropertyName == nameof(ViewModel.ActiveIndexBuildStage)
+                    || e.PropertyName == nameof(ViewModel.IsActiveIndexBuildIncremental)
+                    || e.PropertyName == nameof(ViewModel.IsIndexBuildActive))
+                && IndexStatusHoverOverlay?.Visibility == Visibility.Visible)
+            {
+                RebuildIndexActivityStageRows();
             }
 
             if (e.PropertyName == nameof(ViewModel.ShowBuildNumberInTitleBar))

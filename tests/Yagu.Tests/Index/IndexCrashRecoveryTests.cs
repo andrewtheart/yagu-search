@@ -65,6 +65,15 @@ public sealed class IndexCrashRecoveryTests : IDisposable
 
     private static readonly (string Point, bool Committed)[] CompactCases =
     [
+        (IndexMutationFaults.CompactionWorkspaceCreated, false),
+        (IndexMutationFaults.ChecksummedBodyWritten, false),
+        (IndexMutationFaults.ChecksummedDigestWritten, false),
+        (IndexMutationFaults.ChecksummedFlushed, false),
+        (IndexMutationFaults.V3HeaderWritten, false),
+        (IndexMutationFaults.V3BodyWritten, false),
+        (IndexMutationFaults.V3FileClosed, false),
+        (IndexMutationFaults.V3Published, false),
+        (IndexMutationFaults.CompactionPrepared, false),
         (IndexMutationFaults.BaseWritten, false),
         (IndexMutationFaults.BaseValidated, false),
         (IndexMutationFaults.BaseMarked, false),
@@ -270,6 +279,9 @@ public sealed class IndexCrashRecoveryTests : IDisposable
 
         await CrashAsync("compact", point);
 
+        Assert.Contains(
+            Directory.EnumerateDirectories(_indexRoot, IndexCompactionWorkspace.Prefix + "*", SearchOption.TopDirectoryOnly),
+            static path => Path.GetFileName(path).StartsWith(IndexCompactionWorkspace.Prefix, StringComparison.OrdinalIgnoreCase));
         Assert.Equal(committed ? 0 : 1, Store().ActiveSegmentCount());
         Assert.True(LayeredContains(Path.Combine(_root, "segment-00.txt")));
         RecoverTwice();
@@ -657,6 +669,7 @@ public sealed class IndexCrashRecoveryTests : IDisposable
             {
                 string name = Path.GetFileName(path);
                 return name.StartsWith(".build-", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith(IndexCompactionWorkspace.Prefix, StringComparison.OrdinalIgnoreCase)
                     || (name.StartsWith('.') && name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
                     || name.StartsWith(ExtendedSourceStore.PublishTempPrefix, StringComparison.OrdinalIgnoreCase)
                     || name.StartsWith(ExtendedSourceStore.BackupPrefix, StringComparison.OrdinalIgnoreCase)

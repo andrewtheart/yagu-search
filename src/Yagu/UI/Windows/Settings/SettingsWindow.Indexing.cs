@@ -344,6 +344,12 @@ public sealed partial class SettingsWindow
             (s, v) => s.IndexQuarantineRetentionDays = AppSettings.NormalizeIndexQuarantineRetentionDays(v),
             1, 365,
             "How long a failed/quarantined generation is retained for diagnostics. Default 7.");
+        AddIndexNumber(storageGroup, "Index size history retention (days):",
+            s => s.IndexStorageHistoryRetentionDays,
+            (s, v) => s.IndexStorageHistoryRetentionDays = AppSettings.NormalizeIndexStorageHistoryRetentionDays(v),
+            AppSettings.MinimumIndexStorageHistoryRetentionDays,
+            AppSettings.MaximumIndexStorageHistoryRetentionDays,
+            "How long the Indexing overview keeps hourly physical-size snapshots for its growth graph. Range 1–365 days; default 30.");
 
         // ── Build Scheduling ──
         // Build trigger(s): checkboxes so several automatic triggers can be active at once (e.g. build
@@ -608,7 +614,7 @@ public sealed partial class SettingsWindow
             s => s.IndexCompactionThresholdMB,
             (s, v) => s.IndexCompactionThresholdMB = AppSettings.NormalizeIndexCompactionThresholdMB(v),
             16, 8192,
-            "When accumulated delta updates exceed this size, they are compacted into a fresh base index (whichever bound is hit first). Range 16–8192; default 256.");
+            "When accumulated delta updates exceed this size, they are compacted into a fresh base index (whichever bound is hit first). Range 16–8192; default 512.");
 
         // ── Index Size Management ──
         // An index only ever grows on its own: each incremental update appends a delta segment. Coalescing
@@ -619,38 +625,42 @@ public sealed partial class SettingsWindow
         AddIndexCombo(sizeGroup, "Default size-management strategy:",
             [
                 (IndexSizeManagementModes.CoalesceThenCompact, "Coalesce, then compact (recommended)"),
-                (IndexSizeManagementModes.Coalesce, "Coalesce small segments only (low memory)"),
+                (IndexSizeManagementModes.Coalesce, "Coalesce small segments only (least work)"),
                 (IndexSizeManagementModes.Compact, "Compact into a fresh base only"),
                 (IndexSizeManagementModes.Off, "Off — never reorganize automatically"),
             ],
             s => s.IndexSizeManagementMode,
             (s, v) => s.IndexSizeManagementMode = IndexSizeManagementModes.Normalize(v),
-            "How every index reclaims storage, unless a folder overrides it under Manage Indexes ▸ Size. Coalescing merges runs of small delta segments and never loads the base, so it stays cheap on a huge index. Compaction folds the whole index into a fresh base — far more effective, but it briefly loads the index into memory, so it is capped below. Off lets an index grow until you rebuild it.");
+            "How every index reclaims storage, unless a folder overrides it under Manage Indexes ▸ Size. Coalescing merges bounded runs of small delta segments. Compaction streams every layer into a fresh base and can reclaim more, but it does more I/O and needs temporary spool space, so automatic passes are capped below. Neither operation loads the whole index into memory. Off lets an index grow until you rebuild it.");
         AddIndexNumber(sizeGroup, "Auto-compaction size cap (MB, 0 = no cap):",
             s => s.IndexMaxAutoCompactionSizeMB,
             (s, v) => s.IndexMaxAutoCompactionSizeMB = AppSettings.NormalizeIndexMaxAutoCompactionSizeMB(v),
             0, 1048576,
-            "The largest total index size the automatic compaction will fold. Compaction briefly loads the whole index into memory, so above this cap a large over-segmented index is left segmented instead (searches still use it). An index above this cap can only be reclaimed by coalescing or an explicit rebuild. 0 disables the cap. Default 512.");
+            "The largest total index size an automatic compaction will fold. The 8192 MB default covers medium-sized indexes while keeping very large whole-drive folds user-approved because they can take close to an hour and need substantial temporary disk space. Above this cap, searches still use the segmented index. 0 disables the cap.");
         AddIndexNumber(sizeGroup, "Coalescing: largest segment to merge (MB):",
             s => s.IndexCoalesceMaxSegmentMB,
             (s, v) => s.IndexCoalesceMaxSegmentMB = AppSettings.NormalizeIndexCoalesceMaxSegmentMB(v),
             1, 8192,
-            "Only delta segments at or below this size join a coalescing run. Set below your typical segment size, coalescing can never find work \u2014 which leaves a large index with no way to reclaim storage. Default 256.");
+            "Only delta segments at or below this size join a coalescing run. Set below your typical segment size, coalescing can never find work \u2014 which leaves a large index with no way to reclaim storage. Default 1024.");
         AddIndexNumber(sizeGroup, "Coalescing: largest merge batch (MB):",
             s => s.IndexCoalesceMaxBatchMB,
             (s, v) => s.IndexCoalesceMaxBatchMB = AppSettings.NormalizeIndexCoalesceMaxBatchMB(v),
             1, 32768,
-            "Total size of one merge. This is the main bound on how much memory a coalescing pass uses. Keep it at or above the run minimum multiplied by the segment cap, or a full-length run can never fit. Default 1024.");
+            "Total input size of one automatic merge. Merging streams through a bounded external sort, so this limits how much work and disk I/O one pass does \u2014 not how much memory it holds, which is set by the build memory budget. Keep it at or above the run minimum multiplied by the segment cap, or a full-length run can never fit. Default 4096.");
         AddIndexNumber(sizeGroup, "Coalescing: fewest segments worth merging:",
             s => s.IndexCoalesceMinRun,
             (s, v) => s.IndexCoalesceMinRun = AppSettings.NormalizeIndexCoalesceMinRun(v),
             2, 64,
-            "A run must hold at least this many neighbouring eligible segments before it is merged. Higher values do less, but more useful, work per pass. Default 4.");
+            "A run must hold at least this many neighbouring eligible segments before it is merged. Three lets ordinary update history clean itself up sooner without merging single layers or pairs. Default 3.");
         AddIndexNumber(sizeGroup, "Coalescing: merges per maintenance pass:",
             s => s.IndexCoalesceMaxRunsPerPass,
             (s, v) => s.IndexCoalesceMaxRunsPerPass = AppSettings.NormalizeIndexCoalesceMaxRunsPerPass(v),
             1, 64,
             "How many runs one maintenance pass may merge. Raise it if an index accumulates segments faster than it reclaims them. Default 8.");
+        AddIndexToggle(sizeGroup, "Stop updating an index that can no longer be cleaned up",
+            s => s.IndexHaltUpdatesWhenReclamationBlocked,
+            (s, v) => s.IndexHaltUpdatesWhenReclamationBlocked = v,
+            "When an index has accumulated more update history than the limits above allow, and neither merging nor compacting is permitted at its size, stop adding to it instead of letting it grow. Searches stay complete either way \u2014 anything the index does not cover is read live \u2014 so this trades some search speed for bounded storage. Off by default: Yagu keeps the index current and tells you the index needs attention.");
         // "Share aggregate index telemetry" (ShareAggregateIndexTelemetry) is a privacy/telemetry
         // opt-in, so its toggle lives on the Privacy tab (SettingsWindow.xaml.cs). It is still a CLI
         // config key (--index-config ShareAggregateIndexTelemetry=...) for parity.

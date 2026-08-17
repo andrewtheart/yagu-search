@@ -64,9 +64,10 @@ public sealed partial class MainViewModel
                     operation,
                     useWorker,
                     token,
-                    progress: p => ReportIndexBuildProgress(IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes)),
-                    pdfProgress: p => ReportIndexBuildProgress(p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5)),
-                    imageOcrProgress: p => ReportIndexBuildProgress(p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4)));
+                    progress: p => ReportIndexBuildProgress(root, IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes), IndexBuildStages.RawBuild),
+                    pdfProgress: p => ReportIndexBuildProgress(root, p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5), IndexBuildStages.Pdf),
+                    imageOcrProgress: p => ReportIndexBuildProgress(root, p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4), IndexBuildStages.Ocr),
+                    postBuildCatchUpProgress: _ => ReportIndexBuildProgress(root, 99, IndexBuildStages.PostBuildCatchUp));
                 YaguLog.For("ContentIndex").LogInformation(
                     "Background index {Action} complete for '{Root}'.", rebuild ? "rebuild" : "build", root);
             }
@@ -443,10 +444,12 @@ public sealed partial class MainViewModel
         if (!string.IsNullOrWhiteSpace(folder))
             _activeIndexBuildFolder = folder;
         _activeIndexBuildIsIncremental = isIncremental;
-        _activeIndexBuildPhase = null;
+        _activeIndexBuildPhase = isIncremental ? IndexUpdateStages.Incremental : IndexBuildStages.RawBuild;
         _indexBuildPercent = -1; // fresh build starts at an unknown estimate
         ShowIndexBuildingStatus();
         OnPropertyChanged(nameof(IsIndexBuildActive));
+        OnPropertyChanged(nameof(ActiveIndexBuildStage));
+        OnPropertyChanged(nameof(IsActiveIndexBuildIncremental));
         OnPropertyChanged(nameof(CanPauseIndexing));
     }
 
@@ -494,11 +497,13 @@ public sealed partial class MainViewModel
         if (stage is not null && incremental != _activeIndexBuildIsIncremental)
         {
             _activeIndexBuildIsIncremental = incremental;
+            OnPropertyChanged(nameof(IsActiveIndexBuildIncremental));
             changed = true;
         }
         if (stage is not null && !string.Equals(stage, _activeIndexBuildPhase, StringComparison.Ordinal))
         {
             _activeIndexBuildPhase = stage;
+            OnPropertyChanged(nameof(ActiveIndexBuildStage));
             changed = true;
         }
 
@@ -539,6 +544,9 @@ public sealed partial class MainViewModel
 
         _activeIndexBuildFolder = null;
         _activeIndexBuildIsIncremental = false;
+        _activeIndexBuildPhase = null;
+        OnPropertyChanged(nameof(ActiveIndexBuildStage));
+        OnPropertyChanged(nameof(IsActiveIndexBuildIncremental));
         RevertIndexIndicatorAfterBuild();
     }
 
@@ -629,6 +637,11 @@ public sealed partial class MainViewModel
             IndexStatusTooltip = string.IsNullOrWhiteSpace(_activeIndexBuildFolder)
                 ? "Building the content index\u2026 This runs in the background; searches keep working and results never change. Right-click to pause."
                 : $"Building a content index for {_activeIndexBuildFolder}\u2026 This runs in the background; searches keep working and results never change. Right-click to pause.";
+        }
+        if (ContentIndexUiStatus.BuildActivityDetail(_activeIndexBuildPhase) is { } stageDetail
+            && !IndexStatusTooltip.StartsWith(stageDetail, StringComparison.Ordinal))
+        {
+            IndexStatusTooltip = stageDetail + "\n\n" + IndexStatusTooltip;
         }
         IndexStatusTooltip += BuildIndexDateDetails();
         if (_indexBuildPercent >= 0)

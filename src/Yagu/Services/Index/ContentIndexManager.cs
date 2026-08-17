@@ -1116,6 +1116,80 @@ public sealed partial class ContentIndexManager
         }
     }
 
+    /// <summary>
+    /// One root's active layers split into base / full-build paging / incremental cohorts, or
+    /// <see langword="null"/> when there is no readable index or any active layer cannot be identified.
+    /// Cheap: pointer slot, manifests, and directory sizes only.
+    /// </summary>
+    public ActiveLayerStorageBreakdown? TryReadActiveLayerStorageBreakdownForRoot(string rootDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(rootDirectory))
+            return null;
+        try
+        {
+            var store = new ContentIndexStore(_paths, ScopeIdForRoot(rootDirectory), _retainedGenerations);
+            return store.TryReadActiveLayerStorageBreakdown();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For("ContentIndex").LogDebug(ex, "Could not break down the active index layers for '{Root}'.", rootDirectory);
+            return null;
+        }
+    }
+
+    /// <summary>Active storage cohorts plus their incremental time span, read from pointer/manifests and
+    /// directory sizes only. Used for user-facing cleanup forecasts without opening index contents.</summary>
+    public ActiveLayerStorageTrend? TryReadActiveLayerStorageTrendForRoot(string rootDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(rootDirectory))
+            return null;
+        try
+        {
+            var store = new ContentIndexStore(_paths, ScopeIdForRoot(rootDirectory), _retainedGenerations);
+            return store.TryReadActiveLayerStorageTrend();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For("ContentIndex").LogDebug(ex, "Could not read the active index trend for '{Root}'.", rootDirectory);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether one root's accumulated update history needs clean-up, and whether every allowed automatic
+    /// path to reclaim it is unavailable. Manifest-only and directory sizes: it never opens content or
+    /// posting data. Returns <see cref="IndexReclamationDiagnosis.Healthy"/> when the index cannot be
+    /// measured, so an unreadable index is never reported as blocked.
+    /// </summary>
+    public IndexReclamationDiagnosis DiagnoseReclamation(
+        string rootDirectory,
+        EffectiveIndexSizePolicy policy,
+        int maxDeltaSegments,
+        int compactionThresholdMB)
+    {
+        if (string.IsNullOrWhiteSpace(rootDirectory))
+            return IndexReclamationDiagnosis.Healthy;
+        try
+        {
+            var store = new ContentIndexStore(_paths, ScopeIdForRoot(rootDirectory), _retainedGenerations);
+            if (store.TryReadActiveLayerStorageBreakdown() is not { } breakdown)
+                return IndexReclamationDiagnosis.Healthy;
+            bool hasRun = policy.AllowsCoalescing && store.TryFindIncrementalSegmentRun(
+                policy.CoalesceMinRun,
+                EffectiveIndexSizePolicy.MaximumCoalesceRun,
+                policy.CoalesceMaxSegmentBytes,
+                policy.CoalesceMaxBatchBytes,
+                out _);
+            return IndexReclamationAdvisor.Diagnose(
+                breakdown, policy, maxDeltaSegments, compactionThresholdMB, hasRun);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For("ContentIndex").LogDebug(ex, "Could not diagnose reclamation for '{Root}'.", rootDirectory);
+            return IndexReclamationDiagnosis.Healthy;
+        }
+    }
+
     public bool HasCurrentIndex(string rootDirectory)
     {
         IndexMetadataStatus status = GetMetadataStatusForRoot(rootDirectory);
@@ -1476,15 +1550,14 @@ public sealed partial class ContentIndexManager
             // waiting for another source change to append a delta.
             var updater = new ContentIndexIncrementalUpdater(store, policy);
             smallSegmentsCoalesced = updater.CoalesceSmallSegmentsUnderLease(
-                mutation, maxSegments, CancellationToken.None, size) > 0;
+                mutation, maxSegments, CancellationToken.None, size,
+                IndexMergeResourceBudget.FromSettings(settings)) > 0;
             if (!store.ShouldCompact(maxSegments, thresholdMB))
                 return smallSegmentsCoalesced;
 
-            // Size guard: folding a LARGE over-segmented index re-materializes every layer's documents + a
-            // combined posting index + a serialization buffer — a transient multi-GB memory spike. Above the
-            // per-index cap, skip the automatic compaction and leave the index segmented (queries still use
-            // it, and the query-mode open already bounds their footprint). Exceeding the storage budget lifts
-            // the cap, because otherwise the index would simply grow without limit.
+            // Full compaction is a bounded-memory external merge, but a very large automatic pass still does
+            // substantial sequential I/O and needs scratch space for sorted runs plus the replacement layer.
+            // Above the per-index cap, leave the index segmented until the user explicitly approves that work.
             long indexBytes = store.TotalActiveIndexBytes();
             if (!size.AllowsCompactingIndexOf(indexBytes))
             {
@@ -1494,18 +1567,12 @@ public sealed partial class ContentIndexManager
                 }
                 else
                 {
-                    YaguLog.For("ContentIndex").LogInformation("Skipping auto-compaction of over-segmented scope {Scope} for '{Root}': the index is {IndexMB} MB (> {MaxCompactMB} MB cap, mode '{Mode}') — folding it would spike memory; leaving it segmented.", scopeId, rootDirectory, indexBytes / (1024 * 1024), size.MaxAutoCompactionSizeMB, size.Mode);
+                    YaguLog.For("ContentIndex").LogInformation("Skipping auto-compaction of over-segmented scope {Scope} for '{Root}': the index is {IndexMB} MB (> {MaxCompactMB} MB cap, mode '{Mode}') — leaving this large background I/O pass for explicit approval.", scopeId, rootDirectory, indexBytes / (1024 * 1024), size.MaxAutoCompactionSizeMB, size.Mode);
                 }
                 return smallSegmentsCoalesced;
             }
-            // Compaction folds each layer's per-document trigram sets → the layered open MUST retain the
-            // documents (the default), unlike the query-mode open in the accelerator.
-            // ShouldCompact proved at least one active segment under this writer lease. If external
-            // corruption still makes the open fail, the enclosing fail-open catch leaves the index as-is.
-            var handle = store.TryOpenLayered()!;
-            YaguLog.For("ContentIndex").LogInformation("Compacting fresh over-segmented scope {Scope} for '{Root}' (base + {SegmentCount} segment(s)) into a fresh base.", scopeId, rootDirectory, handle.Segments.Count);
-            ContentIndexGeneration compacted = ContentIndexCompactor.Compact(handle, policy, builtUtc);
-            store.CompactUnderLease(mutation, compacted);
+            YaguLog.For("ContentIndex").LogInformation("Compacting fresh over-segmented scope {Scope} for '{Root}' into a fresh base.", scopeId, rootDirectory);
+            RunStreamingCompactionUnderLease(mutation, store, scopeId, rootDirectory, settings, builtUtc, null, CancellationToken.None);
             YaguLog.For("ContentIndex").LogInformation("Compaction complete for scope {Scope} ('{Root}').", scopeId, rootDirectory);
             return true;
         }
@@ -1514,6 +1581,90 @@ public sealed partial class ContentIndexManager
             YaguLog.For("ContentIndex").LogWarning(ex, "Over-segmented compaction failed for '{Root}' \u2014 left as-is.", rootDirectory);
             return smallSegmentsCoalesced;
         }
+    }
+
+    /// <summary>
+    /// Explicit, user-approved <b>Compact now</b>: folds every active layer into a fresh base by streaming,
+    /// regardless of the automatic-compaction size cap. The cap exists so background maintenance never
+    /// starts an expensive fold on its own; it is not a correctness limit, and this path does not persist
+    /// any change to it. Throws on failure so the caller can report why; the live index is untouched until
+    /// the single pointer flip at the end.
+    /// </summary>
+    public void CompactScopeNow(
+        string rootDirectory,
+        IndexMaintenanceSettings settings,
+        DateTimeOffset builtUtc,
+        Action<int, string>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+        CompactScopeNowUnderLease(mutation, rootDirectory, settings, builtUtc, progress, cancellationToken);
+    }
+
+    internal void CompactScopeNowUnderLease(
+        IndexMutationContext mutation,
+        string rootDirectory,
+        IndexMaintenanceSettings settings,
+        DateTimeOffset builtUtc,
+        Action<int, string>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(mutation);
+        mutation.EnsureOwns(_paths);
+        ArgumentException.ThrowIfNullOrEmpty(rootDirectory);
+        ArgumentNullException.ThrowIfNull(settings);
+
+        string scopeId = ScopeIdForRoot(rootDirectory);
+        var store = new ContentIndexStore(_paths, scopeId, _retainedGenerations)
+        {
+            ProduceV3QueryStructures = settings.ProduceV3QueryStructures,
+        };
+        RunStreamingCompactionUnderLease(mutation, store, scopeId, rootDirectory, settings, builtUtc, progress, cancellationToken);
+    }
+
+    internal static void RunStreamingCompactionUnderLease(
+        IndexMutationContext mutation,
+        ContentIndexStore store,
+        string scopeId,
+        string rootDirectory,
+        IndexMaintenanceSettings settings,
+        DateTimeOffset builtUtc,
+        Action<int, string>? progress,
+        CancellationToken cancellationToken)
+    {
+        progress?.Invoke(2, IndexUpdateStages.CompactAnalyzing);
+        if (!store.TryGetCurrentLayerDirectories(out string? baseDir, out IReadOnlyList<string> segmentDirs)
+            || baseDir is null)
+        {
+            throw new InvalidDataException("This index has no trusted active layers to compact.");
+        }
+        if (segmentDirs.Count == 0)
+            return; // already a single base
+
+        var layers = new List<string>(segmentDirs.Count + 1) { baseDir };
+        layers.AddRange(segmentDirs);
+
+        IndexMergeResourceBudget budget = IndexMergeResourceBudget.FromSettings(settings);
+        using IndexCompactionWorkspace workspace = IndexCompactionWorkspace.Create(store.IndexRootDirectory);
+        var diskGuard = new IndexCompactionDiskGuard(
+            store.IndexRootDirectory, budget.MinimumFreeSpaceMB, budget.MaxDiskUsagePercent);
+
+        var mergeProgress = new IndexProgressReporter(
+            progress is null
+                ? null
+                : percent => progress(percent, IndexUpdateStages.CompactMerging));
+        mergeProgress.Report(10);
+        StreamingSegmentRunMerger.MergeIntoBase(
+            layers, workspace, budget.MemoryBudgetBytes, diskGuard,
+            store.ProduceV3QueryStructures, builtUtc, mergeProgress.Slice(10, 89),
+            cancellationToken);
+
+        progress?.Invoke(90, IndexUpdateStages.CompactPublishing);
+        store.CompactFromPreparedUnderLease(mutation, workspace.PreparedDirectory);
+        progress?.Invoke(100, IndexUpdateStages.CompactPublishing);
+        YaguLog.For("ContentIndex").LogInformation(
+            "Streaming compaction folded base + {SegmentCount} segment(s) into a fresh base for scope {Scope} ('{Root}').",
+            segmentDirs.Count, scopeId, rootDirectory);
     }
 
     /// <summary>Deletes one scope's index. Returns false if nothing was there.</summary>

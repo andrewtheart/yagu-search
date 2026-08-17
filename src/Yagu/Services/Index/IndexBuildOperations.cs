@@ -93,6 +93,8 @@ public sealed class IndexMaintenanceSettings
 {
     public int BuildMemoryBudgetMB { get; set; }
     public int MaxDiskUsagePercent { get; set; }
+    /// <summary>Free space (MB) that must remain on the index volume; 0 disables the floor.</summary>
+    public int MinimumFreeSpaceMB { get; set; }
     public bool BuildPdfText { get; set; }
     public bool BuildImageText { get; set; }
     public string ImageOcrEngine { get; set; } = "paddle";
@@ -103,8 +105,8 @@ public sealed class IndexMaintenanceSettings
     public bool ProduceV3QueryStructures { get; set; }
     public bool AutoRepair { get; set; } = true;
     public int MaxDeltaSegments { get; set; } = 8;
-    public int CompactionThresholdMB { get; set; } = 256;
-    public int MaxAutoCompactionSizeMB { get; set; } = 512;
+    public int CompactionThresholdMB { get; set; } = 512;
+    public int MaxAutoCompactionSizeMB { get; set; } = 8192;
     /// <summary>Default size-management strategy for every root in this operation, one of
     /// <see cref="IndexSizeManagementModes.All"/>. Per-root entries in <see cref="RootSizePolicies"/> win.</summary>
     public string SizeManagementMode { get; set; } = IndexSizeManagementModes.CoalesceThenCompact;
@@ -112,15 +114,21 @@ public sealed class IndexMaintenanceSettings
     /// and, if the index still cannot be brought under, halts that index's maintenance instead of growing.</summary>
     public int SizeBudgetMB { get; set; }
     /// <summary>Largest individual delta segment (MB) eligible to join a coalescing run.</summary>
-    public int CoalesceMaxSegmentMB { get; set; } = 256;
-    /// <summary>Largest total size (MB) of one coalescing run; bounds maintenance-worker memory.</summary>
-    public int CoalesceMaxBatchMB { get; set; } = 1024;
+    public int CoalesceMaxSegmentMB { get; set; } = 1024;
+    /// <summary>Largest total size (MB) of one coalescing run. Merging streams through a bounded external
+    /// sort, so this bounds the run's work and I/O, not the memory it holds — that is
+    /// <see cref="BuildMemoryBudgetMB"/>.</summary>
+    public int CoalesceMaxBatchMB { get; set; } = 4096;
     /// <summary>Fewest contiguous eligible segments that make a coalescing run worth merging.</summary>
-    public int CoalesceMinRun { get; set; } = 4;
+    public int CoalesceMinRun { get; set; } = 3;
     /// <summary>Most coalescing runs merged in one maintenance pass.</summary>
     public int CoalesceMaxRunsPerPass { get; set; } = 8;
     /// <summary>Per-root size-management overrides; each pins only the axes it sets.</summary>
     public List<IndexedRootSizePolicy> RootSizePolicies { get; set; } = [];
+
+    /// <summary>Stop appending to an index whose accumulated update history can no longer be reclaimed
+    /// automatically. Off by default; the index otherwise keeps updating and only reports the problem.</summary>
+    public bool HaltUpdatesWhenReclamationBlocked { get; set; }
 
     /// <summary>
     /// The effective size policy for <paramref name="root"/>: these operation-level values with that root's
@@ -184,9 +192,13 @@ internal sealed class IndexMaintenanceRootOperation
 /// <summary>Narrow, versioned snapshot for an ordered automatic maintenance pass.</summary>
 internal sealed class IndexMaintenanceOperation
 {
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
     public const string ModeBuildDue = "buildDue";
     public const string ModeIncremental = "incremental";
+    /// <summary>A one-shot, user-approved compaction of the named roots. It folds every active layer into a
+    /// fresh base by streaming and ignores the automatic-compaction size cap without persisting any change
+    /// to it; no other maintenance runs in this mode.</summary>
+    public const string ModeCompactOnly = "compactOnly";
 
     public int Version { get; set; } = CurrentVersion;
     public string StorageDirectory { get; set; } = "";
@@ -228,6 +240,8 @@ internal static class IndexMaintenanceActions
     public const string Skipped = "skipped";
     /// <summary>Updates were paused because the index is at its configured storage budget.</summary>
     public const string SizeBudgetReached = "sizeBudgetReached";
+    /// <summary>Updates were paused because unreclaimable update history reached the clean-up thresholds.</summary>
+    public const string ReclamationBlocked = "reclamationBlocked";
     public const string Failed = "failed";
 }
 
@@ -362,8 +376,12 @@ internal static class IndexOperationValidator
         if (operation.Version != IndexMaintenanceOperation.CurrentVersion)
             throw new InvalidDataException($"Unsupported maintenance-operation version {operation.Version}.");
         ValidateStorage(operation.StorageDirectory);
-        if (operation.Mode is not (IndexMaintenanceOperation.ModeBuildDue or IndexMaintenanceOperation.ModeIncremental))
+        if (operation.Mode is not (IndexMaintenanceOperation.ModeBuildDue
+            or IndexMaintenanceOperation.ModeIncremental
+            or IndexMaintenanceOperation.ModeCompactOnly))
+        {
             throw new InvalidDataException($"Unsupported maintenance mode '{operation.Mode}'.");
+        }
         if (operation.Roots is null || operation.Roots.Length == 0 || operation.Roots.Length > IndexBuildDefaults.MaxOperationRoots)
             throw new InvalidDataException($"Maintenance operations require 1-{IndexBuildDefaults.MaxOperationRoots} roots.");
         foreach (IndexMaintenanceRootOperation root in operation.Roots)
@@ -425,7 +443,7 @@ internal static class IndexOperationValidator
         settings.SizeBudgetMB = Math.Max(0, settings.SizeBudgetMB);
         settings.CoalesceMaxSegmentMB = settings.CoalesceMaxSegmentMB > 0 ? settings.CoalesceMaxSegmentMB : 128;
         settings.CoalesceMaxBatchMB = settings.CoalesceMaxBatchMB > 0 ? settings.CoalesceMaxBatchMB : 512;
-        settings.CoalesceMinRun = Math.Clamp(settings.CoalesceMinRun <= 0 ? 4 : settings.CoalesceMinRun, 2, 64);
+        settings.CoalesceMinRun = Math.Clamp(settings.CoalesceMinRun <= 0 ? 3 : settings.CoalesceMinRun, 2, 64);
         settings.CoalesceMaxRunsPerPass = settings.CoalesceMaxRunsPerPass > 0 ? settings.CoalesceMaxRunsPerPass : 8;
         settings.RootSizePolicies ??= [];
         settings.MaxJournalCatchupRecords = Math.Clamp(settings.MaxJournalCatchupRecords, 1, 100_000_000);

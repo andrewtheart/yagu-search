@@ -91,6 +91,8 @@
     <Compile Include="..\..\src\Yagu\Helpers\MultilineTextShadow.cs" Link="Source\Helpers\MultilineTextShadow.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\MultilinePreviewSpan.cs" Link="Source\Helpers\MultilinePreviewSpan.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\PreviewZoomMath.cs" Link="Source\Helpers\PreviewZoomMath.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\TabTargetLabel.cs" Link="Source\Helpers\TabTargetLabel.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\ContinuationDrawerPrefocus.cs" Link="Source\Helpers\ContinuationDrawerPrefocus.cs" />
     <Compile Include="..\..\src\vendor\TextControlBox-WinUI\TextControlBox\Core\ScrollOffsetMath.cs" Link="Source\Vendor\ScrollOffsetMath.cs" />
     <Compile Include="..\..\src\vendor\TextControlBox-WinUI\TextControlBox\Core\EditorZoomMath.cs" Link="Source\Vendor\EditorZoomMath.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SyntaxHighlighter.cs" Link="Source\Helpers\SyntaxHighlighter.cs" />
@@ -153,6 +155,18 @@
     <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexQuerySession.cs" Link="Source\Services\Index\ContentIndexQuerySession.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexGenerationSerializer.cs" Link="Source\Services\Index\ContentIndexGenerationSerializer.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexV3Format.cs" Link="Source\Services\Index\ContentIndexV3Format.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ActiveLayerStorageBreakdown.cs" Link="Source\Services\Index\ActiveLayerStorageBreakdown.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexCompactionForecast.cs" Link="Source\Services\Index\IndexCompactionForecast.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexStorageHistory.cs" Link="Source\Services\Index\IndexStorageHistory.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexCoreFileReaders.cs" Link="Source\Services\Index\IndexCoreFileReaders.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexCompactionDiskGuard.cs" Link="Source\Services\Index\IndexCompactionDiskGuard.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexCompactionWorkspace.cs" Link="Source\Services\Index\IndexCompactionWorkspace.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexExternalMergeSorter.cs" Link="Source\Services\Index\IndexExternalMergeSorter.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexMergeResourceBudget.cs" Link="Source\Services\Index\IndexMergeResourceBudget.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexReclamationAdvisor.cs" Link="Source\Services\Index\IndexReclamationAdvisor.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\IndexChurnSummary.cs" Link="Source\Services\Index\IndexChurnSummary.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexV3StreamingWriter.cs" Link="Source\Services\Index\ContentIndexV3StreamingWriter.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Index\StreamingSegmentRunMerger.cs" Link="Source\Services\Index\StreamingSegmentRunMerger.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\ContentIndexStore.cs" Link="Source\Services\Index\ContentIndexStore.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\BinaryAsciiContentRepresentation.cs" Link="Source\Services\Index\BinaryAsciiContentRepresentation.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\ChecksummedFile.cs" Link="Source\Services\Index\ChecksummedFile.cs" />

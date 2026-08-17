@@ -247,15 +247,25 @@ public sealed partial class MainWindow
     private const int MaxMatchEntriesPerExpandChunk = 2_000;
 
     /// <summary>
-    /// Absolute ceiling on how many overflow matches a single preview section's
+    /// Default ceiling on how many overflow matches or lines a single preview section's
     /// <c>RichTextBlock</c> may render across ALL scroll/Next-match expansions.
     /// A single RichTextBlock grown past this fail-fasts WinUI's text layout
     /// (<c>0xc000027b</c> / <c>E_UNEXPECTED</c>), worse under the memory pressure
-    /// of a concurrent search. Once reached, expansion stops and the section
-    /// directs the user to the full-file editor for the remaining matches.
+    /// of a concurrent search. Once reached, expansion pauses and the section
+    /// offers an explicit persisted limit increase before rendering more.
     /// Configurable via Settings ▸ Editor ▸ Preview section limits (0 = default).
     /// </summary>
-    private const int DefaultMaxOverflowRenderedPerSection = 4_000;
+    private const int DefaultMaxOverflowRenderedPerSection = 40_000;
+    private const int OverflowRenderLimitIncreaseStep = 40_000;
+    private const int MaxConfigurableOverflowRenderedPerSection = 1_000_000;
+
+    /// <summary>
+    /// Paragraph budget for a single section's RichTextBlock. WinUI text layout fail-fasts
+    /// (0xc000027b / E_UNEXPECTED) once one block grows large enough, and its relayout cost scales
+    /// with its own length. Past this budget the file continues in a fresh sibling section, so
+    /// neither the crash nor the growing per-append cost depends on how much has been rendered.
+    /// </summary>
+    private const int MaxParagraphsPerPreviewSectionBlock = 2_000;
     private int EffectiveMaxOverflowRenderedPerSection =>
         ViewModel.MaxRenderedMatchesPerSection > 0 ? ViewModel.MaxRenderedMatchesPerSection : DefaultMaxOverflowRenderedPerSection;
 
@@ -294,10 +304,18 @@ public sealed partial class MainWindow
             return;
 
         bool isWrapped = contentBlock.TextWrapping == TextWrapping.Wrap;
+        double blockWidth = contentBlock.ActualWidth;
+        double fontSize = contentBlock.FontSize;
 
         for (int i = 0; i < contentBlocks.Count; i++)
         {
             if (contentBlocks[i] is not Paragraph cp || gutterBlocks[i] is not Paragraph gp)
+                continue;
+
+            // Appending during scroll re-runs this sweep over the whole section. Re-measuring every
+            // paragraph (two GetCharacterRect calls each in wrap mode) makes each load cost grow with
+            // the rendered length, which is what made deep scrolling stutter progressively.
+            if (IsGutterParagraphSynced(cp, blockWidth, isWrapped, fontSize, lineHeight))
                 continue;
 
             double targetBottom;
@@ -326,8 +344,47 @@ public sealed partial class MainWindow
 
             if (Math.Abs(gp.Margin.Bottom - targetBottom) > 0.5)
                 gp.Margin = new Thickness(gp.Margin.Left, gp.Margin.Top, gp.Margin.Right, targetBottom);
+
+            MarkGutterParagraphSynced(cp, blockWidth, isWrapped, fontSize, lineHeight);
         }
     }
+
+    private sealed class GutterSyncMark
+    {
+        public double Width;
+        public bool Wrapped;
+        public double FontSize;
+        public double LineHeight;
+    }
+
+    private static readonly ConditionalWeakTable<Paragraph, GutterSyncMark> s_gutterSyncMarks = new();
+
+    private static bool IsGutterParagraphSynced(
+        Paragraph contentParagraph, double width, bool wrapped, double fontSize, double lineHeight)
+    {
+        return s_gutterSyncMarks.TryGetValue(contentParagraph, out var mark)
+            && mark.Wrapped == wrapped
+            && Math.Abs(mark.Width - width) < 0.5
+            && Math.Abs(mark.FontSize - fontSize) < 0.01
+            && Math.Abs(mark.LineHeight - lineHeight) < 0.01;
+    }
+
+    private static void MarkGutterParagraphSynced(
+        Paragraph contentParagraph, double width, bool wrapped, double fontSize, double lineHeight)
+    {
+        s_gutterSyncMarks.Remove(contentParagraph);
+        s_gutterSyncMarks.Add(contentParagraph, new GutterSyncMark
+        {
+            Width = width,
+            Wrapped = wrapped,
+            FontSize = fontSize,
+            LineHeight = lineHeight,
+        });
+    }
+
+    /// <summary>Drops a paragraph's gutter-sync mark after its inlines change, so it is re-measured.</summary>
+    private static void InvalidateGutterSyncMark(Paragraph contentParagraph)
+        => s_gutterSyncMarks.Remove(contentParagraph);
 
     private static void SetGutterWrappedContinuationRows(Paragraph gutterParagraph, int visualLineCount)
     {
@@ -500,24 +557,123 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// Terminal notice appended when a section reaches
-    /// <see cref="EffectiveMaxOverflowRenderedPerSection"/>. Unlike
-    /// <see cref="AppendTruncationNotice"/> it does NOT invite further loading
-    /// (which would fail-fast WinUI layout); it points the user to the editor.
+    /// Notice appended when a match-heavy section reaches
+    /// <see cref="EffectiveMaxOverflowRenderedPerSection"/>. Further loading
+    /// requires an explicit persisted limit increase.
     /// </summary>
-    private Paragraph AppendOverflowCeilingNotice(RichTextBlock section, int totalMatches, int renderedMatches)
+    private Paragraph AppendOverflowCeilingNotice(RichTextBlock section, SectionOverflow ov)
     {
         var notice = new Paragraph { Margin = new Thickness(0, 12, 0, 4) };
         var run = new Run
         {
-            Text = $"\u26A0 Showing {renderedMatches:N0} of {totalMatches:N0} matches. " +
+            Text = $"\u26A0 Showing {ov.RenderedSoFar:N0} of {ov.OriginalTotal:N0} matches. " +
                    "This file has too many matches to render fully here \u2014 open it in the editor to browse all.",
+        };
+        run.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 200, 160, 60));
+        notice.Inlines.Add(run);
+        notice.Inlines.Add(CreateOverflowCeilingIncreaseButton(section, ov));
+        section.Blocks.Add(notice);
+        SyncGutterSpacer(section, notice.Margin);
+        return notice;
+    }
+
+    /// <summary>
+    /// Truncation notice for a whole-file (filename-only) preview. It counts LINES, not matches: such a
+    /// section has a single result, so the match wording would read "1 of 1" while content was missing.
+    /// </summary>
+    private Paragraph AppendLineTruncationNotice(RichTextBlock section, int totalLines, int renderedLines)
+    {
+        var notice = new Paragraph { Margin = new Thickness(0, 12, 0, 4) };
+        var run = new Run
+        {
+            Text = $"\u26A0 Showing first {renderedLines:N0} of {totalLines:N0} lines. " +
+                   "Scroll down to load more, or open in editor to browse all.",
         };
         run.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 200, 160, 60));
         notice.Inlines.Add(run);
         section.Blocks.Add(notice);
         SyncGutterSpacer(section, notice.Margin);
         return notice;
+    }
+
+    /// <summary>Counterpart of <see cref="AppendLineTruncationNotice"/> for the render ceiling.</summary>
+    private Paragraph AppendLineTruncationCeilingNotice(RichTextBlock section, SectionOverflow ov)
+    {
+        var notice = new Paragraph { Margin = new Thickness(0, 12, 0, 4) };
+        var run = new Run
+        {
+            Text = $"\u26A0 Showing {ov.RenderedSoFar:N0} of {ov.OriginalTotal:N0} lines. " +
+                   "This file is too large to render fully here \u2014 open it in the editor to browse all.",
+        };
+        run.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 200, 160, 60));
+        notice.Inlines.Add(run);
+        notice.Inlines.Add(CreateOverflowCeilingIncreaseButton(section, ov));
+        section.Blocks.Add(notice);
+        SyncGutterSpacer(section, notice.Margin);
+        return notice;
+    }
+
+    private InlineUIContainer CreateOverflowCeilingIncreaseButton(RichTextBlock section, SectionOverflow ov)
+    {
+        int currentLimit = EffectiveMaxOverflowRenderedPerSection;
+        int nextLimit = Math.Min(
+            MaxConfigurableOverflowRenderedPerSection,
+            currentLimit + OverflowRenderLimitIncreaseStep);
+        var button = new Button
+        {
+            Content = currentLimit < MaxConfigurableOverflowRenderedPerSection
+                ? $"Increase limit by {OverflowRenderLimitIncreaseStep:N0}"
+                : $"Limit is already {MaxConfigurableOverflowRenderedPerSection:N0}",
+            IsEnabled = currentLimit < MaxConfigurableOverflowRenderedPerSection,
+            FontSize = 12,
+            MinHeight = 28,
+            Padding = new Thickness(10, 2, 10, 2),
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTipService.SetToolTip(
+            button,
+            $"Save a {nextLimit:N0}-item section limit and continue loading this file in bounded chunks.");
+        button.Click += async (_, _) =>
+        {
+            button.IsEnabled = false;
+            try
+            {
+                await IncreaseOverflowRenderLimitAsync(section, ov);
+            }
+            catch (Exception ex)
+            {
+                button.IsEnabled = true;
+                YaguLog.For("Preview").LogWarning(
+                    "Increasing the preview render limit failed: {ExceptionType}: {Error}",
+                    ex.GetType().Name,
+                    ex.Message);
+            }
+        };
+        return new InlineUIContainer { Child = button };
+    }
+
+    /// <summary>
+    /// Registers a whole-file (filename-only) preview that stopped at the per-section block budget so the
+    /// existing scroll/expand machinery keeps loading it line by line instead of truncating silently.
+    /// </summary>
+    private void RegisterSectionLineOverflow(
+        RichTextBlock section, SearchResult result, string[] allLines, int previewLines,
+        int nextLineNumber, Paragraph noticePara)
+    {
+        _sectionOverflow[section] = new SectionOverflow
+        {
+            FilePath = result.FilePath,
+            RemainingResults = new List<SearchResult>(),
+            AllLines = allLines,
+            PreviewLines = previewLines,
+            Rx = null,
+            OriginalTotal = allLines.Length,
+            RenderedSoFar = nextLineNumber - 1,
+            NoticePara = noticePara,
+            LineResult = result,
+            NextLineNumber = nextLineNumber,
+        };
     }
 
     /// <summary>
@@ -798,6 +954,8 @@ public sealed partial class MainWindow
         int cap = Math.Min(results.Count, maxMatches);
         var renderedLineNumbers = new HashSet<int>();
         bool renderedFileNameOnlyPreview = false;
+        SearchResult? lineOverflowResult = null;
+        int lineOverflowNextLine = 0;
         foreach (var r in results)
         {
             if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= maxBlocks)
@@ -837,6 +995,7 @@ public sealed partial class MainWindow
             }
 
             var lines = GetPreviewLines(r, allLines, previewLines, fullFile: isFileNameOnlyPreview);
+            int lastRenderedLine = 0;
             foreach (var (line, lineNum) in lines)
             {
                 if (section.Blocks.Count - startingBlocks >= maxBlocks)
@@ -852,6 +1011,15 @@ public sealed partial class MainWindow
                     maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks),
                     forcedSpan: forcedSpan);
                 parasBuilt += addedParagraphs;
+                lastRenderedLine = lineNum;
+            }
+
+            // A whole-file preview is one result, so the result-count overflow below can never report the
+            // lines the block budget dropped. Remember where to resume instead.
+            if (isFileNameOnlyPreview && allLines is { Length: > 0 } && lastRenderedLine > 0 && lastRenderedLine < allLines.Length)
+            {
+                lineOverflowResult = r;
+                lineOverflowNextLine = lastRenderedLine + 1;
             }
 
             renderedResults++;
@@ -870,6 +1038,11 @@ public sealed partial class MainWindow
                 originalTotal: results.Count,
                 renderedSoFar: renderedResults,
                 noticePara: notice);
+        }
+        else if (lineOverflowResult is not null && allLines is { Length: > 0 })
+        {
+            var notice = AppendLineTruncationNotice(section, allLines.Length, lineOverflowNextLine - 1);
+            RegisterSectionLineOverflow(section, lineOverflowResult, allLines, previewLines, lineOverflowNextLine, notice);
         }
 
         buildSw.Stop();
@@ -5198,6 +5371,10 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
 
     private void RebuildPreviewTruncatedLineParagraph(Paragraph paragraph, PreviewTruncatedLineState state)
     {
+        // Replacing the inlines changes the rendered height at the same width, so the cached
+        // gutter measurement no longer applies.
+        InvalidateGutterSyncMark(paragraph);
+
         while (paragraph.Inlines.Count > state.ContentInlineStart)
             paragraph.Inlines.RemoveAt(state.ContentInlineStart);
 

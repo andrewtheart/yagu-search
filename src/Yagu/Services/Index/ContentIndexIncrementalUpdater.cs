@@ -26,6 +26,11 @@ public enum IncrementalUpdateOutcome
     /// size-management mode, so no segment was appended. The existing index stays valid and queryable; the
     /// files it no longer covers are simply live-scanned until it is rebuilt.</summary>
     SizeBudgetReached,
+
+    /// <summary>Accumulated update history has passed the clean-up thresholds, nothing can reclaim it
+    /// automatically, and the user opted to stop appending rather than let the index keep growing. The
+    /// existing index and its checkpoint are untouched; affected files are live-scanned.</summary>
+    ReclamationBlocked,
 }
 
 /// <summary>
@@ -46,8 +51,8 @@ public readonly record struct IncrementalChange(string Path, IndexContentClassif
 /// <summary>
 /// Orchestrates one Phase 3 incremental-update pass (plan §11.4): it turns a resolved set of created/
 /// modified files and deleted paths into an immutable delta segment, appends it to the current base via the
-/// <see cref="ContentIndexStore"/>, and — when the segment/size bounds are exceeded — folds the whole layered
-/// index into a fresh base with <see cref="ContentIndexCompactor"/>.
+/// <see cref="ContentIndexStore"/>, and — when the segment/size bounds are exceeded — streams the whole layered
+/// index into a fresh base through a bounded-memory external merge.
 /// <para>
 /// It is deliberately pure w.r.t. change discovery: the caller supplies the already-resolved changes (from a
 /// continuous USN replay), so this class is fully unit-testable without the journal. It never throws to the
@@ -59,7 +64,7 @@ public sealed partial class ContentIndexIncrementalUpdater
 {
     // A small-run merge is deliberately independent of total scope size: it merges a bounded contiguous run
     // without opening the base or unrelated segments, so a 30+ GiB layered index can shed layers without
-    // recreating the catastrophic full-compaction memory spike the automatic size cap prevents. The bounds
+    // paying for a full-index streaming pass. The bounds
     // come from the per-index EffectiveIndexSizePolicy, because fixed bounds that no real whole-drive index
     // could satisfy left those indexes with no reclamation path at all.
     internal const int SmallSegmentMaximumRun = EffectiveIndexSizePolicy.MaximumCoalesceRun;
@@ -199,15 +204,39 @@ public sealed partial class ContentIndexIncrementalUpdater
 
         EffectiveIndexSizePolicy size = settings.ResolveSizePolicy(normalizedRootPath);
         int budgetMaxSegments = Math.Clamp(settings.MaxDeltaSegments, 1, 64);
+
+        // Opt-in growth stop: when clean-up is due and no allowed path can reclaim the accumulated update
+        // history, halt before appending rather than letting the index grow without limit. Off by default,
+        // because halting costs index coverage (slower searches, never wrong ones).
+        if (settings.HaltUpdatesWhenReclamationBlocked
+            && _store.TryReadActiveLayerStorageBreakdown() is { } breakdown)
+        {
+            bool hasRun = size.AllowsCoalescing && _store.TryFindIncrementalSegmentRun(
+                size.CoalesceMinRun, SmallSegmentMaximumRun,
+                size.CoalesceMaxSegmentBytes, size.CoalesceMaxBatchBytes, out _);
+            IndexReclamationDiagnosis diagnosis = IndexReclamationAdvisor.Diagnose(
+                breakdown, size, budgetMaxSegments,
+                Math.Clamp(settings.CompactionThresholdMB, 1, 8192), hasRun);
+            if (diagnosis.ReclamationBlocked)
+            {
+                YaguLog.For("ContentIndex").LogWarning(
+                    "Scope {Scope} for '{Root}' has {HistoryMB} MB of unreclaimable update history across {Layers} layer(s); updates are paused because you asked Yagu to stop instead of growing further. Searches stay complete \u2014 uncovered files are read live. Compact or rebuild this index to resume.",
+                    scopeId, normalizedRootPath, diagnosis.IncrementalHistoryMB, breakdown.IncrementalCount);
+                return IncrementalUpdateOutcome.ReclamationBlocked;
+            }
+        }
+
         if (size.SizeBudgetMB > 0 && size.ExceedsBudget(_store.TotalActiveIndexBytes()))
         {
             // Over the storage ceiling. Try the bounded, low-memory reclamation first; only if that cannot
             // bring the index back under budget do we stop appending. Halting is the safe way to bound
             // growth: the existing index stays valid and queryable, and anything it no longer covers is
-            // live-scanned, whereas folding an oversized index would trade disk growth for a memory spike.
+            // live-scanned, whereas folding an oversized index would trade disk growth for substantial
+            // background I/O and temporary disk consumption.
             try
             {
-                CoalesceSmallSegmentsUnderLease(mutation, budgetMaxSegments, cancellationToken, size);
+                CoalesceSmallSegmentsUnderLease(
+                    mutation, budgetMaxSegments, cancellationToken, size, IndexMergeResourceBudget.FromSettings(settings));
             }
             catch (OperationCanceledException)
             {
@@ -277,6 +306,23 @@ public sealed partial class ContentIndexIncrementalUpdater
             "Incremental update for scope {Scope}: appended delta segment ({ChangedCount} changed, {DeletedCount} deleted) — merge {MergeMs} ms, serialize {BuildMs} ms, publish {PublishMs} ms.",
             scopeId, changed.Count, deletedPaths.Count, mergeMs, buildMs, phaseTimer.ElapsedMilliseconds);
 
+        // Verbose-only, bounded, root-relative churn hint so a user investigating an index that grows
+        // faster than it can be cleaned up can see which folders to exclude. Never telemetry, never an
+        // absolute path, and never an automatic filter change.
+        if (LogService.Instance.IsVerboseEnabled)
+        {
+            IReadOnlyList<IndexChurnEntry> busiest = IndexChurnSummary.TopRootRelativeDirectories(
+                changed.Select(change => change.Path).Concat(deletedPaths),
+                normalizedRootPath,
+                depth: 2,
+                take: 5);
+            if (IndexChurnSummary.Describe(busiest) is { } churn)
+            {
+                YaguLog.For("ContentIndex").LogDebug(
+                    "Incremental update for scope {Scope}: busiest folders this pass — {Churn}.", scopeId, churn);
+            }
+        }
+
         int maxSegments = budgetMaxSegments;
         int thresholdMB = Math.Clamp(settings.CompactionThresholdMB, 1, 8192);
         if (_store.ActiveSegmentCount() > maxSegments && size.AllowsCoalescing)
@@ -284,7 +330,8 @@ public sealed partial class ContentIndexIncrementalUpdater
             progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);
             try
             {
-                CoalesceSmallSegmentsUnderLease(mutation, maxSegments, cancellationToken, size);
+                CoalesceSmallSegmentsUnderLease(
+                    mutation, maxSegments, cancellationToken, size, IndexMergeResourceBudget.FromSettings(settings));
             }
             catch (OperationCanceledException)
             {
@@ -301,10 +348,9 @@ public sealed partial class ContentIndexIncrementalUpdater
 
         if (_store.ShouldCompact(maxSegments, thresholdMB))
         {
-            // Folding a large layered index re-materializes every layer's documents plus a combined posting
-            // index and a serialization buffer, so the per-index cap decides whether that is affordable.
-            // Exceeding the storage budget lifts the cap, because the only alternative left at that point is
-            // letting this index grow without limit.
+            // Automatic full compaction can still be expensive in disk I/O and temporary storage, so the
+            // per-index policy decides whether to start it. Once allowed, the fold itself is an external
+            // merge bounded by the configured build-memory budget; it never opens the layered index in memory.
             long indexBytes = _store.TotalActiveIndexBytes();
             if (!size.AllowsCompactingIndexOf(indexBytes))
             {
@@ -323,17 +369,36 @@ public sealed partial class ContentIndexIncrementalUpdater
                 return IncrementalUpdateOutcome.SegmentAppended;
             }
 
-            if (_store.TryOpenLayered(cancellationToken: cancellationToken) is not { } handle)
-                return IncrementalUpdateOutcome.SegmentAppended;
-
             cancellationToken.ThrowIfCancellationRequested();
             progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);
-            YaguLog.For("ContentIndex").LogInformation("Incremental update for scope {Scope}: compaction bounds exceeded (maxSegments={MaxSegments}, thresholdMB={ThresholdMB}) → compacting layered index into a fresh base.", scopeId, maxSegments, thresholdMB);
-            ContentIndexGeneration compacted = ContentIndexCompactor.Compact(handle, _policy, builtUtc);
-            cancellationToken.ThrowIfCancellationRequested();
-            _store.CompactUnderLease(mutation, compacted);
-            YaguLog.For("ContentIndex").LogInformation("Incremental update for scope {Scope}: compaction complete.", scopeId);
-            return IncrementalUpdateOutcome.Compacted;
+            YaguLog.For("ContentIndex").LogInformation("Incremental update for scope {Scope}: compaction bounds exceeded (maxSegments={MaxSegments}, thresholdMB={ThresholdMB}) → streaming the layered index into a fresh base.", scopeId, maxSegments, thresholdMB);
+            try
+            {
+                ContentIndexManager.RunStreamingCompactionUnderLease(
+                    mutation,
+                    _store,
+                    scopeId,
+                    normalizedRootPath,
+                    settings,
+                    builtUtc,
+                    progress is null ? null : ReportStreamingCompaction,
+                    cancellationToken);
+                YaguLog.For("ContentIndex").LogInformation("Incremental update for scope {Scope}: streaming compaction complete.", scopeId);
+                return IncrementalUpdateOutcome.Compacted;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // The delta was published before this optional reclamation step. A failed compaction leaves
+                // that complete layered pointer active, so report the durable append rather than rebuilding.
+                YaguLog.For("ContentIndex").LogWarning(ex,
+                    "Post-incremental streaming compaction failed for scope {Scope}; keeping the valid layered index.",
+                    scopeId);
+                return IncrementalUpdateOutcome.SegmentAppended;
+            }
         }
 
         return IncrementalUpdateOutcome.SegmentAppended;
@@ -349,23 +414,33 @@ public sealed partial class ContentIndexIncrementalUpdater
             lastMergePercent = percent;
             progress(percent, IndexUpdateStages.Merging);
         }
+
+        void ReportStreamingCompaction(int percent, string stage)
+        {
+            int bounded = Math.Clamp(percent, 0, 100);
+            int mapped = IndexUpdateStages.CompactFloor
+                + ((100 - IndexUpdateStages.CompactFloor) * bounded / 100);
+            progress!(mapped, stage);
+        }
     }
 
     internal int CoalesceSmallSegmentsUnderLease(
         IndexMutationContext mutation,
         int maxSegments,
         CancellationToken cancellationToken,
-        EffectiveIndexSizePolicy? sizePolicy = null)
+        EffectiveIndexSizePolicy? sizePolicy = null,
+        IndexMergeResourceBudget? resources = null)
     {
         EffectiveIndexSizePolicy size = sizePolicy ?? EffectiveIndexSizePolicy.Default;
         if (!size.AllowsCoalescing)
             return 0;
+        IndexMergeResourceBudget budget = resources ?? IndexMergeResourceBudget.Default;
 
         int mergedRuns = 0;
         int removedLayers = 0;
         while (mergedRuns < size.CoalesceMaxRunsPerPass
                && _store.ActiveSegmentCount() > maxSegments
-               && _store.TryFindSmallSegmentRun(
+               && _store.TryFindIncrementalSegmentRun(
                    size.CoalesceMinRun,
                    SmallSegmentMaximumRun,
                    size.CoalesceMaxSegmentBytes,
@@ -374,19 +449,32 @@ public sealed partial class ContentIndexIncrementalUpdater
                && run is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var inputs = new List<ContentIndexDeltaSegment>(run.SegmentDirectories.Count);
-            foreach (string directory in run.SegmentDirectories)
+            using var workspace = IndexCompactionWorkspace.Create(_store.IndexRootDirectory);
+            var diskGuard = new IndexCompactionDiskGuard(
+                _store.IndexRootDirectory, budget.MinimumFreeSpaceMB, budget.MaxDiskUsagePercent);
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                ContentIndexDeltaSegment? segment = ContentIndexDeltaSegmentSerializer.TryRead(
-                    directory, retainDocuments: true, cancellationToken);
-                if (segment is null)
-                    return removedLayers; // fail safe: leave every existing pointer/layer unchanged
-                inputs.Add(segment);
+                StreamingSegmentRunMerger.Merge(
+                    run.SegmentDirectories,
+                    workspace,
+                    budget.MemoryBudgetBytes,
+                    diskGuard,
+                    _store.ProduceV3QueryStructures,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is IndexCompactionDiskGuardException or InvalidDataException or IOException or UnauthorizedAccessException)
+            {
+                // Fail safe: every existing pointer and layer is untouched; only the workspace is discarded.
+                YaguLog.For("ContentIndex").LogWarning(ex,
+                    "Streaming segment merge aborted before publication; the layered index is unchanged.");
+                return removedLayers;
             }
 
-            ContentIndexDeltaSegment merged = MergeSegmentRun(inputs, cancellationToken);
-            if (!_store.TryReplaceSegmentRunUnderLease(mutation, run, merged))
+            if (!_store.TryReplacePreparedSegmentRunUnderLease(mutation, run, workspace.PreparedDirectory))
                 return removedLayers;
 
             mergedRuns++;
@@ -403,12 +491,14 @@ public sealed partial class ContentIndexIncrementalUpdater
     }
 
     /// <summary>
-    /// Produces one segment with the exact newest-wins meaning of a contiguous input run. Inputs are walked
+    /// Produces one segment with the exact newest-wins meaning of a contiguous input run, materializing
+    /// every input layer in memory. Production now merges by streaming; this remains the <b>reference
+    /// oracle</b> the differential tests compare the streaming merge against. Inputs are walked
     /// newest-to-oldest like the layered query: the first alias/tombstone deciding a path wins; documents are
     /// copied from their existing trigram sets (never re-read from source); hard links within a layer remain
     /// shared. The newest input checkpoint/time becomes the merged segment's logical barrier.
     /// </summary>
-    private ContentIndexDeltaSegment MergeSegmentRun(
+    internal ContentIndexDeltaSegment MergeSegmentRun(
         IReadOnlyList<ContentIndexDeltaSegment> segments,
         CancellationToken cancellationToken)
     {

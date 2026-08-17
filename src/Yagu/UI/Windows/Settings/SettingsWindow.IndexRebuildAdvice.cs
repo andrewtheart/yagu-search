@@ -178,13 +178,18 @@ public sealed partial class SettingsWindow
                             linkedCts.Token,
                             progress: progress => _viewModel.ReportIndexBuildProgress(
                                 root,
-                                IndexBuildProgressEstimate.Percent(progress.BytesCrawled, driveUsedBytes)),
+                                IndexBuildProgressEstimate.Percent(progress.BytesCrawled, driveUsedBytes),
+                                IndexBuildStages.RawBuild),
                             pdfProgress: progress => _viewModel.ReportIndexBuildProgress(
                                 root,
-                                progress.Total <= 0 ? -1 : 90 + Math.Clamp(progress.Processed * 5 / progress.Total, 0, 5)),
+                                progress.Total <= 0 ? -1 : 90 + Math.Clamp(progress.Processed * 5 / progress.Total, 0, 5),
+                                IndexBuildStages.Pdf),
                             imageOcrProgress: progress => _viewModel.ReportIndexBuildProgress(
                                 root,
-                                progress.Total <= 0 ? -1 : 95 + Math.Clamp(progress.Processed * 4 / progress.Total, 0, 4)));
+                                progress.Total <= 0 ? -1 : 95 + Math.Clamp(progress.Processed * 4 / progress.Total, 0, 4),
+                                IndexBuildStages.Ocr),
+                            postBuildCatchUpProgress: _ => _viewModel.ReportIndexBuildProgress(
+                                root, 99, IndexBuildStages.PostBuildCatchUp));
                         completed++;
                     }
                     catch (IndexDiskFullException ex)

@@ -3673,7 +3673,7 @@ public sealed partial class SettingsWindow : Window
             previewViewerGroup.Children.Add(fullFileRenderChars);
             previewViewerGroup.Children.Add(new TextBlock { Text = "The character budget for the full-file preview render (also caps a single very long line). 0 uses the default (1,000,000).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            previewViewerGroup.Children.Add(new TextBlock { Text = "Max rendered matches per section before 'open in editor' (0 = 4000):" });
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Max rendered matches or lines per section before 'open in editor' (0 = 40,000):" });
             var maxRenderedPerSection = new NumberBox { Value = _viewModel.MaxRenderedMatchesPerSection, Minimum = 0, Maximum = 1_000_000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
             maxRenderedPerSection.ValueChanged += (_, args) => _viewModel.MaxRenderedMatchesPerSection = (int)args.NewValue;
             previewViewerGroup.Children.Add(maxRenderedPerSection);
@@ -4320,6 +4320,30 @@ public sealed partial class SettingsWindow : Window
             remindersGroup.Children.Add(new TextBlock
             {
                 Text = "Allows the file drawer, line-number, and preview-match introductory tooltips to appear again.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetTabTargetPrompts = new Button
+            {
+                Content = "Reset Tab destination prompts",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetTabTargetPrompts.Click += async (_, _) =>
+            {
+                await _viewModel.ResetTabTargetPromptsAsync();
+                MarkSettingsDirty(requireValueChanges: false);
+                RefreshDefaultResetButtons();
+                resetTabTargetPrompts.Content = "Tab destination prompts reset";
+            };
+            RegisterDefaultResetButton(resetTabTargetPrompts, () => _viewModel.AreTabTargetPromptsReset);
+            remindersGroup.Children.Add(resetTabTargetPrompts);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Asks again where Tab should go from the directory and search pattern boxes, and restores the default destination (the controls inside each box).",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,

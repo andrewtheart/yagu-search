@@ -60,6 +60,19 @@ public class IndexSizeBudgetAdvisorTests
     }
 
     [Fact]
+    public void Diagnose_WithCoalescingOnly_ExplainsWhyMergingCannotShrinkIndexedContent()
+    {
+        IndexSizeBudgetDiagnosis diagnosis = IndexSizeBudgetAdvisor.Diagnose(
+            Policy(mode: IndexSizeManagementModes.Coalesce), 33_178 * Mb);
+
+        Assert.True(diagnosis.AtBudget);
+        Assert.False(diagnosis.CompactionBlockedByCap);
+        string explanation = diagnosis.ExplainWhyAutomaticCleanupFailed();
+        Assert.Contains("only removes the overhead", explanation);
+        Assert.DoesNotContain("only started automatically below", explanation);
+    }
+
+    [Fact]
     public void Explain_TellsTheUserSearchesAreStillComplete()
     {
         string text = IndexSizeBudgetAdvisor.Diagnose(Policy(), 33_178 * Mb).Explain();
@@ -128,6 +141,8 @@ public class IndexSizeBudgetAdvisorTests
 
     // The window layer is not compiled into this assembly, so its wiring is source-pinned.
     private static readonly string MainWindowSource = ReadMainWindowSources();
+    private static readonly string IndexSizeBudgetSource = File.ReadAllText(Path.Combine(
+        RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.IndexSizeBudget.cs"));
 
     [Fact]
     public void Detection_RunsBeforeTheFreshnessVerdict_SoAPausedIndexNeverReportsHealthy()
@@ -149,18 +164,27 @@ public class IndexSizeBudgetAdvisorTests
     }
 
     [Fact]
-    public void Dialog_ExplainsAndAppliesEveryRemedyInPlace()
+    public void Dialog_ClosesBeforeDispatch_AndReportsLongWorkInTheStatusIndicator()
     {
-        Assert.Contains("ShowIndexSizeBudgetDialogAsync", MainWindowSource);
-        Assert.Contains("diagnosis.Explain()", MainWindowSource);
-        Assert.Contains("diagnosis.ExplainWhyAutomaticCleanupFailed()", MainWindowSource);
-        Assert.Contains("ApplyIndexSizeBudgetRemedyAsync", MainWindowSource);
-        // Each remedy is actually performed, not delegated to a Settings page.
-        Assert.Contains("IndexSizeBudgetRemedy.RaiseBudget", MainWindowSource);
-        Assert.Contains("IndexSizeBudgetRemedy.AllowCompaction", MainWindowSource);
-        Assert.Contains("IndexSizeBudgetRemedy.Delete", MainWindowSource);
-        Assert.Contains("RebuildCurrentIndexBlockingAsync", MainWindowSource);
-        Assert.Contains("ShowTitleBar = false", MainWindowSource);
+        Assert.Contains("ShowIndexSizeBudgetDialogAsync", IndexSizeBudgetSource);
+        Assert.Contains("diagnosis.Explain()", IndexSizeBudgetSource);
+        Assert.Contains("diagnosis.ExplainWhyAutomaticCleanupFailed()", IndexSizeBudgetSource);
+        Assert.Contains("dialog?.AcceptClose();", IndexSizeBudgetSource);
+        Assert.Contains("ApplyIndexSizeBudgetRemedyAsync", IndexSizeBudgetSource);
+        Assert.Contains("ApplyIndexSizeAttentionRemedyAsync", IndexSizeBudgetSource);
+        Assert.DoesNotContain("new ProgressBar", IndexSizeBudgetSource);
+        Assert.DoesNotContain("status.Text", IndexSizeBudgetSource);
+        Assert.DoesNotContain("RebuildCurrentIndexBlockingAsync", IndexSizeBudgetSource);
+
+        Assert.Contains("IndexSizeBudgetRemedy.RaiseBudget", IndexSizeBudgetSource);
+        Assert.Contains("IndexSizeBudgetRemedy.AllowCompaction", IndexSizeBudgetSource);
+        Assert.Contains("IndexSizeBudgetRemedy.Delete", IndexSizeBudgetSource);
+        Assert.Contains("ViewModel.RebuildRegisteredIndexNow(indexRoot);", IndexSizeBudgetSource);
+        Assert.Contains("ViewModel.BeginIndexBuildActivity(indexRoot, isIncremental: true);", IndexSizeBudgetSource);
+        Assert.Contains("ViewModel.ReportIndexBuildProgress(indexRoot, 2, IndexUpdateStages.CompactAnalyzing);", IndexSizeBudgetSource);
+        Assert.Contains("ViewModel.ReportIndexBuildProgress(indexRoot, -1, IndexUpdateStages.Deleting);", IndexSizeBudgetSource);
+        Assert.Contains("ViewModel.EndIndexBuildActivity();", IndexSizeBudgetSource);
+        Assert.Contains("ShowTitleBar = false", IndexSizeBudgetSource);
     }
 
     [Fact]

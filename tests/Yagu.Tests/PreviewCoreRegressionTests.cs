@@ -596,6 +596,85 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void OverflowCeilingNotice_OffersPersistedIncrementalLimitIncrease()
+    {
+        Assert.Contains("private const int DefaultMaxOverflowRenderedPerSection = 40_000;", MainWindowSource);
+        Assert.Contains("private const int OverflowRenderLimitIncreaseStep = 40_000;", MainWindowSource);
+
+        string matchNotice = ExtractMethodWindow(MainWindowSource, "AppendOverflowCeilingNotice", window: 1800);
+        Assert.Contains("CreateOverflowCeilingIncreaseButton(section, ov)", matchNotice);
+
+        string lineNotice = ExtractMethodWindow(MainWindowSource, "AppendLineTruncationCeilingNotice", window: 1800);
+        Assert.Contains("CreateOverflowCeilingIncreaseButton(section, ov)", lineNotice);
+
+        string button = ExtractMethodWindow(MainWindowSource, "private InlineUIContainer CreateOverflowCeilingIncreaseButton", window: 2600);
+        AssertContainsInOrder(button,
+            "var button = new Button",
+            "$\"Increase limit by {OverflowRenderLimitIncreaseStep:N0}\"",
+            "button.Click += async",
+            "return new InlineUIContainer { Child = button };");
+
+        string increase = ExtractMethodWindow(MainWindowSource, "private async Task IncreaseOverflowRenderLimitAsync", window: 2600);
+        AssertContainsInOrder(increase,
+            "int currentLimit = EffectiveMaxOverflowRenderedPerSection;",
+            "currentLimit + OverflowRenderLimitIncreaseStep",
+            "ViewModel.MaxRenderedMatchesPerSection = nextLimit;",
+            "await ViewModel.PersistSettingsAsync();",
+            "ov.CeilingReached = false;",
+            "ExpandOverflowChunk(section,");
+
+        Assert.Contains("Max rendered matches or lines per section before 'open in editor' (0 = 40,000):", SettingsWindowSource);
+    }
+
+    [Fact]
+    public void PreviewSectionGrowth_RollsOverToContinuationSectionInsteadOfOneUnboundedBlock()
+    {
+        // A single RichTextBlock fail-fasts WinUI text layout (0xc000027b) once it grows large
+        // enough, so growth must spread across bounded blocks rather than enlarging one block.
+        Assert.Contains("private const int MaxParagraphsPerPreviewSectionBlock = 2_000;", MainWindowSource);
+
+        string capacity = ExtractMethodWindow(MainWindowSource, "private RichTextBlock EnsurePreviewRenderCapacity", window: 3000);
+        AssertContainsInOrder(capacity,
+            "if (section.Blocks.Count < MaxParagraphsPerPreviewSectionBlock)",
+            "return section;",
+            "AddPreviewSection(",
+            "addToPanel: false);",
+            "PreviewSectionsPanel.Children.Insert(index + 1, continuationExpander);",
+            "_sectionOverflow.Remove(section);",
+            "_sectionOverflow[continuationBlock] = ov;",
+            "if (!ov.IsLineMode)",
+            "RegisterSectionMatchTotal(section, ov.RenderedSoFar);",
+            "RegisterSectionMatchTotal(continuationBlock, Math.Max(0, ov.OriginalTotal - ov.RenderedSoFar));");
+
+        // Both scroll-driven and match-navigation expansion must route through the rollover.
+        string expandScrollChunk = ExtractMethodWindow(MainWindowSource, "ExpandOverflowChunk");
+        Assert.Contains("section = EnsurePreviewRenderCapacity(section, ov);", expandScrollChunk);
+
+        string expandChunk = ExtractMethodWindow(MainWindowSource, "ExpandSectionNextChunk");
+        Assert.Contains("section = EnsurePreviewRenderCapacity(section, ov);", expandChunk);
+    }
+
+    [Fact]
+    public void PreviewIncrementalLoad_DoesNotRepeatWorkThatScalesWithRenderedLength()
+    {
+        // Scrolling a long preview appends repeatedly. Any per-append work proportional to what is
+        // already rendered makes each load slower than the last, which the user sees as stutter that
+        // worsens the further down the document they scroll.
+
+        // Gutter sync must skip paragraphs already measured at the current width/font.
+        string gutterSync = ExtractMethodWindow(MainWindowSource, "private void SyncGutterParagraphHeights", window: 3600);
+        AssertContainsInOrder(gutterSync,
+            "if (IsGutterParagraphSynced(cp, blockWidth, isWrapped, fontSize, lineHeight))",
+            "continue;",
+            "MarkGutterParagraphSynced(cp, blockWidth, isWrapped, fontSize, lineHeight);");
+
+        // Rebuilding a paragraph's inlines changes its height at the same width, so its cached
+        // measurement must be dropped or the gutter would go stale.
+        string rebuild = ExtractMethodWindow(MainWindowSource, "private void RebuildPreviewTruncatedLineParagraph", window: 1200);
+        Assert.Contains("InvalidateGutterSyncMark(paragraph);", rebuild);
+    }
+
+    [Fact]
     public void MatchLineCheckbox_AddsAdditionalCheckedMatchesIncrementally()
     {
         // Checking an additional match line must add it to the existing preview
@@ -844,7 +923,7 @@ public sealed class PreviewCoreRegressionTests
             "LineHeight = previewTextLineHeight");
         Assert.DoesNotContain("FontFamily = new FontFamily(\"Consolas\")", addSection);
 
-        string mainWindowPropertyChanged = ExtractMethodWindow(MainWindowSource, "MainWindow", window: 12500);
+        string mainWindowPropertyChanged = ExtractMethodWindow(MainWindowSource, "MainWindow", window: 13000);
         AssertContainsInOrder(mainWindowPropertyChanged,
             "e.PropertyName == nameof(ViewModel.PreviewTextFontFamily)",
             "e.PropertyName == nameof(ViewModel.PreviewTextFontSize)",
@@ -1317,7 +1396,7 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(bottomActions,
             "x:Name=\"SearchCardLoadSessionButton\"",
             "Click=\"OnLoadSession\"",
-            "ToolTipService.ToolTip=\"Load a previously saved .yagu-session file\"",
+            "ToolTipService.ToolTip=\"Load a previously saved .yagu-session file (Ctrl+O)\"",
             "<FontIcon Glyph=\"&#xE8E5;\"",
             "x:Name=\"PreSearchTerminalChevron\"",
             "Click=\"OnToggleTerminalPane\"");
@@ -1957,8 +2036,8 @@ public sealed class PreviewCoreRegressionTests
 
         string highlight = ExtractMethodWindow(MainWindowSource, "HighlightActiveExpander", 1800);
         AssertContainsInOrder(highlight,
-            "child.Background = null;",
-            "ApplyPreviewSectionContentBackground(child, isActive);");
+            "_lastHighlightedActiveBlock = activeBlock;",
+            "ApplyPreviewSectionBackgrounds();");
         Assert.DoesNotContain("s_activeExpanderBrush", MainWindowSource);
 
         string backgroundHelper = ExtractMethodWindow(MainWindowSource, "ApplyPreviewSectionContentBackground", 2600);
@@ -2310,9 +2389,10 @@ public sealed class PreviewCoreRegressionTests
         string filterRow = ExtractXamlWindow("PlaceholderText=\"Filter files…\"", 1700);
         Assert.DoesNotContain("Content=\"{x:Bind ViewModel.DateRangeFilterLabel", filterRow);
 
-        string selectAllFiles = ExtractXamlWindow("x:Name=\"SelectAllFilesCheckBox\"", 700);
+        string selectAllFiles = ExtractXamlWindow("x:Name=\"SelectAllFilesCheckBox\"", 850);
         Assert.Contains("Width=\"24\" Height=\"24\" MinWidth=\"0\" MinHeight=\"0\" Padding=\"0\"", selectAllFiles);
         Assert.Contains("HorizontalAlignment=\"Center\" VerticalAlignment=\"Center\"", selectAllFiles);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.SelectAllFilesVisibility, Mode=OneWay}\"", selectAllFiles);
 
         // Layout: the select-all checkbox stays in the left toolbar; skipped-files/filter controls
         // occupy column 2; the expand/restore command owns the final far-right column.
@@ -2349,6 +2429,12 @@ public sealed class PreviewCoreRegressionTests
             "FilesSkipped > 0",
             "public Microsoft.UI.Xaml.Visibility ResultFilterAreaVisibility =>",
             "_resultCollection.AllGroups.Count > 0 || FilesSkipped > 0");
+        AssertContainsInOrder(viewModelSource,
+            "public Microsoft.UI.Xaml.Visibility SelectAllFilesVisibility =>",
+            "ResultGroups.Count > 1");
+        AssertContainsInOrder(viewModelSource,
+            "private void OnVisibleResultGroupsChanged(object? sender, NotifyCollectionChangedEventArgs e)",
+            "OnPropertyChanged(nameof(SelectAllFilesVisibility));");
 
         string extensionMenu = ExtractMethodWindow(MainWindowSource, "PopulateExtensionFilterList", window: 3200);
         AssertContainsInOrder(extensionMenu,
@@ -2378,7 +2464,7 @@ public sealed class PreviewCoreRegressionTests
         // (null) state and paint a stray "dash" glyph. The XAML wires Loaded + Indeterminate guards
         // that snap it back to a definite state; the null→false correction must NOT run the Unchecked
         // side effect (which would deselect everything).
-        string selectAllFiles = ExtractXamlWindow("x:Name=\"SelectAllFilesCheckBox\"", 700);
+        string selectAllFiles = ExtractXamlWindow("x:Name=\"SelectAllFilesCheckBox\"", 850);
         Assert.Contains("Loaded=\"OnSelectAllFilesLoaded\"", selectAllFiles);
         Assert.Contains("Indeterminate=\"OnSelectAllFilesIndeterminate\"", selectAllFiles);
 
@@ -2427,10 +2513,51 @@ public sealed class PreviewCoreRegressionTests
 
         // Old maximum: 20 px gauge + 8/10 padding = 38 px. New maximum: 16 + 6/8 = 30 px
         // (about 21% shorter), while the 12 px labels and 16 px status glyph still fit unchanged.
-        Assert.Contains("Grid.Row=\"6\" Padding=\"20,6,20,8\"", statusBar);
+        Assert.Contains("Grid.Row=\"6\" Padding=\"20,6,0,8\"", statusBar);
         Assert.Contains("HorizontalAlignment=\"Stretch\" Height=\"16\"", statusBar);
         Assert.DoesNotContain("Padding=\"20,8,20,10\"", statusBar);
         Assert.DoesNotContain("HorizontalAlignment=\"Stretch\" Height=\"20\"", statusBar);
+    }
+
+    /// <summary>
+    /// A filename-only preview renders the whole file from a single result, so the per-section block budget
+    /// stops it long before the file ends while the result-count overflow check still sees nothing missing.
+    /// It must register a line-based overflow so the notice and scroll-to-load path keep working.
+    /// </summary>
+    [Fact]
+    public void WholeFilePreview_StoppedByBlockBudget_RegistersLineOverflowInsteadOfTruncatingSilently()
+    {
+        string build = ExtractMethodWindow(MainWindowSource, "BuildConcatenatedSection");
+        AssertContainsInOrder(build,
+            "lastRenderedLine = lineNum;",
+            "if (isFileNameOnlyPreview && allLines is { Length: > 0 } && lastRenderedLine > 0 && lastRenderedLine < allLines.Length)",
+            "lineOverflowNextLine = lastRenderedLine + 1;",
+            "else if (lineOverflowResult is not null && allLines is { Length: > 0 })",
+            "RegisterSectionLineOverflow(section, lineOverflowResult, allLines, previewLines, lineOverflowNextLine, notice);");
+
+        string concatenated = ExtractMethodWindow(MainWindowSource, "ShowConcatenatedPreviewAsync");
+        AssertContainsInOrder(concatenated,
+            "lastRenderedLine = lineNum;",
+            "RegisterSectionLineOverflow(section, lineOverflowResult, allLines, previewLines, lineOverflowNextLine, notice);");
+
+        Assert.Contains("public bool IsLineMode => NextLineNumber > 0 && LineResult is not null;", MainWindowSource);
+
+        string expand = ExtractMethodWindow(MainWindowSource, "ExpandLineOverflowChunk");
+        AssertContainsInOrder(expand,
+            "blocksAdded < MaxPreviewBlocksPerExpandChunk",
+            "ov.NextLineNumber = lineNumber;",
+            "ov.NoticePara = AppendLineTruncationNotice(section, allLines.Length, ov.RenderedSoFar);",
+            "_sectionOverflow.Remove(section);");
+
+        // Scroll-triggered expansion must route a line-mode section to the line loader.
+        string chunk = ExtractMethodWindow(MainWindowSource, "ExpandOverflowChunk");
+        AssertContainsInOrder(chunk,
+            "if (ov.IsLineMode)",
+            "ExpandLineOverflowChunk(section, ov);");
+
+        // Match navigation has no matches to page through here and must not drop the overflow.
+        string nextChunk = ExtractMethodWindow(MainWindowSource, "ExpandSectionNextChunk");
+        Assert.Contains("if (ov.IsLineMode) return false;", nextChunk);
     }
 
     [Fact]
@@ -2516,6 +2643,7 @@ public sealed class PreviewCoreRegressionTests
 
         string fileGroupResultTemplate = ExtractXamlWindow("<DataTemplate x:Key=\"FileGroupResultTemplate\"", 11000);
         AssertContainsInOrder(fileGroupResultTemplate,
+            "<Grid Margin=\"-29,0,0,0\">",
             "<ContentControl Content=\"{Binding}\"",
             "ContentTemplate=\"{StaticResource FileGroupHeaderTemplate}\"",
             "Visibility=\"{x:Bind IsFileNameOnlyMatch, Mode=OneWay}\"",
@@ -3152,7 +3280,7 @@ public sealed class PreviewCoreRegressionTests
         string overflowCeiling = ExtractMethodWindow(MainWindowSource, "MarkOverflowCeilingReached", window: 900);
         Assert.Contains("if (ov.CeilingReached) return;", overflowCeiling);
         Assert.Contains("ov.CeilingReached = true;", overflowCeiling);
-        Assert.Contains("AppendOverflowCeilingNotice(section, ov.OriginalTotal, ov.RenderedSoFar)", overflowCeiling);
+        Assert.Contains("AppendOverflowCeilingNotice(section, ov)", overflowCeiling);
 
         string autoOverflow = ExtractMethodWindow(MainWindowSource, "TryAutoLoadOverflowOnScroll", window: 2200);
         Assert.Contains("IsOverflowAutoLoadSuppressedForMatchNavigation()", autoOverflow);
@@ -3203,12 +3331,16 @@ public sealed class PreviewCoreRegressionTests
     public void SectionMatchPaginator_UsesRegisteredTotalsWithoutRenderedOverflowRatchet()
     {
         string sectionTotal = ExtractMethodWindow(MainWindowSource, "GetSectionMatchTotal", window: 1200);
+        // A registered per-section total is authoritative and must be returned before falling back to
+        // rendered+overflow counts, which must never ratchet the denominator upward. Checking the
+        // registered total first also avoids re-running the highlight regex over every un-rendered
+        // result on each scroll-driven expansion.
         AssertContainsInOrder(sectionTotal,
+            "if (_sectionTotalMatchCounts.TryGetValue(sectionNav.Block, out int total))",
+            "return total;",
             "int renderedTotal = sectionNav.Matches.Count;",
             "if (_sectionOverflow.TryGetValue(sectionNav.Block, out var ov))",
             "renderedTotal += CountOverflowRemainingMatches(ov);",
-            "if (_sectionTotalMatchCounts.TryGetValue(sectionNav.Block, out int total))",
-            "return total;",
             "return renderedTotal;");
         Assert.DoesNotContain("Math.Max(total, renderedTotal)", sectionTotal);
 

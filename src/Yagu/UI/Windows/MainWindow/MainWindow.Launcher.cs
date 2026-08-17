@@ -379,6 +379,12 @@ public sealed partial class MainWindow
             return IntPtr.Zero;
         }
 
+        if (IsLoadSessionShortcutMessage(message, wParam))
+        {
+            _ = ShowLoadSessionDialogAsync();
+            return IntPtr.Zero;
+        }
+
         if (message == HotkeyService.WmHotkey)
         {
             _hotkeyService.OnWmHotkey((int)wParam);
@@ -390,6 +396,15 @@ public sealed partial class MainWindow
 
     private static bool IsHelpShortcutMessage(uint message, UIntPtr wParam)
         => message is WmKeyDown or WmSysKeyDown && wParam.ToUInt32() == VkF1;
+
+    private static bool IsLoadSessionShortcutMessage(uint message, UIntPtr wParam)
+        => message is WmKeyDown or WmSysKeyDown
+            && wParam.ToUInt32() == VkO
+            && IsVirtualKeyDown(VkControl)
+            && !IsVirtualKeyDown(VkShift)
+            && !IsVirtualKeyDown(VkMenu);
+
+    private static bool IsVirtualKeyDown(int virtualKey) => (GetKeyState(virtualKey) & 0x8000) != 0;
 
     private static bool TryApplyMaximizedWorkArea(IntPtr hWnd, IntPtr lParam)
     {

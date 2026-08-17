@@ -246,6 +246,65 @@ public sealed class ContentIndexV3FormatTests : IDisposable
     }
 
     [Fact]
+    public void BlockFile_StreamedWriter_ImplementsWriteOnlyContract_AndCleansScratchOnFailure()
+    {
+        string path = Path.Combine(_dir, "streamed.v3");
+        string scratch = Path.Combine(_dir, "streamed-body.tmp");
+        ContentIndexV3BlockFile.WriteStreamed(
+            path,
+            sectionKind: 9,
+            formatVersion: 1,
+            scratch,
+            (stream, cancellationToken) =>
+            {
+                Assert.False(cancellationToken.IsCancellationRequested);
+                Assert.False(stream.CanRead);
+                Assert.False(stream.CanSeek);
+                Assert.True(stream.CanWrite);
+                stream.Write(new byte[] { 1, 2 }, 0, 2);
+                stream.WriteByte(3);
+                Assert.Throws<NotSupportedException>(() => _ = stream.Length);
+                Assert.Throws<NotSupportedException>(() => _ = stream.Position);
+                Assert.Throws<NotSupportedException>(() => stream.Position = 0);
+                Assert.Throws<NotSupportedException>(() => stream.Read(new byte[1], 0, 1));
+                Assert.Throws<NotSupportedException>(() => stream.Seek(0, SeekOrigin.Begin));
+                Assert.Throws<NotSupportedException>(() => stream.SetLength(0));
+            });
+
+        Assert.False(File.Exists(scratch));
+        using (ContentIndexV3BlockFile file = ContentIndexV3BlockFile.Open(path, 9, 1)!)
+        {
+            Assert.NotNull(file);
+            Assert.Equal(3, file.BodyLength);
+            Assert.True(file.Body(0, 3).SequenceEqual(new byte[] { 1, 2, 3 }));
+        }
+
+        string emptyPath = Path.Combine(_dir, "streamed-empty.v3");
+        string emptyScratch = Path.Combine(_dir, "streamed-empty.tmp");
+        ContentIndexV3BlockFile.WriteStreamed(emptyPath, 9, 1, emptyScratch, static (_, _) => { });
+        using (ContentIndexV3BlockFile empty = ContentIndexV3BlockFile.Open(emptyPath, 9, 1)!)
+        {
+            Assert.NotNull(empty);
+            Assert.Equal(0, empty.BodyLength);
+        }
+
+        string failedPath = Path.Combine(_dir, "streamed-failed.v3");
+        string failedScratch = Path.Combine(_dir, "streamed-failed.tmp");
+        Assert.Throws<IOException>(() => ContentIndexV3BlockFile.WriteStreamed(
+            failedPath,
+            9,
+            1,
+            failedScratch,
+            static (stream, _) =>
+            {
+                stream.WriteByte(1);
+                throw new IOException("producer failed");
+            }));
+        Assert.False(File.Exists(failedScratch));
+        Assert.False(File.Exists(failedPath));
+    }
+
+    [Fact]
     public void TryOpen_MissingFiles_ReturnsNull()
     {
         Assert.Null(ContentIndexV3Format.TryOpen(_dir)); // nothing written yet

@@ -281,13 +281,16 @@ public sealed partial class MainViewModel
         string storageDir = _settings.IndexStorageDirectory;
         int maxCatchupRecords = AppSettings.NormalizeIndexMaxJournalCatchupRecords(_settings.IndexMaxJournalCatchupRecords);
         int fileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds(_settings.FileIoTimeoutSeconds);
+        int historyRetentionDays = AppSettings.NormalizeIndexStorageHistoryRetentionDays(
+            _settings.IndexStorageHistoryRetentionDays);
         _ = RefreshAllDriveIndexStatusAsync(
             generation,
             registeredRoots,
             retained,
             storageDir,
             maxCatchupRecords,
-            fileIoTimeoutSeconds);
+            fileIoTimeoutSeconds,
+            historyRetentionDays);
     }
 
     private async Task RefreshAllDriveIndexStatusAsync(
@@ -296,12 +299,15 @@ public sealed partial class MainViewModel
         int retained,
         string storageDir,
         int maxCatchupRecords,
-        int fileIoTimeoutSeconds)
+        int fileIoTimeoutSeconds,
+        int historyRetentionDays)
     {
         // Resolved on this thread from the live settings, then applied per index root inside the scan.
         AppSettings settings = _settings;
         Func<string, EffectiveIndexSizePolicy> resolveSizePolicy =
             indexRoot => IndexSizeManagementPolicy.Resolve(settings, indexRoot);
+        int maxDeltaSegments = AppSettings.NormalizeIndexMaxDeltaSegments(settings.IndexMaxDeltaSegments);
+        int compactionThresholdMB = AppSettings.NormalizeIndexCompactionThresholdMB(settings.IndexCompactionThresholdMB);
         IReadOnlyList<IndexRootHealthEntry> health;
         try
         {
@@ -331,7 +337,10 @@ public sealed partial class MainViewModel
                             registeredRoots,
                             maxCatchupRecords,
                             fileIoTimeoutSeconds,
-                            resolveSizePolicy));
+                            resolveSizePolicy,
+                            maxDeltaSegments,
+                            compactionThresholdMB,
+                            settings));
                     }
                     catch (Exception ex)
                     {
@@ -341,6 +350,12 @@ public sealed partial class MainViewModel
                             $"health check failed ({ex.GetType().Name}) — searches scan live"));
                     }
                 }
+                var history = new IndexStorageHistoryStore(
+                    IndexStorageHistoryStore.PathForIndexRoot(provider.IndexRoot));
+                history.TryRecordIfDue(
+                    manager.GetStorageStats,
+                    historyRetentionDays,
+                    DateTimeOffset.UtcNow);
                 return (IReadOnlyList<IndexRootHealthEntry>)rows;
             }).ConfigureAwait(true);
         }
@@ -372,8 +387,21 @@ public sealed partial class MainViewModel
             {
                 if (row.Kind == IndexRootHealthKind.SizeBudgetReached && row.SizeBudgetRoot is { } budgetRoot)
                     notify(budgetRoot);
+                else if (row.Kind == IndexRootHealthKind.ReclamationBlocked && row.ReclamationBlockedRoot is { } blockedRoot)
+                    notify(blockedRoot);
             }
         }
+    }
+
+    /// <summary>Loads the bounded history off the UI thread for the indexing-overview graph.</summary>
+    public async Task<IReadOnlyList<IndexStorageHistorySample>> LoadIndexStorageHistoryAsync()
+    {
+        string indexRoot = DefaultContentIndexPathProvider.Create(_settings.IndexStorageDirectory).IndexRoot;
+        int retentionDays = AppSettings.NormalizeIndexStorageHistoryRetentionDays(
+            _settings.IndexStorageHistoryRetentionDays);
+        return await Task.Run(() => new IndexStorageHistoryStore(
+                IndexStorageHistoryStore.PathForIndexRoot(indexRoot))
+            .Read(retentionDays, DateTimeOffset.UtcNow)).ConfigureAwait(true);
     }
 
     /// <summary>Raised for each index found paused at its storage budget. The window shows the
@@ -386,7 +414,10 @@ public sealed partial class MainViewModel
         IReadOnlyList<string> registeredRoots,
         int maxCatchupRecords,
         int fileIoTimeoutSeconds,
-        Func<string, EffectiveIndexSizePolicy> resolveSizePolicy)
+        Func<string, EffectiveIndexSizePolicy> resolveSizePolicy,
+        int maxDeltaSegments,
+        int compactionThresholdMB,
+        AppSettings settings)
     {
         bool registered = IndexedRootsPolicy.FindBestCoveringRoot(registeredRoots, root) is not null;
         if (!registered)
@@ -403,18 +434,45 @@ public sealed partial class MainViewModel
 
         if (metadata.Exists && metadata.MetadataReadable && metadata.Health == IndexStorageHealth.Healthy)
         {
+            EffectiveIndexSizePolicy sizePolicy = resolveSizePolicy(indexRoot);
+            IndexCompactionForecast? forecast = manager.TryReadActiveLayerStorageTrendForRoot(indexRoot) is { } trend
+                ? IndexCompactionForecaster.Estimate(
+                    indexRoot,
+                    trend,
+                    sizePolicy,
+                    maxDeltaSegments,
+                    compactionThresholdMB,
+                    settings,
+                    DateTimeOffset.UtcNow)
+                : null;
+
             // Checked before freshness: an index paused at its storage budget still has perfectly healthy
             // metadata, so without this it reports as healthy (or merely "changes pending") while silently
             // never updating again.
             IndexSizeBudgetDiagnosis budget = IndexSizeBudgetAdvisor.Diagnose(
-                resolveSizePolicy(indexRoot), manager.GetActiveIndexBytesForRoot(indexRoot));
+                sizePolicy, manager.GetActiveIndexBytesForRoot(indexRoot));
             if (budget.AtBudget)
             {
                 return new IndexRootHealthEntry(
                     root,
                     IndexRootHealthKind.SizeBudgetReached,
                     IndexSizeBudgetAdvisor.HealthStatus(budget),
-                    SizeBudgetRoot: indexRoot);
+                    SizeBudgetRoot: indexRoot,
+                    CompactionForecast: forecast);
+            }
+
+            // Still updating, but the accumulated update history has passed the clean-up thresholds and no
+            // allowed automatic path can reclaim it, so the index will keep growing until the user acts.
+            IndexReclamationDiagnosis reclamation = manager.DiagnoseReclamation(
+                indexRoot, sizePolicy, maxDeltaSegments, compactionThresholdMB);
+            if (reclamation.ReclamationBlocked)
+            {
+                return new IndexRootHealthEntry(
+                    root,
+                    IndexRootHealthKind.ReclamationBlocked,
+                    IndexReclamationAdvisor.HealthStatus(reclamation),
+                    ReclamationBlockedRoot: indexRoot,
+                    CompactionForecast: forecast);
             }
 
             ContentIndexManager.ScopeFreshnessStatus freshness = manager.GetScopeFreshnessStatus(
@@ -428,7 +486,8 @@ public sealed partial class MainViewModel
                 ContentIndexManager.ScopeFreshnessState.Fresh => new IndexRootHealthEntry(
                     root,
                     IndexRootHealthKind.Healthy,
-                    "healthy — up to date" + date),
+                    "healthy — up to date" + date,
+                    CompactionForecast: forecast),
                 ContentIndexManager.ScopeFreshnessState.Dirty => new IndexRootHealthEntry(
                     root,
                     IndexRootHealthKind.ChangesPending,
@@ -437,7 +496,8 @@ public sealed partial class MainViewModel
                             ? "1 recent filesystem change pending indexing"
                             : $"{freshness.DirtyCount:N0} recent filesystem changes pending indexing")
                         + "; affected files scan live until the next update"
-                        + date),
+                        + date,
+                    CompactionForecast: forecast),
                 ContentIndexManager.ScopeFreshnessState.Uncertain when freshness.RequiresRebuild => new IndexRootHealthEntry(
                     root,
                     IndexRootHealthKind.RebuildRequired,

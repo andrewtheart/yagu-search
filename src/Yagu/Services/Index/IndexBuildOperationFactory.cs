@@ -91,6 +91,8 @@ internal static class IndexBuildOperationFactory
         {
             BuildMemoryBudgetMB = settings.EffectiveIndexBuildMemoryBudgetMB,
             MaxDiskUsagePercent = settings.EffectiveIndexMaxDiskUsagePercent,
+            MinimumFreeSpaceMB = settings.IndexMinimumFreeSpaceMB,
+            HaltUpdatesWhenReclamationBlocked = settings.IndexHaltUpdatesWhenReclamationBlocked,
             BuildPdfText = settings.IndexBuildPdfTextExtendedSource,
             BuildImageText = settings.IndexBuildImageTextExtendedSource,
             ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(settings.ImageOcrEngine),

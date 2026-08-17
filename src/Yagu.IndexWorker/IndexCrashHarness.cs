@@ -51,14 +51,15 @@ internal static class IndexCrashHarness
                 break;
 
             case "compact":
-            {
-                var store = new ContentIndexStore(paths, scopeId, retainedGenerations: 4);
-                ContentIndexStore.LayeredIndexHandle handle = store.TryOpenLayered()
-                    ?? throw new InvalidDataException("A layered seed index is required.");
-                ContentIndexGeneration compacted = ContentIndexCompactor.Compact(handle, policy, DateTimeOffset.UtcNow);
-                store.Compact(compacted);
+                new ContentIndexManager(paths, retainedGenerations: 4).CompactScopeNow(
+                    root,
+                    new IndexMaintenanceSettings
+                    {
+                        BuildMemoryBudgetMB = 1,
+                        ProduceV3QueryStructures = true,
+                    },
+                    DateTimeOffset.UtcNow);
                 break;
-            }
 
             case "coalesce":
             {

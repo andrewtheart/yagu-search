@@ -25,6 +25,7 @@ public sealed partial class SettingsWindow
     private Button? _indexRebuildButton;
     private Button? _indexRepairButton;
     private Button? _indexValidateButton;
+    private Button? _indexCompactButton;
     private Button? _indexDeleteButton;
     private Button? _indexClearButton;
     private Button? _indexCancelButton;
@@ -41,15 +42,21 @@ public sealed partial class SettingsWindow
     // being built without rebuilding the whole list on every progress tick. Keyed by normalized root path.
     private readonly Dictionary<string, IndexedRootRowVisuals> _indexedRootRowVisuals = new(StringComparer.OrdinalIgnoreCase);
 
-    // Per-root freshness computed off the UI thread alongside the storage stats: true = the USN journal
-    // proves the folder changed since its index was built (rebuild recommended); false = no proven change;
-    // absent = unknown (journal unavailable). Keyed by normalized root path.
+    // Per-root operational health computed off the UI thread alongside the storage stats. These maps
+    // intentionally mirror the status bar's precedence: size-budget halt, blocked reclamation, then
+    // freshness. Keyed by normalized root path.
     private Dictionary<string, bool> _rootStaleByPath = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, ContentIndexManager.ScopeFreshnessStatus> _rootFreshnessByPath = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, IndexSizeBudgetDiagnosis> _rootSizeBudgetByPath = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, IndexReclamationDiagnosis> _rootReclamationByPath = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, IndexCompactionForecast> _rootCompactionForecastByPath = new(StringComparer.OrdinalIgnoreCase);
 
-    private sealed record RootFreshnessSnapshot(
+    private sealed record RootHealthSnapshot(
         Dictionary<string, bool> StaleByPath,
-        Dictionary<string, ContentIndexManager.ScopeFreshnessStatus> StatusByPath);
+        Dictionary<string, ContentIndexManager.ScopeFreshnessStatus> FreshnessByPath,
+        Dictionary<string, IndexSizeBudgetDiagnosis> SizeBudgetByPath,
+        Dictionary<string, IndexReclamationDiagnosis> ReclamationByPath,
+        Dictionary<string, IndexCompactionForecast> CompactionForecastByPath);
 
     private sealed class IndexedRootRowVisuals
     {
@@ -93,13 +100,15 @@ public sealed partial class SettingsWindow
 
         _indexRepairButton = new Button { Content = "Repair index", Padding = new Thickness(12, 4, 12, 4) };
         _indexRepairButton.Click += (_, _) => _ = RunIndexRepairAsync();
+        _indexCompactButton = new Button { Content = "Compact now", Padding = new Thickness(12, 4, 12, 4) };
+        _indexCompactButton.Click += (_, _) => _ = RunIndexCompactAsync();
         _indexDeleteButton = new Button { Content = "Delete this index", Padding = new Thickness(12, 4, 12, 4) };
         _indexDeleteButton.Click += (_, _) => _ = RunIndexDeleteAsync();
         _indexClearButton = new Button { Content = "Clear all indexes", Padding = new Thickness(12, 4, 12, 4) };
         _indexClearButton.Click += (_, _) => _ = RunIndexClearAllAsync();
         var openButton = new Button { Content = "Open storage folder", Padding = new Thickness(12, 4, 12, 4) };
         openButton.Click += (_, _) => OpenIndexStorageLocation();
-        group.Children.Add(MakeIndexButtonRow(_indexRepairButton, _indexDeleteButton, _indexClearButton, openButton));
+        group.Children.Add(MakeIndexButtonRow(_indexRepairButton, _indexCompactButton, _indexDeleteButton, _indexClearButton, openButton));
 
         _indexStatusText = new TextBlock
         {
@@ -166,16 +175,22 @@ public sealed partial class SettingsWindow
             _lastIndexStorageSummary = summary;
             _rootStaleByPath.Clear();
             _rootFreshnessByPath.Clear();
+            _rootSizeBudgetByPath.Clear();
+            _rootReclamationByPath.Clear();
+            _rootCompactionForecastByPath.Clear();
             RenderIndexStorageStats(summary);
             // Show each folder's size + doc count NOW (GetStorageStats is manifest-only), so the rows leave
             // "checking index…" immediately instead of waiting on the slower per-root journal read below.
             RefreshIndexedRootsRadios();
 
-            // Per-root freshness (USN-proven "changes detected since build") is a slower journal read — do it
-            // after the sizes are already visible, then refresh once more to add the freshness marker.
-            RootFreshnessSnapshot freshness = await Task.Run(() => ComputeRootStaleness(manager, summary)).ConfigureAwait(true);
-            _rootStaleByPath = freshness.StaleByPath;
-            _rootFreshnessByPath = freshness.StatusByPath;
+            // Operational health includes size-budget/reclamation checks plus USN freshness. Do it after
+            // sizes are visible, then refresh once more so Settings agrees with the status-bar count.
+            RootHealthSnapshot health = await Task.Run(() => ComputeRootHealth(manager, summary)).ConfigureAwait(true);
+            _rootStaleByPath = health.StaleByPath;
+            _rootFreshnessByPath = health.FreshnessByPath;
+            _rootSizeBudgetByPath = health.SizeBudgetByPath;
+            _rootReclamationByPath = health.ReclamationByPath;
+            _rootCompactionForecastByPath = health.CompactionForecastByPath;
             RefreshIndexedRootsRadios();
             RenderIndexStorageStats(summary);
         }
@@ -250,6 +265,9 @@ public sealed partial class SettingsWindow
     {
         if (stat.Health != IndexStorageHealth.Healthy || stat.RootPath is null)
             return true;
+        if (FindRootSizeBudgetDiagnosis(stat.RootPath) is { AtBudget: true }
+            || FindRootReclamationDiagnosis(stat.RootPath) is { ReclamationBlocked: true })
+            return true;
         if (FindRootFreshnessStatus(stat.RootPath) is { NeedsAttention: true })
             return true;
         return !IndexedRootsPolicy.Contains(_viewModel.Settings.IndexedRoots, stat.RootPath)
@@ -287,6 +305,9 @@ public sealed partial class SettingsWindow
     {
         string? coveringRoot = stat.RootPath is null ? null : FindRegisteredCoveringAncestor(stat.RootPath);
         ContentIndexManager.ScopeFreshnessStatus? freshness = FindRootFreshnessStatus(stat.RootPath);
+        IndexSizeBudgetDiagnosis? sizeBudget = FindRootSizeBudgetDiagnosis(stat.RootPath);
+        IndexReclamationDiagnosis? reclamation = FindRootReclamationDiagnosis(stat.RootPath);
+        IndexCompactionForecast? forecast = FindRootCompactionForecast(stat.RootPath);
         bool registered = stat.RootPath is not null
             && IndexedRootsPolicy.Contains(_viewModel.Settings.IndexedRoots, stat.RootPath);
 
@@ -328,6 +349,22 @@ public sealed partial class SettingsWindow
             color = Microsoft.UI.Colors.DarkOrange;
             state = "Redundant child index";
             explanation = $"The maintained index for {coveringRoot} already covers this folder. Yagu never opens both indexes for one search. Delete this stored child index to reclaim space.";
+        }
+        else if (sizeBudget is { AtBudget: true } budgetIssue)
+        {
+            glyph = "\uE7BA";
+            color = Microsoft.UI.Colors.DarkOrange;
+            state = "Updates paused · size limit reached";
+            explanation = budgetIssue.Explain().Replace("\n\n", " ", StringComparison.Ordinal)
+                + " " + budgetIssue.ExplainWhyAutomaticCleanupFailed();
+        }
+        else if (reclamation is { ReclamationBlocked: true } reclamationIssue)
+        {
+            glyph = "\uE7BA";
+            color = Microsoft.UI.Colors.DarkOrange;
+            state = "Cleanup blocked · still updating";
+            explanation = reclamationIssue.Explain().Replace("\n\n", " ", StringComparison.Ordinal)
+                + " " + reclamationIssue.ExplainWhyAutomaticCleanupIsUnavailable();
         }
         else if (freshness is { RequiresRebuild: true } freshnessIssue)
         {
@@ -410,6 +447,20 @@ public sealed partial class SettingsWindow
             Opacity = 0.82,
             TextWrapping = TextWrapping.Wrap,
         });
+        if (forecast is not null)
+        {
+            body.Children.Add(new TextBlock
+            {
+                Text = forecast.Summary,
+                FontSize = 12,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                    forecast.Kind == IndexCompactionForecastKind.CleanupAttentionLikely
+                        ? Microsoft.UI.Colors.DarkOrange
+                        : Microsoft.UI.Colors.DodgerBlue),
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
         body.Children.Add(new TextBlock
         {
             Text = explanation,
@@ -420,6 +471,12 @@ public sealed partial class SettingsWindow
 
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
         AddIndexStorageActions(actions, stat, coveringRoot, registered);
+        if (forecast is not null && stat.RootPath is { } forecastRoot)
+        {
+            actions.Children.Add(CreateStorageActionLink(
+                "More details",
+                () => ShowIndexCompactionForecastDetailsAsync(forecastRoot, forecast)));
+        }
         if (actions.Children.Count > 0)
             body.Children.Add(actions);
 
@@ -444,18 +501,24 @@ public sealed partial class SettingsWindow
             parts.Add(stat.SegmentCount == 0 ? "single generation" : $"base + {stat.SegmentCount} segments");
         if (stat.BuiltUtc is { } built)
             parts.Add($"active generation built {built.LocalDateTime:yyyy-MM-dd HH:mm}");
-        if (stat.RootPath is not null
-            && FindRootFreshnessStatus(stat.RootPath) is { } freshness)
+        if (stat.RootPath is not null)
         {
-            parts.Add(freshness.State switch
+            if (FindRootSizeBudgetDiagnosis(stat.RootPath) is { AtBudget: true })
+                parts.Add("updates paused at size limit");
+            else if (FindRootReclamationDiagnosis(stat.RootPath) is { ReclamationBlocked: true })
+                parts.Add("automatic cleanup blocked");
+            else if (FindRootFreshnessStatus(stat.RootPath) is { } freshness)
             {
-                ContentIndexManager.ScopeFreshnessState.Dirty => "changes detected",
-                ContentIndexManager.ScopeFreshnessState.Fresh => "up to date",
-                ContentIndexManager.ScopeFreshnessState.Uncertain when freshness.RequiresRebuild => "freshness lost · rebuild required",
-                ContentIndexManager.ScopeFreshnessState.Uncertain when freshness.RawStatus == UsnReadStatus.Incomplete => "catch-up limit reached · increase limit and update",
-                ContentIndexManager.ScopeFreshnessState.Uncertain => "freshness unavailable · live scan only",
-                _ => "freshness unavailable",
-            });
+                parts.Add(freshness.State switch
+                {
+                    ContentIndexManager.ScopeFreshnessState.Dirty => "changes pending",
+                    ContentIndexManager.ScopeFreshnessState.Fresh => "up to date",
+                    ContentIndexManager.ScopeFreshnessState.Uncertain when freshness.RequiresRebuild => "freshness lost · rebuild required",
+                    ContentIndexManager.ScopeFreshnessState.Uncertain when freshness.RawStatus == UsnReadStatus.Incomplete => "catch-up limit reached · increase limit and update",
+                    ContentIndexManager.ScopeFreshnessState.Uncertain => "freshness unavailable · live scan only",
+                    _ => "freshness unavailable",
+                });
+            }
         }
         return string.Join("  ·  ", parts);
     }
@@ -498,6 +561,16 @@ public sealed partial class SettingsWindow
             return;
         }
 
+        if (FindRootSizeBudgetDiagnosis(stat.RootPath) is { AtBudget: true }
+            || FindRootReclamationDiagnosis(stat.RootPath) is { ReclamationBlocked: true })
+        {
+            actions.Children.Add(CreateStorageActionLink(
+                "Compact now", () => RunStorageCompactAsync(stat), requiresMaster: true));
+            actions.Children.Add(CreateStorageActionLink(
+                "Rebuild", () => RunStorageRebuildAsync(stat), requiresMaster: true));
+            return;
+        }
+
         if (FindRootFreshnessStatus(stat.RootPath) is { RequiresRebuild: true })
         {
             actions.Children.Add(CreateStorageActionLink(
@@ -534,6 +607,29 @@ public sealed partial class SettingsWindow
         return link;
     }
 
+    private Task ShowIndexCompactionForecastDetailsAsync(string root, IndexCompactionForecast forecast)
+        => YaguDialog.ShowAsync(
+            _settingsHwnd,
+            new YaguDialogOptions
+            {
+                Title = $"Compaction estimate for {root}",
+                Content = new TextBlock
+                {
+                    Text = forecast.Details,
+                    FontSize = 13,
+                    TextWrapping = TextWrapping.Wrap,
+                    IsTextSelectionEnabled = true,
+                },
+                CloseButtonText = "Close",
+                RequestedTheme = RootGrid.ActualTheme,
+                Width = 620,
+                Height = 430,
+                MaxContentHeight = 370,
+                ShowTitleBar = false,
+                ShowTopRightCloseButton = true,
+                TitleGlyph = "\uE823",
+            });
+
     private void SelectStorageStat(IndexStorageStat stat)
     {
         _indexManageRoot = stat.RootPath ?? string.Empty;
@@ -565,6 +661,12 @@ public sealed partial class SettingsWindow
         await RunIndexBuildAsync(rebuild: true);
     }
 
+    private async Task RunStorageCompactAsync(IndexStorageStat stat)
+    {
+        SelectStorageStat(stat);
+        await RunIndexCompactAsync();
+    }
+
     private Task RegisterStorageRootAsync(IndexStorageStat stat)
     {
         if (stat.RootPath is null)
@@ -584,17 +686,20 @@ public sealed partial class SettingsWindow
     }
 
     /// <summary>
-    /// Computes per-root freshness for every on-disk index in <paramref name="summary"/>: <c>true</c> when
-    /// the USN journal PROVES the folder changed since its index was built ("changes detected — rebuild"),
-    /// <c>false</c> when there is no proven change. Roots whose freshness can't be read are omitted (shown
-    /// as unknown). Runs off the UI thread; never throws.
+    /// Computes the same operational-health precedence used by the status bar for every healthy on-disk
+    /// index: size-budget halt, blocked reclamation, then freshness. Runs off the UI thread; never throws.
     /// </summary>
-    private RootFreshnessSnapshot ComputeRootStaleness(ContentIndexManager manager, IndexStorageSummary summary)
+    private RootHealthSnapshot ComputeRootHealth(ContentIndexManager manager, IndexStorageSummary summary)
     {
         var stale = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-        var statuses = new Dictionary<string, ContentIndexManager.ScopeFreshnessStatus>(StringComparer.OrdinalIgnoreCase);
+        var freshnessByPath = new Dictionary<string, ContentIndexManager.ScopeFreshnessStatus>(StringComparer.OrdinalIgnoreCase);
+        var sizeBudgetByPath = new Dictionary<string, IndexSizeBudgetDiagnosis>(StringComparer.OrdinalIgnoreCase);
+        var reclamationByPath = new Dictionary<string, IndexReclamationDiagnosis>(StringComparer.OrdinalIgnoreCase);
+        var compactionForecastByPath = new Dictionary<string, IndexCompactionForecast>(StringComparer.OrdinalIgnoreCase);
         ContentIndexFreshnessEvaluator.JournalReader reader = ContentIndexFreshnessEvaluator.CreateReader(
             AppSettings.NormalizeIndexMaxJournalCatchupRecords(_viewModel.Settings.IndexMaxJournalCatchupRecords));
+        int maxDeltaSegments = AppSettings.NormalizeIndexMaxDeltaSegments(_viewModel.Settings.IndexMaxDeltaSegments);
+        int compactionThresholdMB = AppSettings.NormalizeIndexCompactionThresholdMB(_viewModel.Settings.IndexCompactionThresholdMB);
         foreach (IndexStorageStat stat in summary.Indexes)
         {
             if (stat.RootPath is null || stat.Health != IndexStorageHealth.Healthy || !stat.RootExists)
@@ -602,8 +707,36 @@ public sealed partial class SettingsWindow
             try
             {
                 string key = IndexScopeIdentity.NormalizePath(stat.RootPath);
+                EffectiveIndexSizePolicy sizePolicy = IndexSizeManagementPolicy.Resolve(_viewModel.Settings, stat.RootPath);
+                if (manager.TryReadActiveLayerStorageTrendForRoot(stat.RootPath) is { } trend)
+                {
+                    compactionForecastByPath[key] = IndexCompactionForecaster.Estimate(
+                        stat.RootPath,
+                        trend,
+                        sizePolicy,
+                        maxDeltaSegments,
+                        compactionThresholdMB,
+                        _viewModel.Settings,
+                        DateTimeOffset.UtcNow);
+                }
+                IndexSizeBudgetDiagnosis sizeBudget = IndexSizeBudgetAdvisor.Diagnose(
+                    sizePolicy, manager.GetActiveIndexBytesForRoot(stat.RootPath));
+                if (sizeBudget.AtBudget)
+                {
+                    sizeBudgetByPath[key] = sizeBudget;
+                    continue;
+                }
+
+                IndexReclamationDiagnosis reclamation = manager.DiagnoseReclamation(
+                    stat.RootPath, sizePolicy, maxDeltaSegments, compactionThresholdMB);
+                if (reclamation.ReclamationBlocked)
+                {
+                    reclamationByPath[key] = reclamation;
+                    continue;
+                }
+
                 ContentIndexManager.ScopeFreshnessStatus freshness = manager.GetScopeFreshnessStatus(stat.RootPath, reader);
-                statuses[key] = freshness;
+                freshnessByPath[key] = freshness;
                 if (freshness.State == ContentIndexManager.ScopeFreshnessState.Dirty)
                     stale[key] = true;
                 else if (freshness.State == ContentIndexManager.ScopeFreshnessState.Fresh)
@@ -614,7 +747,12 @@ public sealed partial class SettingsWindow
                 YaguLog.For("ContentIndex").LogDebug("IsScopeStale failed for '{RootPath}': {ExceptionType}", stat.RootPath, ex.GetType().Name);
             }
         }
-        return new RootFreshnessSnapshot(stale, statuses);
+        return new RootHealthSnapshot(
+            stale,
+            freshnessByPath,
+            sizeBudgetByPath,
+            reclamationByPath,
+            compactionForecastByPath);
     }
 
     /// <summary>
@@ -844,6 +982,9 @@ public sealed partial class SettingsWindow
         string? coveringRoot = FindRegisteredCoveringAncestor(root);
         bool? isStale = _rootStaleByPath.TryGetValue(IndexScopeIdentity.NormalizePath(root), out bool st) ? st : null;
         ContentIndexManager.ScopeFreshnessStatus? freshness = FindRootFreshnessStatus(root);
+        IndexSizeBudgetDiagnosis? sizeBudget = FindRootSizeBudgetDiagnosis(root);
+        IndexReclamationDiagnosis? reclamation = FindRootReclamationDiagnosis(root);
+        IndexCompactionForecast? forecast = FindRootCompactionForecast(root);
 
         var pathText = new TextBlock
         {
@@ -851,7 +992,9 @@ public sealed partial class SettingsWindow
             FontSize = 13,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
-        string idleDetail = FormatRootRowDetail(stat, filter is not null, _lastIndexStorageSummary is not null, isRegistered, isStale, coveringRoot, freshness);
+        string idleDetail = FormatRootRowDetail(
+            stat, filter is not null, _lastIndexStorageSummary is not null, isRegistered,
+            isStale, coveringRoot, freshness, sizeBudget, reclamation, forecast);
         var detailText = new TextBlock
         {
             Text = idleDetail,
@@ -886,7 +1029,8 @@ public sealed partial class SettingsWindow
             VerticalContentAlignment = VerticalAlignment.Center,
             IsChecked = string.Equals(root, _indexManageRoot, StringComparison.OrdinalIgnoreCase),
         };
-        ToolTipService.SetToolTip(radio, BuildIndexedRootTooltip(root, stat, filter, isRegistered, coveringRoot, freshness));
+        ToolTipService.SetToolTip(radio, BuildIndexedRootTooltip(
+            root, stat, filter, isRegistered, coveringRoot, freshness, sizeBudget, reclamation, forecast));
         radio.Checked += (_, _) =>
         {
             _indexManageRoot = captured;
@@ -932,6 +1076,33 @@ public sealed partial class SettingsWindow
             : null;
     }
 
+    private IndexSizeBudgetDiagnosis? FindRootSizeBudgetDiagnosis(string? root)
+    {
+        if (string.IsNullOrWhiteSpace(root))
+            return null;
+        return _rootSizeBudgetByPath.TryGetValue(IndexScopeIdentity.NormalizePath(root), out var diagnosis)
+            ? diagnosis
+            : null;
+    }
+
+    private IndexReclamationDiagnosis? FindRootReclamationDiagnosis(string? root)
+    {
+        if (string.IsNullOrWhiteSpace(root))
+            return null;
+        return _rootReclamationByPath.TryGetValue(IndexScopeIdentity.NormalizePath(root), out var diagnosis)
+            ? diagnosis
+            : null;
+    }
+
+    private IndexCompactionForecast? FindRootCompactionForecast(string? root)
+    {
+        if (string.IsNullOrWhiteSpace(root))
+            return null;
+        return _rootCompactionForecastByPath.TryGetValue(IndexScopeIdentity.NormalizePath(root), out var forecast)
+            ? forecast
+            : null;
+    }
+
     /// <summary>The muted one-line summary under a folder path: index size + stored records (or state) and a filter marker.</summary>
     private static string FormatRootRowDetail(
         IndexStorageStat? stat,
@@ -940,7 +1111,10 @@ public sealed partial class SettingsWindow
         bool isRegistered,
         bool? isStale = null,
         string? coveringRoot = null,
-        ContentIndexManager.ScopeFreshnessStatus? freshness = null)
+        ContentIndexManager.ScopeFreshnessStatus? freshness = null,
+        IndexSizeBudgetDiagnosis? sizeBudget = null,
+        IndexReclamationDiagnosis? reclamation = null,
+        IndexCompactionForecast? forecast = null)
     {
         string sizePart;
         if (stat is { RootExists: false, RootPath: not null } missing)
@@ -950,15 +1124,18 @@ public sealed partial class SettingsWindow
         else if (stat is { Health: IndexStorageHealth.Healthy } s)
         {
             sizePart = $"{ContentIndexUiStatus.FormatBytes(s.SizeBytes)}  \u00b7  {s.DocumentCount:N0} stored records";
-            // Freshness marker: the USN journal proves whether the folder changed since its index was built.
-            if (freshness is { RequiresRebuild: true })
+            if (sizeBudget is { AtBudget: true })
+                sizePart += "  \u00b7  updates paused \u2014 size limit reached";
+            else if (reclamation is { ReclamationBlocked: true })
+                sizePart += "  \u00b7  cleanup blocked \u2014 still updating";
+            else if (freshness is { RequiresRebuild: true })
                 sizePart += "  \u00b7  freshness lost \u2014 rebuild required";
             else if (freshness is { RawStatus: UsnReadStatus.Incomplete })
                 sizePart += "  \u00b7  catch-up limit reached \u2014 increase limit and update";
             else if (freshness is { NeedsAttention: true })
                 sizePart += "  \u00b7  freshness unavailable \u2014 live scan only";
             else if (isStale == true)
-                sizePart += "  \u00b7  changes detected \u2014 rebuild";
+                sizePart += "  \u00b7  changes pending";
             else if (isStale == false)
                 sizePart += "  \u00b7  up to date";
         }
@@ -976,6 +1153,8 @@ public sealed partial class SettingsWindow
             sizePart += "  \u00b7  leftover index";
         if (coveringRoot is not null)
             sizePart += $"  \u00b7  redundant \u2014 covered by {coveringRoot}";
+        if (forecast is not null)
+            sizePart += "  \u00b7  " + forecast.Summary;
         return sizePart;
     }
 
@@ -1044,7 +1223,10 @@ public sealed partial class SettingsWindow
         IndexedRootFilter? filter,
         bool isRegistered,
         string? coveringRoot,
-        ContentIndexManager.ScopeFreshnessStatus? freshness)
+        ContentIndexManager.ScopeFreshnessStatus? freshness,
+        IndexSizeBudgetDiagnosis? sizeBudget,
+        IndexReclamationDiagnosis? reclamation,
+        IndexCompactionForecast? forecast)
     {
         var panel = new StackPanel { Spacing = 4, MaxWidth = 480 };
         panel.Children.Add(new TextBlock
@@ -1097,7 +1279,30 @@ public sealed partial class SettingsWindow
             });
         }
 
-        if (freshness is { RequiresRebuild: true } freshnessIssue)
+        if (sizeBudget is { AtBudget: true } budgetIssue)
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Updates paused: " + IndexSizeBudgetAdvisor.HealthStatus(budgetIssue),
+                FontSize = 12,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.DarkOrange),
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+        else if (reclamation is { ReclamationBlocked: true } reclamationIssue)
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Cleanup blocked: " + IndexReclamationAdvisor.HealthStatus(reclamationIssue)
+                    + " " + reclamationIssue.ExplainWhyAutomaticCleanupIsUnavailable(),
+                FontSize = 12,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.DarkOrange),
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+        else if (freshness is { RequiresRebuild: true } freshnessIssue)
         {
             panel.Children.Add(new TextBlock
             {
@@ -1127,6 +1332,17 @@ public sealed partial class SettingsWindow
                 FontSize = 12,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.DarkOrange),
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        if (forecast is not null)
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = forecast.Summary,
+                FontSize = 12,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap,
             });
         }
@@ -1412,6 +1628,8 @@ public sealed partial class SettingsWindow
             _indexRepairButton.IsEnabled = master && selectedStat is { CanRepair: true } && !redundantChild && !busy;
         if (_indexValidateButton is not null)
             _indexValidateButton.IsEnabled = hasFolder && sourceAvailable && !busy;
+        if (_indexCompactButton is not null)
+            _indexCompactButton.IsEnabled = master && hasScope && !busy;
         if (_indexDeleteButton is not null)
             _indexDeleteButton.IsEnabled = hasScope && !busy;
         if (_indexClearButton is not null)
@@ -1493,10 +1711,10 @@ public sealed partial class SettingsWindow
                 operation,
                 _viewModel.Settings.IndexUseNativeWorker,
                 linkedCts.Token,
-                progress: p => _viewModel.ReportIndexBuildProgress(IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes)),
-                pdfProgress: p => _viewModel.ReportIndexBuildProgress(p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5)),
-                imageOcrProgress: p => _viewModel.ReportIndexBuildProgress(p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4)),
-                postBuildCatchUpProgress: _ => _viewModel.ReportIndexBuildProgress(99));
+                progress: p => _viewModel.ReportIndexBuildProgress(root, IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes), IndexBuildStages.RawBuild),
+                pdfProgress: p => _viewModel.ReportIndexBuildProgress(root, p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5), IndexBuildStages.Pdf),
+                imageOcrProgress: p => _viewModel.ReportIndexBuildProgress(root, p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4), IndexBuildStages.Ocr),
+                postBuildCatchUpProgress: _ => _viewModel.ReportIndexBuildProgress(root, 99, IndexBuildStages.PostBuildCatchUp));
             string ocrSummary = string.IsNullOrWhiteSpace(result.ImageOcrStatus)
                 ? string.Empty
                 : $" Image-text index: {result.ImageOcrStatus} ({result.ImagesAdmitted:N0}/{result.ImagesSeen:N0} images admitted).";
@@ -1575,6 +1793,67 @@ public sealed partial class SettingsWindow
         }
         finally
         {
+            _indexActionInProgress = false;
+            RefreshIndexManagementButtons();
+        }
+    }
+
+    /// <summary>
+    /// Folds every active layer of the selected index into one fresh index, in the maintenance worker. The
+    /// merge streams through disk, so memory stays bounded no matter how large the index is; it ignores the
+    /// automatic-compaction size cap for this run only and never writes that setting.
+    /// </summary>
+    private async Task RunIndexCompactAsync()
+    {
+        if (_indexActionInProgress)
+            return;
+        string root = _indexManageRoot;
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            SetIndexStatus("Choose a folder to compact first.");
+            return;
+        }
+
+        AppSettings settings = _viewModel.Settings;
+        IndexMaintenanceOperation operation = IndexBuildOperationFactory.CreateMaintenance(
+            settings, new[] { root }, IndexMaintenanceOperation.ModeCompactOnly, rebuildWhenDirty: false);
+        var coordinator = new IndexBuildCoordinator();
+        _indexBuildCts = new CancellationTokenSource();
+        _indexActionInProgress = true;
+        RefreshIndexManagementButtons();
+        SetIndexStatus($"Compacting the index for {root}\u2026 this rewrites every stored record, so it can take a while.");
+        try
+        {
+            await coordinator.RunMaintenancePreferWorkerAsync(
+                operation,
+                settings.IndexUseNativeWorker,
+                _indexBuildCts.Token,
+                (progressRoot, percent, stage) => DispatcherQueue.TryEnqueue(
+                    () => SetIndexStatus($"Compacting {progressRoot}\u2026 {stage} {percent}%"))).ConfigureAwait(true);
+
+            ActiveLayerStorageBreakdown? breakdown = CreateIndexManager().TryReadActiveLayerStorageBreakdownForRoot(root);
+            SetIndexStatus(breakdown is { } b
+                ? $"Compacted {root}: now {b.SegmentCount:N0} segment(s), {b.TotalBytes / (1024.0 * 1024.0):N0} MB total."
+                : $"Compacted {root}.");
+            _ = RefreshIndexStorageStatsAsync();
+            _viewModel.RefreshAllDriveIndexStatus();
+        }
+        catch (OperationCanceledException)
+        {
+            SetIndexStatus("Compaction cancelled; the existing index is unchanged.");
+        }
+        catch (IndexWriteBusyException)
+        {
+            SetIndexStatus("Another index operation is running; compact again after it finishes.");
+        }
+        catch (Exception ex)
+        {
+            SetIndexStatus($"Compact failed: {ex.Message}");
+        }
+        finally
+        {
+            _indexBuildCts?.Dispose();
+            _indexBuildCts = null;
             _indexActionInProgress = false;
             RefreshIndexManagementButtons();
         }

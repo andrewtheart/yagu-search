@@ -239,12 +239,20 @@ public sealed class IndexBuildOperationTests : IDisposable
         operation.Settings.ImageOcrEngine = null!;
         operation.Settings.ImageOcrModel = " ";
         operation.Settings.ImageOcrMaxSide = 0;
+        operation.Settings.CoalesceMaxSegmentMB = 0;
+        operation.Settings.CoalesceMaxBatchMB = 0;
+        operation.Settings.CoalesceMinRun = 0;
+        operation.Settings.CoalesceMaxRunsPerPass = 0;
         IndexOperationValidator.Validate(operation);
         Assert.Equal(IndexMaintenanceOperation.ModeIncremental, operation.Mode);
         Assert.Equal(IndexWorkerParallelism.Maximum, operation.Roots[0].BuildParallelism);
         Assert.Equal("paddle", operation.Settings.ImageOcrEngine);
         Assert.Equal("ChineseV5", operation.Settings.ImageOcrModel);
         Assert.Equal(0, operation.Settings.ImageOcrMaxSide);
+        Assert.Equal(128, operation.Settings.CoalesceMaxSegmentMB);
+        Assert.Equal(512, operation.Settings.CoalesceMaxBatchMB);
+        Assert.Equal(3, operation.Settings.CoalesceMinRun);
+        Assert.Equal(8, operation.Settings.CoalesceMaxRunsPerPass);
 
         operation.Mode = "unknown";
         Assert.Throws<InvalidDataException>(() => IndexOperationValidator.Validate(operation));

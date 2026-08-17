@@ -73,11 +73,11 @@ internal sealed class IndexBuildCoordinator
             new IndexWorkerRequest { Op = IndexWorkerProtocol.Ops.BuildScope, OperationJson = json },
             message =>
             {
-                if (message.ProgressStage == "pdf")
+                if (message.ProgressStage == IndexBuildStages.Pdf)
                     pdfProgress?.Invoke(new PdfBuildProgress(Math.Max(0, message.Percent - 90), 5));
-                else if (message.ProgressStage == "ocr")
+                else if (message.ProgressStage == IndexBuildStages.Ocr)
                     imageOcrProgress?.Invoke(new ImageOcrBuildProgress(Math.Max(0, message.Percent - 95), 4));
-                else if (message.ProgressStage == "postBuildCatchUp")
+                else if (message.ProgressStage == IndexBuildStages.PostBuildCatchUp)
                     postBuildCatchUpProgress?.Invoke(message.Percent);
                 else
                     progress?.Invoke(new IndexBuildProgress(message.BytesCrawled, message.FilesCrawled));

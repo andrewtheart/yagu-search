@@ -362,6 +362,22 @@ internal static class IndexBuildExecutor
                     failed++;
                     continue;
                 }
+                if (operation.Mode == IndexMaintenanceOperation.ModeCompactOnly)
+                {
+                    if (!exists)
+                    {
+                        roots.Add(new IndexMaintenanceRootResult { Root = root, Action = IndexMaintenanceActions.Skipped });
+                        skipped++;
+                        continue;
+                    }
+                    manager.CompactScopeNowUnderLease(
+                        mutation, root, operation.Settings, DateTimeOffset.UtcNow,
+                        (percent, stage) => progress?.Invoke(root, percent, stage),
+                        cancellationToken);
+                    roots.Add(new IndexMaintenanceRootResult { Root = root, Action = IndexMaintenanceActions.Compacted });
+                    built++;
+                    continue;
+                }
                 if (operation.Mode == IndexMaintenanceOperation.ModeBuildDue)
                 {
                     ContentIndexManager.ScopeFreshnessState freshness = exists
@@ -487,6 +503,11 @@ internal static class IndexBuildExecutor
                         roots.Add(new IndexMaintenanceRootResult { Root = root, Action = IndexMaintenanceActions.SizeBudgetReached });
                         skipped++;
                         break;
+                    case IncrementalUpdateOutcome.ReclamationBlocked:
+                        // Also a deliberate stop the user opted into; the index and its checkpoint are intact.
+                        roots.Add(new IndexMaintenanceRootResult { Root = root, Action = IndexMaintenanceActions.ReclamationBlocked });
+                        skipped++;
+                        break;
                     case IncrementalUpdateOutcome.NeedsCompatibilityRebuild when operation.AllowCompatibilityRebuild:
                     {
                         IndexBuildSuccess success = BuildNestedFullScope(
@@ -583,11 +604,11 @@ internal static class IndexBuildExecutor
             mutation,
             build,
             cancellationToken,
-            p => progress?.Invoke(root.Root, IndexBuildProgressEstimate.Percent(p.BytesCrawled, usedBytes), "rawBuild"),
-            p => progress?.Invoke(root.Root, p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5), "pdf"),
-            imageOcrProgress: p => progress?.Invoke(root.Root, p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4), "ocr"),
+            p => progress?.Invoke(root.Root, IndexBuildProgressEstimate.Percent(p.BytesCrawled, usedBytes), IndexBuildStages.RawBuild),
+            p => progress?.Invoke(root.Root, p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5), IndexBuildStages.Pdf),
+            imageOcrProgress: p => progress?.Invoke(root.Root, p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4), IndexBuildStages.Ocr),
             postBuildCatchUpProgress: p =>
-                progress?.Invoke(root.Root, MapPostBuildCatchUpProgress(p), "postBuildCatchUp"));
+                progress?.Invoke(root.Root, MapPostBuildCatchUpProgress(p), IndexBuildStages.PostBuildCatchUp));
     }
 
     internal static int MapPostBuildCatchUpProgress(int progress) => progress < 0 ? -1 : 99;

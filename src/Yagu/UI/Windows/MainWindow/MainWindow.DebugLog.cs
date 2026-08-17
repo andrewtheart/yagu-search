@@ -1,9 +1,14 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Media;
+using Yagu.Helpers;
 using Yagu.Services;
+using Yagu.Services.Logging;
+using Microsoft.Extensions.Logging;
+using YaguLogLevel = Yagu.Services.LogLevel;
 
 namespace Yagu;
 
@@ -65,6 +70,55 @@ public sealed partial class MainWindow
     private void OnDebugLogCloseClicked(object sender, RoutedEventArgs e) => DebugLogFlyout.Hide();
 
     private void OnDebugLogRefreshNow(object sender, RoutedEventArgs e) => RefreshDebugLogTail();
+
+    private void OnCopyDebugLogEntry(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string { Length: > 0 } rawText })
+            SetClipboardText(rawText, "log entry");
+    }
+
+    private async void OnDebugLogExportVisible(object sender, RoutedEventArgs e)
+    {
+        string[] visibleEntries = _debugLogVisibleEntries.Select(static entry => entry.RawText).ToArray();
+        if (visibleEntries.Length == 0)
+            return;
+
+        string? path;
+        try
+        {
+            path = Win32FileDialog.Save(
+                _hwnd,
+                "Export visible Yagu logs",
+                $"Yagu_Logs_{DateTime.Now:yyyyMMdd_HHmmss}",
+                "log",
+                [
+                    ("Log files", "*.log"),
+                    ("Text files", "*.txt"),
+                    ("All files", "*.*"),
+                ]);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For("MainWindow").LogWarning(ex, "Could not open the live-log export dialog.");
+            DebugLogStatusText.Text = $"Could not export logs: {ex.Message}";
+            return;
+        }
+
+        if (path is null)
+            return;
+
+        try
+        {
+            string text = string.Join(Environment.NewLine, visibleEntries) + Environment.NewLine;
+            await File.WriteAllTextAsync(path, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            DebugLogStatusText.Text = $"Exported {visibleEntries.Length:N0} visible entries to {path}";
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For("MainWindow").LogWarning(ex, "Could not export visible live-log entries to '{Path}'.", path);
+            DebugLogStatusText.Text = $"Could not export logs: {ex.Message}";
+        }
+    }
 
     private void RefreshDebugLogTail()
     {
@@ -148,8 +202,8 @@ public sealed partial class MainWindow
         string? category = DebugLogCategoryFilter.SelectedIndex > 0
             ? DebugLogCategoryFilter.SelectedItem as string
             : null;
-        LogLevel? severity = DebugLogSeverityFilter.SelectedIndex > 0
-            ? (LogLevel)(DebugLogSeverityFilter.SelectedIndex - 1)
+        YaguLogLevel? severity = DebugLogSeverityFilter.SelectedIndex > 0
+            ? (YaguLogLevel)(DebugLogSeverityFilter.SelectedIndex - 1)
             : null;
         DateTimeOffset? since = DebugLogSinceFilter.SelectedIndex switch
         {
@@ -167,6 +221,7 @@ public sealed partial class MainWindow
             since,
             DebugLogTextFilter.Text);
         bool visibleEntriesChanged = SynchronizeDebugLogVisibleEntries(filtered);
+        DebugLogExportButton.IsEnabled = filtered.Count > 0;
         DebugLogStatusText.Text =
             $"{filtered.Count:N0} of {_debugLogEntries.Count:N0} entries  |  {_debugLogReader?.LogPath}";
 
@@ -260,12 +315,12 @@ public sealed partial class DebugLogSeverityBrushConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, string language)
     {
-        string resourceKey = value is LogLevel level
+        string resourceKey = value is YaguLogLevel level
             ? level switch
             {
-                LogLevel.Critical => "SystemFillColorCriticalBrush",
-                LogLevel.Warning => "SystemFillColorCautionBrush",
-                LogLevel.Info => "AccentTextFillColorPrimaryBrush",
+            YaguLogLevel.Critical => "SystemFillColorCriticalBrush",
+            YaguLogLevel.Warning => "SystemFillColorCautionBrush",
+            YaguLogLevel.Info => "AccentTextFillColorPrimaryBrush",
                 _ => "TextFillColorSecondaryBrush",
             }
             : "TextFillColorSecondaryBrush";

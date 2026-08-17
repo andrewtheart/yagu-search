@@ -556,7 +556,11 @@ Policy</a></li>
 <li><a href="#embedded-terminal-1" id="toc-embedded-terminal-1">Embedded
 Terminal</a></li>
 <li><a href="#keyboard-shortcuts" id="toc-keyboard-shortcuts">Keyboard
-Shortcuts</a></li>
+Shortcuts</a>
+<ul>
+<li><a href="#where-tab-goes" id="toc-where-tab-goes">Where Tab
+goes</a></li>
+</ul></li>
 <li><a href="#window-modes" id="toc-window-modes">Window Modes</a></li>
 <li><a href="#drag-and-drop" id="toc-drag-and-drop">Drag and
 Drop</a></li>
@@ -3099,7 +3103,7 @@ then. The remaining controls include <strong>use file-system watcher
 hints</strong> (off by default; a latency hint only — the change journal
 stays authoritative), the <strong>maximum delta segments</strong>
 (default 8), and the <strong>compaction size threshold</strong> (default
-256 MB). (The opt-in <strong>share aggregate content-index
+512 MB). (The opt-in <strong>share aggregate content-index
 metrics</strong> telemetry toggle lives on the <strong>Privacy</strong>
 tab.)</td>
 </tr>
@@ -3107,40 +3111,59 @@ tab.)</td>
 <td>Index Size Management</td>
 <td>How each index reclaims storage. An index only ever grows on its
 own: every incremental update appends a delta segment, and storage comes
-back only through <strong>coalescing</strong> (merging a run of
-neighbouring small segments — cheap, never loads the base) or
-<strong>compaction</strong> (folding every layer into a fresh base — far
-more effective, but it briefly loads the index into memory). The
+back only through <strong>coalescing</strong> (merging a bounded run of
+neighbouring small segments) or <strong>compaction</strong> (streaming
+every active layer into a fresh base, which can reclaim more). The
 <strong>default size-management strategy</strong> picks which an index
 may use: <em>Coalesce, then compact</em> (default), <em>Coalesce
-only</em> (lowest memory), <em>Compact only</em>, or <em>Off</em>. The
-<strong>auto-compaction size cap</strong> (default 512 MB, 0 = no cap)
-bounds how large an index may be before automatic compaction stops
-folding it — above the cap only coalescing or an explicit rebuild
-reclaims space. The four <strong>coalescing</strong> controls set the
-largest segment eligible to merge (default 256 MB), the largest merge
-batch (default 1024 MB, the main memory bound; keep it at or above the
-run minimum multiplied by the segment cap so a full-length run can fit),
-the fewest neighbouring segments worth merging (default 4), and how many
-merges one maintenance pass may perform (default 8). If the
-largest-segment value is set below your typical segment size, coalescing
-can never find work and a large index will have no way to reclaim
-storage. Every folder can override the strategy, the size budget, and
-the compaction cap under <strong>Manage Indexes ▸ Size…</strong>. If an
-index does reach its budget and automatic clean-up cannot bring it back
-under, Yagu says so directly: the index-health row reports
-<strong>updates paused — reached its N MB size limit</strong>, and a
-dialog explains in plain language that searches remain complete
-(uncovered files are read live) but the index is no longer being kept up
-to date. The dialog fixes it for you — <strong>Rebuild this
-index</strong> (recommended; frees almost all the space and resumes
-updates, with the current index still working until the new one is
-ready), <strong>Raise the limit</strong>, <strong>Compact it
-instead</strong>, or <strong>Delete this index</strong> — and applies
-your choice immediately rather than sending you elsewhere. None of these
-settings can change search results — an index that stays segmented, or
-one paused at its budget, simply prunes less, and anything it cannot
-prove safe to skip is read live.</td>
+only</em> (least maintenance work), <em>Compact only</em>, or
+<em>Off</em>. The <strong>auto-compaction size cap</strong> (default
+8192 MB, 0 = no cap) lets medium-sized indexes compact automatically
+while leaving hour-scale whole-drive folds user-approved because those
+consume substantial I/O and temporary disk space. Above the cap only
+coalescing, an explicitly requested compaction, or a rebuild reclaims
+space. The four <strong>coalescing</strong> controls set the largest
+segment eligible to merge (default 1024 MB), the largest merge batch
+(default 4096 MB — this bounds the work and disk I/O of one merge, not
+the memory it holds, which is set by the build memory budget; keep it at
+or above the run minimum multiplied by the segment cap so a full-length
+run can fit), the fewest neighbouring segments worth merging (default
+3), and how many merges one maintenance pass may perform (default 8).
+Merging and compaction both run as bounded streaming passes: records are
+ordered on disk in chunks sized by the build memory budget, so folding
+even a very large index never loads the whole index into memory. Only
+accumulated <strong>update history</strong> is merged; the pages of a
+single full build are disjoint parts of one index, so merging them would
+reclaim nothing and is deliberately skipped. If the largest-segment
+value is set below your typical segment size, coalescing can never find
+work and a large index will have no way to reclaim storage. Every folder
+can override the strategy, the size budget, and the compaction cap under
+<strong>Manage Indexes ▸ Size…</strong>. If an index does reach its
+budget and automatic clean-up cannot bring it back under, Yagu says so
+directly: the index-health row reports <strong>updates paused — reached
+its N MB size limit</strong>, and a dialog explains in plain language
+that searches remain complete (uncovered files are read live) but the
+index is no longer being kept up to date. The dialog fixes it for you —
+<strong>Rebuild this index</strong> (recommended; frees almost all the
+space and resumes updates, with the current index still working until
+the new one is ready), <strong>Raise the limit</strong>, <strong>Compact
+it instead</strong>, or <strong>Delete this index</strong> — and applies
+your choice immediately rather than sending you elsewhere. Separately,
+an index can keep updating and still be unable to shed the history those
+updates leave behind — when its accumulated update history passes the
+clean-up thresholds and neither merging nor compacting is permitted at
+its size. That row reports <strong>still updating, but N MB of
+accumulated update history cannot be reclaimed automatically</strong>,
+and its dialog offers <strong>Compact now</strong> (recommended; a
+one-shot, user-approved streaming fold that does not change your
+automatic-compaction cap), <strong>Rebuild this index</strong>,
+<strong>Delete this index</strong>, or <strong>Review size
+settings</strong>. Turn on <strong>Stop updating an index that can no
+longer be cleaned up</strong> if you would rather Yagu paused that index
+than let it grow — it is off by default, because pausing costs search
+speed. None of these settings can change search results — an index that
+stays segmented, or one paused at its budget, simply prunes less, and
+anything it cannot prove safe to skip is read live.</td>
 </tr>
 <tr>
 <td>Status &amp; Provenance</td>
@@ -3247,6 +3270,30 @@ validated.</td>
 </tr>
 </tbody>
 </table>
+<p><strong>Compaction estimates.</strong> The bottom-right
+<strong>Index</strong> hover panel and each corresponding card under
+<strong>Settings ▸ Indexing ▸ Index storage</strong> show an estimated
+date/time for the next full automatic compaction. If the projected index
+will be above its automatic-compaction cap, the same line estimates when
+clean-up attention is likely instead. Choose <strong>More
+details</strong> for the observed update-history size, layer count,
+recent growth rate, threshold, projected index size,
+automatic-compaction decision, and any smaller coalescing pass expected
+first. The estimate assumes recent file churn continues and Yagu remains
+open; coalescing, pausing, closing Yagu, or a burst of file changes can
+move it.</p>
+<p><strong>Index size history graph.</strong> The graph button at the
+top-right of the bottom status bar’s <strong>Indexing overview</strong>
+opens a line graph of physical index storage over time. <strong>All
+disks</strong> shows the collective size of every stored index; the
+filter can instead show the indexes whose source folders belong to one
+observed drive. Yagu records at most one snapshot per hour during its
+existing off-thread all-drive health refresh, so opening the graph never
+starts another index scan. <strong>Settings ▸ Indexing ▸ Storage ▸ Index
+size history retention</strong> controls the visible and retained window
+from 1–365 days (default 30). The bounded history is stored locally as
+<code>index-size-history.json</code> beside the index scopes and is
+never telemetry.</p>
 <h4 id="folder-coverage-freshness-and-maintenance">Folder coverage,
 freshness, and maintenance</h4>
 <p><strong>Removed folders and status health.</strong> Removing a folder
@@ -3600,7 +3647,8 @@ accepting work is not automatically repeated inside the main app.</td>
 </table>
 <p>The CLI exposes the same lifecycle through
 <code>--build-index</code>, <code>--rebuild-index</code>,
-<code>--index-status</code>, <code>--delete-index</code>,
+<code>--index-status</code>, <code>--compact-index</code>,
+<code>--validate-index</code>, <code>--delete-index</code>,
 <code>--clear-indexes</code>, root/filter commands, and
 <code>--index-config</code>; see <strong>Content Index (CLI)</strong>
 below.</p>
@@ -3801,8 +3849,10 @@ single very long line (default: 1,000,000).</td>
 </tr>
 <tr>
 <td>Max rendered matches per section</td>
-<td>Ceiling on matches a single section renders across all “Load more”
-expansions before directing you to the editor (default: 4,000).</td>
+<td>Ceiling on matches or lines a single section renders across all
+“Load more” expansions (default: 40,000). When reached, the preview
+offers to raise the saved limit by 40,000 and continue in bounded
+chunks, or open the file in the editor.</td>
 </tr>
 <tr>
 <td>Max files per multi-file preview</td>
@@ -4508,6 +4558,27 @@ Filter.</td>
 </tr>
 </tbody>
 </table>
+<h3 id="where-tab-goes">Where Tab goes</h3>
+<p>Both the directory box and the search pattern box have small controls
+tucked inside their trailing edge — the pin/index/Browse buttons on the
+directory box, and the Match Case / Regex / Multiline / Exact toggles on
+the search pattern box. Tab therefore has two sensible destinations.</p>
+<p>The first time you press <strong>Tab</strong> in either box, a small
+callout appears asking which you want:</p>
+<ul>
+<li><strong>Go to the control inside the box</strong> — the pin button
+from the directory box, Match Case from the search pattern box.</li>
+<li><strong>Skip past it</strong> — jump straight to the search pattern
+box (from the directory box) or to the <strong>Search</strong> button
+(from the search pattern box).</li>
+</ul>
+<p>Your answer is remembered and applied to every later Tab press from
+that box. The callout always names whichever control currently sits
+first inside the box, so it stays accurate if the button row changes. To
+be asked again, use <strong>Settings ▸ Reminders and Warnings ▸ Reset
+Tab destination prompts</strong>.</p>
+<p><strong>Shift+Tab</strong> is unaffected and always moves backwards
+through the normal tab order.</p>
 <hr />
 <h2 id="window-modes">Window Modes</h2>
 <p>The pin button in the title bar cycles through four modes:</p>
@@ -5845,7 +5916,28 @@ redundant child rebuild beneath a registered ancestor.</td>
 <td>Print the index manifest, stored content-record/layer counts,
 creation time, active-generation build time, true last
 incremental-update time (when one exists), and last-build skip/fail
-summary for a scope.</td>
+summary for a scope. It also breaks the active layers into
+<strong>base</strong>, <strong>full-build pages</strong>, and
+<strong>update history</strong>, and says whether a clean-up is due and
+whether it can still happen automatically.</td>
+</tr>
+<tr>
+<td><code>--compact-index [&lt;path&gt;]</code></td>
+<td>Fold every active layer of one index into a fresh single index. Runs
+as a bounded streaming pass in the maintenance worker — records are
+ordered on disk in chunks sized by the build memory budget, so it never
+loads the index into memory. It ignores the automatic-compaction size
+cap for this run only and never changes that setting. Cancelling leaves
+the existing index untouched.</td>
+</tr>
+<tr>
+<td><code>--validate-index [&lt;path&gt;]</code></td>
+<td>Structurally validate a stored index — checksum every active layer,
+walk its records, and confirm the counts agree — then print the stored
+record and segment counts. Read-only: it never modifies the index. When
+validation fails it prints why and reminds you those searches live-scan.
+The CLI counterpart of <strong>Settings ▸ Indexing ▸
+Validate</strong>.</td>
 </tr>
 <tr>
 <td><code>--delete-index &lt;path&gt;</code></td>

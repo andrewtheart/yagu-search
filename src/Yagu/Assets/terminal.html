@@ -801,6 +801,13 @@
   // WebView2 owns keyboard focus while the terminal is active, so all input is
   // captured here and forwarded to the host shell rather than via xterm's textarea.
   window.addEventListener('keydown', function(event) {
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'o') {
+      event.preventDefault();
+      event.stopPropagation();
+      postHostMessage({ type: 'openSession' });
+      return;
+    }
+
     if (event.key === 'F1') {
       event.preventDefault();
       event.stopPropagation();

@@ -14,6 +14,15 @@ internal static class ChecksummedFile
     /// <summary>Length of the trailing SHA-256 digest.</summary>
     public const int DigestBytes = 32;
 
+    /// <summary>
+    /// Largest body <see cref="TryRead(string, out byte[], CancellationToken)"/> can return: it materializes
+    /// the body in a single array, and no .NET array can address more than <see cref="int.MaxValue"/> bytes.
+    /// Writers of files read that way must refuse to exceed this rather than publish a layer that every
+    /// reader would later report as corrupt. Files read through <see cref="ChecksummedReader"/> (notably
+    /// <c>content.bin</c>) stream instead and are not bound by it.
+    /// </summary>
+    public const long MaxReadableBodyBytes = int.MaxValue;
+
     /// <summary>Writes <paramref name="body"/> followed by its SHA-256 digest, flushed to disk.</summary>
     public static void Write(string path, byte[] body)
     {
@@ -76,7 +85,7 @@ internal static class ChecksummedFile
     internal static bool TryRead(Stream fs, out byte[] body, CancellationToken cancellationToken = default)
     {
         body = Array.Empty<byte>();
-        if (fs.Length < DigestBytes || fs.Length - DigestBytes > int.MaxValue)
+        if (fs.Length < DigestBytes || fs.Length - DigestBytes > MaxReadableBodyBytes)
             return false;
 
         int bodyLen = checked((int)(fs.Length - DigestBytes));
@@ -197,6 +206,10 @@ internal static class ChecksummedFile
             }
             return new ChecksummedReader(fs, fs.Length - DigestBytes);
         }
+
+        /// <summary>Body bytes not yet consumed; 0 once a read has failed. Lets a record parser reject a
+        /// declared length that cannot possibly fit before it allocates a buffer for it.</summary>
+        public long RemainingBodyBytes => _failed ? 0 : _bodyLength - _bodyPos;
 
         private bool ReadExact(Span<byte> dest)
         {

@@ -2772,12 +2772,14 @@ public sealed partial class MainWindow
 
     private int GetSectionMatchTotal(SectionMatchNav sectionNav)
     {
+        // Registered total first: CountOverflowRemainingMatches re-runs the highlight regex over every
+        // un-rendered result, and this is called from every scroll-driven expansion.
+        if (_sectionTotalMatchCounts.TryGetValue(sectionNav.Block, out int total))
+            return total;
+
         int renderedTotal = sectionNav.Matches.Count;
         if (_sectionOverflow.TryGetValue(sectionNav.Block, out var ov))
             renderedTotal += CountOverflowRemainingMatches(ov);
-
-        if (_sectionTotalMatchCounts.TryGetValue(sectionNav.Block, out int total))
-            return total;
 
         return renderedTotal;
     }
@@ -3126,6 +3128,7 @@ public sealed partial class MainWindow
         if (_sectionMatchNavs.TryGetValue(block, out var sn))
         {
             _activeSectionNav = sn;
+            ClearContinuationDrawerPrefocus();
             HighlightActiveExpander();
             UpdateSectionNavOverlay();
             UpdateStickyHorizontalScrollBar();
@@ -3163,32 +3166,49 @@ public sealed partial class MainWindow
     }
 
     private RichTextBlock? _lastHighlightedActiveBlock;
+    private Expander? _lastHighlightedPrefocusExpander;
 
     private void HighlightActiveExpander()
     {
         var activeBlock = _activeSectionNav?.Block;
-        // Avoid the per-click loop when the active section hasn't changed.
-        if (ReferenceEquals(activeBlock, _lastHighlightedActiveBlock))
-            return;
-        _lastHighlightedActiveBlock = activeBlock;
-        foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
+        // Avoid the per-click loop when neither the active section nor the pre-focused drawer changed.
+        if (ReferenceEquals(activeBlock, _lastHighlightedActiveBlock)
+            && ReferenceEquals(_prefocusedContinuationExpander, _lastHighlightedPrefocusExpander))
         {
-            bool isActive = child.Tag is RichTextBlock b && b == activeBlock;
-            child.Background = null;
-            ApplyPreviewSectionContentBackground(child, isActive);
+            return;
         }
+        _lastHighlightedActiveBlock = activeBlock;
+        _lastHighlightedPrefocusExpander = _prefocusedContinuationExpander;
+        ApplyPreviewSectionBackgrounds();
     }
 
     private void ApplyPreviewSectionBackgrounds()
     {
+        // Self-heal a stale pre-focus left behind by a preview rebuild.
+        if (_prefocusedContinuationExpander is { } prefocused
+            && !PreviewSectionsPanel.Children.Contains(prefocused))
+        {
+            _prefocusedContinuationExpander = null;
+            _lastHighlightedPrefocusExpander = null;
+        }
+
         var activeBlock = _activeSectionNav?.Block;
         foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
         {
-            bool isActive = child.Tag is RichTextBlock block && block == activeBlock;
             child.Background = null;
-            ApplyPreviewSectionContentBackground(child, isActive);
+            ApplyPreviewSectionContentBackground(child, IsPreviewSectionFocused(child, activeBlock));
         }
     }
+
+    /// <summary>
+    /// Which drawer is painted with the "selected" background. A scroll-driven pre-focus on a
+    /// continuation drawer of the file being read wins, so the drawer is already highlighted by the
+    /// time it scrolls into view (see <see cref="TryPrefocusApproachingContinuationDrawer"/>).
+    /// </summary>
+    private bool IsPreviewSectionFocused(Expander expander, RichTextBlock? activeBlock)
+        => _prefocusedContinuationExpander is not null
+            ? ReferenceEquals(expander, _prefocusedContinuationExpander)
+            : expander.Tag is RichTextBlock block && block == activeBlock;
 
     private void ApplyPreviewSectionContentBackground(Expander expander, bool isActive)
     {
@@ -3734,6 +3754,10 @@ public sealed partial class MainWindow
         var sw = Stopwatch.StartNew();
         if (!_sectionOverflow.TryGetValue(section, out var ov)) return false;
 
+        // A whole-file (filename-only) section overflows by lines and has no matches to navigate to;
+        // falling through would drop its overflow on the empty-chunk path below.
+        if (ov.IsLineMode) return false;
+
         // Respect the global render ceiling (see EffectiveMaxOverflowRenderedPerSection):
         // growing a single RichTextBlock past it fail-fasts WinUI text layout.
         if (ov.CeilingReached || ov.RenderedSoFar >= EffectiveMaxOverflowRenderedPerSection)
@@ -3741,6 +3765,8 @@ public sealed partial class MainWindow
             MarkOverflowCeilingReached(section, ov);
             return false;
         }
+
+        section = EnsurePreviewRenderCapacity(section, ov);
 
         int requestedChunkSize = maxResultsToExpand is > 0 ? maxResultsToExpand.Value : MaxMatchesPerExpandChunk;
         int chunkSize = Math.Min(requestedChunkSize, ov.RemainingResults.Count);

@@ -405,7 +405,10 @@ public sealed partial class MainWindow
         finally
         {
             if (indexBuildActivityStarted)
+            {
                 ViewModel.EndIndexBuildActivity();
+                ViewModel.RefreshAllDriveIndexStatus();
+            }
         }
     }
 

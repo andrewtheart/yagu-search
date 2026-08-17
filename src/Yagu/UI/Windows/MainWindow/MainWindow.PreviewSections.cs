@@ -138,10 +138,17 @@ public sealed partial class MainWindow
         /// continues directly from the last rendered line.</summary>
         public int LastRenderedLine;
         /// <summary>True once <see cref="EffectiveMaxOverflowRenderedPerSection"/> has been
-        /// reached and expansion was permanently stopped (a terminal notice is
-        /// shown). Prevents further scroll/Next-match growth that would fail-fast
-        /// WinUI text layout.</summary>
+        /// reached and expansion is paused. The notice can raise the persisted
+        /// ceiling and resume bounded loading.</summary>
         public bool CeilingReached;
+        /// <summary>
+        /// Whole-file (filename-only) preview: the next 1-based source line to render. Such a section has a
+        /// single result and no matches, so it overflows by LINES rather than by un-rendered results.
+        /// </summary>
+        public int NextLineNumber;
+        /// <summary>The filename-only result the remaining lines belong to.</summary>
+        public SearchResult? LineResult;
+        public bool IsLineMode => NextLineNumber > 0 && LineResult is not null;
     }
     private readonly Dictionary<RichTextBlock, SectionOverflow> _sectionOverflow = new();
 
@@ -982,6 +989,7 @@ public sealed partial class MainWindow
         UpdatePreviewCustomSelectionForViewChange();
         RefreshPreviewCustomSelectionOverlay();
         UpdateStickyFileHeader();
+        TryPrefocusApproachingContinuationDrawer();
         TryAutoLoadMoreOnScroll();
         TryAutoLoadOverflowOnScroll();
         if (e.IsIntermediate) return;
@@ -1296,6 +1304,110 @@ public sealed partial class MainWindow
     private bool IsOverflowAutoLoadSuppressedForMatchNavigation()
         => Environment.TickCount64 < _suppressOverflowAutoLoadUntilTick;
 
+    /// <summary>
+    /// Paints the continuation drawer the user is scrolling toward with the "selected" background
+    /// before it reaches the viewport.
+    /// </summary>
+    /// <remarks>
+    /// A long file's preview rolls over into sibling "continued" drawers
+    /// (<see cref="EnsurePreviewRenderCapacity"/>). Only one drawer carries the selected background, so
+    /// without this look-ahead the next drawer would scroll into view still painted unselected and only
+    /// light up once the user interacted with it. This is paint-only: match navigation keeps tracking
+    /// <c>_activeSectionNav</c>, and focus never crosses to a different file.
+    /// </remarks>
+    private void TryPrefocusApproachingContinuationDrawer()
+    {
+        try
+        {
+            if (PreviewSectionsPanel.Visibility != Visibility.Visible) return;
+
+            var sv = PreviewScrollViewer;
+            double viewport = sv.ViewportHeight;
+            if (viewport <= 0) return;
+
+            double offset = sv.VerticalOffset;
+            double previous = _lastContinuationPrefocusOffset;
+            _lastContinuationPrefocusOffset = offset;
+            if (double.IsNaN(previous) || offset == previous) return;
+
+            // A match-navigation scroll already activated its target drawer; don't fight it.
+            if (IsOverflowAutoLoadSuppressedForMatchNavigation() && !IsPreviewManualScrollActive()) return;
+
+            Expander? anchor = _prefocusedContinuationExpander ?? ResolveActiveSectionExpander();
+            if (anchor is null
+                || !_expanderFilePaths.TryGetValue(anchor, out string? filePath)
+                || string.IsNullOrEmpty(filePath))
+            {
+                return;
+            }
+
+            int anchorIndex = PreviewSectionsPanel.Children.IndexOf(anchor);
+            if (anchorIndex < 0) return;
+
+            bool scrollingDown = offset > previous;
+            int step = scrollingDown ? 1 : -1;
+
+            // Walk away from the anchor collecting this file's drawers; stop at the first drawer that
+            // belongs to another file so the highlight never crosses files.
+            var siblings = new List<Expander>();
+            var extents = new List<ContinuationDrawerPrefocus.DrawerExtent>();
+            for (int i = anchorIndex + step; i >= 0 && i < PreviewSectionsPanel.Children.Count; i += step)
+            {
+                if (PreviewSectionsPanel.Children[i] is not Expander sibling) break;
+                if (!_expanderFilePaths.TryGetValue(sibling, out string? siblingPath)
+                    || !string.Equals(siblingPath, filePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+                if (!TryGetPreviewSectionExtent(sibling, out double top, out double bottom)) break;
+                siblings.Add(sibling);
+                extents.Add(new ContinuationDrawerPrefocus.DrawerExtent(top, bottom));
+            }
+
+            int pick = ContinuationDrawerPrefocus.SelectDrawer(
+                extents, offset, viewport, scrollingDown, ContinuationDrawerPrefocusViewports);
+            if (pick < 0) return;
+
+            Expander? candidate = siblings[pick];
+            // Landing back on the active section's own drawer just clears the override.
+            if (ReferenceEquals(candidate, ResolveActiveSectionExpander())) candidate = null;
+            if (ReferenceEquals(candidate, _prefocusedContinuationExpander)) return;
+
+            _prefocusedContinuationExpander = candidate;
+            HighlightActiveExpander();
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("Preview").LogWarning(
+                "Continuation-drawer pre-focus threw: {ExceptionType}: {Error}", ex.GetType().Name, ex.Message);
+        }
+    }
+
+    private Expander? ResolveActiveSectionExpander()
+        => _activeSectionNav?.Block is { } block && _blockExpanderCache.TryGetValue(block, out var expander)
+            ? expander
+            : null;
+
+    private void ClearContinuationDrawerPrefocus() => _prefocusedContinuationExpander = null;
+
+    /// <summary>Vertical span of a drawer in the preview scroll viewer's content coordinates.</summary>
+    private bool TryGetPreviewSectionExtent(Expander expander, out double top, out double bottom)
+    {
+        top = 0;
+        bottom = 0;
+        try
+        {
+            var sv = PreviewScrollViewer;
+            top = expander.TransformToVisual(sv).TransformPoint(new Windows.Foundation.Point(0, 0)).Y + sv.VerticalOffset;
+            bottom = top + expander.ActualHeight;
+            return expander.ActualHeight > 0;
+        }
+        catch
+        {
+            return false; // TransformToVisual throws when the element is not in the live tree
+        }
+    }
+
     private void ScheduleOverflowPrefetchContinuation()
     {
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
@@ -1312,9 +1424,10 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// Permanently stops overflow expansion for a section that has reached the
+    /// Pauses overflow expansion for a section that has reached the
     /// global <see cref="EffectiveMaxOverflowRenderedPerSection"/> render ceiling,
-    /// replacing its truncation notice with a terminal "open in editor" message.
+    /// replacing its truncation notice with an "open in editor" message and an
+    /// explicit limit-increase action.
     /// Idempotent — safe to call from every expansion path. The overflow state
     /// itself is kept (so the match-count denominator stays correct); only
     /// further growth is blocked.
@@ -1331,7 +1444,108 @@ public sealed partial class MainWindow
             if (_sectionGutterBlocks.TryGetValue(section, out var gb) && gb.Blocks.Count > 0)
                 gb.Blocks.RemoveAt(gb.Blocks.Count - 1);
         }
-        ov.NoticePara = AppendOverflowCeilingNotice(section, ov.OriginalTotal, ov.RenderedSoFar);
+        ov.NoticePara = ov.IsLineMode
+            ? AppendLineTruncationCeilingNotice(section, ov)
+            : AppendOverflowCeilingNotice(section, ov);
+    }
+
+    /// <summary>
+    /// Returns the block to render the next chunk into, rolling the file over into a fresh sibling
+    /// section once the current block reaches <see cref="MaxParagraphsPerPreviewSectionBlock"/>.
+    /// Growth is therefore spread across bounded blocks instead of enlarging one unbounded block,
+    /// which is what both fail-fasted WinUI text layout and made each load progressively slower.
+    /// </summary>
+    private RichTextBlock EnsurePreviewRenderCapacity(RichTextBlock section, SectionOverflow ov)
+    {
+        if (section.Blocks.Count < MaxParagraphsPerPreviewSectionBlock)
+            return section;
+
+        try
+        {
+            string? filePath = ov.FilePath ?? ResolvePreviewBlockFilePath(section);
+            if (string.IsNullOrEmpty(filePath)) return section;
+            if (!_blockExpanderCache.TryGetValue(section, out var currentExpander)) return section;
+            int index = PreviewSectionsPanel.Children.IndexOf(currentExpander);
+            if (index < 0) return section;
+
+            if (ov.NoticePara is not null)
+            {
+                section.Blocks.Remove(ov.NoticePara);
+                if (_sectionGutterBlocks.TryGetValue(section, out var gb) && gb.Blocks.Count > 0)
+                    gb.Blocks.RemoveAt(gb.Blocks.Count - 1);
+                ov.NoticePara = null;
+            }
+
+            var (continuationBlock, continuationExpander) = AddPreviewSection(
+                filePath,
+                detail: ov.IsLineMode ? $"continued from line {ov.RenderedSoFar:N0}" : "continued",
+                results: null,
+                isExpanded: true,
+                addToPanel: false);
+
+            PreviewSectionsPanel.Children.Insert(index + 1, continuationExpander);
+            // The continuation drawer is created at the exact moment the user reaches the end of the
+            // previous one, so it must inherit that drawer's focus state rather than being painted
+            // unselected for a frame; the scroll look-ahead then hands the focus over properly.
+            ApplyPreviewSectionContentBackground(
+                continuationExpander, IsPreviewSectionFocused(currentExpander, _activeSectionNav?.Block));
+            InvalidateScrollPositionCache();
+
+            _sectionOverflow.Remove(section);
+            _sectionOverflow[continuationBlock] = ov;
+
+            // Split the registered total across both drawers so the combined denominator still sums
+            // to this file's real match count. Line-mode sections count lines, not matches, and
+            // carry a zero match total, so they keep it.
+            if (!ov.IsLineMode)
+            {
+                RegisterSectionMatchTotal(section, ov.RenderedSoFar);
+                RegisterSectionMatchTotal(continuationBlock, Math.Max(0, ov.OriginalTotal - ov.RenderedSoFar));
+            }
+            else
+            {
+                RegisterSectionMatchTotal(continuationBlock, 0);
+            }
+
+            YaguLog.For("Preview").LogInformation(
+                "Preview section rolled over: file='{File}', renderedSoFar={Rendered}, blocks={Blocks}",
+                Path.GetFileName(filePath), ov.RenderedSoFar, section.Blocks.Count);
+            return continuationBlock;
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("Preview").LogWarning(
+                "Preview section rollover failed: {ExceptionType}: {Error}", ex.GetType().Name, ex.Message);
+            return section;
+        }
+    }
+
+    private async Task IncreaseOverflowRenderLimitAsync(RichTextBlock section, SectionOverflow ov)
+    {
+        if (!_sectionOverflow.TryGetValue(section, out var current) || !ReferenceEquals(current, ov))
+            return;
+
+        int currentLimit = EffectiveMaxOverflowRenderedPerSection;
+        if (ov.RenderedSoFar >= currentLimit)
+        {
+            int nextLimit = Math.Min(
+                MaxConfigurableOverflowRenderedPerSection,
+                currentLimit + OverflowRenderLimitIncreaseStep);
+            if (nextLimit <= currentLimit)
+                return;
+
+            ViewModel.MaxRenderedMatchesPerSection = nextLimit;
+            await ViewModel.PersistSettingsAsync();
+        }
+
+        if (!_sectionOverflow.TryGetValue(section, out current) || !ReferenceEquals(current, ov))
+            return;
+
+        ov.CeilingReached = false;
+        int resumeCount = ViewModel.PreviewAutoLoadMatches > 0
+            ? Math.Min(ViewModel.PreviewAutoLoadMatches, MaxMatchesPerExpandChunk)
+            : MaxMatchesPerExpandChunk;
+        ExpandOverflowChunk(section, Math.Max(1, resumeCount));
     }
 
     /// <summary>
@@ -1351,6 +1565,14 @@ public sealed partial class MainWindow
         if (ov.CeilingReached || ov.RenderedSoFar >= EffectiveMaxOverflowRenderedPerSection)
         {
             MarkOverflowCeilingReached(section, ov);
+            return;
+        }
+
+        section = EnsurePreviewRenderCapacity(section, ov);
+
+        if (ov.IsLineMode)
+        {
+            ExpandLineOverflowChunk(section, ov);
             return;
         }
 
@@ -1533,6 +1755,56 @@ public sealed partial class MainWindow
 
         sw.Stop();
         YaguLog.For("Preview").LogInformation("ExpandOverflowChunk(scroll): consumed={Consumed}, addedEntries={AddedEntries}, renderedSoFar={RenderedSoFar}, remaining={Remaining}, elapsed={Elapsed}ms", consumed, addedCount, ov.RenderedSoFar, ov.RemainingResults.Count, sw.ElapsedMilliseconds);
+    }
+
+    /// <summary>
+    /// Continues a whole-file (filename-only) preview from the line where the per-section block budget
+    /// stopped it. These sections hold one result and no matches, so the chunk is bounded by blocks rather
+    /// than by a match count.
+    /// </summary>
+    private void ExpandLineOverflowChunk(RichTextBlock section, SectionOverflow ov)
+    {
+        var sw = Stopwatch.StartNew();
+        if (ov.AllLines is not { Length: > 0 } allLines || ov.LineResult is not { } result)
+        {
+            _sectionOverflow.Remove(section);
+            return;
+        }
+
+        if (ov.NoticePara != null)
+        {
+            section.Blocks.Remove(ov.NoticePara);
+            if (_sectionGutterBlocks.TryGetValue(section, out var gb) && gb.Blocks.Count > 0)
+                gb.Blocks.RemoveAt(gb.Blocks.Count - 1);
+            ov.NoticePara = null;
+        }
+
+        _sectionMatchNavs.TryGetValue(section, out var sn);
+        int blocksAdded = 0;
+        int lineNumber = Math.Max(1, ov.NextLineNumber);
+        while (lineNumber <= allLines.Length && blocksAdded < MaxPreviewBlocksPerExpandChunk)
+        {
+            AddPreviewLineParagraphs(
+                section, allLines[lineNumber - 1], lineNumber, isMatchLine: true, result, rx: null,
+                truncate: false, null, sn, out int addedParagraphs,
+                maxParagraphs: MaxPreviewBlocksPerExpandChunk - blocksAdded);
+            if (addedParagraphs <= 0)
+                break;
+            blocksAdded += addedParagraphs;
+            lineNumber++;
+        }
+
+        ov.NextLineNumber = lineNumber;
+        ov.RenderedSoFar = lineNumber - 1;
+        InvalidateParagraphIndexCache(section);
+
+        if (lineNumber <= allLines.Length)
+            ov.NoticePara = AppendLineTruncationNotice(section, allLines.Length, ov.RenderedSoFar);
+        else
+            _sectionOverflow.Remove(section);
+
+        sw.Stop();
+        YaguLog.For("Preview").LogInformation("ExpandLineOverflowChunk: renderedLines={Rendered}, totalLines={Total}, blocksAdded={Blocks}, remaining={Remaining}, elapsed={Elapsed}ms", ov.RenderedSoFar, allLines.Length, blocksAdded, Math.Max(0, allLines.Length - ov.RenderedSoFar), sw.ElapsedMilliseconds);
     }
 
     private void MaterializeVisibleLazySections()

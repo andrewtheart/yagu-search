@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -26,6 +27,9 @@ public sealed partial class MainWindow
     private bool _indexStatusPointerOverHoverPanel;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _indexStatusHoverHideTimer;
     private IReadOnlyList<string> _indexStatusHoverRepairRoots = Array.Empty<string>();
+    private IReadOnlyList<IndexStorageHistorySample> _indexStorageHistorySamples = Array.Empty<IndexStorageHistorySample>();
+    private int _indexStorageHistoryLoadGeneration;
+    private bool _updatingIndexStorageHistoryFilter;
 
     /// <summary>Click handler for the status-bar index indicator. When a searched folder has no index yet
     /// it offers to add one; otherwise it opens the Indexing settings tab.</summary>
@@ -150,6 +154,8 @@ public sealed partial class MainWindow
 
         if (IndexStatusAutomaticIndexingComboBox?.IsDropDownOpen == true)
             IndexStatusAutomaticIndexingComboBox.IsDropDownOpen = false;
+        if (IndexStorageHistoryFilter?.IsDropDownOpen == true)
+            IndexStorageHistoryFilter.IsDropDownOpen = false;
         HideIndexStatusHoverOverlay();
         e.Handled = true;
     }
@@ -176,6 +182,7 @@ public sealed partial class MainWindow
 
     private void UpdateIndexStatusHoverActions()
     {
+        RebuildIndexActivityStageRows();
         RebuildIndexStatusHealthRows();
 
         bool canRepair = ViewModel.TryGetCurrentIndexFreshnessRepairTarget(
@@ -202,6 +209,286 @@ public sealed partial class MainWindow
         if (IndexStatusAutomaticIndexingPanel is not null)
             IndexStatusAutomaticIndexingPanel.Visibility =
                 automaticIndexingOff ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async void OnIndexStorageHistoryClick(object sender, RoutedEventArgs e)
+    {
+        if (IndexStorageHistoryPanel is null)
+            return;
+        if (IndexStorageHistoryPanel.Visibility == Visibility.Visible)
+        {
+            IndexStorageHistoryPanel.Visibility = Visibility.Collapsed;
+            PositionIndexStatusHoverOverlay();
+            return;
+        }
+
+        IndexStorageHistoryPanel.Visibility = Visibility.Visible;
+        if (IndexStorageHistorySummary is not null)
+            IndexStorageHistorySummary.Text = "Loading index size history…";
+        IndexStorageHistoryChart?.Children.Clear();
+        PositionIndexStatusHoverOverlay();
+        int generation = ++_indexStorageHistoryLoadGeneration;
+        try
+        {
+            IReadOnlyList<IndexStorageHistorySample> samples = await ViewModel.LoadIndexStorageHistoryAsync();
+            if (generation != _indexStorageHistoryLoadGeneration
+                || IndexStorageHistoryPanel.Visibility != Visibility.Visible)
+            {
+                return;
+            }
+            _indexStorageHistorySamples = samples;
+            PopulateIndexStorageHistoryFilter();
+            RenderIndexStorageHistoryChart();
+            PositionIndexStatusHoverOverlay();
+        }
+        catch (Exception ex)
+        {
+            if (generation != _indexStorageHistoryLoadGeneration
+                || IndexStorageHistoryPanel.Visibility != Visibility.Visible)
+            {
+                return;
+            }
+            if (IndexStorageHistorySummary is not null)
+                IndexStorageHistorySummary.Text = $"Index size history is temporarily unavailable ({ex.GetType().Name}).";
+        }
+    }
+
+    private void PopulateIndexStorageHistoryFilter()
+    {
+        if (IndexStorageHistoryFilter is null)
+            return;
+        string selected = (IndexStorageHistoryFilter.SelectedItem as ComboBoxItem)?.Tag as string ?? string.Empty;
+        _updatingIndexStorageHistoryFilter = true;
+        try
+        {
+            IndexStorageHistoryFilter.Items.Clear();
+            IndexStorageHistoryFilter.Items.Add(new ComboBoxItem { Content = "All disks", Tag = string.Empty });
+            foreach (string drive in IndexStorageHistoryStore.AvailableDrives(_indexStorageHistorySamples))
+                IndexStorageHistoryFilter.Items.Add(new ComboBoxItem { Content = drive, Tag = drive });
+            IndexStorageHistoryFilter.SelectedItem = IndexStorageHistoryFilter.Items
+                .OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag as string, selected, StringComparison.OrdinalIgnoreCase))
+                ?? IndexStorageHistoryFilter.Items[0];
+        }
+        finally
+        {
+            _updatingIndexStorageHistoryFilter = false;
+        }
+    }
+
+    private void OnIndexStorageHistoryFilterChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_updatingIndexStorageHistoryFilter)
+            RenderIndexStorageHistoryChart();
+    }
+
+    private void OnIndexStorageHistoryFilterDropDownOpened(object? sender, object e)
+        => CancelIndexStatusHoverHide();
+
+    private void OnIndexStorageHistoryFilterDropDownClosed(object? sender, object e)
+    {
+        if (!_indexStatusPointerOverIndicator && !_indexStatusPointerOverHoverPanel)
+            ScheduleIndexStatusHoverHide();
+    }
+
+    private void OnIndexStorageHistoryFilterLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (!_indexStatusPointerOverIndicator
+            && !_indexStatusPointerOverHoverPanel
+            && IndexStorageHistoryFilter?.IsDropDownOpen != true)
+        {
+            ScheduleIndexStatusHoverHide();
+        }
+    }
+
+    private void RenderIndexStorageHistoryChart()
+    {
+        if (IndexStorageHistoryChart is null || IndexStorageHistorySummary is null)
+            return;
+        IndexStorageHistoryChart.Children.Clear();
+        string? drive = (IndexStorageHistoryFilter?.SelectedItem as ComboBoxItem)?.Tag as string;
+        IReadOnlyList<IndexStorageHistoryPoint> series = IndexStorageHistoryStore.BuildSeries(
+            _indexStorageHistorySamples,
+            drive);
+        if (series.Count == 0)
+        {
+            var empty = new TextBlock
+            {
+                Text = "No history yet. Yagu records one physical-size snapshot per hour.",
+                Width = 340,
+                TextAlignment = TextAlignment.Center,
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 12,
+                Opacity = 0.72,
+            };
+            Canvas.SetLeft(empty, 28);
+            Canvas.SetTop(empty, 74);
+            IndexStorageHistoryChart.Children.Add(empty);
+            IndexStorageHistorySummary.Text = "History begins after the first hourly index-storage snapshot.";
+            return;
+        }
+
+        const double width = 396;
+        const double plotLeft = 52;
+        const double plotRight = width - 8;
+        const double plotTop = 10;
+        const double plotBottom = 158;
+        var gridBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+            "ControlStrokeColorDefaultBrush"];
+        Microsoft.UI.Xaml.Media.Brush lineBrush = IndexStatusHoverIndexingIcon?.Foreground
+            ?? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"];
+
+        long minimum = series.Min(static point => point.Bytes);
+        long maximum = series.Max(static point => point.Bytes);
+        DateTimeOffset firstTime = series[0].TimestampUtc;
+        DateTimeOffset lastTime = series[^1].TimestampUtc;
+        double timeSpan = Math.Max(1, (lastTime - firstTime).TotalSeconds);
+        for (int row = 0; row <= 3; row++)
+        {
+            double y = plotTop + ((plotBottom - plotTop) * row / 3.0);
+            var gridLine = new Microsoft.UI.Xaml.Shapes.Line
+            {
+                X1 = plotLeft,
+                X2 = plotRight,
+                Y1 = y,
+                Y2 = y,
+                Stroke = gridBrush,
+                StrokeThickness = 1,
+                Opacity = row is 0 or 3 ? 0.55 : 0.28,
+            };
+            IndexStorageHistoryChart.Children.Add(gridLine);
+        }
+
+        var graph = new Microsoft.UI.Xaml.Shapes.Polyline
+        {
+            Stroke = lineBrush,
+            StrokeThickness = 2.2,
+        };
+        foreach (IndexStorageHistoryPoint point in series)
+        {
+            double x = series.Count == 1
+                ? (plotLeft + plotRight) / 2
+                : plotLeft + ((point.TimestampUtc - firstTime).TotalSeconds / timeSpan * (plotRight - plotLeft));
+            double y = maximum == minimum
+                ? (plotTop + plotBottom) / 2
+                : plotBottom - ((point.Bytes - minimum) / (double)(maximum - minimum) * (plotBottom - plotTop));
+            graph.Points.Add(new Windows.Foundation.Point(x, y));
+        }
+        IndexStorageHistoryChart.Children.Add(graph);
+
+        Windows.Foundation.Point lastPoint = graph.Points[^1];
+        var marker = new Microsoft.UI.Xaml.Shapes.Ellipse
+        {
+            Width = 7,
+            Height = 7,
+            Fill = lineBrush,
+        };
+        Canvas.SetLeft(marker, lastPoint.X - 3.5);
+        Canvas.SetTop(marker, lastPoint.Y - 3.5);
+        IndexStorageHistoryChart.Children.Add(marker);
+
+        AddChartText(ContentIndexUiStatus.FormatBytes(maximum), 0, plotTop - 5, 48, TextAlignment.Right);
+        AddChartText(ContentIndexUiStatus.FormatBytes(minimum), 0, plotBottom - 8, 48, TextAlignment.Right);
+        AddChartText(firstTime.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture), plotLeft, 166, 92, TextAlignment.Left);
+        AddChartText(lastTime.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture), plotRight - 92, 166, 92, TextAlignment.Right);
+
+        long firstBytes = series[0].Bytes;
+        long lastBytes = series[^1].Bytes;
+        long change = lastBytes - firstBytes;
+        string movement = change switch
+        {
+            > 0 => $"grew {ContentIndexUiStatus.FormatBytes(change)}",
+            < 0 => $"shrunk {ContentIndexUiStatus.FormatBytes(-change)}",
+            _ => "did not change",
+        };
+        string selection = string.IsNullOrWhiteSpace(drive) ? "All disks" : drive;
+        IndexStorageHistorySummary.Text =
+            $"{selection}: {ContentIndexUiStatus.FormatBytes(lastBytes)} now · {movement} · "
+            + $"{series.Count:N0} hourly sample(s) · range {ContentIndexUiStatus.FormatBytes(minimum)}–{ContentIndexUiStatus.FormatBytes(maximum)}";
+        ToolTipService.SetToolTip(graph, IndexStorageHistorySummary.Text);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
+            IndexStorageHistoryChart,
+            $"{selection} index size history. {IndexStorageHistorySummary.Text}");
+
+        void AddChartText(string text, double left, double top, double textWidth, TextAlignment alignment)
+        {
+            var label = new TextBlock
+            {
+                Text = text,
+                Width = textWidth,
+                FontSize = 10,
+                Opacity = 0.68,
+                TextAlignment = alignment,
+            };
+            Canvas.SetLeft(label, left);
+            Canvas.SetTop(label, top);
+            IndexStorageHistoryChart.Children.Add(label);
+        }
+    }
+
+    private void RebuildIndexActivityStageRows()
+    {
+        if (IndexStatusActivityStagePanel is null || IndexStatusActivityStageRows is null)
+            return;
+
+        IndexStatusActivityStageRows.Children.Clear();
+        if (!ViewModel.IsIndexBuildActive)
+        {
+            IndexStatusActivityStagePanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        string? activeStage = ViewModel.ActiveIndexBuildStage;
+        IReadOnlyList<IndexActivityStageInfo> stages = ContentIndexUiStatus.BuildActivityStages(
+            ViewModel.IsActiveIndexBuildIncremental,
+            activeStage);
+        foreach (IndexActivityStageInfo stage in stages)
+        {
+            bool active = string.Equals(stage.Stage, activeStage, StringComparison.OrdinalIgnoreCase)
+                || (string.Equals(activeStage, IndexUpdateStages.Incremental, StringComparison.OrdinalIgnoreCase)
+                    && stage.Stage == IndexUpdateStages.Resolving);
+
+            var row = new Grid { ColumnSpacing = 10, Opacity = active ? 1.0 : 0.68 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var icon = new FontIcon
+            {
+                Glyph = "\uE8F1",
+                FontSize = 15,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 2, 0, 0),
+                Foreground = active ? IndexStatusHoverIndexingIcon?.Foreground : null,
+            };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(icon, "Indexing stage");
+            row.Children.Add(icon);
+
+            var copy = new StackPanel { Spacing = 1 };
+            copy.Children.Add(new TextBlock
+            {
+                Text = active ? $"Current · {stage.Title}" : stage.Title,
+                FontSize = 12,
+                FontWeight = active
+                    ? Microsoft.UI.Text.FontWeights.SemiBold
+                    : Microsoft.UI.Text.FontWeights.Normal,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            copy.Children.Add(new TextBlock
+            {
+                Text = stage.Detail,
+                FontSize = 11,
+                Opacity = 0.82,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            Grid.SetColumn(copy, 1);
+            row.Children.Add(copy);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
+                row,
+                active ? $"Current indexing stage: {stage.Title}. {stage.Detail}" : $"Indexing stage: {stage.Title}. {stage.Detail}");
+            IndexStatusActivityStageRows.Children.Add(row);
+        }
+
+        IndexStatusActivityStagePanel.Visibility = Visibility.Visible;
     }
 
     private void RebuildIndexStatusHealthRows()
@@ -248,6 +535,19 @@ public sealed partial class MainWindow
                 Opacity = 0.8,
                 TextWrapping = TextWrapping.Wrap,
             });
+            if (entry.CompactionForecast is { } forecast)
+            {
+                details.Children.Add(new TextBlock
+                {
+                    Text = forecast.Summary,
+                    FontSize = 11,
+                    Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                        forecast.Kind == IndexCompactionForecastKind.CleanupAttentionLikely
+                            ? "SystemFillColorCautionBrush"
+                            : "AccentTextFillColorPrimaryBrush"],
+                    TextWrapping = TextWrapping.Wrap,
+                });
+            }
             row.Children.Add(details);
 
             var actions = new StackPanel
@@ -327,6 +627,18 @@ public sealed partial class MainWindow
                 actions.Children.Add(rebuild);
             }
 
+            if (entry.CompactionForecast is { } forecastDetails)
+            {
+                Button moreDetails = CreateIndexStatusHealthActionButton(
+                    "More details",
+                    $"Explain the compaction estimate for {entry.Root}",
+                    settingsActionsEnabled);
+                moreDetails.Click += async (_, _) => await ShowIndexCompactionForecastDetailsAsync(
+                    entry.Root,
+                    forecastDetails);
+                actions.Children.Add(moreDetails);
+            }
+
             if (actions.Children.Count > 0)
             {
                 Grid.SetColumn(actions, 1);
@@ -353,6 +665,34 @@ public sealed partial class MainWindow
         ToolTipService.SetToolTip(button, tooltip);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, tooltip);
         return button;
+    }
+
+    private async Task ShowIndexCompactionForecastDetailsAsync(
+        string root,
+        IndexCompactionForecast forecast)
+    {
+        HideIndexStatusHoverOverlay();
+        await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = $"Compaction estimate for {root}",
+                Content = new TextBlock
+                {
+                    Text = forecast.Details,
+                    FontSize = 13,
+                    TextWrapping = TextWrapping.Wrap,
+                    IsTextSelectionEnabled = true,
+                },
+                CloseButtonText = "Close",
+                RequestedTheme = RootGrid.ActualTheme,
+                Width = 620,
+                Height = 430,
+                MaxContentHeight = 370,
+                ShowTitleBar = false,
+                ShowTopRightCloseButton = true,
+                TitleGlyph = "\uE823",
+            }).ConfigureAwait(true);
     }
 
     private async Task RunIndexStatusHealthActionAsync(string root, bool incremental)
@@ -516,10 +856,20 @@ public sealed partial class MainWindow
             _indexStatusHoverHideTimer = null;
             if (!_indexStatusPointerOverIndicator
                 && !_indexStatusPointerOverHoverPanel
-                && IndexStatusAutomaticIndexingComboBox?.IsDropDownOpen != true)
+                && IndexStatusAutomaticIndexingComboBox?.IsDropDownOpen != true
+                && IndexStorageHistoryFilter?.IsDropDownOpen != true
+                && !IsIndexStatusHoverFocusWithinOverlay())
                 HideIndexStatusHoverOverlay();
         };
         timer.Start();
+    }
+
+    private bool IsIndexStatusHoverFocusWithinOverlay()
+    {
+        if (IndexStatusHoverOverlay?.XamlRoot is not { } xamlRoot)
+            return false;
+        var focused = FocusManager.GetFocusedElement(xamlRoot) as DependencyObject;
+        return focused is not null && IsDescendantOf(focused, IndexStatusHoverOverlay);
     }
 
     private void CancelIndexStatusHoverHide()
@@ -537,6 +887,9 @@ public sealed partial class MainWindow
             IndexStatusTextBlock.TextDecorations = Windows.UI.Text.TextDecorations.None;
         if (IndexStatusHoverOverlay is not null)
             IndexStatusHoverOverlay.Visibility = Visibility.Collapsed;
+        if (IndexStorageHistoryPanel is not null)
+            IndexStorageHistoryPanel.Visibility = Visibility.Collapsed;
+        Interlocked.Increment(ref _indexStorageHistoryLoadGeneration);
     }
 
     // ── Spinning glyph while a build is actively running ──

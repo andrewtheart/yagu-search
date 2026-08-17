@@ -401,6 +401,9 @@ public sealed partial class MainWindow
                 case "openHelp":
                     OpenHelpWindow();
                     break;
+                case "openSession":
+                    _ = ShowLoadSessionDialogAsync();
+                    break;
                 case "hostLog":
                     LogTerminalPageMessage(root);
                     break;

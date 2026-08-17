@@ -719,12 +719,13 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.DoesNotContain("row.Progress.IsIndeterminate = percent < 0;", SettingsIndexingActionsSource);
         Assert.Contains("_indexedRootRowVisuals[IndexScopeIdentity.NormalizePath(root)]", SettingsIndexingActionsSource);
 
-        // B — an idle indexed folder shows a USN-proven freshness marker ("up to date" vs "changes
-        // detected — rebuild"), computed off the UI thread alongside the storage stats.
+        // B — an idle indexed folder shows operational health computed off the UI thread. Routine
+        // journal-proven changes are pending maintenance, not a rebuild warning.
         Assert.Contains("manager.GetScopeFreshnessStatus(stat.RootPath, reader)", SettingsIndexingActionsSource);
-        Assert.Contains("changes detected \\u2014 rebuild", SettingsIndexingActionsSource);
+        Assert.Contains("changes pending", SettingsIndexingActionsSource);
+        Assert.DoesNotContain("changes detected \\u2014 rebuild", SettingsIndexingActionsSource);
         Assert.Contains("up to date", SettingsIndexingActionsSource);
-        Assert.Contains("ComputeRootStaleness(manager, summary)", SettingsIndexingActionsSource);
+        Assert.Contains("ComputeRootHealth(manager, summary)", SettingsIndexingActionsSource);
         Assert.Contains("freshness lost \\u2014 rebuild required", SettingsIndexingActionsSource);
         Assert.Contains("Rebuild required · freshness lost", SettingsIndexingActionsSource);
         Assert.Contains("FindRootFreshnessStatus(stat.RootPath) is { RequiresRebuild: true }", SettingsIndexingActionsSource);
@@ -735,6 +736,17 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("Update needed · catch-up limit reached", SettingsIndexingActionsSource);
         Assert.Contains("catch-up limit reached \\u2014 increase limit and update", SettingsIndexingActionsSource);
         Assert.Contains("freshness.RawStatus == UsnReadStatus.Incomplete", SettingsIndexingActionsSource);
+
+        // C — Settings uses the same size-budget and reclamation diagnoses as the status bar, so a
+        // structurally valid index cannot be listed as healthy while the global count says attention.
+        Assert.Contains("IndexSizeBudgetAdvisor.Diagnose(", SettingsIndexingActionsSource);
+        Assert.Contains("manager.DiagnoseReclamation(", SettingsIndexingActionsSource);
+        Assert.Contains("FindRootSizeBudgetDiagnosis(stat.RootPath) is { AtBudget: true }", SettingsIndexingActionsSource);
+        Assert.Contains("FindRootReclamationDiagnosis(stat.RootPath) is { ReclamationBlocked: true }", SettingsIndexingActionsSource);
+        Assert.Contains("Updates paused · size limit reached", SettingsIndexingActionsSource);
+        Assert.Contains("Cleanup blocked · still updating", SettingsIndexingActionsSource);
+        Assert.Contains("automatic cleanup blocked", SettingsIndexingActionsSource);
+        Assert.Contains("\"Compact now\", () => RunStorageCompactAsync(stat)", SettingsIndexingActionsSource);
 
         // The Settings window reacts to VM build-state changes to update the rows.
         Assert.Contains("OnIndexBuildStateChangedForRows(e.PropertyName)", SettingsWindowSource);
@@ -980,7 +992,7 @@ public sealed class ContentIndexGuiRegressionTests
     public void IndexStatusHover_ExplainsFreshnessFailureAndOffersDirectRepair()
     {
         string indicator = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusIndicator\"", 4500);
-        string hover = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusHoverOverlay\"", 9000);
+        string hover = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusHoverOverlay\"", 16000);
         Assert.Contains("x:Name=\"IndexStatusHoverOverlay\"", hover);
         Assert.Contains("Grid.Row=\"0\" Grid.RowSpan=\"7\"", hover);
         Assert.Contains("Background=\"{ThemeResource AcrylicBackgroundFillColorDefaultBrush}\"", hover);
@@ -1067,6 +1079,40 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("private string BuildIndexSchedulingDetails()", MainViewModelSource);
         Assert.Contains("=> Environment.NewLine + Environment.NewLine", MainViewModelSource);
         Assert.Contains("+ BuildIndexDateDetails()\r\n                + BuildIndexSchedulingDetails();", MainViewModelSource);
+    }
+
+    [Fact]
+    public void IndexStatusHover_ChartsBoundedHourlySizeHistory_ForAllOrOneDisk()
+    {
+        string hover = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusHoverOverlay\"", 15000);
+
+        Assert.Contains("x:Name=\"IndexStorageHistoryButton\" Grid.Column=\"2\"", hover);
+        Assert.Contains("Click=\"OnIndexStorageHistoryClick\"", hover);
+        Assert.Contains("ToolTipService.ToolTip=\"Show index size history\"", hover);
+        Assert.Contains("x:Name=\"IndexStorageHistoryPanel\"", hover);
+        Assert.Contains("x:Name=\"IndexStorageHistoryFilter\"", hover);
+        Assert.Contains("SelectionChanged=\"OnIndexStorageHistoryFilterChanged\"", hover);
+        Assert.Contains("LostFocus=\"OnIndexStorageHistoryFilterLostFocus\"", hover);
+        Assert.Contains("x:Name=\"IndexStorageHistoryChart\" Width=\"396\" Height=\"190\"", hover);
+        Assert.Contains("AutomationProperties.Name=\"Index size over time line graph\"", hover);
+
+        Assert.Contains("await ViewModel.LoadIndexStorageHistoryAsync()", IndexOnboardingSource);
+        Assert.Contains("Content = \"All disks\", Tag = string.Empty", IndexOnboardingSource);
+        Assert.Contains("IndexStorageHistoryStore.AvailableDrives(_indexStorageHistorySamples)", IndexOnboardingSource);
+        Assert.Contains("IndexStorageHistoryStore.BuildSeries(", IndexOnboardingSource);
+        Assert.Contains("new Microsoft.UI.Xaml.Shapes.Polyline", IndexOnboardingSource);
+        Assert.Contains("series.Count:N0} hourly sample(s)", IndexOnboardingSource);
+        Assert.Contains("IndexStorageHistoryPanel.Visibility = Visibility.Collapsed;", IndexOnboardingSource);
+        Assert.Contains("&& !IsIndexStatusHoverFocusWithinOverlay())", IndexOnboardingSource);
+        Assert.Contains("FocusManager.GetFocusedElement(xamlRoot) as DependencyObject", IndexOnboardingSource);
+        Assert.Contains("IsDescendantOf(focused, IndexStatusHoverOverlay)", IndexOnboardingSource);
+
+        Assert.Contains("history.TryRecordIfDue(", MainViewModelSource);
+        Assert.Contains("manager.GetStorageStats", MainViewModelSource);
+        Assert.Contains("public async Task<IReadOnlyList<IndexStorageHistorySample>> LoadIndexStorageHistoryAsync()", MainViewModelSource);
+        Assert.Contains("Task.Run(() => new IndexStorageHistoryStore(", MainViewModelSource);
+        Assert.Contains("s.IndexStorageHistoryRetentionDays", SettingsIndexingSource);
+        Assert.Contains("Index size history retention (days):", SettingsIndexingSource);
     }
 
     [Fact]
@@ -1614,8 +1660,8 @@ public sealed class ContentIndexGuiRegressionTests
 
         // Both user-initiated build paths capture the drive denominator once and forward per-report progress.
         Assert.Contains("long driveUsedBytes = IndexBuildProgressEstimate.DriveUsedBytes(root);", MainViewModelSource);
-        Assert.Contains("progress: p => ReportIndexBuildProgress(IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes))", MainViewModelSource);
-        Assert.Contains("progress: p => _viewModel.ReportIndexBuildProgress(IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes))", SettingsIndexingActionsSource);
+        Assert.Contains("IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes), IndexBuildStages.RawBuild", MainViewModelSource);
+        Assert.Contains("IndexBuildProgressEstimate.Percent(p.BytesCrawled, driveUsedBytes), IndexBuildStages.RawBuild", SettingsIndexingActionsSource);
 
         // The multi-root auto/scheduled/startup/resume pass also reports each root's folder + percent into the
         // indicator (folder so the tooltip names the drive; percent for full builds AND incremental refreshes).
@@ -1626,6 +1672,34 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("public void ReportIndexBuildProgress(string? folder, int percent)", MainViewModelSource);
         Assert.Contains("public void ReportIndexBuildProgress(string? folder, int percent, string? stage)", MainViewModelSource);
         Assert.Contains("Updating the existing content index for {_activeIndexBuildFolder} incrementally", MainViewModelSource);
+    }
+
+    [Fact]
+    public void MainWindow_IndexingOverview_ShowsEveryStageWithAnIndexingIcon()
+    {
+        string indexHover = ExtractFrom(MainWindowXaml, "x:Name=\"IndexStatusHoverOverlay\"", 11000);
+        Assert.Contains("x:Name=\"IndexStatusActivityStagePanel\"", indexHover);
+        Assert.Contains("Text=\"Indexing stages\"", indexHover);
+        Assert.Contains("x:Name=\"IndexStatusActivityStageRows\"", indexHover);
+        Assert.Contains("MaxHeight=\"240\"", indexHover);
+
+        Assert.Contains("private void RebuildIndexActivityStageRows()", IndexOnboardingSource);
+        Assert.Contains("ContentIndexUiStatus.BuildActivityStages(", IndexOnboardingSource);
+        Assert.Contains("Glyph = \"\\uE8F1\"", IndexOnboardingSource);
+        Assert.Contains("Current · {stage.Title}", IndexOnboardingSource);
+        Assert.Contains("Text = stage.Detail", IndexOnboardingSource);
+        Assert.Contains("nameof(ViewModel.ActiveIndexBuildStage)", MainWindowCodeBehindSource);
+        Assert.Contains("RebuildIndexActivityStageRows();", MainWindowCodeBehindSource);
+
+        Assert.Contains("IndexBuildStages.RawBuild", MainViewModelSource);
+        Assert.Contains("IndexBuildStages.Pdf", MainViewModelSource);
+        Assert.Contains("IndexBuildStages.Ocr", MainViewModelSource);
+        Assert.Contains("IndexBuildStages.PostBuildCatchUp", MainViewModelSource);
+
+        string stages = Read("src", "Yagu", "Services", "Index", "IndexUpdateStages.cs");
+        Assert.Contains("CompactAnalyzing", stages);
+        Assert.Contains("CompactMerging", stages);
+        Assert.Contains("CompactPublishing", stages);
     }
 
     [Fact]
@@ -1748,6 +1822,14 @@ public sealed class ContentIndexGuiRegressionTests
         // Startup and scheduled passes share one build-pass method.
         Assert.Contains("private async Task RunIndexBuildPassAsync(IReadOnlyList<string> roots)", StartupChecksSource);
         Assert.Contains("await RunIndexBuildPassAsync(roots);", StartupChecksSource);
+
+        // Every completed automatic pass refreshes health/storage. The bounded history store rejects
+        // sub-hour calls before measuring, then records the next due point without requiring UI activity.
+        string buildPass = ExtractFrom(StartupChecksSource,
+            "private async Task RunIndexBuildPassAsync(IReadOnlyList<string> roots)", 9000);
+        Assert.Contains("finally", buildPass);
+        Assert.Contains("ViewModel.EndIndexBuildActivity();", buildPass);
+        Assert.Contains("ViewModel.RefreshAllDriveIndexStatus();", buildPass);
     }
 
     [Fact]

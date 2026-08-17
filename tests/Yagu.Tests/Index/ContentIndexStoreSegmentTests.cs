@@ -481,7 +481,133 @@ public sealed class ContentIndexStoreSegmentTests : IDisposable
     }
 
     [Fact]
-    public void SmallSegmentCoalescing_PreservesFullBuildAndIncrementalProvenanceBoundaries()
+    public void ActiveLayerStorageBreakdown_SeparatesFullBuildPagesFromIncrementalHistory()
+    {
+        var store = NewStore();
+        Assert.Null(store.TryReadActiveLayerStorageBreakdown());
+
+        var createdUtc = new DateTimeOffset(2026, 8, 10, 9, 0, 0, TimeSpan.Zero);
+        var baseBuilder = new ContentIndexGenerationBuilder(OpenPolicy);
+        baseBuilder.AddDocument(@"C:\r\base.txt", Encoding.UTF8.GetBytes("base"));
+        store.Publish(baseBuilder.Build(_scopeId, "vol", _root, new UsnCheckpoint(1, 100), createdUtc));
+
+        var pageBuilder = new ContentIndexGenerationBuilder(OpenPolicy);
+        pageBuilder.AddDocument(@"C:\r\page.txt", Encoding.UTF8.GetBytes("page"));
+        store.PublishSegment(new ContentIndexDeltaSegment(
+            pageBuilder.Build(
+                _scopeId, "vol", _root, new UsnCheckpoint(1, 100), createdUtc.AddMinutes(1),
+                lastIncrementalUpdateUtc: null),
+            Array.Empty<string>()));
+
+        store.PublishSegment(BuildSegment(1, 200,
+            b => b.AddChangedDocument(@"C:\r\changed.txt", Encoding.UTF8.GetBytes("changed"))));
+
+        store.DirectorySizeReader = directory => Path.GetFileName(directory) switch
+        {
+            "gen-000001" => 1000,
+            "seg-000001" => 100,
+            "seg-000002" => 10,
+            _ => 0,
+        };
+
+        ActiveLayerStorageBreakdown? breakdown = store.TryReadActiveLayerStorageBreakdown();
+        Assert.NotNull(breakdown);
+        Assert.Equal(1000, breakdown!.Value.BaseBytes);
+        Assert.Equal(1, breakdown.Value.BaseCount);
+        Assert.Equal(100, breakdown.Value.FullBuildPagingBytes);
+        Assert.Equal(1, breakdown.Value.FullBuildPagingCount);
+        Assert.Equal(10, breakdown.Value.IncrementalBytes);
+        Assert.Equal(1, breakdown.Value.IncrementalCount);
+        Assert.Equal(1110, breakdown.Value.TotalBytes);
+        Assert.Equal(3, breakdown.Value.TotalCount);
+        Assert.Equal(2, breakdown.Value.SegmentCount);
+        Assert.Equal(10, breakdown.Value.IncrementalHistoryBytes);
+
+        ActiveLayerStorageTrend? trend = store.TryReadActiveLayerStorageTrend();
+        Assert.NotNull(trend);
+        Assert.Equal(breakdown.Value, trend!.Value.Breakdown);
+        Assert.NotNull(trend.Value.OldestIncrementalBuiltUtc);
+        Assert.Equal(trend.Value.OldestIncrementalBuiltUtc, trend.Value.NewestIncrementalBuiltUtc);
+
+        // An unidentifiable active layer must fail closed rather than be counted as either cohort.
+        File.WriteAllBytes(
+            Path.Combine(store.ScopeDirectory, "segments", "seg-000002", ContentIndexGenerationSerializer.ManifestFile),
+            [1, 2, 3]);
+        Assert.Null(store.TryReadActiveLayerStorageBreakdown());
+        Assert.Null(store.TryReadActiveLayerStorageTrend());
+    }
+
+    [Fact]
+    public void ActiveLayerStorageTrend_TracksOldestAndNewestIncrementalTimes()
+    {
+        var store = NewStore();
+        DateTimeOffset createdUtc = new(2026, 8, 10, 9, 0, 0, TimeSpan.Zero);
+        var baseBuilder = new ContentIndexGenerationBuilder(OpenPolicy);
+        baseBuilder.AddDocument(@"C:\r\base.txt", Encoding.UTF8.GetBytes("base"));
+        store.Publish(baseBuilder.Build(
+            _scopeId, "vol", _root, new UsnCheckpoint(1, 100), createdUtc));
+
+        DateTimeOffset newestUtc = createdUtc.AddHours(2);
+        DateTimeOffset oldestUtc = createdUtc.AddHours(1);
+        var newest = new ContentIndexDeltaSegmentBuilder(OpenPolicy);
+        newest.AddChangedDocument(@"C:\r\newest.txt", Encoding.UTF8.GetBytes("newest"));
+        store.PublishSegment(newest.Build(
+            _scopeId, "vol", _root, new UsnCheckpoint(1, 200), newestUtc));
+        var oldest = new ContentIndexDeltaSegmentBuilder(OpenPolicy);
+        oldest.AddChangedDocument(@"C:\r\oldest.txt", Encoding.UTF8.GetBytes("oldest"));
+        store.PublishSegment(oldest.Build(
+            _scopeId, "vol", _root, new UsnCheckpoint(1, 300), oldestUtc));
+
+        ActiveLayerStorageTrend? trend = store.TryReadActiveLayerStorageTrend();
+
+        Assert.NotNull(trend);
+        Assert.Equal(oldestUtc, trend!.Value.OldestIncrementalBuiltUtc);
+        Assert.Equal(newestUtc, trend.Value.NewestIncrementalBuiltUtc);
+        Assert.Equal(2, trend.Value.Breakdown.IncrementalCount);
+    }
+
+    [Fact]
+    public void ActiveLayerStorageTrend_FallsBackWhenNewestBaseManifestIsUnreadable()
+    {
+        var store = NewStore();
+        store.Publish(BuildBase((@"C:\r\first.txt", "first")));
+        store.Publish(BuildBase((@"C:\r\second.txt", "second")));
+        string newestManifest = Path.Combine(
+            store.ScopeDirectory,
+            "generations",
+            "gen-000002",
+            ContentIndexGenerationSerializer.ManifestFile);
+        File.WriteAllBytes(newestManifest, [1, 2, 3]);
+
+        ActiveLayerStorageTrend? trend = store.TryReadActiveLayerStorageTrend();
+
+        Assert.NotNull(trend);
+        Assert.Equal(1, trend!.Value.Breakdown.BaseCount);
+        Assert.Equal(0, trend.Value.Breakdown.SegmentCount);
+    }
+
+    [Fact]
+    public void PreparedPublication_RejectsMissingOrOutOfRangeWorkspacesBeforePointerChange()
+    {
+        var store = NewStore();
+        store.Publish(BuildBase((@"C:\r\a.txt", "alpha")));
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+        var run = new ContentIndexStore.SegmentCoalesceRun(0, [], [], 0);
+        string missing = Path.Combine(_sandbox, "missing-prepared");
+
+        Assert.False(store.TryReplacePreparedSegmentRunUnderLease(mutation, run, missing));
+        Assert.Throws<InvalidDataException>(() => store.CompactFromPreparedUnderLease(mutation, missing));
+
+        string outOfRangePrepared = Path.Combine(_sandbox, "out-of-range-prepared");
+        Directory.CreateDirectory(outOfRangePrepared);
+        var outOfRange = new ContentIndexStore.SegmentCoalesceRun(99, ["seg-999999"], [outOfRangePrepared], 1);
+        Assert.False(store.TryReplacePreparedSegmentRunUnderLease(
+            mutation, outOfRange, outOfRangePrepared));
+        Assert.True(Directory.Exists(outOfRangePrepared));
+    }
+
+    [Fact]
+    public void SmallSegmentCoalescing_MergesIncrementalHistoryOnly_AndLeavesFullBuildPagesAlone()
     {
         var createdUtc = new DateTimeOffset(2026, 7, 30, 10, 0, 0, TimeSpan.Zero);
         var store = NewStore();
@@ -527,8 +653,9 @@ public sealed class ContentIndexStoreSegmentTests : IDisposable
         int removed = updater.CoalesceSmallSegmentsUnderLease(
             mutation, maxSegments: 1, CancellationToken.None);
 
-        Assert.Equal((EffectiveIndexSizePolicy.Default.CoalesceMinRun - 1) * 2, removed);
-        Assert.Equal(2, store.ActiveSegmentCount());
+        Assert.Equal(EffectiveIndexSizePolicy.Default.CoalesceMinRun - 1, removed);
+        // The four disjoint full-build pages are untouched; only the incremental run collapsed to one layer.
+        Assert.Equal(EffectiveIndexSizePolicy.Default.CoalesceMinRun + 1, store.ActiveSegmentCount());
         StoredIndexStat stat = store.ReadStorageStat();
         Assert.Equal(finalBatchUtc, stat.BuiltUtc);
         Assert.Equal(finalIncrementalUtc, stat.LastIncrementalUpdateUtc);

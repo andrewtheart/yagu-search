@@ -57,6 +57,50 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
         => new() { IndexMaxDeltaSegments = maxSegments, IndexCompactionThresholdMB = thresholdMB };
 
     [Fact]
+    public void Apply_UnreclaimableHistory_HaltsOnlyWhenTheUserOptedIn()
+    {
+        var store = NewStore();
+        PublishBase(store, (@"C:\r\a.txt", "alpha"));
+        var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
+
+        // Ten incremental layers with a run minimum no run can reach, in a mode that forbids compaction:
+        // nothing automatic can reclaim the accumulated history.
+        for (int i = 0; i < 10; i++)
+        {
+            var builder = new ContentIndexDeltaSegmentBuilder(OpenPolicy);
+            builder.AddChangedDocument($@"C:\r\changed-{i}.txt", Encoding.UTF8.GetBytes($"changed {i}"));
+            store.PublishSegment(builder.Build(
+                _scopeId, "vol", _root, new UsnCheckpoint(1, 200 + i), DateTimeOffset.UtcNow));
+        }
+
+        var blocked = new IndexMaintenanceSettings
+        {
+            MaxDeltaSegments = 8,
+            CompactionThresholdMB = 1,
+            SizeManagementMode = IndexSizeManagementModes.Coalesce, // compaction is not permitted at all
+            CoalesceMaxSegmentMB = 1024,
+            CoalesceMaxBatchMB = 4096,
+            CoalesceMinRun = 20, // no contiguous run can ever reach this length here
+        };
+
+        // Default: keep updating, only report the problem.
+        IncrementalUpdateOutcome keptUpdating = updater.Apply(
+            _scopeId, "vol", _root, [Change(@"C:\r\b.txt", "beta")], Array.Empty<string>(),
+            new UsnCheckpoint(1, 400), blocked, DateTimeOffset.UtcNow);
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, keptUpdating);
+
+        blocked.HaltUpdatesWhenReclamationBlocked = true;
+        int segmentsBefore = store.ActiveSegmentCount();
+        IncrementalUpdateOutcome halted = updater.Apply(
+            _scopeId, "vol", _root, [Change(@"C:\r\c.txt", "gamma")], Array.Empty<string>(),
+            new UsnCheckpoint(1, 500), blocked, DateTimeOffset.UtcNow);
+
+        Assert.Equal(IncrementalUpdateOutcome.ReclamationBlocked, halted);
+        Assert.Equal(segmentsBefore, store.ActiveSegmentCount());
+        Assert.NotNull(store.TryOpenLayered());
+    }
+
+    [Fact]
     public void Apply_NoChanges_IsNoOp()
     {
         var store = NewStore();
@@ -144,7 +188,7 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
             _root,
             new[] { Change(@"C:\r\s0.txt", "first segment") },
             Array.Empty<string>(),
-            new UsnCheckpoint(2, 200),
+            new UsnCheckpoint(1, 200),
             settings,
             DateTimeOffset.UtcNow));
 
@@ -157,13 +201,16 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
             _root,
             new[] { Change(@"C:\r\s1.txt", "second segment") },
             Array.Empty<string>(),
-            new UsnCheckpoint(3, 300),
+            new UsnCheckpoint(1, 300),
             IndexBuildOperationFactory.CreateMaintenanceSettings(settings),
             DateTimeOffset.UtcNow,
             progress: (percent, stage) => progress.Add((percent, stage)));
 
         Assert.Equal(IncrementalUpdateOutcome.Compacted, outcome);
         Assert.Contains(progress, item => item == (IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting));
+        Assert.Contains(progress, item => item.Stage == IndexUpdateStages.CompactAnalyzing);
+        Assert.Contains(progress, item => item.Stage == IndexUpdateStages.CompactMerging);
+        Assert.Contains(progress, item => item.Stage == IndexUpdateStages.CompactPublishing);
         Assert.True(progress.Zip(progress.Skip(1), (left, right) => left.Percent <= right.Percent).All(value => value));
     }
 
@@ -207,6 +254,9 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
         PublishBase(store, (@"C:\r\a.txt", "alpha base"));
         var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
         var settings = Settings(maxSegments: 2, thresholdMB: 4096); // compact after >2 segments
+        // Compact-only: coalescing would merge the run first and satisfy the bound without a full fold,
+        // which is its own test below.
+        settings.IndexSizeManagementMode = IndexSizeManagementModes.Compact;
 
         IncrementalUpdateOutcome last = IncrementalUpdateOutcome.NoChanges;
         for (int i = 0; i < 3; i++)
@@ -214,7 +264,7 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
             last = updater.Apply(_scopeId, "vol", _root,
                 new[] { Change($@"C:\r\s{i}.txt", $"segment doc number {i} content") },
                 Array.Empty<string>(),
-                new UsnCheckpoint((ulong)(2 + i), 200 + i), settings, DateTimeOffset.UtcNow);
+                new UsnCheckpoint(1, 200 + i), settings, DateTimeOffset.UtcNow);
         }
 
         // The third append pushed the segment count over 2 → compaction folded everything into a new base.
@@ -222,6 +272,42 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
         Assert.Equal(0, store.ActiveSegmentCount());
         // All four documents survive in the compacted base (a + s0 + s1 + s2).
         Assert.Equal(4, store.TryOpenCurrent()!.AliasCount);
+    }
+
+    /// <summary>
+    /// With the shipped default the cheap bounded merge absorbs the layer-count trigger, so exceeding it
+    /// coalesces a run instead of paying for a full fold. Every path stays queryable either way.
+    /// </summary>
+    [Fact]
+    public void Apply_ExceedingSegmentBound_CoalescesRunBeforeCompactingUnderTheDefaultMode()
+    {
+        var store = NewStore();
+        PublishBase(store, (@"C:\r\a.txt", "alpha base"));
+        var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
+        var settings = Settings(maxSegments: 2, thresholdMB: 4096);
+        Assert.Equal(IndexSizeManagementModes.CoalesceThenCompact, settings.IndexSizeManagementMode);
+        Assert.Equal(3, AppSettings.DefaultIndexCoalesceMinRun);
+
+        IncrementalUpdateOutcome last = IncrementalUpdateOutcome.NoChanges;
+        for (int i = 0; i < 3; i++)
+        {
+            last = updater.Apply(_scopeId, "vol", _root,
+                new[] { Change($@"C:\r\s{i}.txt", $"segment doc number {i} content") },
+                Array.Empty<string>(),
+                new UsnCheckpoint(1, 200 + i), settings, DateTimeOffset.UtcNow);
+        }
+
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, last);
+        Assert.Equal(1, store.ActiveSegmentCount());
+
+        ContentIndexStore.LayeredIndexHandle? handle = store.TryOpenLayered();
+        Assert.NotNull(handle);
+        Assert.True(handle!.Base.TryGetAlias(IndexScopeIdentity.NormalizePath(@"C:\r\a.txt"), out _, out _));
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.True(handle.Segments[0].Added.TryGetAlias(
+                IndexScopeIdentity.NormalizePath($@"C:\r\s{i}.txt"), out _, out _));
+        }
     }
 
     [Fact]
@@ -240,16 +326,17 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
 
         var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
         var settings = Settings(maxSegments: 1, thresholdMB: 4096);
+        settings.IndexSizeManagementMode = IndexSizeManagementModes.Compact;
         settings.IndexMaxAutoCompactionSizeMB = 1;
 
         Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, updater.Apply(
             _scopeId, "vol", _root,
             new[] { Change(@"C:\r\s0.txt", "first segment") }, Array.Empty<string>(),
-            new UsnCheckpoint(2, 200), settings, DateTimeOffset.UtcNow));
+            new UsnCheckpoint(1, 200), settings, DateTimeOffset.UtcNow));
         IncrementalUpdateOutcome capped = updater.Apply(
             _scopeId, "vol", _root,
             new[] { Change(@"C:\r\s1.txt", "second segment") }, Array.Empty<string>(),
-            new UsnCheckpoint(3, 300), settings, DateTimeOffset.UtcNow);
+            new UsnCheckpoint(1, 300), settings, DateTimeOffset.UtcNow);
 
         Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, capped);
         Assert.Equal(2, store.ActiveSegmentCount());
@@ -258,10 +345,88 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
         IncrementalUpdateOutcome uncapped = updater.Apply(
             _scopeId, "vol", _root,
             new[] { Change(@"C:\r\s2.txt", "third segment") }, Array.Empty<string>(),
-            new UsnCheckpoint(4, 400), settings, DateTimeOffset.UtcNow);
+            new UsnCheckpoint(1, 400), settings, DateTimeOffset.UtcNow);
 
         Assert.Equal(IncrementalUpdateOutcome.Compacted, uncapped);
         Assert.Equal(0, store.ActiveSegmentCount());
+    }
+
+    [Fact]
+    public void Apply_OverConfiguredSizeBudgetWithoutCompaction_HaltsBeforeAppending()
+    {
+        var store = NewStore();
+        var builder = new ContentIndexGenerationBuilder(OpenPolicy);
+        for (int index = 0; index < 700; index++)
+        {
+            string wideBody = string.Concat(Enumerable.Range(0, 40)
+                .Select(_ => Guid.NewGuid().ToString("N")));
+            builder.AddDocument($@"C:\r\base-{index}.txt", Encoding.UTF8.GetBytes(wideBody));
+        }
+        store.Publish(builder.Build(
+            _scopeId, "vol", _root, new UsnCheckpoint(1, 100), DateTimeOffset.UtcNow));
+        Assert.True(store.TotalActiveIndexBytes() > 1024 * 1024);
+
+        var settings = new IndexMaintenanceSettings
+        {
+            SizeBudgetMB = 1,
+            SizeManagementMode = IndexSizeManagementModes.Coalesce,
+        };
+        var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
+
+        IncrementalUpdateOutcome outcome = updater.Apply(
+            _scopeId,
+            "vol",
+            _root,
+            [Change(@"C:\r\new.txt", "new content")],
+            Array.Empty<string>(),
+            new UsnCheckpoint(1, 200),
+            settings,
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(IncrementalUpdateOutcome.SizeBudgetReached, outcome);
+        Assert.Equal(0, store.ActiveSegmentCount());
+    }
+
+    [Fact]
+    public void Apply_CorruptOlderLayer_KeepsTheNewlyPublishedSegmentWhenReclamationFails()
+    {
+        var store = NewStore();
+        PublishBase(store, (@"C:\r\base.txt", "base content"));
+        for (int layer = 0; layer < 3; layer++)
+        {
+            var segment = new ContentIndexDeltaSegmentBuilder(OpenPolicy);
+            segment.AddChangedDocument(
+                $@"C:\r\old-{layer}.txt",
+                Encoding.UTF8.GetBytes($"old layer {layer}"));
+            store.PublishSegment(segment.Build(
+                _scopeId,
+                "vol",
+                _root,
+                new UsnCheckpoint(1, 200 + layer),
+                DateTimeOffset.UtcNow.AddMinutes(layer)));
+        }
+
+        string corruptAliases = Path.Combine(
+            store.ScopeDirectory,
+            "segments",
+            "seg-000001",
+            ContentIndexGenerationSerializer.AliasesFile);
+        File.WriteAllBytes(corruptAliases, [1, 2, 3]);
+
+        AppSettings settings = Settings(maxSegments: 2, thresholdMB: 4096);
+        var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
+        IncrementalUpdateOutcome outcome = updater.Apply(
+            _scopeId,
+            "vol",
+            _root,
+            [Change(@"C:\r\new.txt", "new durable segment")],
+            Array.Empty<string>(),
+            new UsnCheckpoint(1, 500),
+            settings,
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, outcome);
+        Assert.Equal(4, store.ActiveSegmentCount());
     }
 
     [Fact]

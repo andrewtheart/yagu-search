@@ -80,6 +80,10 @@ public enum IndexRootHealthKind
     /// <summary>The index hit its storage budget, so Yagu stopped updating it. Searches stay complete
     /// (uncovered files are read live) but acceleration decays until the user acts.</summary>
     SizeBudgetReached,
+
+    /// <summary>The index is <b>still being updated</b>, but its accumulated update history has passed the
+    /// clean-up thresholds and no allowed automatic path can reclaim it, so it will keep growing.</summary>
+    ReclamationBlocked,
 }
 
 /// <summary>One immutable row in the launch-time all-drive index-health snapshot.</summary>
@@ -93,13 +97,16 @@ public readonly record struct IndexRootHealthEntry(
     string? DeleteRoot = null,
     string? AddRoot = null,
     string? BuildRoot = null,
-    string? SizeBudgetRoot = null)
+    string? SizeBudgetRoot = null,
+    string? ReclamationBlockedRoot = null,
+    IndexCompactionForecast? CompactionForecast = null)
 {
     public bool NeedsAttention => Kind is IndexRootHealthKind.RebuildRequired
         or IndexRootHealthKind.FreshnessUnavailable
         or IndexRootHealthKind.BuildRequired
         or IndexRootHealthKind.StorageProblem
-        or IndexRootHealthKind.SizeBudgetReached;
+        or IndexRootHealthKind.SizeBudgetReached
+        or IndexRootHealthKind.ReclamationBlocked;
 
     public bool HasStoredIndex => Kind is IndexRootHealthKind.LeftoverIndex
         or IndexRootHealthKind.Healthy
@@ -107,7 +114,8 @@ public readonly record struct IndexRootHealthEntry(
         or IndexRootHealthKind.RebuildRequired
         or IndexRootHealthKind.FreshnessUnavailable
         or IndexRootHealthKind.StorageProblem
-        or IndexRootHealthKind.SizeBudgetReached;
+        or IndexRootHealthKind.SizeBudgetReached
+        or IndexRootHealthKind.ReclamationBlocked;
 
     public bool IsHealthy => Kind is IndexRootHealthKind.Healthy or IndexRootHealthKind.ChangesPending;
 
@@ -137,6 +145,9 @@ public readonly record struct IndexRootHealthEntry(
     /// missing step is running that first build.</summary>
     public bool CanBuildNow => !string.IsNullOrWhiteSpace(BuildRoot);
 }
+
+/// <summary>One row in the indexing-overview stage list.</summary>
+public readonly record struct IndexActivityStageInfo(string Stage, string Title, string Detail);
 
 /// <summary>
 /// Pure presentation helpers for the Indexing feature's UI (plan §6.2). Every decision here is a pure
@@ -263,7 +274,16 @@ public static class ContentIndexUiStatus
     public static string BuildActivityLabel(bool isIncremental, string? stage, int percent)
     {
         if (!isIncremental && !IndexUpdateStages.IsIncremental(stage))
-            return percent >= 0 ? $"Indexing… {percent}%" : "Indexing…";
+        {
+            return stage switch
+            {
+                IndexBuildStages.RawBuild => percent >= 0 ? $"Indexing files… {percent}%" : "Indexing files…",
+                IndexBuildStages.Pdf => percent >= 0 ? $"Indexing PDF text… {percent}%" : "Indexing PDF text…",
+                IndexBuildStages.Ocr => percent >= 0 ? $"Indexing image text… {percent}%" : "Indexing image text…",
+                IndexBuildStages.PostBuildCatchUp => "Catching up file changes…",
+                _ => percent >= 0 ? $"Indexing… {percent}%" : "Indexing…",
+            };
+        }
 
         return stage switch
         {
@@ -271,21 +291,76 @@ public static class ContentIndexUiStatus
             IndexUpdateStages.Writing => "Writing index update…",
             IndexUpdateStages.Publishing => "Publishing index update…",
             IndexUpdateStages.Compacting => "Compacting index…",
+            IndexUpdateStages.CompactAnalyzing => "Analyzing compaction…",
+            IndexUpdateStages.CompactMerging => percent >= 0 ? $"Compacting index… {percent}%" : "Compacting index…",
+            IndexUpdateStages.CompactPublishing => "Publishing compacted index…",
+            IndexUpdateStages.Deleting => "Deleting index…",
             _ when percent >= 100 => "Finalizing index update…",
             _ => percent >= 0 ? $"Updating index… {percent}%" : "Updating index…",
         };
     }
 
-    /// <summary>Tooltip sentence describing what an incremental update is currently doing.</summary>
+    /// <summary>Tooltip sentence describing what the current build/update stage is doing.</summary>
     public static string? BuildActivityDetail(string? stage) => stage switch
     {
+        IndexBuildStages.RawBuild => "Scanning the source folder, reading eligible files, and building the complete replacement index.",
+        IndexBuildStages.Pdf => "Extracting searchable text from PDF files and adding it to the index.",
+        IndexBuildStages.Ocr => "Recognizing text in supported images and adding that text to the index.",
+        IndexBuildStages.PostBuildCatchUp => "Replaying filesystem changes that occurred while the complete index was being built.",
+        IndexUpdateStages.Incremental => "Preparing a safe incremental update from the drive change journal.",
         IndexUpdateStages.Resolving => "Resolving which files the change journal reports as changed, and reading their content.",
         IndexUpdateStages.Merging => "Merging the resolved changes into a new index segment.",
         IndexUpdateStages.Writing => "Writing the new index segment to disk.",
         IndexUpdateStages.Publishing => "Publishing the new segment so searches can use it.",
         IndexUpdateStages.Compacting => "Compacting index layers now that the update is durable.",
+        IndexUpdateStages.CompactAnalyzing => "Reading active-layer metadata and planning the explicit compaction.",
+        IndexUpdateStages.CompactMerging => "Streaming the active base and update layers into one compacted replacement.",
+        IndexUpdateStages.CompactPublishing => "Validating and atomically publishing the compacted index while the previous index remains usable.",
+        IndexUpdateStages.Deleting => "Removing the stored index. Searches remain available and read files directly afterward.",
         _ => null,
     };
+
+    /// <summary>Every stage shown in the indexing overview for the active operation.</summary>
+    public static IReadOnlyList<IndexActivityStageInfo> BuildActivityStages(bool isIncremental, string? activeStage)
+    {
+        if (activeStage == IndexUpdateStages.Deleting)
+            return new[] { Stage(IndexUpdateStages.Deleting, "Delete stored index") };
+
+        if (activeStage is IndexUpdateStages.CompactAnalyzing
+            or IndexUpdateStages.CompactMerging
+            or IndexUpdateStages.CompactPublishing)
+        {
+            return new[]
+            {
+                Stage(IndexUpdateStages.CompactAnalyzing, "Analyze active layers"),
+                Stage(IndexUpdateStages.CompactMerging, "Compact index layers"),
+                Stage(IndexUpdateStages.CompactPublishing, "Publish compacted index"),
+            };
+        }
+
+        if (isIncremental || IndexUpdateStages.IsIncremental(activeStage))
+        {
+            return new[]
+            {
+                Stage(IndexUpdateStages.Resolving, "Resolve file changes"),
+                Stage(IndexUpdateStages.Merging, "Merge changes"),
+                Stage(IndexUpdateStages.Writing, "Write index update"),
+                Stage(IndexUpdateStages.Publishing, "Publish index update"),
+                Stage(IndexUpdateStages.Compacting, "Compact index layers"),
+            };
+        }
+
+        return new[]
+        {
+            Stage(IndexBuildStages.RawBuild, "Index files"),
+            Stage(IndexBuildStages.Pdf, "Index PDF text"),
+            Stage(IndexBuildStages.Ocr, "Index image text"),
+            Stage(IndexBuildStages.PostBuildCatchUp, "Catch up file changes"),
+        };
+
+        static IndexActivityStageInfo Stage(string stage, string title)
+            => new(stage, title, BuildActivityDetail(stage) ?? string.Empty);
+    }
 
     /// <summary>
     /// Replaces a readiness card's "Yagu can build this in the background" explanation when a build or

@@ -12,6 +12,18 @@ public sealed class SessionLoadDialogRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "SessionLoadDialog.cs"));
     private static readonly string YaguDialogSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "YaguDialog.cs"));
+    private static readonly string MainWindowXaml = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+    private static readonly string MainWindowKeyboardSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Keyboard.cs"));
+    private static readonly string MainWindowLauncherSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Launcher.cs"));
+    private static readonly string MainWindowWindowSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
+    private static readonly string MainWindowTerminalSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
+    private static readonly string TerminalHtml = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "Assets", "terminal.html"));
 
     [Fact]
     public void LoadSession_UsesFastDiscoveryBeforeNativePickerFallback()
@@ -31,12 +43,16 @@ public sealed class SessionLoadDialogRegressionTests
 
         string loadCommand = ExtractWindow(
             PreviewCommandsSource,
-            "private async void OnLoadSession",
+            "private async Task ShowLoadSessionDialogAsync()",
             "private async Task<string?> ChooseSessionFileToLoadAsync");
         AssertContainsInOrder(loadCommand,
+            "if (_sessionLoadDialogOpening || !ViewModel.IsSessionIdle || YaguDialog.HasOpenOwnedWindow(_hwnd))",
+            "_sessionLoadDialogOpening = true;",
             "string previousStatusText = ViewModel.StatusText;",
-            "string? path = await ChooseSessionFileToLoadAsync(previousStatusText);",
-            "if (path is null) return;");
+            "string? path = await ChooseSessionFileToLoadAsync(previousStatusText).ConfigureAwait(true);",
+            "if (path is null)",
+            "await LoadSessionFileAsync(path)",
+            "_sessionLoadDialogOpening = false;");
 
         string chooseMethod = ExtractWindow(
             PreviewCommandsSource,
@@ -60,6 +76,30 @@ public sealed class SessionLoadDialogRegressionTests
             "if (ViewModel.StatusText == FindingSavedYaguSessionsStatus)",
             "ViewModel.StatusText = previousStatusText;",
             "return null;");
+    }
+
+    [Fact]
+    public void CtrlO_LoadsSavedSessionAcrossMainWindowAndTerminalFocus()
+    {
+        Assert.Equal(2, CountOccurrences(
+            MainWindowXaml,
+            "ToolTipService.ToolTip=\"Load a previously saved .yagu-session file (Ctrl+O)\""));
+
+        Assert.Contains("Key = VirtualKey.O", MainWindowKeyboardSource);
+        Assert.Contains("Modifiers = VirtualKeyModifiers.Control", MainWindowKeyboardSource);
+        Assert.Contains("_ = ShowLoadSessionDialogAsync();", MainWindowKeyboardSource);
+        Assert.Contains("Windows.System.VirtualKey.O && ctrl && !shift", MainWindowKeyboardSource);
+
+        Assert.Contains("IsLoadSessionShortcutMessage(message, wParam)", MainWindowLauncherSource);
+        Assert.Contains("wParam.ToUInt32() == VkO", MainWindowLauncherSource);
+        Assert.Contains("IsVirtualKeyDown(VkControl)", MainWindowLauncherSource);
+        Assert.Contains("private const uint VkO = 0x4F;", MainWindowWindowSource);
+        Assert.Contains("private static extern short GetKeyState(int virtualKey);", MainWindowWindowSource);
+
+        Assert.Contains("case \"openSession\":", MainWindowTerminalSource);
+        Assert.Contains("_ = ShowLoadSessionDialogAsync();", MainWindowTerminalSource);
+        Assert.Contains("event.key.toLowerCase() === 'o'", TerminalHtml);
+        Assert.Contains("type: 'openSession'", TerminalHtml);
     }
 
     [Fact]

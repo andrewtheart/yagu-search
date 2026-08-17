@@ -1,5 +1,21 @@
 namespace Yagu.Services.Index;
 
+/// <summary>Progress stage names reported while building a complete replacement index.</summary>
+public static class IndexBuildStages
+{
+    /// <summary>Crawling source files, reading content, and building the raw index.</summary>
+    public const string RawBuild = "rawBuild";
+
+    /// <summary>Extracting and indexing text from PDF files.</summary>
+    public const string Pdf = "pdf";
+
+    /// <summary>Extracting and indexing text from images with OCR.</summary>
+    public const string Ocr = "ocr";
+
+    /// <summary>Replaying changes that occurred while the full build was running.</summary>
+    public const string PostBuildCatchUp = "postBuildCatchUp";
+}
+
 /// <summary>
 /// Progress stage names an incremental (delta) index update reports alongside its percent estimate.
 /// Every value keeps the <see cref="Incremental"/> prefix so the existing stage contract still holds:
@@ -30,6 +46,18 @@ public static class IndexUpdateStages
     /// <summary>Coalescing or compacting layers after the delta was durably appended.</summary>
     public const string Compacting = "incremental.compacting";
 
+    /// <summary>Reading the active layer metadata an explicit compaction will fold.</summary>
+    public const string CompactAnalyzing = "incremental.compacting.analyzing";
+
+    /// <summary>Streaming every layer's records into the merged base.</summary>
+    public const string CompactMerging = "incremental.compacting.merging";
+
+    /// <summary>Validating and atomically publishing the compacted base.</summary>
+    public const string CompactPublishing = "incremental.compacting.publishing";
+
+    /// <summary>Removing one stored index after the warning dialog hands work to the status bar.</summary>
+    public const string Deleting = "incremental.deleting";
+
     /// <summary>True when the stage denotes an update to an existing index rather than a full build.</summary>
     public static bool IsIncremental(string? stage)
         => stage is not null && stage.StartsWith(Incremental, StringComparison.OrdinalIgnoreCase);
@@ -41,4 +69,41 @@ public static class IndexUpdateStages
     public const int WriteFloor = MergeCeiling;
     public const int PublishFloor = 94;
     public const int CompactFloor = 97;
+}
+
+/// <summary>
+/// Maps measured work from nested operations into one monotonic integer progress stream. Repeated
+/// percentages are suppressed so record-level estimators never flood the worker protocol.
+/// </summary>
+internal sealed class IndexProgressReporter(Action<int>? callback)
+{
+    private int _lastPercent = -1;
+
+    public void Report(int percent)
+    {
+        int bounded = Math.Clamp(percent, 0, 100);
+        if (callback is null || bounded <= _lastPercent)
+            return;
+        _lastPercent = bounded;
+        callback(bounded);
+    }
+
+    public void ReportFraction(long completed, long total, int startPercent, int endPercent)
+        => Report(Scale(completed, total, startPercent, endPercent));
+
+    public Action<int>? Slice(int startPercent, int endPercent)
+        => callback is null
+            ? null
+            : percent => Report(Scale(percent, 100, startPercent, endPercent));
+
+    internal static int Scale(long completed, long total, int startPercent, int endPercent)
+    {
+        int start = Math.Clamp(startPercent, 0, 100);
+        int end = Math.Clamp(endPercent, start, 100);
+        if (total <= 0)
+            return start;
+        long bounded = Math.Clamp(completed, 0, total);
+        double ratio = (double)bounded / total;
+        return start + (int)Math.Floor(ratio * (end - start));
+    }
 }

@@ -64,7 +64,15 @@ SetupIconFile=..\src\Yagu\Assets\yagu.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
 SolidCompression=yes
-WizardStyle=modern
+; Dark, branded wizard. The artwork is generated from docs\images\yagu-logo.png by
+; scripts\build-installer-wizard-images.ps1 at 3x so it stays sharp at 200-300% scaling.
+WizardStyle=modern dark includetitlebar hidebevels
+WizardSizePercent=125
+WizardKeepAspectRatio=yes
+WizardImageFile=assets\wizard-dark.png
+WizardSmallImageFile=assets\wizard-small-dark.png
+; The welcome page is where the tall branded panel is shown, so keep it.
+DisableWelcomePage=no
 #if YaguArch == "arm64"
 ArchitecturesAllowed=arm64
 ArchitecturesInstallIn64BitMode=arm64
@@ -730,6 +738,12 @@ var
   I: Integer;
   OptionCount, OptionTop: Integer;
 begin
+  WizardForm.Caption := 'Install Yagu';
+  WizardForm.WelcomeLabel1.Caption := 'Yagu' + #13#10 + 'Yet Another Grep Utility';
+  WizardForm.WelcomeLabel2.Caption :=
+    'Hyperfast search across your drives - file names, text, PDFs, images and archives.' + #13#10 + #13#10 +
+    'Setup shows the license, third-party notices and privacy policy before anything is installed, and asks what to keep if Yagu is already on this machine.';
+
   ExtractTemporaryFile('THIRD-PARTY-NOTICES.txt');
   if not LoadStringsFromFile(
     ExpandConstant('{tmp}\THIRD-PARTY-NOTICES.txt'), NoticesLines) then
@@ -760,7 +774,8 @@ begin
   Rtf :=
     '{\rtf1\ansi\ansicpg1252\deff0' +
     '{\fonttbl{\f0\fswiss\fcharset0 Segoe UI;}}' +
-    '{\colortbl ;\red0\green70\blue140;\red170\green30\blue30;\red0\green100\blue55;}' +
+    { Light tints: the wizard runs in dark mode, so the classic dark blue/red/green are unreadable. }
+    '{\colortbl ;\red127\green196\blue255;\red255\green138\blue128;\red126\green231\blue135;}' +
     '\viewkind4\uc1\pard\f0\fs18' +
     '\b Setup found existing Yagu program files or saved data.\b0\par\par ';
   if ExistingInstallLocations <> '' then

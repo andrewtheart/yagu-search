@@ -160,6 +160,24 @@ public sealed class ContentIndexFileIdentityPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void QueryModeRead_CorruptContentFailsClosed()
+    {
+        var builder = new ContentIndexGenerationBuilder(OpenPolicy, identityProvider: FakeIdentities(0x5, out _));
+        builder.AddDocument(@"C:\r\a.txt", Encoding.UTF8.GetBytes("the planner produces trigram queries"));
+        ContentIndexGeneration generation = builder.Build(
+            "s", "v", @"C:\r", new UsnCheckpoint(1, 100), DateTimeOffset.UtcNow);
+        string directory = Path.Combine(_sandbox, "gen-stream-corrupt");
+        ContentIndexGenerationSerializer.Write(directory, generation);
+
+        string contentPath = Path.Combine(directory, ContentIndexGenerationSerializer.ContentFile);
+        byte[] bytes = File.ReadAllBytes(contentPath);
+        bytes[^1] ^= 0xFF;
+        File.WriteAllBytes(contentPath, bytes);
+
+        Assert.Null(ContentIndexGenerationSerializer.TryRead(directory, retainDocuments: false));
+    }
+
+    [Fact]
     public void NullIdentityProvider_ProducesEmptyFileIdMap()
     {
         var builder = new ContentIndexGenerationBuilder(OpenPolicy); // no identity provider

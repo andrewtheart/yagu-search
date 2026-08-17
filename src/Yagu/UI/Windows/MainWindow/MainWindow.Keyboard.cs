@@ -26,6 +26,18 @@ public sealed partial class MainWindow
             OpenHelpWindow();
         };
         RootGrid.KeyboardAccelerators.Add(helpAccelerator);
+
+        var loadSessionAccelerator = new KeyboardAccelerator
+        {
+            Key = VirtualKey.O,
+            Modifiers = VirtualKeyModifiers.Control,
+        };
+        loadSessionAccelerator.Invoked += (sender, args) =>
+        {
+            args.Handled = true;
+            _ = ShowLoadSessionDialogAsync();
+        };
+        RootGrid.KeyboardAccelerators.Add(loadSessionAccelerator);
     }
 
     private void OnRootGridPreviewKeyDown(object sender, KeyRoutedEventArgs e)
@@ -41,6 +53,11 @@ public sealed partial class MainWindow
         {
             e.Handled = true;
             OpenHelpWindow();
+        }
+        else if (e.Key == Windows.System.VirtualKey.O && ctrl && !shift)
+        {
+            e.Handled = true;
+            _ = ShowLoadSessionDialogAsync();
         }
         else if (e.Key == Windows.System.VirtualKey.F && ctrl)
         {

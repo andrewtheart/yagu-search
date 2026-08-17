@@ -41,6 +41,9 @@ internal static class IndexMutationFaults
     internal const string CoalesceMarkerCleared = "coalesce.marker-cleared";
     internal const string CoalesceCleanupFinished = "coalesce.cleanup-finished";
 
+    internal const string CompactionWorkspaceCreated = "compaction.workspace-created";
+    internal const string CompactionPrepared = "compaction.prepared";
+
     internal const string PointerTempFlushed = "pointer.temp-flushed";
     internal const string PointerPublished = "pointer.published";
     internal const string RetentionStarted = "retention.started";

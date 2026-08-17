@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Index;
 using Xunit;
 
 namespace Yagu.Tests;
@@ -37,6 +38,7 @@ public sealed class ContentIndexSettingsTests
         Assert.Equal(AppSettings.DefaultIndexMaxCandidatePercent, s.IndexMaxCandidatePercent);
         Assert.Equal(AppSettings.DefaultIndexMaxFileSizeMB, s.IndexMaxFileSizeMB);
         Assert.Equal(AppSettings.DefaultIndexRetainedGenerationCount, s.IndexRetainedGenerationCount);
+        Assert.Equal(AppSettings.DefaultIndexStorageHistoryRetentionDays, s.IndexStorageHistoryRetentionDays);
         Assert.Equal(AppSettings.DefaultIndexBuildTrigger, s.IndexBuildTrigger);
         Assert.Equal(AppSettings.DefaultIndexUpdateMode, s.IndexUpdateMode);
         Assert.Equal("ManualFullRebuild", s.IndexUpdateMode); // V1 default never auto-rebuilds
@@ -56,12 +58,103 @@ public sealed class ContentIndexSettingsTests
         var s = new AppSettings();
         Assert.False(s.IndexUseWatcherHints); // watcher hints opt-in
         Assert.Equal(8, s.IndexMaxDeltaSegments);
-        Assert.Equal(256, s.IndexCompactionThresholdMB);
+        Assert.Equal(512, s.IndexCompactionThresholdMB);
         Assert.Equal(AppSettings.DefaultIndexMaxDeltaSegments, s.IndexMaxDeltaSegments);
         Assert.Equal(AppSettings.DefaultIndexCompactionThresholdMB, s.IndexCompactionThresholdMB);
-        Assert.Equal(512, s.IndexMaxAutoCompactionSizeMB);
+        Assert.Equal(8192, s.IndexMaxAutoCompactionSizeMB);
         Assert.Equal(AppSettings.DefaultIndexMaxAutoCompactionSizeMB, s.IndexMaxAutoCompactionSizeMB);
         Assert.False(s.ShareAggregateIndexTelemetry); // aggregate index telemetry is opt-in
+    }
+
+    [Fact]
+    public void Defaults_StreamingMergeBounds_CoverOrdinaryWholeDriveSegments()
+    {
+        var s = new AppSettings();
+        Assert.Equal(1024, s.IndexCoalesceMaxSegmentMB);
+        Assert.Equal(4096, s.IndexCoalesceMaxBatchMB);
+        Assert.Equal(3, s.IndexCoalesceMinRun);
+        // A minimum-length run must always be able to fit inside one batch.
+        Assert.True(s.IndexCoalesceMaxBatchMB >= s.IndexCoalesceMinRun * s.IndexCoalesceMaxSegmentMB);
+        // Halting a still-updating index is opt-in: coverage loss is never imposed silently.
+        Assert.False(s.IndexHaltUpdatesWhenReclamationBlocked);
+        Assert.Equal(s.IndexCoalesceMaxSegmentMB, EffectiveIndexSizePolicy.Default.CoalesceMaxSegmentMB);
+        Assert.Equal(s.IndexCoalesceMaxBatchMB, EffectiveIndexSizePolicy.Default.CoalesceMaxBatchMB);
+        Assert.Equal(s.IndexCoalesceMinRun, EffectiveIndexSizePolicy.Default.CoalesceMinRun);
+        Assert.Equal(s.IndexMaxAutoCompactionSizeMB, EffectiveIndexSizePolicy.Default.MaxAutoCompactionSizeMB);
+    }
+
+    [Fact]
+    public void AutomaticCompactionMigration_LiftsOnlyExactPreviousDefaults()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "yagu-auto-compact-migrate", Guid.NewGuid().ToString("N") + ".json");
+        Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
+        try
+        {
+            File.WriteAllText(
+                temp,
+                $$"""{ "IndexSizeDefaultsMigrated": true, "IndexStreamingMergeDefaultsMigrated": true, "IndexCompactionThresholdMB": {{AppSettings.PreBalancedDefaultIndexCompactionThresholdMB}}, "IndexMaxAutoCompactionSizeMB": {{AppSettings.PreBalancedDefaultIndexMaxAutoCompactionSizeMB}}, "IndexCoalesceMinRun": {{AppSettings.PreBalancedDefaultIndexCoalesceMinRun}} }""");
+            AppSettings lifted = new SettingsService(temp).Load();
+            Assert.Equal(AppSettings.DefaultIndexCompactionThresholdMB, lifted.IndexCompactionThresholdMB);
+            Assert.Equal(AppSettings.DefaultIndexMaxAutoCompactionSizeMB, lifted.IndexMaxAutoCompactionSizeMB);
+            Assert.Equal(AppSettings.DefaultIndexCoalesceMinRun, lifted.IndexCoalesceMinRun);
+            Assert.True(lifted.IndexAutomaticCompactionDefaultsMigrated);
+
+            File.WriteAllText(
+                temp,
+                """{ "IndexSizeDefaultsMigrated": true, "IndexStreamingMergeDefaultsMigrated": true, "IndexCompactionThresholdMB": 768, "IndexMaxAutoCompactionSizeMB": 0, "IndexCoalesceMinRun": 2 }""");
+            AppSettings deliberate = new SettingsService(temp).Load();
+            Assert.Equal(768, deliberate.IndexCompactionThresholdMB);
+            Assert.Equal(0, deliberate.IndexMaxAutoCompactionSizeMB);
+            Assert.Equal(2, deliberate.IndexCoalesceMinRun);
+
+            File.WriteAllText(
+                temp,
+                $$"""{ "IndexSizeDefaultsMigrated": true, "IndexStreamingMergeDefaultsMigrated": true, "IndexAutomaticCompactionDefaultsMigrated": true, "IndexCompactionThresholdMB": {{AppSettings.PreBalancedDefaultIndexCompactionThresholdMB}}, "IndexMaxAutoCompactionSizeMB": {{AppSettings.PreBalancedDefaultIndexMaxAutoCompactionSizeMB}}, "IndexCoalesceMinRun": {{AppSettings.PreBalancedDefaultIndexCoalesceMinRun}} }""");
+            AppSettings alreadyMigrated = new SettingsService(temp).Load();
+            Assert.Equal(AppSettings.PreBalancedDefaultIndexCompactionThresholdMB, alreadyMigrated.IndexCompactionThresholdMB);
+            Assert.Equal(AppSettings.PreBalancedDefaultIndexMaxAutoCompactionSizeMB, alreadyMigrated.IndexMaxAutoCompactionSizeMB);
+            Assert.Equal(AppSettings.PreBalancedDefaultIndexCoalesceMinRun, alreadyMigrated.IndexCoalesceMinRun);
+        }
+        finally
+        {
+            try { File.Delete(temp); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void StreamingMergeMigration_LiftsOnlyUnchangedPreviousDefaults()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "yagu-stream-migrate", Guid.NewGuid().ToString("N") + ".json");
+        Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
+        try
+        {
+            File.WriteAllText(
+                temp,
+                $$"""{ "IndexSizeDefaultsMigrated": true, "IndexCoalesceMaxSegmentMB": {{AppSettings.PreStreamingDefaultIndexCoalesceMaxSegmentMB}}, "IndexCoalesceMaxBatchMB": {{AppSettings.PreStreamingDefaultIndexCoalesceMaxBatchMB}} }""");
+            AppSettings lifted = new SettingsService(temp).Load();
+            Assert.Equal(AppSettings.DefaultIndexCoalesceMaxSegmentMB, lifted.IndexCoalesceMaxSegmentMB);
+            Assert.Equal(AppSettings.DefaultIndexCoalesceMaxBatchMB, lifted.IndexCoalesceMaxBatchMB);
+            Assert.True(lifted.IndexStreamingMergeDefaultsMigrated);
+
+            File.WriteAllText(
+                temp,
+                """{ "IndexSizeDefaultsMigrated": true, "IndexCoalesceMaxSegmentMB": 300, "IndexCoalesceMaxBatchMB": 1500 }""");
+            AppSettings deliberate = new SettingsService(temp).Load();
+            Assert.Equal(300, deliberate.IndexCoalesceMaxSegmentMB);
+            Assert.Equal(1500, deliberate.IndexCoalesceMaxBatchMB);
+
+            File.WriteAllText(
+                temp,
+                $$"""{ "IndexSizeDefaultsMigrated": true, "IndexStreamingMergeDefaultsMigrated": true, "IndexCoalesceMaxSegmentMB": {{AppSettings.PreStreamingDefaultIndexCoalesceMaxSegmentMB}} }""");
+            AppSettings alreadyMigrated = new SettingsService(temp).Load();
+            Assert.Equal(
+                AppSettings.PreStreamingDefaultIndexCoalesceMaxSegmentMB,
+                alreadyMigrated.IndexCoalesceMaxSegmentMB);
+        }
+        finally
+        {
+            try { File.Delete(temp); } catch { /* best effort */ }
+        }
     }
 
     [Theory]
@@ -387,6 +480,7 @@ public sealed class ContentIndexSettingsTests
                 IndexPostBuildCatchUpThresholdChanges = int.MaxValue,
                 IndexStorageDirectory = @"  E:\ix  ",
                 IndexRetainedGenerationCount = 3,
+                IndexStorageHistoryRetentionDays = 9999,
                 IndexedRoots = new List<string> { @"C:\Projects", @"C:\Projects\", @"c:\projects", "  ", @"D:\Data" },
             });
 
@@ -409,6 +503,7 @@ public sealed class ContentIndexSettingsTests
                 loaded.IndexPostBuildCatchUpThresholdChanges);
             Assert.Equal(@"E:\ix", loaded.IndexStorageDirectory);
             Assert.Equal(3, loaded.IndexRetainedGenerationCount);
+            Assert.Equal(AppSettings.MaximumIndexStorageHistoryRetentionDays, loaded.IndexStorageHistoryRetentionDays);
             // IndexedRoots normalize + de-dup (case-insensitive, trailing sep) + drop blanks on load.
             Assert.Equal(new[] { @"C:\Projects", @"D:\Data" }, loaded.IndexedRoots);
         }

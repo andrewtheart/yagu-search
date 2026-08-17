@@ -69,6 +69,15 @@
     <Compile Include="..\Yagu\Services\Index\BoundedFileIdPathResolver.cs" Link="Linked\Index\BoundedFileIdPathResolver.cs" />
     <Compile Include="..\Yagu\Services\Index\VolumeBinding.cs" Link="Linked\Index\VolumeBinding.cs" />
     <Compile Include="..\Yagu\Services\Index\ChecksummedFile.cs" Link="Linked\Index\ChecksummedFile.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexCoreFileReaders.cs" Link="Linked\Index\IndexCoreFileReaders.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexCompactionDiskGuard.cs" Link="Linked\Index\IndexCompactionDiskGuard.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexCompactionWorkspace.cs" Link="Linked\Index\IndexCompactionWorkspace.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexExternalMergeSorter.cs" Link="Linked\Index\IndexExternalMergeSorter.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexMergeResourceBudget.cs" Link="Linked\Index\IndexMergeResourceBudget.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexReclamationAdvisor.cs" Link="Linked\Index\IndexReclamationAdvisor.cs" />
+    <Compile Include="..\Yagu\Services\Index\IndexChurnSummary.cs" Link="Linked\Index\IndexChurnSummary.cs" />
+    <Compile Include="..\Yagu\Services\Index\ContentIndexV3StreamingWriter.cs" Link="Linked\Index\ContentIndexV3StreamingWriter.cs" />
+    <Compile Include="..\Yagu\Services\Index\StreamingSegmentRunMerger.cs" Link="Linked\Index\StreamingSegmentRunMerger.cs" />
     <Compile Include="..\Yagu\Services\Index\ContentIndexBuildTransaction.cs" Link="Linked\Index\ContentIndexBuildTransaction.cs" />
     <Compile Include="..\Yagu\Services\Index\ContentIndexBuildBatch.cs" Link="Linked\Index\ContentIndexBuildBatch.cs" />
     <Compile Include="..\Yagu\Services\Index\ContentIndexCompactor.cs" Link="Linked\Index\ContentIndexCompactor.cs" />
@@ -83,6 +92,7 @@
     <Compile Include="..\Yagu\Services\Index\IndexUpdateStages.cs" Link="Linked\Index\IndexUpdateStages.cs" />
     <Compile Include="..\Yagu\Services\Index\ContentIndexManager.cs" Link="Linked\Index\ContentIndexManager.cs" />
     <Compile Include="..\Yagu\Services\Index\IndexedRootsPolicy.cs" Link="Linked\Index\IndexedRootsPolicy.cs" />
+    <Compile Include="..\Yagu\Services\Index\ActiveLayerStorageBreakdown.cs" Link="Linked\Index\ActiveLayerStorageBreakdown.cs" />
     <Compile Include="..\Yagu\Services\Index\ContentIndexStore.cs" Link="Linked\Index\ContentIndexStore.cs" />
     <Compile Include="..\Yagu\Services\Index\ContentIndexV3Format.cs" Link="Linked\Index\ContentIndexV3Format.cs" />
     <Compile Include="..\Yagu\Services\Index\ContentIndexUsnChangeResolver.cs" Link="Linked\Index\ContentIndexUsnChangeResolver.cs" />

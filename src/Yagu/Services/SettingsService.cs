@@ -165,6 +165,10 @@ public sealed class AppSettings
     public const int MinimumIndexQuarantineRetentionDays = 1;
     public const int MaximumIndexQuarantineRetentionDays = 90;
 
+    public const int DefaultIndexStorageHistoryRetentionDays = 30;
+    public const int MinimumIndexStorageHistoryRetentionDays = 1;
+    public const int MaximumIndexStorageHistoryRetentionDays = 365;
+
     public const int DefaultIndexIdleDelayMinutes = 5;
     public const int MinimumIndexIdleDelayMinutes = 1;
     public const int MaximumIndexIdleDelayMinutes = 120;
@@ -241,15 +245,15 @@ public sealed class AppSettings
     public const int MinimumIndexMaxDeltaSegments = 1;
     public const int MaximumIndexMaxDeltaSegments = 64;
 
-    public const int DefaultIndexCompactionThresholdMB = 256;
+    public const int DefaultIndexCompactionThresholdMB = 512;
     public const int MinimumIndexCompactionThresholdMB = 16;
     public const int MaximumIndexCompactionThresholdMB = 8192;
 
-    // Safety cap on the AUTOMATIC over-segmented compaction (plan §11.4): folding a large index into a fresh
-    // base re-materializes every layer's documents + a combined posting index + a serialization buffer in
-    // memory (a transient multi-GB spike). Above this total on-disk size the auto-compaction is skipped and
-    // the index is left segmented (queries still work). 0 = no cap. Manual/explicit compaction ignores it.
-    public const int DefaultIndexMaxAutoCompactionSizeMB = 512;
+    // Work cap on AUTOMATIC over-segmented compaction (plan §11.4): the fold is a bounded-memory external
+    // merge, but a large pass still performs substantial sequential I/O and needs temporary spool/output
+    // space. Above this total on-disk size automatic compaction is skipped and the index stays segmented
+    // (queries still work). 0 = no cap. Manual/explicit compaction ignores it.
+    public const int DefaultIndexMaxAutoCompactionSizeMB = 8192;
     public const int MaximumIndexMaxAutoCompactionSizeMB = 1_048_576;
 
     // Segment coalescing bounds (plan §11.4). Coalescing merges a contiguous run of small delta segments
@@ -259,11 +263,14 @@ public sealed class AppSettings
     // Measured on real whole-drive indexes: paged full-build layers and incremental segments both land
     // around 200 MB, so the previous 128 MB cap made 3 of 27 segments eligible and never produced a run.
     // The batch cap must stay >= MinRun * MaxSegment or a minimum-length run can never fit.
-    public const int DefaultIndexCoalesceMaxSegmentMB = 256;
+    // Raised again once merging became a bounded streaming external sort: peak memory is now governed by
+    // IndexBuildMemoryBudgetMB rather than by how large the merged inputs are, so the caps only need to be
+    // wide enough to actually cover ordinary whole-drive segments (780-990 MB each in practice).
+    public const int DefaultIndexCoalesceMaxSegmentMB = 1024;
     public const int MaximumIndexCoalesceMaxSegmentMB = 8192;
-    public const int DefaultIndexCoalesceMaxBatchMB = 1024;
+    public const int DefaultIndexCoalesceMaxBatchMB = 4096;
     public const int MaximumIndexCoalesceMaxBatchMB = 32768;
-    public const int DefaultIndexCoalesceMinRun = 4;
+    public const int DefaultIndexCoalesceMinRun = 3;
     public const int MinimumIndexCoalesceMinRun = 2;
     public const int MaximumIndexCoalesceMinRun = 64;
     public const int DefaultIndexCoalesceMaxRunsPerPass = 8;
@@ -272,6 +279,15 @@ public sealed class AppSettings
     /// <summary>Pre-migration coalescing defaults, kept only so settings still carrying them can be lifted once.</summary>
     public const int LegacyDefaultIndexCoalesceMaxSegmentMB = 128;
     public const int LegacyDefaultIndexCoalesceMaxBatchMB = 512;
+
+    /// <summary>The in-memory-merge era defaults, lifted once by the streaming-merge migration.</summary>
+    public const int PreStreamingDefaultIndexCoalesceMaxSegmentMB = 256;
+    public const int PreStreamingDefaultIndexCoalesceMaxBatchMB = 1024;
+
+    /// <summary>The defaults used before automatic cleanup was rebalanced for streaming compaction.</summary>
+    public const int PreBalancedDefaultIndexCompactionThresholdMB = 256;
+    public const int PreBalancedDefaultIndexMaxAutoCompactionSizeMB = 512;
+    public const int PreBalancedDefaultIndexCoalesceMinRun = 4;
 
     /// <summary>Build trigger: how a build/update is kicked off (plan §6.1).</summary>
     public const string DefaultIndexBuildTrigger = "Manual";
@@ -349,6 +365,10 @@ public sealed class AppSettings
     public static int NormalizeIndexQuarantineRetentionDays(int value)
         => value <= 0 ? DefaultIndexQuarantineRetentionDays
             : Math.Clamp(value, MinimumIndexQuarantineRetentionDays, MaximumIndexQuarantineRetentionDays);
+
+    public static int NormalizeIndexStorageHistoryRetentionDays(int value)
+        => value <= 0 ? DefaultIndexStorageHistoryRetentionDays
+            : Math.Clamp(value, MinimumIndexStorageHistoryRetentionDays, MaximumIndexStorageHistoryRetentionDays);
 
     public static int NormalizeIndexIdleDelayMinutes(int value)
         => value <= 0 ? DefaultIndexIdleDelayMinutes
@@ -885,6 +905,18 @@ public sealed class AppSettings
     /// 128/512 MB coalescing bounds, which together let a whole-drive index halt with nothing able to
     /// reclaim it.</summary>
     public bool IndexSizeDefaultsMigrated { get; set; }
+    /// <summary>One-time migration guard for the coalescing bounds written before merging became a
+    /// bounded streaming external sort (256/1024 MB).</summary>
+    public bool IndexStreamingMergeDefaultsMigrated { get; set; }
+    /// <summary>One-time migration guard for automatic-cleanup defaults from before streaming compaction
+    /// made medium-sized full folds safe and three-layer coalescing practical.</summary>
+    public bool IndexAutomaticCompactionDefaultsMigrated { get; set; }
+    /// <summary>
+    /// Stop adding to an index once its accumulated update history has passed the clean-up thresholds and
+    /// no allowed automatic path can reclaim it. Default false: Yagu keeps the index current and only warns,
+    /// because halting trades index coverage (slower searches, never wrong ones) for bounded growth.
+    /// </summary>
+    public bool IndexHaltUpdatesWhenReclamationBlocked { get; set; }
     /// <summary>Reserved free-space floor (MB). Default 2048 (plan §6.1/§11.2).</summary>
     public int IndexMinimumFreeSpaceMB { get; set; } = DefaultIndexMinimumFreeSpaceMB;
     /// <summary>Stop an index build when the index drive is at least this percent full (plan §11.2).
@@ -896,6 +928,8 @@ public sealed class AppSettings
     public int IndexStaleTemporaryHours { get; set; } = DefaultIndexStaleTemporaryHours;
     /// <summary>Quarantine retention for a failed generation (days). Default 7 (plan §6.1).</summary>
     public int IndexQuarantineRetentionDays { get; set; } = DefaultIndexQuarantineRetentionDays;
+    /// <summary>How many days of hourly physical index-size snapshots the overview graph retains.</summary>
+    public int IndexStorageHistoryRetentionDays { get; set; } = DefaultIndexStorageHistoryRetentionDays;
     /// <summary>Build trigger(s): any combination of WhenEnabled / AtStartup / WhenIdle / Continuous / OnSchedule,
     /// stored as a normalized, comma-separated list (e.g. <c>"AtStartup, OnSchedule"</c>). "Manual" (the
     /// default) means none are selected, so indexing never begins unexpectedly (plan §6.1).</summary>
@@ -976,24 +1010,24 @@ public sealed class AppSettings
     /// fresh base (plan §11.4). Normalized to [1, 64]; default 8.</summary>
     public int IndexMaxDeltaSegments { get; set; } = DefaultIndexMaxDeltaSegments;
     /// <summary>Accumulated delta-segment size (MB) that triggers a compaction into a fresh base, whichever
-    /// bound is hit first (plan §11.4). Normalized to [16, 8192]; default 256.</summary>
+    /// bound is hit first (plan §11.4). Normalized to [16, 8192]; default 512.</summary>
     public int IndexCompactionThresholdMB { get; set; } = DefaultIndexCompactionThresholdMB;
-    /// <summary>Largest total on-disk index size (MB) that the AUTOMATIC over-segmented compaction is allowed
-    /// to fold in-process. Compaction briefly loads the whole index into memory (a transient multi-GB spike),
-    /// so above this cap a large over-segmented index is left segmented instead — searches still use it, and
-    /// the query-mode load already bounds their footprint. 0 disables the cap (always compact). Default 512.
-    /// Manual/explicit compaction is never gated by this.</summary>
+    /// <summary>Largest total on-disk index size (MB) that AUTOMATIC compaction is allowed to fold. The fold
+    /// is a bounded-memory external merge, but a large pass still does substantial background I/O and needs
+    /// temporary spool/output space. Above this cap the index stays segmented; searches still use it. 0
+    /// disables the cap (always compact). Default 8192. Manual/explicit compaction is never gated by this.</summary>
     public int IndexMaxAutoCompactionSizeMB { get; set; } = DefaultIndexMaxAutoCompactionSizeMB;
     /// <summary>Default size-management strategy for every index, overridable per folder via
     /// <see cref="IndexedRootSizePolicies"/>. One of <see cref="Yagu.Services.Index.IndexSizeManagementPolicy.Modes"/>;
     /// default <c>CoalesceThenCompact</c>. Only decides how an index reorganizes its own storage — never what a
     /// search returns.</summary>
     public string IndexSizeManagementMode { get; set; } = Yagu.Services.Index.IndexSizeManagementModes.CoalesceThenCompact;
-    /// <summary>Largest individual delta segment (MB) eligible to join a coalescing run. Default 256.</summary>
+    /// <summary>Largest individual delta segment (MB) eligible to join a coalescing run. Default 1024.</summary>
     public int IndexCoalesceMaxSegmentMB { get; set; } = DefaultIndexCoalesceMaxSegmentMB;
-    /// <summary>Largest total size (MB) of one coalescing run. Bounds maintenance-worker memory. Default 1024.</summary>
+    /// <summary>Largest total size (MB) of one coalescing run. Bounds work and disk I/O; the build memory budget
+    /// bounds in-memory external-sort chunks. Default 4096.</summary>
     public int IndexCoalesceMaxBatchMB { get; set; } = DefaultIndexCoalesceMaxBatchMB;
-    /// <summary>Fewest contiguous eligible segments that make a coalescing run worth merging. Default 4.</summary>
+    /// <summary>Fewest contiguous eligible segments that make a coalescing run worth merging. Default 3.</summary>
     public int IndexCoalesceMinRun { get; set; } = DefaultIndexCoalesceMinRun;
     /// <summary>Most coalescing runs merged in a single maintenance pass. Default 8.</summary>
     public int IndexCoalesceMaxRunsPerPass { get; set; } = DefaultIndexCoalesceMaxRunsPerPass;
@@ -1092,11 +1126,15 @@ public sealed class AppSettings
         IndexMaxFileSizeMB = DefaultIndexMaxFileSizeMB;
         IndexMaxDiskSizeMB = DefaultIndexMaxDiskSizeMB;
         IndexSizeDefaultsMigrated = true;
+        IndexStreamingMergeDefaultsMigrated = true;
+        IndexAutomaticCompactionDefaultsMigrated = true;
+        IndexHaltUpdatesWhenReclamationBlocked = false;
         IndexMinimumFreeSpaceMB = DefaultIndexMinimumFreeSpaceMB;
         IndexMaxDiskUsagePercent = DefaultIndexMaxDiskUsagePercent;
         IndexRetainedGenerationCount = DefaultIndexRetainedGenerationCount;
         IndexStaleTemporaryHours = DefaultIndexStaleTemporaryHours;
         IndexQuarantineRetentionDays = DefaultIndexQuarantineRetentionDays;
+        IndexStorageHistoryRetentionDays = DefaultIndexStorageHistoryRetentionDays;
         IndexBuildTrigger = IndexBuildTriggerContinuous;
         IndexUpdateMode = IndexUpdateModeAutomaticIncremental;
         IndexIdleDelayMinutes = DefaultIndexIdleDelayMinutes;
@@ -1230,6 +1268,16 @@ public sealed class AppSettings
     public bool HasShownFileDrawerLineNumberIntroTip { get; set; }
     /// <summary>Whether the first preview-match introductory tooltip has been shown.</summary>
     public bool HasShownPreviewMatchIntroTip { get; set; }
+    /// <summary>Whether the one-time "where should Tab go?" prompt has been shown for the directory box.</summary>
+    public bool HasPromptedDirectoryTabTarget { get; set; }
+    /// <summary>When true, Tab from the directory box jumps straight to the search-pattern box instead of
+    /// the controls overlaid at the directory box's trailing edge.</summary>
+    public bool DirectoryTabSkipsInlineControls { get; set; }
+    /// <summary>Whether the one-time "where should Tab go?" prompt has been shown for the search-pattern box.</summary>
+    public bool HasPromptedSearchPatternTabTarget { get; set; }
+    /// <summary>When true, Tab from the search-pattern box jumps straight to the Search button instead of
+    /// the toggles overlaid at the search-pattern box's trailing edge.</summary>
+    public bool SearchPatternTabSkipsInlineControls { get; set; }
     /// <summary>When true, do not show the "another instance is already running" dialog on startup.</summary>
     public bool SuppressMultiInstanceWarning { get; set; }
     /// <summary>When true (default), force disk-intensive content-scan, OCR-process, and content-index
@@ -1332,9 +1380,9 @@ public sealed class AppSettings
     /// Prevents a few match-dense files from recreating millions of result stubs just to build a preview.</summary>
     public int MaxSelectedResultsPerPreview { get; set; }
 
-    /// <summary>Absolute ceiling on how many matches a single preview section renders across ALL overflow
-    /// expansions before it stops and directs you to the built-in editor. 0 = 4000 (default). Guards the
-    /// WinUI text layout against a fail-fast on an unbounded RichTextBlock.</summary>
+    /// <summary>Ceiling on how many matches or lines a single preview section renders across ALL overflow
+    /// expansions before it pauses and offers to raise the limit. 0 = 40000 (default). Guards the WinUI
+    /// text layout against a fail-fast on an unbounded RichTextBlock.</summary>
     public int MaxRenderedMatchesPerSection { get; set; }
 
     /// <summary>Max file size (MB) for full-file preview mode. 0 = 1024 (1 GB default).</summary>
@@ -1612,6 +1660,8 @@ public sealed class SettingsService
             IndexContinuousIntervalMigrated = true,
             IndexOneMinuteContinuousIntervalMigrated = true,
             IndexSizeDefaultsMigrated = true,
+            IndexStreamingMergeDefaultsMigrated = true,
+            IndexAutomaticCompactionDefaultsMigrated = true,
         };
 
     // Earlier Yagu versions stored the startup window mode (launcher vs traditional) and the
@@ -1751,6 +1801,43 @@ public sealed class SettingsService
         settings.IndexSizeDefaultsMigrated = true;
     }
 
+    /// <summary>
+    /// Second, independently versioned lift of the coalescing bounds, applied once merging became a
+    /// bounded streaming external sort. Only a value still sitting on the previous default moves, so a
+    /// deliberately chosen bound is preserved and an already-migrated setting is stable.
+    /// </summary>
+    private static void MigrateStreamingMergeDefaults(AppSettings settings)
+    {
+        if (settings.IndexStreamingMergeDefaultsMigrated)
+            return;
+
+        if (settings.IndexCoalesceMaxSegmentMB == AppSettings.PreStreamingDefaultIndexCoalesceMaxSegmentMB)
+            settings.IndexCoalesceMaxSegmentMB = AppSettings.DefaultIndexCoalesceMaxSegmentMB;
+        if (settings.IndexCoalesceMaxBatchMB == AppSettings.PreStreamingDefaultIndexCoalesceMaxBatchMB)
+            settings.IndexCoalesceMaxBatchMB = AppSettings.DefaultIndexCoalesceMaxBatchMB;
+
+        settings.IndexStreamingMergeDefaultsMigrated = true;
+    }
+
+    /// <summary>
+    /// Rebalances automatic cleanup after full compaction became a bounded-memory streaming operation.
+    /// Exact previous defaults move once; deliberate custom values, including an uncapped zero, stay put.
+    /// </summary>
+    private static void MigrateAutomaticCompactionDefaults(AppSettings settings)
+    {
+        if (settings.IndexAutomaticCompactionDefaultsMigrated)
+            return;
+
+        if (settings.IndexCompactionThresholdMB == AppSettings.PreBalancedDefaultIndexCompactionThresholdMB)
+            settings.IndexCompactionThresholdMB = AppSettings.DefaultIndexCompactionThresholdMB;
+        if (settings.IndexMaxAutoCompactionSizeMB == AppSettings.PreBalancedDefaultIndexMaxAutoCompactionSizeMB)
+            settings.IndexMaxAutoCompactionSizeMB = AppSettings.DefaultIndexMaxAutoCompactionSizeMB;
+        if (settings.IndexCoalesceMinRun == AppSettings.PreBalancedDefaultIndexCoalesceMinRun)
+            settings.IndexCoalesceMinRun = AppSettings.DefaultIndexCoalesceMinRun;
+
+        settings.IndexAutomaticCompactionDefaultsMigrated = true;
+    }
+
     /// <summary>Normalizes/validates every persisted content-index setting (plan §6.1). Bounded numeric
     /// values are clamped, enums coerced to known values, and strings trimmed. A zero (unset) numeric
     /// value falls back to its architecture-aware default. Kept in one place so Settings and the CLI
@@ -1764,12 +1851,15 @@ public sealed class SettingsService
         settings.IndexMaxInProcessSizeMB = AppSettings.NormalizeIndexMaxInProcessSizeMB(settings.IndexMaxInProcessSizeMB);
         settings.IndexMaxFileSizeMB = AppSettings.NormalizeIndexMaxFileSizeMB(settings.IndexMaxFileSizeMB);
         MigrateIndexSizeDefaults(settings);
+        MigrateStreamingMergeDefaults(settings);
+        MigrateAutomaticCompactionDefaults(settings);
         settings.IndexMaxDiskSizeMB = AppSettings.NormalizeIndexMaxDiskSizeMB(settings.IndexMaxDiskSizeMB);
         settings.IndexMinimumFreeSpaceMB = AppSettings.NormalizeIndexMinimumFreeSpaceMB(settings.IndexMinimumFreeSpaceMB);
         settings.IndexMaxDiskUsagePercent = AppSettings.NormalizeIndexMaxDiskUsagePercent(settings.IndexMaxDiskUsagePercent);
         settings.IndexRetainedGenerationCount = AppSettings.NormalizeIndexRetainedGenerationCount(settings.IndexRetainedGenerationCount);
         settings.IndexStaleTemporaryHours = AppSettings.NormalizeIndexStaleTemporaryHours(settings.IndexStaleTemporaryHours);
         settings.IndexQuarantineRetentionDays = AppSettings.NormalizeIndexQuarantineRetentionDays(settings.IndexQuarantineRetentionDays);
+        settings.IndexStorageHistoryRetentionDays = AppSettings.NormalizeIndexStorageHistoryRetentionDays(settings.IndexStorageHistoryRetentionDays);
         // Builds before the cadence split stored both meanings in IndexIdleDelayMinutes. Copy that value once;
         // settings saved by this build carry the guard and preserve independently chosen values thereafter.
         if (!settings.IndexContinuousIntervalMigrated)
@@ -1925,6 +2015,8 @@ public sealed class SettingsService
             settings.IndexContinuousIntervalMigrated = true;
             settings.IndexOneMinuteContinuousIntervalMigrated = true;
             settings.IndexSizeDefaultsMigrated = true;
+            settings.IndexStreamingMergeDefaultsMigrated = true;
+            settings.IndexAutomaticCompactionDefaultsMigrated = true;
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             // Write to a temp file then atomically replace, so a concurrent reader (e.g. the bug
@@ -1951,6 +2043,8 @@ public sealed class SettingsService
             settings.IndexContinuousIntervalMigrated = true;
             settings.IndexOneMinuteContinuousIntervalMigrated = true;
             settings.IndexSizeDefaultsMigrated = true;
+            settings.IndexStreamingMergeDefaultsMigrated = true;
+            settings.IndexAutomaticCompactionDefaultsMigrated = true;
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             // Write to a temp file then atomically replace, so a concurrent reader (e.g. the bug

@@ -161,6 +161,63 @@ public sealed class TrigramPostingIndexTests
         Assert.Equal(new[] { 0 }, index.GetPosting(b));
     }
 
+    /// <summary>
+    /// The query-mode load reads <c>content.bin</c> as a checksum-validated STREAM rather than one byte[],
+    /// which is what lets a compacted whole-drive layer exceed the 2 GiB an array can address. It must agree
+    /// with the in-memory reader for the same records.
+    /// </summary>
+    [Fact]
+    public void TryBuildFromContentFile_MatchesTheInMemoryReader()
+    {
+        Trigram a = Tg("aaa");
+        Trigram b = Tg("bbb");
+        byte[] body = ContentBody(
+            new[] { a.Value, a.Value, b.Value },
+            new[] { a.Value });
+        string dir = Path.Combine(Path.GetTempPath(), "yagu-content-stream-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string path = Path.Combine(dir, "content.bin");
+            ChecksummedFile.Write(path, body);
+
+            TrigramPostingIndex? streamed = TrigramPostingIndex.TryBuildFromContentFile(path, out int documentCount);
+
+            Assert.NotNull(streamed);
+            Assert.Equal(2, documentCount);
+            Assert.Equal(new[] { 0, 1 }, streamed!.GetPosting(a));
+            Assert.Equal(new[] { 0 }, streamed.GetPosting(b));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>A truncated or digest-mismatched content file must be reported as unreadable (null), not
+    /// silently loaded as a shorter index — the caller treats that layer as corrupt and live-scans.</summary>
+    [Fact]
+    public void TryBuildFromContentFile_CorruptOrMissingFile_ReturnsNull()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "yagu-content-stream-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string missing = Path.Combine(dir, "content.bin");
+            Assert.Null(TrigramPostingIndex.TryBuildFromContentFile(missing, out _));
+
+            ChecksummedFile.Write(missing, ContentBody(new[] { Tg("aaa").Value }));
+            byte[] tampered = File.ReadAllBytes(missing);
+            tampered[^1] ^= 0xFF;
+            File.WriteAllBytes(missing, tampered);
+            Assert.Null(TrigramPostingIndex.TryBuildFromContentFile(missing, out _));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void Evaluate_MergeLists_CoversEitherExhaustionOrder()
     {

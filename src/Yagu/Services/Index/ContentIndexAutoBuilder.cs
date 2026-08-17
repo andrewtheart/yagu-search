@@ -374,7 +374,8 @@ public sealed class ContentIndexAutoBuilder
                         skipped++;
                         break;
                     case IncrementalUpdateOutcome.SizeBudgetReached:
-                        // A deliberate storage-budget halt, not a broken index — never rebuild from here.
+                    case IncrementalUpdateOutcome.ReclamationBlocked:
+                        // A deliberate halt, not a broken index — never rebuild from here.
                         skipped++;
                         break;
                     default: // NeedsFullRebuild

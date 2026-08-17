@@ -127,6 +127,59 @@ public sealed class TrigramPostingIndex
         return new TrigramPostingIndex(postings, docCount);
     }
 
+    /// <summary>
+    /// Builds the posting index by streaming a <c>content.bin</c> FILE (checksum-validated as it is read)
+    /// straight into posting lists. Unlike <see cref="BuildFromContentBody"/> this never materializes the
+    /// body in a single array, so it can load a compacted layer holding more than 2 GiB of trigram records —
+    /// the size a whole-drive index reaches once every layer is folded into one. Returns null when the file
+    /// is missing, truncated, malformed, or fails its digest; the caller then treats the layer as corrupt.
+    /// Produces the same postings as <see cref="BuildFromContentBody"/> for the same data.
+    /// </summary>
+    public static TrigramPostingIndex? TryBuildFromContentFile(
+        string contentPath,
+        out int documentCount,
+        CancellationToken cancellationToken = default)
+    {
+        documentCount = 0;
+        cancellationToken.ThrowIfCancellationRequested();
+        using IndexContentFileReader? reader = IndexContentFileReader.Open(contentPath);
+        if (reader is null)
+            return null;
+
+        var builders = new Dictionary<Trigram, List<int>>();
+        var trigrams = new List<Trigram>();
+        while (reader.TryReadNext(trigrams, out int docId))
+        {
+            if ((docId & 0xFF) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+            foreach (Trigram t in trigrams)
+            {
+                if (!builders.TryGetValue(t, out var list))
+                {
+                    list = new List<int>();
+                    builders[t] = list;
+                }
+                // Documents arrive in ascending id order → posting lists stay sorted; guard duplicates.
+                if (list.Count == 0 || list[^1] != docId)
+                    list.Add(docId);
+            }
+        }
+        if (!reader.TryFinish())
+            return null;
+
+        var postings = new Dictionary<Trigram, int[]>(builders.Count);
+        int postingNumber = 0;
+        foreach (var (trigram, list) in builders)
+        {
+            if ((postingNumber++ & 0x3FF) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+            postings[trigram] = list.ToArray();
+        }
+
+        documentCount = reader.DocumentCount;
+        return new TrigramPostingIndex(postings, documentCount);
+    }
+
     private static int ReadInt32(ReadOnlySpan<byte> body, ref int offset)
     {
         if (offset + 4 > body.Length)
