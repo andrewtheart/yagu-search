@@ -190,6 +190,7 @@ public sealed partial class SettingsWindow
                                 IndexBuildStages.Ocr),
                             postBuildCatchUpProgress: _ => _viewModel.ReportIndexBuildProgress(
                                 root, 99, IndexBuildStages.PostBuildCatchUp));
+                        await _viewModel.ClearAutomaticCompactionBackoffAsync(root).ConfigureAwait(true);
                         completed++;
                     }
                     catch (IndexDiskFullException ex)

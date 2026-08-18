@@ -58,4 +58,24 @@ public class TelemetryConsentStartupSequencingTests
         Assert.Contains("if (YaguDialog.HasOpenOwnedWindow(_hwnd))", startup);
         Assert.Contains("await TelemetryConsentDialog.RequestConsentAsync(this);", startup);
     }
+
+    [Fact]
+    public void DeveloperOptions_CanResetTelemetryConsentWithoutChangingCurrentChoices()
+    {
+        string viewModel = MainViewModelPartials.Text;
+        string settings = File.ReadAllText(Path.Combine(
+            RepoRoot(), "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+
+        Assert.Contains("public async Task ResetTelemetryConsentPromptAsync()", viewModel);
+        Assert.Contains("settings => settings.TelemetryConsentPromptShown = false", viewModel);
+        string reset = viewModel.Substring(
+            viewModel.IndexOf("public async Task ResetTelemetryConsentPromptAsync()", StringComparison.Ordinal),
+            650);
+        Assert.DoesNotContain("TelemetryEnabled =", reset);
+        Assert.DoesNotContain("BugReportingEnabled =", reset);
+
+        Assert.Contains("Reset telemetry consent prompt (re-prompt on startup)", settings);
+        Assert.Contains("await _viewModel.ResetTelemetryConsentPromptAsync();", settings);
+        Assert.Contains("RegisterDefaultResetButton(resetTelemetryConsentPrompt", settings);
+    }
 }

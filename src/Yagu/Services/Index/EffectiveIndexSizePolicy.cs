@@ -51,7 +51,8 @@ public static class IndexSizeManagementModes
 /// </summary>
 /// <param name="Mode">The resolved strategy, one of <see cref="IndexSizeManagementModes.All"/>.</param>
 /// <param name="SizeBudgetMB">Storage ceiling for this index in MB; 0 = no ceiling.</param>
-/// <param name="MaxAutoCompactionSizeMB">Largest index that may be folded in one automatic compaction; 0 = no cap.</param>
+/// <param name="MaxAutoCompactionSizeMB">Routine automatic fold cap while bounded coalescing can progress;
+/// compact-capable modes may stream-compact above it when no bounded merge can run. 0 = no cap.</param>
 /// <param name="CoalesceMaxSegmentMB">Largest individual segment eligible to join a coalescing run.</param>
 /// <param name="CoalesceMaxBatchMB">Largest total size of one coalescing run.</param>
 /// <param name="CoalesceMinRun">Fewest contiguous eligible segments that make a run worth merging.</param>
@@ -114,4 +115,14 @@ public readonly record struct EffectiveIndexSizePolicy(
             return true;
         return activeIndexBytes <= (long)MaxAutoCompactionSizeMB * 1024 * 1024;
     }
+
+    /// <summary>
+    /// True when an automatic pass may compact now. The configured size cap still defers routine full
+    /// compaction while bounded coalescing is making progress. When no bounded merge can run, streaming
+    /// compaction becomes the fallback for modes that allow it, regardless of size; otherwise the index
+    /// would grow indefinitely even though its worker-isolated, bounded-memory cleanup path is available.
+    /// </summary>
+    public bool AllowsAutomaticCompactionOf(long activeIndexBytes, bool boundedMergeCanProgress)
+        => AllowsCompactingIndexOf(activeIndexBytes)
+            || (AllowsCompaction && !boundedMergeCanProgress);
 }

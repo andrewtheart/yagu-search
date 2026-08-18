@@ -138,7 +138,10 @@ public static class IndexCompactionForecaster
             ? activeSegmentBytes + (long)Math.Max(0, growthBytesPerHour * delay.TotalHours)
             : Math.Max(activeSegmentBytes, thresholdBytes);
         long projectedTotalBytes = breakdown.BaseBytes + projectedSegmentBytes;
-        bool automaticCompaction = policy.AllowsCompactingIndexOf(projectedTotalBytes);
+        bool withinAutomaticCap = policy.AllowsCompactingIndexOf(projectedTotalBytes);
+        bool automaticCompaction = policy.AllowsAutomaticCompactionOf(
+            projectedTotalBytes,
+            boundedMergeCanProgress: false);
         IndexCompactionForecastKind kind = automaticCompaction
             ? IndexCompactionForecastKind.AutomaticCompaction
             : IndexCompactionForecastKind.CleanupAttentionLikely;
@@ -153,14 +156,19 @@ public static class IndexCompactionForecaster
         else if (policy.AllowsCoalescing && breakdown.SegmentCount > maxDeltaSegments)
             coalesceUtc = now.ToUniversalTime();
 
-        string cleanupOutcome = automaticCompaction
+        string cleanupOutcome = withinAutomaticCap
             ? $"At the threshold, the active index is projected to be about {FormatBytes(projectedTotalBytes)}, "
                 + $"within the {FormatCap(policy.MaxAutoCompactionSizeMB)} automatic-compaction cap, so Yagu "
                 + "should compact it automatically rather than show a warning."
+            : automaticCompaction
+                ? $"At the threshold, the active index is projected to be about {FormatBytes(projectedTotalBytes)}, "
+                    + $"above the {FormatCap(policy.MaxAutoCompactionSizeMB)} routine automatic-compaction cap. "
+                    + "If bounded coalescing cannot make progress, Yagu will automatically use streaming "
+                    + "compaction as the configured fallback rather than show a warning."
             : $"At the threshold, the active index is projected to be about {FormatBytes(projectedTotalBytes)}, "
                 + $"outside the {FormatCap(policy.MaxAutoCompactionSizeMB)} automatic-compaction allowance. "
-                + "If bounded coalescing cannot reclaim enough history, Yagu will ask what to do instead of "
-                + "starting a large full compaction on its own.";
+                + "This index's size-management mode forbids full compaction, so Yagu may ask what to do if "
+                + "bounded coalescing cannot reclaim enough history.";
         string coalescing = coalesceUtc is { } coalesce
             && coalesce < estimatedUtc
                 ? $" A smaller bounded coalescing pass is expected first, around "

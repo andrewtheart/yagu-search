@@ -128,8 +128,7 @@ public sealed class ExternalSearchRequestRegressionTests
         foreach (string option in new[] { "Regex", "Case", "Multiline", "Exact" })
             Assert.Contains($"Content = \"{option}\"", menu);
 
-        // Title-bar-less per the modal convention, and dismissed by deactivation or Esc.
-        Assert.Contains("ExtendsContentIntoTitleBar = true;", menu);
+        // Title-bar-less, and dismissed by deactivation or Esc.
         Assert.Contains("presenter.SetBorderAndTitleBar(hasBorder: false, hasTitleBar: false);", menu);
         Assert.Contains("WindowActivationState.Deactivated", menu);
         Assert.Contains("Windows.System.VirtualKey.Escape", menu);
@@ -148,6 +147,51 @@ public sealed class ExternalSearchRequestRegressionTests
             "ViewModel.Multiline = request.Multiline;",
             "ViewModel.ExactMatch = request.ExactMatch;",
             "ApplyExternalSearchRequest(new SearchRequest(");
+    }
+
+    [Fact]
+    public void TrayMenu_HasNoCaptionButtons_AndAnchorsToTheClickedPoint()
+    {
+        string menu = Read("src", "Yagu", "UI", "Windows", "TrayMenuWindow.cs");
+
+        // A context menu must never show caption buttons. Two layers can draw them, so both are ruled out:
+        // the SDK title bar (which ExtendsContentIntoTitleBar keeps alive) and the DWM non-client caption.
+        Assert.DoesNotContain("ExtendsContentIntoTitleBar =", menu);
+        Assert.Contains(
+            "(style & ~(WsCaption | WsThickFrame | WsSysMenu | WsMinimizeBox | WsMaximizeBox))",
+            menu);
+        Assert.Contains("| WsPopup", menu);
+        Assert.Contains("SwpFrameChanged", menu);
+
+        // A failed style read returns 0; writing a style synthesized from it would clear WS_VISIBLE.
+        Assert.Contains("if (style == 0)", menu);
+
+        // Applied when the window is created, then re-asserted after it is realized, because the presenter
+        // call can silently no-op beforehand and showing the window can restore WinUI's frame.
+        Assert.Contains("ApplyBorderlessPopupFrame(hwnd);", menu);
+        string activated = ExtractWindow(menu, "private void OnActivated", 700);
+        AssertContainsInOrder(activated,
+            "ReassertPopupFrame();",
+            "DispatcherQueue.TryEnqueue(ReassertPopupFrame);");
+        string reassert = ExtractWindow(menu, "private void ReassertPopupFrame()", 300);
+        AssertContainsInOrder(reassert,
+            "TryConfigurePresenter();",
+            "ApplyBorderlessPopupFrame(");
+
+        // Each presenter setting fails independently, so a rejected call cannot strand IsAlwaysOnTop (which
+        // keeps the menu above the taskbar) or IsShownInSwitchers.
+        string presenter = ExtractWindow(menu, "private void TryConfigurePresenter", 800);
+        Assert.Contains("try { _appWindow.IsShownInSwitchers = false; }", presenter);
+        int switchers = presenter.IndexOf("_appWindow.IsShownInSwitchers", StringComparison.Ordinal);
+        int border = presenter.IndexOf("presenter.SetBorderAndTitleBar(", StringComparison.Ordinal);
+        Assert.True(switchers >= 0 && border > switchers, "Both presenter settings must be present.");
+        Assert.Contains("presenter.IsAlwaysOnTop = true;", presenter);
+
+        // The menu corner tracks the cursor, sized for the display that was actually clicked.
+        Assert.Contains("double scale = GetAnchorScale();", menu);
+        Assert.Contains("int x = _anchorX - width;", menu);
+        Assert.Contains("int y = _anchorY - height;", menu);
+        Assert.Contains("MonitorFromPoint(new POINT { X = _anchorX, Y = _anchorY }", menu);
     }
 
     // ---- Listener lifecycle ----

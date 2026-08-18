@@ -9,6 +9,16 @@ namespace Yagu.ViewModels;
 /// </summary>
 public sealed partial class MainViewModel
 {
+    /// <summary>Persists one prompt-reset field without saving unrelated Settings-window edits that
+    /// have not been applied yet. The live settings object is updated too so the reset state is
+    /// immediately reflected in Developer Options.</summary>
+    private async Task<bool> PersistPromptResetAsync(Action<AppSettings> reset)
+    {
+        ArgumentNullException.ThrowIfNull(reset);
+        return await _settingsService.UpdateAsync(reset, afterCommit: () => reset(_settings))
+            .ConfigureAwait(true);
+    }
+
     private bool _suppressAdminWarning;
     public bool SuppressAdminWarning
     {
@@ -41,4 +51,33 @@ public sealed partial class MainViewModel
     [ObservableProperty] public partial bool HasShownFileDrawerIntroTip { get; set; }
     [ObservableProperty] public partial bool HasShownFileDrawerLineNumberIntroTip { get; set; }
     [ObservableProperty] public partial bool HasShownPreviewMatchIntroTip { get; set; }
+
+    /// <summary>Shows Explorer context-menu onboarding again on the next launch when the integration is
+    /// not installed. An existing context-menu registration is left unchanged.</summary>
+    public async Task ResetExplorerContextMenuPromptAsync()
+    {
+        if (await PersistPromptResetAsync(settings => settings.HasCompletedFirstRun = false)
+            .ConfigureAwait(true))
+            HasCompletedFirstRun = false;
+    }
+
+    /// <summary>Shows result-storage location onboarding again on the next launch while preserving the
+    /// currently selected directory until the user accepts another choice.</summary>
+    public async Task ResetResultStoreTempLocationPromptAsync()
+    {
+        if (await PersistPromptResetAsync(settings => settings.HasChosenSearchResultTempDirectory = false)
+            .ConfigureAwait(true))
+            HasChosenSearchResultTempDirectory = false;
+    }
+
+    /// <summary>Returns update checks to the undecided state so the startup choice is shown again.
+    /// Prompt mode performs no network check before the user selects and saves a mode.</summary>
+    public async Task ResetAppUpdateConsentPromptAsync()
+    {
+        await PersistPromptResetAsync(settings =>
+        {
+            settings.AppUpdateCheckMode = AppUpdateCheckMode.Prompt;
+            settings.AppUpdateChecksEnabled = true;
+        }).ConfigureAwait(true);
+    }
 }

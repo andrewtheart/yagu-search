@@ -137,6 +137,24 @@ public class OcrPreSearchReadinessTests
     }
 
     [Fact]
+    public void DeveloperOptions_CanResetOcrConsentWithoutDeletingInstalledAssets()
+    {
+        string viewModel = MainViewModelPartials.Text;
+        Assert.Contains("public async Task ResetOcrDownloadConsentAsync()", viewModel);
+        Assert.Contains("OcrDownloadGate.ConsentGranted = false;", viewModel);
+        Assert.Contains("settings => settings.OcrDownloadConsented = false", viewModel);
+        int start = viewModel.IndexOf("public async Task ResetOcrDownloadConsentAsync()", StringComparison.Ordinal);
+        string reset = viewModel.Substring(start, Math.Min(650, viewModel.Length - start));
+        Assert.DoesNotContain("Delete", reset);
+
+        string settings = File.ReadAllText(Path.Combine(
+            RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+        Assert.Contains("Reset OCR download consent", settings);
+        Assert.Contains("await _viewModel.ResetOcrDownloadConsentAsync();", settings);
+        Assert.Contains("RegisterDefaultResetButton(resetOcrDownloadConsent", settings);
+    }
+
+    [Fact]
     public void DownloadDialog_ShowsLiveElapsedProgress_AndIsTitleBarLess()
     {
         Assert.Contains("OcrPreSearchReadiness.DescribeElapsed(started.Elapsed)", MainWindowSource);

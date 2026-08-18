@@ -54,7 +54,8 @@ public sealed class MultilineNewlineSuggestionTests
 
         // Developer Options reset re-enables the prompt and persists.
         Assert.Contains("public async Task ResetMultilineNewlineSuggestionAsync()", src);
-        Assert.Contains("_settings.MultilineNewlineSuggestionDismissed = false;", src);
+        Assert.Contains("settings => settings.MultilineNewlineSuggestionDismissed = false", src);
+        Assert.Contains("await PersistPromptResetAsync(", src);
         Assert.Contains("public bool MultilineNewlineSuggestionDismissed => _settings.MultilineNewlineSuggestionDismissed;", src);
     }
 

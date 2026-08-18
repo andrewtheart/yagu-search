@@ -15,6 +15,10 @@ public enum IncrementalUpdateOutcome
     /// <summary>A segment was appended and then the layered index was compacted into a fresh base.</summary>
     Compacted,
 
+    /// <summary>The delta segment was durably appended, but optional automatic compaction failed. The
+    /// layered index remains valid; maintenance reports failure and retries after a durable backoff.</summary>
+    CompactionFailed,
+
     /// <summary>No trusted base exists to append to — the caller should do a full rebuild instead.</summary>
     NeedsFullRebuild,
 
@@ -23,8 +27,8 @@ public enum IncrementalUpdateOutcome
     NeedsCompatibilityRebuild,
 
     /// <summary>The index is at its configured storage budget and could not be reclaimed within its
-    /// size-management mode, so no segment was appended. The existing index stays valid and queryable; the
-    /// files it no longer covers are simply live-scanned until it is rebuilt.</summary>
+    /// size-management mode. Usually no segment was appended; when one delta crossed the ceiling, that
+    /// durable delta remains active and later updates pause. The index stays valid and queryable.</summary>
     SizeBudgetReached,
 
     /// <summary>Accumulated update history has passed the clean-up thresholds, nothing can reclaim it
@@ -236,7 +240,8 @@ public sealed partial class ContentIndexIncrementalUpdater
             try
             {
                 CoalesceSmallSegmentsUnderLease(
-                    mutation, budgetMaxSegments, cancellationToken, size, IndexMergeResourceBudget.FromSettings(settings));
+                    mutation, budgetMaxSegments, cancellationToken, size,
+                    IndexMergeResourceBudget.FromSettings(settings));
             }
             catch (OperationCanceledException)
             {
@@ -249,8 +254,53 @@ public sealed partial class ContentIndexIncrementalUpdater
             }
 
             long afterCoalesce = _store.TotalActiveIndexBytes();
-            if (size.ExceedsBudget(afterCoalesce) && !size.AllowsCompactingIndexOf(afterCoalesce))
+            if (size.ExceedsBudget(afterCoalesce) && size.AllowsCompaction)
             {
+                if (ContentIndexManager.TryReadAutomaticCompactionFailure(
+                        _store,
+                        out IndexAutomaticCompactionFailure priorFailure)
+                    && priorFailure.RetryAfterUtc > DateTimeOffset.UtcNow)
+                {
+                    return IncrementalUpdateOutcome.CompactionFailed;
+                }
+
+                try
+                {
+                    progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);
+                    ContentIndexManager.RunStreamingCompactionUnderLease(
+                        mutation,
+                        _store,
+                        scopeId,
+                        normalizedRootPath,
+                        settings,
+                        builtUtc,
+                        progress,
+                        cancellationToken);
+                    afterCoalesce = _store.TotalActiveIndexBytes();
+                    if (!size.ExceedsBudget(afterCoalesce))
+                        ContentIndexManager.ClearAutomaticCompactionFailure(_store);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    ContentIndexManager.RecordAutomaticCompactionFailure(_store, ex, DateTimeOffset.UtcNow);
+                    return IncrementalUpdateOutcome.CompactionFailed;
+                }
+            }
+
+            if (size.ExceedsBudget(afterCoalesce))
+            {
+                if (size.AllowsCompaction)
+                {
+                    ContentIndexManager.RecordAutomaticCompactionFailure(
+                        _store,
+                        new InvalidOperationException(
+                            $"Streaming compaction completed, but the {afterCoalesce / (1024 * 1024):N0} MB index still exceeds its {size.SizeBudgetMB:N0} MB storage budget."),
+                        DateTimeOffset.UtcNow);
+                }
                 YaguLog.For("ContentIndex").LogWarning(
                     "Scope {Scope} for '{Root}' is {IndexMB} MB, at or over its {BudgetMB} MB size budget, and mode '{Mode}' cannot reclaim further — pausing index updates for this root. Searches still return every match (uncovered files are read live); rebuild this index to reclaim the space.",
                     scopeId, normalizedRootPath, afterCoalesce / (1024 * 1024), size.SizeBudgetMB, size.Mode);
@@ -323,15 +373,104 @@ public sealed partial class ContentIndexIncrementalUpdater
             }
         }
 
+        // The index may have started below its hard budget and crossed it with this newly published
+        // segment. Enforce the ceiling in the same pass rather than waiting for another scheduled run:
+        // try bounded coalescing, then streaming compaction regardless of routine thresholds/cap. The
+        // delta is already durable, so a failed fold keeps a valid layered index and reports typed failure.
+        if (size.ExceedsBudget(_store.TotalActiveIndexBytes()))
+        {
+            if (size.AllowsCoalescing)
+            {
+                try
+                {
+                    CoalesceSmallSegmentsUnderLease(
+                        mutation,
+                        budgetMaxSegments,
+                        cancellationToken,
+                        size,
+                        IndexMergeResourceBudget.FromSettings(settings));
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    YaguLog.For("ContentIndex").LogWarning(
+                        ex,
+                        "Post-publish budget coalescing failed for scope {Scope}; trying full compaction when configured.",
+                        scopeId);
+                }
+            }
+
+            long afterBudgetCoalesce = _store.TotalActiveIndexBytes();
+            if (size.ExceedsBudget(afterBudgetCoalesce) && size.AllowsCompaction)
+            {
+                if (ContentIndexManager.TryReadAutomaticCompactionFailure(
+                        _store,
+                        out IndexAutomaticCompactionFailure priorFailure)
+                    && priorFailure.RetryAfterUtc > DateTimeOffset.UtcNow)
+                {
+                    return IncrementalUpdateOutcome.CompactionFailed;
+                }
+
+                try
+                {
+                    progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);
+                    ContentIndexManager.RunStreamingCompactionUnderLease(
+                        mutation,
+                        _store,
+                        scopeId,
+                        normalizedRootPath,
+                        settings,
+                        builtUtc,
+                        progress,
+                        cancellationToken);
+                    long compactedBytes = _store.TotalActiveIndexBytes();
+                    if (!size.ExceedsBudget(compactedBytes))
+                    {
+                        ContentIndexManager.ClearAutomaticCompactionFailure(_store);
+                        return IncrementalUpdateOutcome.Compacted;
+                    }
+
+                    ContentIndexManager.RecordAutomaticCompactionFailure(
+                        _store,
+                        new InvalidOperationException(
+                            $"Streaming compaction completed, but the {compactedBytes / (1024 * 1024):N0} MB index still exceeds its {size.SizeBudgetMB:N0} MB storage budget."),
+                        DateTimeOffset.UtcNow);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    ContentIndexManager.RecordAutomaticCompactionFailure(_store, ex, DateTimeOffset.UtcNow);
+                    return IncrementalUpdateOutcome.CompactionFailed;
+                }
+            }
+
+            if (size.ExceedsBudget(_store.TotalActiveIndexBytes()))
+            {
+                YaguLog.For("ContentIndex").LogWarning(
+                    "Scope {Scope} crossed its {BudgetMB} MB storage budget after publishing the incremental update; updates are now paused and the valid current index is retained.",
+                    scopeId,
+                    size.SizeBudgetMB);
+                return IncrementalUpdateOutcome.SizeBudgetReached;
+            }
+        }
+
         int maxSegments = budgetMaxSegments;
         int thresholdMB = Math.Clamp(settings.CompactionThresholdMB, 1, 8192);
-        if (_store.ActiveSegmentCount() > maxSegments && size.AllowsCoalescing)
+        bool boundedMergeMadeProgress = false;
+        if (_store.ShouldCompact(maxSegments, thresholdMB) && size.AllowsCoalescing)
         {
             progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);
             try
             {
-                CoalesceSmallSegmentsUnderLease(
-                    mutation, maxSegments, cancellationToken, size, IndexMergeResourceBudget.FromSettings(settings));
+                boundedMergeMadeProgress = CoalesceSmallSegmentsUnderLease(
+                    mutation, maxSegments, cancellationToken, size,
+                    IndexMergeResourceBudget.FromSettings(settings)) > 0;
             }
             catch (OperationCanceledException)
             {
@@ -352,7 +491,15 @@ public sealed partial class ContentIndexIncrementalUpdater
             // per-index policy decides whether to start it. Once allowed, the fold itself is an external
             // merge bounded by the configured build-memory budget; it never opens the layered index in memory.
             long indexBytes = _store.TotalActiveIndexBytes();
-            if (!size.AllowsCompactingIndexOf(indexBytes))
+            bool boundedMergeCanStillProgress = size.AllowsCoalescing
+                && _store.ActiveSegmentCount() > maxSegments
+                && _store.TryFindIncrementalSegmentRun(
+                    size.CoalesceMinRun,
+                    EffectiveIndexSizePolicy.MaximumCoalesceRun,
+                    size.CoalesceMaxSegmentBytes,
+                    size.CoalesceMaxBatchBytes,
+                    out _);
+            if (!size.AllowsAutomaticCompactionOf(indexBytes, boundedMergeCanStillProgress))
             {
                 if (size.ExceedsBudget(indexBytes))
                 {
@@ -367,6 +514,28 @@ public sealed partial class ContentIndexIncrementalUpdater
                         scopeId, indexBytes / (1024 * 1024), size.MaxAutoCompactionSizeMB, size.Mode);
                 }
                 return IncrementalUpdateOutcome.SegmentAppended;
+            }
+            if (!size.AllowsCompactingIndexOf(indexBytes))
+            {
+                YaguLog.For("ContentIndex").LogInformation(
+                    "Incremental update for scope {Scope}: the {IndexMB} MB index has no bounded incremental merge that can make progress, so streaming compaction is overriding the {MaxCompactMB} MB automatic cap as the configured cleanup fallback (mode '{Mode}').",
+                    scopeId,
+                    indexBytes / (1024 * 1024),
+                    size.MaxAutoCompactionSizeMB,
+                    size.Mode);
+            }
+
+            if (ContentIndexManager.TryReadAutomaticCompactionFailure(
+                    _store,
+                    out IndexAutomaticCompactionFailure priorFailure)
+                && priorFailure.RetryAfterUtc > DateTimeOffset.UtcNow)
+            {
+                YaguLog.For("ContentIndex").LogWarning(
+                    "Incremental update for scope {Scope}: automatic compaction is deferred until {RetryAfter:u} after the prior failure: {Reason}",
+                    scopeId,
+                    priorFailure.RetryAfterUtc,
+                    priorFailure.Reason);
+                return IncrementalUpdateOutcome.CompactionFailed;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -383,6 +552,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                     builtUtc,
                     progress is null ? null : ReportStreamingCompaction,
                     cancellationToken);
+                ContentIndexManager.ClearAutomaticCompactionFailure(_store);
                 YaguLog.For("ContentIndex").LogInformation("Incremental update for scope {Scope}: streaming compaction complete.", scopeId);
                 return IncrementalUpdateOutcome.Compacted;
             }
@@ -392,13 +562,19 @@ public sealed partial class ContentIndexIncrementalUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                ContentIndexManager.RecordAutomaticCompactionFailure(_store, ex, DateTimeOffset.UtcNow);
                 // The delta was published before this optional reclamation step. A failed compaction leaves
-                // that complete layered pointer active, so report the durable append rather than rebuilding.
+                // that complete layered pointer active. Report a typed maintenance failure rather than a
+                // successful append so the scheduler surfaces it and honors the retry backoff.
                 YaguLog.For("ContentIndex").LogWarning(ex,
                     "Post-incremental streaming compaction failed for scope {Scope}; keeping the valid layered index.",
                     scopeId);
-                return IncrementalUpdateOutcome.SegmentAppended;
+                return IncrementalUpdateOutcome.CompactionFailed;
             }
+        }
+        else
+        {
+            ContentIndexManager.ClearAutomaticCompactionFailure(_store);
         }
 
         return IncrementalUpdateOutcome.SegmentAppended;

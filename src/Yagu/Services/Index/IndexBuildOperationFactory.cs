@@ -143,3 +143,67 @@ internal static class IndexBuildOperationFactory
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 }
+
+/// <summary>Host-side companion to the best-effort failure marker stored on an index volume.</summary>
+internal static class IndexAutomaticCompactionRetryState
+{
+    public static bool IsActive(AppSettings settings, string root, DateTimeOffset nowUtc)
+    {
+        string normalized = IndexScopeIdentity.NormalizePath(root);
+        if (!IndexSizeManagementPolicy.Resolve(settings, normalized).AllowsCompaction)
+            return false;
+        return settings.IndexAutomaticCompactionRetryAfterUtcByRoot.TryGetValue(
+                normalized,
+                out DateTimeOffset retryAfterUtc)
+            && retryAfterUtc > nowUtc.ToUniversalTime();
+    }
+
+    public static void ApplyResults(
+        AppSettings settings,
+        IReadOnlyList<IndexMaintenanceRootResult> roots,
+        DateTimeOffset nowUtc)
+    {
+        DateTimeOffset retryAfterUtc = nowUtc.ToUniversalTime().Add(
+            ContentIndexManager.AutomaticCompactionRetryDelay);
+        foreach (IndexMaintenanceRootResult result in roots)
+        {
+            string root = IndexScopeIdentity.NormalizePath(result.Root);
+            bool compactCapable = IndexSizeManagementPolicy.Resolve(settings, root).AllowsCompaction;
+            if (compactCapable
+                && (result.Outcome == "compactionFailed"
+                    || result.Action == IndexMaintenanceActions.SizeBudgetReached))
+            {
+                settings.IndexAutomaticCompactionRetryAfterUtcByRoot[root] = retryAfterUtc;
+            }
+            else if (result.Action is IndexMaintenanceActions.Compacted or IndexMaintenanceActions.Built)
+            {
+                settings.IndexAutomaticCompactionRetryAfterUtcByRoot.Remove(root);
+            }
+        }
+    }
+
+    public static async Task RecordAsync(
+        SettingsService service,
+        AppSettings liveSettings,
+        IReadOnlyList<IndexMaintenanceRootResult> roots,
+        DateTimeOffset nowUtc)
+    {
+        if (roots.Count == 0)
+            return;
+        void Apply(AppSettings settings) => ApplyResults(settings, roots, nowUtc);
+        if (!await service.UpdateAsync(Apply, afterCommit: () => Apply(liveSettings)).ConfigureAwait(false))
+            Apply(liveSettings);
+    }
+
+    public static async Task ClearAsync(
+        SettingsService service,
+        AppSettings liveSettings,
+        string root)
+    {
+        string normalized = IndexScopeIdentity.NormalizePath(root);
+        void Clear(AppSettings settings) =>
+            settings.IndexAutomaticCompactionRetryAfterUtcByRoot.Remove(normalized);
+        if (!await service.UpdateAsync(Clear, afterCommit: () => Clear(liveSettings)).ConfigureAwait(false))
+            Clear(liveSettings);
+    }
+}

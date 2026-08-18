@@ -27,15 +27,24 @@ public sealed partial class MainWindow
         AppUpdateConsent,
     }
 
-    private sealed class StartupDialogPlan(IReadOnlyList<StartupDialogStep> steps)
+    private sealed class StartupDialogPlan
     {
-        public int Count => steps.Count;
+        private readonly List<StartupDialogStep> _steps;
+
+        public StartupDialogPlan(IReadOnlyList<StartupDialogStep> steps)
+        {
+            _steps = [.. steps];
+        }
+
+        public int Count => _steps.Count;
+
+        public void Remove(StartupDialogStep step) => _steps.Remove(step);
 
         public bool TryGetPosition(StartupDialogStep step, out int position)
         {
-            for (int i = 0; i < steps.Count; i++)
+            for (int i = 0; i < _steps.Count; i++)
             {
-                if (steps[i] == step)
+                if (_steps[i] == step)
                 {
                     position = i + 1;
                     return true;
@@ -77,7 +86,8 @@ public sealed partial class MainWindow
             steps.Add(StartupDialogStep.Everything);
         if (!ViewModel.HasCompletedFirstRun && !_preparedContextMenuRegistered.Value)
             steps.Add(StartupDialogStep.ContextMenu);
-        if (!ViewModel.Settings.HasPromptedIndexOnboarding && ViewModel.Settings.IndexedRoots.Count == 0)
+        if (ViewModel.Settings.RePromptIndexOnboardingOnNextLaunch
+            || (!ViewModel.Settings.HasPromptedIndexOnboarding && ViewModel.Settings.IndexedRoots.Count == 0))
             steps.Add(StartupDialogStep.IndexOnboarding);
         if (WillShowIndexLiteralPathFilterNotice())
             steps.Add(StartupDialogStep.IndexLiteralPathFilters);

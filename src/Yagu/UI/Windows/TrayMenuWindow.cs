@@ -100,15 +100,16 @@ internal sealed partial class TrayMenuWindow : Window
         _root = BuildRoot(theme);
         Content = _root;
 
-        // Title-bar-less: set on the Window directly so the caption strip is never drawn even when the
-        // presenter call below fails to apply. No SetTitleBar(), so every control stays interactive.
-        ExtendsContentIntoTitleBar = true;
+        // This menu must have no title bar at all, so the frame is stripped to a borderless popup below.
+        // Unlike the app's modal windows it deliberately does NOT set ExtendsContentIntoTitleBar: that keeps
+        // an AppWindow title bar alive and draws its minimize/maximize/close buttons over the menu.
         Closed += (_, _) => { if (ReferenceEquals(s_open, this)) s_open = null; };
         Activated += OnActivated;
 
         IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         _appWindow = AppWindow.GetFromWindowId(Win32Interop.GetWindowIdFromWindow(hwnd));
         TryConfigurePresenter();
+        ApplyBorderlessPopupFrame(hwnd);
         SeedFromCurrentSearch();
         _root.SizeChanged += (_, _) => ResizeAndPosition();
         ResizeAndPosition();
@@ -278,7 +279,24 @@ internal sealed partial class TrayMenuWindow : Window
     private void OnActivated(object sender, WindowActivatedEventArgs args)
     {
         if (args.WindowActivationState == WindowActivationState.Deactivated)
+        {
             CloseMenu();
+            return;
+        }
+
+        // Presenter calls can silently no-op before the window is realized, and showing it can restore the
+        // frame WinUI wanted, so re-assert now and again once this activation settles.
+        ReassertPopupFrame();
+        DispatcherQueue.TryEnqueue(ReassertPopupFrame);
+    }
+
+    private void ReassertPopupFrame()
+    {
+        if (_closing)
+            return;
+        TryConfigurePresenter();
+        try { ApplyBorderlessPopupFrame(WinRT.Interop.WindowNative.GetWindowHandle(this)); }
+        catch { }
     }
 
     private void CloseMenu()
@@ -293,16 +311,16 @@ internal sealed partial class TrayMenuWindow : Window
     }
 
     /// <summary>
-    /// Sizes the window to its content and keeps the bottom-right corner pinned near the tray cursor,
-    /// clamped to the display's work area so it never spills off-screen.
+    /// Sizes the window to its content and anchors its bottom-right corner to the tray cursor, clamped to
+    /// the display's work area so the menu rests against the taskbar edge rather than under it. The anchor
+    /// only lands where the user clicked because the popup frame has no caption and no resize border, so
+    /// the window rect and the menu the user sees are the same rectangle.
     /// </summary>
     private void ResizeAndPosition()
     {
         try
         {
-            double scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
-            if (scale <= 0)
-                scale = 1;
+            double scale = GetAnchorScale();
 
             _root.Measure(new Windows.Foundation.Size(MenuWidthDip, double.PositiveInfinity));
             int width = (int)Math.Ceiling(MenuWidthDip * scale);
@@ -325,8 +343,38 @@ internal sealed partial class TrayMenuWindow : Window
         catch { }
     }
 
+    /// <summary>
+    /// The DPI scale of the display the user actually right-clicked on. The window is still sitting on
+    /// whichever display it was created on when it is first sized, so scaling by its own DPI would size the
+    /// menu for the wrong display and place it away from the click on a mixed-DPI desktop.
+    /// </summary>
+    private double GetAnchorScale()
+    {
+        uint dpi = 0;
+        try
+        {
+            IntPtr monitor = MonitorFromPoint(new POINT { X = _anchorX, Y = _anchorY }, MonitorDefaultToNearest);
+            if (monitor != IntPtr.Zero && GetDpiForMonitor(monitor, MdtEffectiveDpi, out uint dpiX, out _) == 0)
+                dpi = dpiX;
+        }
+        catch { }
+
+        if (dpi == 0)
+        {
+            try { dpi = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)); }
+            catch { }
+        }
+
+        return dpi > 0 ? dpi / 96.0 : 1;
+    }
+
     private void TryConfigurePresenter()
     {
+        // Separate try blocks: one rejected call must not strand the others. IsAlwaysOnTop especially,
+        // since it keeps the menu above the taskbar it is anchored to.
+        try { _appWindow.IsShownInSwitchers = false; }
+        catch { }
+
         try
         {
             if (_appWindow.Presenter is OverlappedPresenter presenter)
@@ -337,11 +385,78 @@ internal sealed partial class TrayMenuWindow : Window
                 presenter.IsAlwaysOnTop = true;
                 presenter.SetBorderAndTitleBar(hasBorder: false, hasTitleBar: false);
             }
-            _appWindow.IsShownInSwitchers = false;
         }
         catch { }
     }
 
+    /// <summary>
+    /// Forces a true borderless popup frame, because <see cref="TryConfigurePresenter"/> swallows a
+    /// rejected presenter call and would leave this menu with an ordinary window frame. That frame is wrong
+    /// twice over: it draws caption buttons (minimize/maximize/close) that a context menu must never show,
+    /// and its invisible resize border sits outside the visible edge, so positioning by window rect lands
+    /// the menu a few pixels away from where the user right-clicked. Idempotent.
+    /// </summary>
+    private static void ApplyBorderlessPopupFrame(IntPtr hwnd)
+    {
+        try
+        {
+            int style = GetWindowLong(hwnd, GwlStyle);
+            // A failed read returns 0; synthesizing a style from it would clear WS_VISIBLE and the clip bits.
+            if (style == 0)
+                return;
+
+            int popupStyle = (style & ~(WsCaption | WsThickFrame | WsSysMenu | WsMinimizeBox | WsMaximizeBox))
+                | WsPopup;
+            if (style == popupStyle)
+                return;
+
+            _ = SetWindowLong(hwnd, GwlStyle, popupStyle);
+            _ = SetWindowPos(
+                hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                SwpNoMove | SwpNoSize | SwpNoZOrder | SwpNoActivate | SwpFrameChanged);
+        }
+        catch { }
+    }
+
+    private const int GwlStyle = -16;
+    private const int WsPopup = unchecked((int)0x80000000);
+    private const int WsCaption = 0x00C00000;
+    private const int WsThickFrame = 0x00040000;
+    private const int WsSysMenu = 0x00080000;
+    private const int WsMinimizeBox = 0x00020000;
+    private const int WsMaximizeBox = 0x00010000;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoZOrder = 0x0004;
+    private const uint SwpNoActivate = 0x0010;
+    private const uint SwpFrameChanged = 0x0020;
+    private const uint MonitorDefaultToNearest = 0x0002;
+    private const int MdtEffectiveDpi = 0;
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromPoint(POINT point, uint flags);
+
+    [System.Runtime.InteropServices.DllImport("shcore.dll")]
+    private static extern int GetDpiForMonitor(IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
+    private static extern int GetWindowLong(IntPtr hwnd, int index);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SetWindowLongW", SetLastError = true)]
+    private static extern int SetWindowLong(IntPtr hwnd, int index, int newLong);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(
+        IntPtr hwnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
 }

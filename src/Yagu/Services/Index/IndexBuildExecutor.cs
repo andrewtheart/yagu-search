@@ -75,7 +75,7 @@ internal sealed class IndexMaintenanceRuntime
         = static (manager, root, maxCatchupRecords) => manager.GetScopeFreshnessState(
             root, ContentIndexFreshnessEvaluator.CreateReader(maxCatchupRecords));
 
-    public Func<IndexMutationContext, ContentIndexManager, string, IndexIngestionPolicy, IndexMaintenanceSettings, bool> Compact { get; init; }
+    public Func<IndexMutationContext, ContentIndexManager, string, IndexIngestionPolicy, IndexMaintenanceSettings, IndexAutomaticCompactionOutcome> Compact { get; init; }
         = static (mutation, manager, root, policy, settings) =>
             manager.CompactScopeIfOverSegmentedUnderLease(mutation, root, policy, settings, DateTimeOffset.UtcNow);
 
@@ -426,10 +426,24 @@ internal static class IndexBuildExecutor
                 }
                 if (exists && incrementalFreshness == ContentIndexManager.ScopeFreshnessState.Fresh)
                 {
-                    if (runtime.Compact(mutation, manager, root, policy, operation.Settings))
+                    IndexAutomaticCompactionOutcome compaction = runtime.Compact(
+                        mutation, manager, root, policy, operation.Settings);
+                    if (compaction == IndexAutomaticCompactionOutcome.Maintained)
                     {
                         roots.Add(new IndexMaintenanceRootResult { Root = root, Action = IndexMaintenanceActions.Compacted });
                         built++;
+                        continue;
+                    }
+                    if (compaction == IndexAutomaticCompactionOutcome.Failed)
+                    {
+                        roots.Add(new IndexMaintenanceRootResult
+                        {
+                            Root = root,
+                            Action = IndexMaintenanceActions.Failed,
+                            Outcome = "compactionFailed",
+                            Warning = "Automatic compaction failed; the existing index was kept and a later pass will retry after the backoff period.",
+                        });
+                        failed++;
                         continue;
                     }
                     if (runtime.Reanchor(mutation, manager, paths, operation.RetainedGenerations, root))
@@ -478,13 +492,36 @@ internal static class IndexBuildExecutor
                         roots.Add(new IndexMaintenanceRootResult { Root = root, Action = IndexMaintenanceActions.Compacted });
                         built++;
                         break;
+                    case IncrementalUpdateOutcome.CompactionFailed:
+                        roots.Add(new IndexMaintenanceRootResult
+                        {
+                            Root = root,
+                            Action = IndexMaintenanceActions.Failed,
+                            Outcome = "compactionFailed",
+                            Warning = "The incremental update was kept, but automatic compaction failed; a later pass will retry after the backoff period.",
+                        });
+                        failed++;
+                        break;
                     case IncrementalUpdateOutcome.NoChanges:
                         // No file changes: still do the cheap maintenance work that previously lived in
                         // the pre-refresh "fresh" branch (compaction / proactive checkpoint re-anchor).
-                        if (runtime.Compact(mutation, manager, root, policy, operation.Settings))
+                        IndexAutomaticCompactionOutcome noChangeCompaction = runtime.Compact(
+                            mutation, manager, root, policy, operation.Settings);
+                        if (noChangeCompaction == IndexAutomaticCompactionOutcome.Maintained)
                         {
                             roots.Add(new IndexMaintenanceRootResult { Root = root, Action = IndexMaintenanceActions.Compacted });
                             built++;
+                        }
+                        else if (noChangeCompaction == IndexAutomaticCompactionOutcome.Failed)
+                        {
+                            roots.Add(new IndexMaintenanceRootResult
+                            {
+                                Root = root,
+                                Action = IndexMaintenanceActions.Failed,
+                                Outcome = "compactionFailed",
+                                Warning = "Automatic compaction failed; the existing index was kept and a later pass will retry after the backoff period.",
+                            });
+                            failed++;
                         }
                         else if (runtime.Reanchor(mutation, manager, paths, operation.RetainedGenerations, root))
                         {
@@ -540,6 +577,21 @@ internal static class IndexBuildExecutor
             catch (OperationCanceledException)
             {
                 throw;
+            }
+            catch (Exception ex) when (
+                operation.Mode == IndexMaintenanceOperation.ModeCompactOnly
+                && ex is not (OutOfMemoryException or IndexDiskFullException or IndexWriteBusyException))
+            {
+                roots.Add(new IndexMaintenanceRootResult
+                {
+                    Root = root,
+                    Action = IndexMaintenanceActions.Failed,
+                    Outcome = "compactionFailed",
+                    Warning = ex.Message,
+                });
+                failed++;
+                YaguLog.For("ContentIndex").LogWarning(ex,
+                    "Explicit index compaction failed for root '{Root}'; the valid existing index was retained.", root);
             }
             catch (Exception ex) when (ex is not (OutOfMemoryException or IndexDiskFullException or IndexWriteBusyException))
             {

@@ -48,6 +48,18 @@ public sealed class SemanticQuerySuggestionTests
         Assert.Contains("if (!SemanticSearchAvailable)", src);
         Assert.Contains("SemanticSearchAvailable = true;", src);
         Assert.Contains("IsSemanticQueryMode = true;", src);
+        Assert.Contains("public async Task ResetSemanticSuggestionAsync()", src);
+        Assert.Contains("settings => settings.SemanticSuggestionDismissed = false", src);
+    }
+
+    [Fact]
+    public void DeveloperOptions_CanResetAiSearchSuggestion()
+    {
+        string settings = File.ReadAllText(Path.Combine(
+            Root, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+        Assert.Contains("Reset AI search suggestion", settings);
+        Assert.Contains("await _viewModel.ResetSemanticSuggestionAsync();", settings);
+        Assert.Contains("RegisterDefaultResetButton(resetSemanticSuggestion", settings);
     }
 
     [Fact]

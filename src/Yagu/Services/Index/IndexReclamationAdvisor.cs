@@ -85,9 +85,8 @@ public readonly record struct IndexReclamationDiagnosis(
                 + "bounded automatic merge has nothing it is allowed to combine. ";
         }
 
-        string compacting = MaxAutoCompactionSizeMB > 0
-            ? $"Folding the whole index into one file would work, but that only happens automatically below "
-                + $"{MaxAutoCompactionSizeMB:N0} MB."
+        string compacting = Mode == IndexSizeManagementModes.Coalesce
+            ? "Full compaction is disabled by this index's Coalesce-only clean-up mode."
             : "Folding the whole index into one file is not permitted by this index's clean-up mode.";
         return merging + compacting;
     }
@@ -136,7 +135,9 @@ public static class IndexReclamationAdvisor
             return IndexReclamationDiagnosis.Healthy;
 
         bool mergeAvailable = policy.AllowsCoalescing && hasEligibleIncrementalRun;
-        bool compactionAvailable = policy.AllowsCompactingIndexOf(breakdown.TotalBytes);
+        bool compactionAvailable = policy.AllowsAutomaticCompactionOf(
+            breakdown.TotalBytes,
+            boundedMergeCanProgress: mergeAvailable);
         bool blocked = !mergeAvailable && !compactionAvailable;
 
         return new IndexReclamationDiagnosis(

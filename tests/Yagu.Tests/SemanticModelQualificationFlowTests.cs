@@ -367,10 +367,13 @@ public sealed class SemanticModelQualificationFlowTests
         string src = MainViewModelPartials.Text;
 
         Assert.Contains("public async Task ResetSemanticModelQualificationAsync()", src);
-        Assert.Contains("SemanticModelQualificationCoordinator.Reset(_settings);", src);
+        Assert.Contains("SemanticModelQualificationCoordinator.Reset(settings);", src);
+        Assert.Contains("await PersistPromptResetAsync(settings =>", src);
+        Assert.Contains("settings.SemanticSearchEnabled = true;", src);
         // Re-enable AI search so the offer returns, and drop the live model override.
         Assert.Contains("SemanticSearchAvailable = true;", src);
         Assert.Contains("SemanticModelAlias = string.Empty;", src);
+        Assert.Contains("_semanticTranslator?.SetEnabled(true);", src);
         Assert.Contains("_semanticTranslator?.SetModelOverride(null);", src);
         // Button-enable state helper.
         Assert.Contains("public bool HasSemanticModelQualificationState =>", src);

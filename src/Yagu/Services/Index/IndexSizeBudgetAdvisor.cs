@@ -123,7 +123,7 @@ public static class IndexSizeBudgetAdvisor
     /// </summary>
     public static IndexSizeBudgetDiagnosis Diagnose(EffectiveIndexSizePolicy policy, long activeBytes)
     {
-        if (activeBytes <= 0 || !policy.ExceedsBudget(activeBytes) || policy.AllowsCompactingIndexOf(activeBytes))
+        if (activeBytes <= 0 || !policy.ExceedsBudget(activeBytes) || policy.AllowsCompaction)
             return IndexSizeBudgetDiagnosis.Healthy;
 
         return new IndexSizeBudgetDiagnosis(

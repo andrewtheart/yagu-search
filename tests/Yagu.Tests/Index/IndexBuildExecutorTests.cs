@@ -343,18 +343,20 @@ public sealed class IndexBuildExecutorTests : IDisposable
     }
 
     [Theory]
-    [InlineData(IncrementalUpdateOutcome.SegmentAppended, IndexMaintenanceActions.DeltaAppended, 1, 0)]
-    [InlineData(IncrementalUpdateOutcome.Compacted, IndexMaintenanceActions.Compacted, 1, 0)]
-    [InlineData(IncrementalUpdateOutcome.NoChanges, IndexMaintenanceActions.Skipped, 0, 1)]
-    [InlineData(IncrementalUpdateOutcome.SizeBudgetReached, IndexMaintenanceActions.SizeBudgetReached, 0, 1)]
-    [InlineData(IncrementalUpdateOutcome.ReclamationBlocked, IndexMaintenanceActions.ReclamationBlocked, 0, 1)]
-    [InlineData(IncrementalUpdateOutcome.NeedsFullRebuild, IndexMaintenanceActions.Built, 1, 0)]
-    [InlineData(IncrementalUpdateOutcome.NeedsCompatibilityRebuild, IndexMaintenanceActions.Built, 1, 0)]
+    [InlineData(IncrementalUpdateOutcome.SegmentAppended, IndexMaintenanceActions.DeltaAppended, 1, 0, 0)]
+    [InlineData(IncrementalUpdateOutcome.Compacted, IndexMaintenanceActions.Compacted, 1, 0, 0)]
+    [InlineData(IncrementalUpdateOutcome.CompactionFailed, IndexMaintenanceActions.Failed, 0, 0, 1)]
+    [InlineData(IncrementalUpdateOutcome.NoChanges, IndexMaintenanceActions.Skipped, 0, 1, 0)]
+    [InlineData(IncrementalUpdateOutcome.SizeBudgetReached, IndexMaintenanceActions.SizeBudgetReached, 0, 1, 0)]
+    [InlineData(IncrementalUpdateOutcome.ReclamationBlocked, IndexMaintenanceActions.ReclamationBlocked, 0, 1, 0)]
+    [InlineData(IncrementalUpdateOutcome.NeedsFullRebuild, IndexMaintenanceActions.Built, 1, 0, 0)]
+    [InlineData(IncrementalUpdateOutcome.NeedsCompatibilityRebuild, IndexMaintenanceActions.Built, 1, 0, 0)]
     public void Maintenance_Incremental_MapsEveryRefreshOutcome(
         IncrementalUpdateOutcome refreshOutcome,
         string expectedAction,
         int expectedBuilt,
-        int expectedSkipped)
+        int expectedSkipped,
+        int expectedFailed)
     {
         BuildInitialIndex();
         using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
@@ -379,6 +381,7 @@ public sealed class IndexBuildExecutorTests : IDisposable
 
         Assert.Equal(expectedBuilt, result.Built);
         Assert.Equal(expectedSkipped, result.Skipped);
+        Assert.Equal(expectedFailed, result.Failed);
         Assert.Equal(expectedAction, Assert.Single(result.Roots).Action);
         Assert.Contains((50, IndexUpdateStages.Resolving), progress);
         Assert.Contains((100, IndexUpdateStages.Incremental), progress);
@@ -397,6 +400,50 @@ public sealed class IndexBuildExecutorTests : IDisposable
 
         Assert.Equal(1, result.Skipped);
         Assert.Equal(IndexMaintenanceActions.Skipped, Assert.Single(result.Roots).Action);
+    }
+
+    [Fact]
+    public void Maintenance_CompactOnly_FailureIsTypedAndRecordsBackoffMarker()
+    {
+        BuildInitialIndex();
+        string scopeId = ContentIndexManager.ScopeIdForRoot(_root);
+        var store = new ContentIndexStore(_paths, scopeId);
+        IndexManifest manifest = store.TryReadCurrentIncrementalManifest()!;
+        var segmentBuilder = new ContentIndexDeltaSegmentBuilder(
+            new IndexIngestionPolicySnapshot { IncludeHiddenFiles = true }.ToPolicy());
+        if (VolumeBindingReader.TryCapture(manifest.NormalizedRootPath) is { } volumeBinding)
+            segmentBuilder.SeedVolumeBinding(volumeBinding);
+        else
+            segmentBuilder.SeedVolumeSerialNumber(manifest.VolumeSerialNumber);
+        segmentBuilder.AddChangedDocument(
+            Path.Combine(_root, "changed.txt"),
+            System.Text.Encoding.UTF8.GetBytes("changed content"));
+        store.PublishSegmentFast(segmentBuilder.Build(
+            scopeId,
+            manifest.VolumeIdentity,
+            manifest.NormalizedRootPath,
+            new UsnCheckpoint(
+                manifest.FreshnessCheckpoint.JournalId,
+                manifest.FreshnessCheckpoint.NextUsn + 1),
+            DateTimeOffset.UtcNow));
+        Assert.True(store.TryGetCurrentLayerDirectories(out _, out IReadOnlyList<string> segmentDirectories));
+        File.WriteAllText(Path.Combine(Assert.Single(segmentDirectories), "aliases.bin"), "corrupt");
+
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+        IndexMaintenanceSuccess result = IndexBuildExecutor.RunMaintenancePassUnderLease(
+            mutation,
+            Maintenance(IndexMaintenanceOperation.ModeCompactOnly, _root),
+            CancellationToken.None,
+            progress: null);
+
+        Assert.Equal(1, result.Failed);
+        IndexMaintenanceRootResult failed = Assert.Single(result.Roots);
+        Assert.Equal(IndexMaintenanceActions.Failed, failed.Action);
+        Assert.Equal("compactionFailed", failed.Outcome);
+        Assert.True(ContentIndexManager.TryReadAutomaticCompactionFailure(
+            store,
+            out IndexAutomaticCompactionFailure marker));
+        Assert.Contains("aliases.bin", marker.Reason);
     }
 
     [Fact]
@@ -537,7 +584,7 @@ public sealed class IndexBuildExecutorTests : IDisposable
         var compact = new IndexMaintenanceRuntime
         {
             CheckFreshness = static (_, _, _) => ContentIndexManager.ScopeFreshnessState.Fresh,
-            Compact = static (_, _, _, _, _) => true,
+            Compact = static (_, _, _, _, _) => IndexAutomaticCompactionOutcome.Maintained,
         };
         Assert.Equal(IndexMaintenanceActions.Compacted, Assert.Single(
             IndexBuildExecutor.RunMaintenancePassUnderLease(mutation, operation, CancellationToken.None, null, compact).Roots).Action);
@@ -545,7 +592,7 @@ public sealed class IndexBuildExecutorTests : IDisposable
         var reanchor = new IndexMaintenanceRuntime
         {
             CheckFreshness = static (_, _, _) => ContentIndexManager.ScopeFreshnessState.Fresh,
-            Compact = static (_, _, _, _, _) => false,
+            Compact = static (_, _, _, _, _) => IndexAutomaticCompactionOutcome.NotNeeded,
             Reanchor = static (_, _, _, _, _) => true,
         };
         Assert.Equal(IndexMaintenanceActions.Reanchored, Assert.Single(
@@ -554,7 +601,7 @@ public sealed class IndexBuildExecutorTests : IDisposable
         var skip = new IndexMaintenanceRuntime
         {
             CheckFreshness = static (_, _, _) => ContentIndexManager.ScopeFreshnessState.Fresh,
-            Compact = static (_, _, _, _, _) => false,
+            Compact = static (_, _, _, _, _) => IndexAutomaticCompactionOutcome.NotNeeded,
             Reanchor = static (_, _, _, _, _) => false,
         };
         Assert.Equal(IndexMaintenanceActions.Skipped, Assert.Single(

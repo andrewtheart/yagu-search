@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -249,10 +250,10 @@ public sealed class AppSettings
     public const int MinimumIndexCompactionThresholdMB = 16;
     public const int MaximumIndexCompactionThresholdMB = 8192;
 
-    // Work cap on AUTOMATIC over-segmented compaction (plan §11.4): the fold is a bounded-memory external
-    // merge, but a large pass still performs substantial sequential I/O and needs temporary spool/output
-    // space. Above this total on-disk size automatic compaction is skipped and the index stays segmented
-    // (queries still work). 0 = no cap. Manual/explicit compaction ignores it.
+    // Routine AUTOMATIC compaction cap (plan §11.4): while bounded coalescing is making progress, a large
+    // streaming fold is deferred because it performs substantial sequential I/O and needs temporary
+    // spool/output space. If no bounded merge can progress, compact-capable modes use streaming compaction
+    // as the automatic fallback even above this cap. 0 removes routine deferral entirely.
     public const int DefaultIndexMaxAutoCompactionSizeMB = 8192;
     public const int MaximumIndexMaxAutoCompactionSizeMB = 1_048_576;
 
@@ -1012,10 +1013,10 @@ public sealed class AppSettings
     /// <summary>Accumulated delta-segment size (MB) that triggers a compaction into a fresh base, whichever
     /// bound is hit first (plan §11.4). Normalized to [16, 8192]; default 512.</summary>
     public int IndexCompactionThresholdMB { get; set; } = DefaultIndexCompactionThresholdMB;
-    /// <summary>Largest total on-disk index size (MB) that AUTOMATIC compaction is allowed to fold. The fold
-    /// is a bounded-memory external merge, but a large pass still does substantial background I/O and needs
-    /// temporary spool/output space. Above this cap the index stays segmented; searches still use it. 0
-    /// disables the cap (always compact). Default 8192. Manual/explicit compaction is never gated by this.</summary>
+    /// <summary>Largest total on-disk index size (MB) for routine automatic compaction while bounded
+    /// coalescing can still progress. A compact-capable mode falls back to streaming compaction above the
+    /// cap when no bounded merge can run, preventing indefinite growth. 0 removes the routine deferral;
+    /// default 8192.</summary>
     public int IndexMaxAutoCompactionSizeMB { get; set; } = DefaultIndexMaxAutoCompactionSizeMB;
     /// <summary>Default size-management strategy for every index, overridable per folder via
     /// <see cref="IndexedRootSizePolicies"/>. One of <see cref="Yagu.Services.Index.IndexSizeManagementPolicy.Modes"/>;
@@ -1067,6 +1068,11 @@ public sealed class AppSettings
     /// inheriting whatever it leaves unset. Canonicalized on load by
     /// <see cref="Yagu.Services.Index.IndexSizeManagementPolicy"/>. Empty by default.</summary>
     public List<Yagu.Services.Index.IndexedRootSizePolicy> IndexedRootSizePolicies { get; set; } = [];
+    /// <summary>Internal host-side retry state for automatic compaction failures. This is stored with
+    /// settings so backoff and health remain available even when the index volume is full or read-only
+    /// and cannot write its local failure marker. Keys are normalized index roots.</summary>
+    public Dictionary<string, DateTimeOffset> IndexAutomaticCompactionRetryAfterUtcByRoot { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public static List<string> NormalizeContentIndexLiveScanWarningDismissedRoots(IEnumerable<string>? roots)
     {
@@ -1257,6 +1263,9 @@ public sealed class AppSettings
     public bool HasCompletedFirstRun { get; set; }
     /// <summary>Whether the one-time "add a folder to the content index" onboarding prompt has been shown.</summary>
     public bool HasPromptedIndexOnboarding { get; set; }
+    /// <summary>Developer-requested one-shot override that shows index onboarding on the next launch even
+    /// when registered roots would normally prove setup is complete. Consumed when the prompt is shown.</summary>
+    public bool RePromptIndexOnboardingOnNextLaunch { get; set; }
     /// <summary>Whether the one-time notice about literal absolute paths in index filters now excluding whole
     /// subtrees (they were previously inert) has been shown.</summary>
     public bool HasPromptedIndexLiteralPathFilters { get; set; }
@@ -1514,11 +1523,21 @@ public sealed class AppSettings
 
 public sealed class SettingsService
 {
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> WriteGates =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly string _path;
+    private readonly SemaphoreSlim _writeGate;
 
     public SettingsService() : this(ResolveInstanceSettingsPath()) { }
 
-    public SettingsService(string path) { _path = path; }
+    public SettingsService(string path)
+    {
+        _path = path;
+        string gateKey;
+        try { gateKey = Path.GetFullPath(path); }
+        catch { gateKey = path; }
+        _writeGate = WriteGates.GetOrAdd(gateKey, static _ => new SemaphoreSlim(1, 1));
+    }
 
     public static string DefaultPath() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Yagu", "settings.json");
@@ -1551,53 +1570,7 @@ public sealed class SettingsService
             if (!File.Exists(_path)) return CreateDefaultSettings();
             using var fs = File.OpenRead(_path);
             var settings = JsonSerializer.Deserialize(fs, AppSettingsJsonContext.Default.AppSettings) ?? new AppSettings();
-            // Migrate: old default was int.MaxValue which caused unbounded memory growth.
-            if (settings.MaxResults > SearchOptions.MaxResultsCeiling)
-                settings.MaxResults = SearchOptions.MaxResultsCeiling;
-            if (settings.MaxMatchesPerLine < 0)
-                settings.MaxMatchesPerLine = 0;
-            else if (!settings.MaxMatchesPerLineMigratedToUnlimited && settings.MaxMatchesPerLine == LegacyDefaultMaxMatchesPerLine)
-                settings.MaxMatchesPerLine = 0; // one-time flip of the old 5000 default to unlimited
-            settings.MaxMatchesPerLineMigratedToUnlimited = true;
-            if (settings.AbsoluteMaxResults < 0)
-                settings.AbsoluteMaxResults = 0;
-            // Unlimited-by-default: migrate the exact legacy 2,000,000 backstop to 0 (disabled) so
-            // existing installs stop truncating large result sets. A deliberately-set value is kept.
-            else if (settings.AbsoluteMaxResults == LegacyDefaultAbsoluteMaxResults)
-                settings.AbsoluteMaxResults = 0;
-            if (settings.SkipExtensions is null)
-                settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
-            if (settings.ArchiveExtensions is null)
-                settings.ArchiveExtensions = AppSettings.DefaultArchiveExtensions;
-            if (IsLegacyDefaultSkipExtensions(settings.SkipExtensions))
-                settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
-            if (settings.BinaryExtensions is null)
-                settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
-            else if (IsLegacyExpandedBinaryPrefilter(settings.BinaryExtensions))
-            {
-                settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
-                settings.SkipExtensions = MergeExtensionLists(settings.SkipExtensions, AppSettings.DefaultSkipExtensions);
-            }
-            MigrateLegacyPreviewGutterColors(settings);
-            MigrateLegacyWindowFocusBehavior(settings);
-            MigrateLegacyAppUpdateChecks(settings);
-            MigrateIndexMappedWorkerDefaults(settings);
-            NormalizeFilterModeSettings(settings);
-            NormalizeThemeSettings(settings);
-            NormalizePreviewTextFontSettings(settings);
-            NormalizePreviewEditorFontSettings(settings);
-            NormalizeResultListMatchTextSettings(settings);
-            NormalizePreviewShowMoreSettings(settings);
-            settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(settings.ImageOcrEngine);
-            settings.ImageOcrModel = AppSettings.NormalizeImageOcrModel(settings.ImageOcrModel);
-            settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(settings.ImageOcrMaxSide);
-            settings.ImageOcrWorkerParallelism = AppSettings.NormalizeImageOcrWorkerParallelism(settings.ImageOcrWorkerParallelism);
-            NormalizeIndexSettings(settings);
-            settings.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(settings.LowDiskSpaceWarningPercent);
-            settings.TerminalDefaultWorkingDirectory ??= string.Empty;
-            settings.TerminalShellKindIndex = TerminalShell.NormalizeSettingsIndex(settings.TerminalShellKindIndex);
-            settings.BugReportContactEmail ??= string.Empty;
-            settings.TelemetryInstallId ??= string.Empty;
+            NormalizeLoadedSettings(settings, normalizeSyncOnlyValues: true);
             return settings;
         }
         catch (Exception ex) { YaguLog.For("Settings").LogWarning(ex, "Failed to load settings from {Path}", _path); return CreateDefaultSettings(); }
@@ -1610,45 +1583,7 @@ public sealed class SettingsService
             if (!File.Exists(_path)) return CreateDefaultSettings();
             await using var fs = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.Asynchronous);
             var settings = await JsonSerializer.DeserializeAsync(fs, AppSettingsJsonContext.Default.AppSettings, cancellationToken).ConfigureAwait(false) ?? new AppSettings();
-            if (settings.MaxResults > SearchOptions.MaxResultsCeiling)
-                settings.MaxResults = SearchOptions.MaxResultsCeiling;
-            if (settings.AbsoluteMaxResults < 0)
-                settings.AbsoluteMaxResults = 0;
-            // Unlimited-by-default: migrate the exact legacy 2,000,000 backstop to 0 (disabled).
-            else if (settings.AbsoluteMaxResults == LegacyDefaultAbsoluteMaxResults)
-                settings.AbsoluteMaxResults = 0;
-            if (settings.SkipExtensions is null)
-                settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
-            if (settings.ArchiveExtensions is null)
-                settings.ArchiveExtensions = AppSettings.DefaultArchiveExtensions;
-            if (IsLegacyDefaultSkipExtensions(settings.SkipExtensions))
-                settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
-            if (settings.BinaryExtensions is null)
-                settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
-            else if (IsLegacyExpandedBinaryPrefilter(settings.BinaryExtensions))
-            {
-                settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
-                settings.SkipExtensions = MergeExtensionLists(settings.SkipExtensions, AppSettings.DefaultSkipExtensions);
-            }
-            MigrateLegacyPreviewGutterColors(settings);
-            MigrateLegacyWindowFocusBehavior(settings);
-            MigrateLegacyAppUpdateChecks(settings);
-            MigrateIndexMappedWorkerDefaults(settings);
-            NormalizeFilterModeSettings(settings);
-            NormalizeThemeSettings(settings);
-            NormalizePreviewTextFontSettings(settings);
-            NormalizePreviewEditorFontSettings(settings);
-            NormalizeResultListMatchTextSettings(settings);
-            NormalizePreviewShowMoreSettings(settings);
-            settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(settings.ImageOcrEngine);
-            settings.ImageOcrModel = AppSettings.NormalizeImageOcrModel(settings.ImageOcrModel);
-            settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(settings.ImageOcrMaxSide);
-            settings.ImageOcrWorkerParallelism = AppSettings.NormalizeImageOcrWorkerParallelism(settings.ImageOcrWorkerParallelism);
-            NormalizeIndexSettings(settings);
-            settings.TerminalDefaultWorkingDirectory ??= string.Empty;
-            settings.TerminalShellKindIndex = TerminalShell.NormalizeSettingsIndex(settings.TerminalShellKindIndex);
-            settings.BugReportContactEmail ??= string.Empty;
-            settings.TelemetryInstallId ??= string.Empty;
+            NormalizeLoadedSettings(settings, normalizeSyncOnlyValues: false);
             return settings;
         }
         catch (Exception ex) { YaguLog.For("Settings").LogWarning(ex, "Failed to load settings from {Path}", _path); return CreateDefaultSettings(); }
@@ -1663,6 +1598,62 @@ public sealed class SettingsService
             IndexStreamingMergeDefaultsMigrated = true,
             IndexAutomaticCompactionDefaultsMigrated = true,
         };
+
+    private static void NormalizeLoadedSettings(AppSettings settings, bool normalizeSyncOnlyValues)
+    {
+        if (settings.MaxResults > SearchOptions.MaxResultsCeiling)
+            settings.MaxResults = SearchOptions.MaxResultsCeiling;
+        if (normalizeSyncOnlyValues)
+        {
+            if (settings.MaxMatchesPerLine < 0)
+                settings.MaxMatchesPerLine = 0;
+            else if (!settings.MaxMatchesPerLineMigratedToUnlimited
+                && settings.MaxMatchesPerLine == LegacyDefaultMaxMatchesPerLine)
+                settings.MaxMatchesPerLine = 0;
+            settings.MaxMatchesPerLineMigratedToUnlimited = true;
+        }
+        if (settings.AbsoluteMaxResults < 0)
+            settings.AbsoluteMaxResults = 0;
+        else if (settings.AbsoluteMaxResults == LegacyDefaultAbsoluteMaxResults)
+            settings.AbsoluteMaxResults = 0;
+        if (settings.SkipExtensions is null)
+            settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
+        if (settings.ArchiveExtensions is null)
+            settings.ArchiveExtensions = AppSettings.DefaultArchiveExtensions;
+        if (IsLegacyDefaultSkipExtensions(settings.SkipExtensions))
+            settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
+        if (settings.BinaryExtensions is null)
+            settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
+        else if (IsLegacyExpandedBinaryPrefilter(settings.BinaryExtensions))
+        {
+            settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
+            settings.SkipExtensions = MergeExtensionLists(settings.SkipExtensions, AppSettings.DefaultSkipExtensions);
+        }
+        MigrateLegacyPreviewGutterColors(settings);
+        MigrateLegacyWindowFocusBehavior(settings);
+        MigrateLegacyAppUpdateChecks(settings);
+        MigrateIndexMappedWorkerDefaults(settings);
+        NormalizeFilterModeSettings(settings);
+        NormalizeThemeSettings(settings);
+        NormalizePreviewTextFontSettings(settings);
+        NormalizePreviewEditorFontSettings(settings);
+        NormalizeResultListMatchTextSettings(settings);
+        NormalizePreviewShowMoreSettings(settings);
+        settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(settings.ImageOcrEngine);
+        settings.ImageOcrModel = AppSettings.NormalizeImageOcrModel(settings.ImageOcrModel);
+        settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(settings.ImageOcrMaxSide);
+        settings.ImageOcrWorkerParallelism = AppSettings.NormalizeImageOcrWorkerParallelism(settings.ImageOcrWorkerParallelism);
+        NormalizeIndexSettings(settings);
+        if (normalizeSyncOnlyValues)
+        {
+            settings.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(
+                settings.LowDiskSpaceWarningPercent);
+        }
+        settings.TerminalDefaultWorkingDirectory ??= string.Empty;
+        settings.TerminalShellKindIndex = TerminalShell.NormalizeSettingsIndex(settings.TerminalShellKindIndex);
+        settings.BugReportContactEmail ??= string.Empty;
+        settings.TelemetryInstallId ??= string.Empty;
+    }
 
     // Earlier Yagu versions stored the startup window mode (launcher vs traditional) and the
     // launcher's focus-loss behavior in a single setting (WindowFocusBehavior 0..3 where 3 meant
@@ -1904,10 +1895,30 @@ public sealed class SettingsService
         settings.IndexedRootFilters = Yagu.Services.Index.IndexedRootFilterPolicy.Normalize(settings.IndexedRootFilters);
         settings.IndexedRootSizePolicies = Yagu.Services.Index.IndexSizeManagementPolicy.Normalize(settings.IndexedRootSizePolicies);
         settings.IndexSizeManagementMode = Yagu.Services.Index.IndexSizeManagementPolicy.NormalizeMode(settings.IndexSizeManagementMode);
+        settings.IndexAutomaticCompactionRetryAfterUtcByRoot =
+            NormalizeAutomaticCompactionRetryState(settings);
         settings.IndexCoalesceMaxSegmentMB = AppSettings.NormalizeIndexCoalesceMaxSegmentMB(settings.IndexCoalesceMaxSegmentMB);
         settings.IndexCoalesceMaxBatchMB = AppSettings.NormalizeIndexCoalesceMaxBatchMB(settings.IndexCoalesceMaxBatchMB);
         settings.IndexCoalesceMinRun = AppSettings.NormalizeIndexCoalesceMinRun(settings.IndexCoalesceMinRun);
         settings.IndexCoalesceMaxRunsPerPass = AppSettings.NormalizeIndexCoalesceMaxRunsPerPass(settings.IndexCoalesceMaxRunsPerPass);
+    }
+
+    private static Dictionary<string, DateTimeOffset> NormalizeAutomaticCompactionRetryState(AppSettings settings)
+    {
+        var normalized = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+        IReadOnlyDictionary<string, DateTimeOffset>? state = settings.IndexAutomaticCompactionRetryAfterUtcByRoot;
+        if (state is null)
+            return normalized;
+        foreach ((string root, DateTimeOffset retryAfterUtc) in state)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+                continue;
+            string path = Yagu.Services.Index.IndexScopeIdentity.NormalizePath(root);
+            if (path.Length > 0
+                && Yagu.Services.Index.IndexSizeManagementPolicy.Resolve(settings, path).AllowsCompaction)
+                normalized[path] = retryAfterUtc.ToUniversalTime();
+        }
+        return normalized;
     }
 
     private static string NormalizeArgbHexString(string? value, string fallback)
@@ -2010,58 +2021,131 @@ public sealed class SettingsService
 
     public void Save(AppSettings settings)
     {
+        _writeGate.Wait();
         try
         {
-            settings.IndexContinuousIntervalMigrated = true;
-            settings.IndexOneMinuteContinuousIntervalMigrated = true;
-            settings.IndexSizeDefaultsMigrated = true;
-            settings.IndexStreamingMergeDefaultsMigrated = true;
-            settings.IndexAutomaticCompactionDefaultsMigrated = true;
-            var dir = Path.GetDirectoryName(_path);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            // Write to a temp file then atomically replace, so a concurrent reader (e.g. the bug
-            // report) never sees a half-written file and a crash mid-save can't corrupt settings.json.
-            string tmp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
-                    JsonSerializer.Serialize(fs, settings, AppSettingsJsonContext.Default.AppSettings);
-                CommitTempFile(tmp, _path);
-            }
-            finally
-            {
-                if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best-effort cleanup */ } }
-            }
+            SaveUnlocked(settings);
         }
         catch (Exception ex) { YaguLog.For("Settings").LogWarning(ex, "Failed to save settings to {Path}", _path); }
+        finally { _writeGate.Release(); }
     }
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
     {
+        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            settings.IndexContinuousIntervalMigrated = true;
-            settings.IndexOneMinuteContinuousIntervalMigrated = true;
-            settings.IndexSizeDefaultsMigrated = true;
-            settings.IndexStreamingMergeDefaultsMigrated = true;
-            settings.IndexAutomaticCompactionDefaultsMigrated = true;
-            var dir = Path.GetDirectoryName(_path);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            // Write to a temp file then atomically replace, so a concurrent reader (e.g. the bug
-            // report) never sees a half-written file and a crash mid-save can't corrupt settings.json.
-            string tmp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                await using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
-                    await JsonSerializer.SerializeAsync(fs, settings, AppSettingsJsonContext.Default.AppSettings, cancellationToken).ConfigureAwait(false);
-                await CommitTempFileAsync(tmp, _path).ConfigureAwait(false);
-            }
-            finally
-            {
-                if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best-effort cleanup */ } }
-            }
+            await SaveUnlockedAsync(settings, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) { YaguLog.For("Settings").LogWarning(ex, "Failed to save settings to {Path}", _path); }
+        finally { _writeGate.Release(); }
+    }
+
+    /// <summary>Strictly updates selected persisted fields under the same per-path lock as ordinary
+    /// saves. Unlike <see cref="LoadAsync"/>, an unreadable settings file fails without writing defaults
+    /// over it. Returns false when the existing snapshot could not be read or the update could not commit.</summary>
+    public async Task<bool> UpdateAsync(
+        Action<AppSettings> update,
+        Action? afterCommit = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            AppSettings settings;
+            if (!File.Exists(_path))
+            {
+                settings = CreateDefaultSettings();
+            }
+            else
+            {
+                await using var input = new FileStream(
+                    _path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.Asynchronous);
+                settings = await JsonSerializer.DeserializeAsync(
+                    input,
+                    AppSettingsJsonContext.Default.AppSettings,
+                    cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The settings file did not contain a settings object.");
+            }
+
+                    NormalizeLoadedSettings(settings, normalizeSyncOnlyValues: false);
+            update(settings);
+            await SaveUnlockedAsync(settings, cancellationToken).ConfigureAwait(false);
+                    if (afterCommit is not null)
+                    {
+                        try { afterCommit(); }
+                        catch (Exception ex)
+                        {
+                            YaguLog.For("Settings").LogWarning(
+                                ex,
+                                "Settings were updated at {Path}, but applying the committed state in memory failed",
+                                _path);
+                        }
+                    }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("Settings").LogWarning(ex, "Failed to update settings at {Path}", _path);
+            return false;
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+    }
+
+    private void SaveUnlocked(AppSettings settings)
+    {
+        PrepareForSave(settings);
+        var dir = Path.GetDirectoryName(_path);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        string tmp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+                JsonSerializer.Serialize(fs, settings, AppSettingsJsonContext.Default.AppSettings);
+            CommitTempFile(tmp, _path);
+        }
+        finally
+        {
+            if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best-effort cleanup */ } }
+        }
+    }
+
+    private async Task SaveUnlockedAsync(AppSettings settings, CancellationToken cancellationToken)
+    {
+        PrepareForSave(settings);
+        var dir = Path.GetDirectoryName(_path);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        string tmp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            await using (var fs = new FileStream(
+                tmp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+            {
+                await JsonSerializer.SerializeAsync(
+                    fs,
+                    settings,
+                    AppSettingsJsonContext.Default.AppSettings,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            await CommitTempFileAsync(tmp, _path).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best-effort cleanup */ } }
+        }
+    }
+
+    private static void PrepareForSave(AppSettings settings)
+    {
+        settings.IndexContinuousIntervalMigrated = true;
+        settings.IndexOneMinuteContinuousIntervalMigrated = true;
+        settings.IndexSizeDefaultsMigrated = true;
+        settings.IndexStreamingMergeDefaultsMigrated = true;
+        settings.IndexAutomaticCompactionDefaultsMigrated = true;
     }
 
     /// <summary>Attempts the temp-file replace once; returns false for a transient lock so the caller can retry.</summary>

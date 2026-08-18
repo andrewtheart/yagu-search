@@ -446,6 +446,26 @@ public sealed partial class MainViewModel
                     DateTimeOffset.UtcNow)
                 : null;
 
+            DateTimeOffset? hostRetryAfter = settings.IndexAutomaticCompactionRetryAfterUtcByRoot.TryGetValue(
+                IndexScopeIdentity.NormalizePath(indexRoot),
+                out DateTimeOffset configuredRetryAfter)
+                ? configuredRetryAfter
+                : null;
+            IndexAutomaticCompactionFailure? localFailure = manager.TryReadAutomaticCompactionFailureForRoot(indexRoot);
+            if (sizePolicy.AllowsCompaction && (hostRetryAfter.HasValue || localFailure.HasValue))
+            {
+                DateTimeOffset retryAfterUtc = hostRetryAfter ?? localFailure!.Value.RetryAfterUtc;
+                string reason = localFailure?.Reason ?? "the previous automatic compaction attempt failed";
+                string retry = retryAfterUtc > DateTimeOffset.UtcNow
+                    ? $"will retry after {retryAfterUtc.ToLocalTime():g}"
+                    : "will retry on the next maintenance pass";
+                return new IndexRootHealthEntry(
+                    root,
+                    IndexRootHealthKind.StorageProblem,
+                    $"automatic compaction failed; {retry}. The existing index remains valid ({reason})",
+                    CompactionForecast: forecast);
+            }
+
             // Checked before freshness: an index paused at its storage budget still has perfectly healthy
             // metadata, so without this it reports as healthy (or merely "changes pending") while silently
             // never updating again.

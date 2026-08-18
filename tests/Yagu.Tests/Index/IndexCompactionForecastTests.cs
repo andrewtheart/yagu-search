@@ -53,7 +53,7 @@ public sealed class IndexCompactionForecastTests
     }
 
     [Fact]
-    public void OversizedIndex_ForecastsAttentionInsteadOfAutomaticCompaction()
+    public void OversizedCompactCapableIndex_ForecastsAutomaticFallbackCompaction()
     {
         var trend = new ActiveLayerStorageTrend(
             new ActiveLayerStorageBreakdown(
@@ -67,10 +67,30 @@ public sealed class IndexCompactionForecastTests
             @"C:\", trend, Policy(), maxDeltaSegments: 8, compactionThresholdMB: 512,
             AutomaticSettings(), Now);
 
+        Assert.Equal(IndexCompactionForecastKind.AutomaticCompaction, forecast.Kind);
+        Assert.Contains("Estimated auto-compaction", forecast.Summary);
+        Assert.Contains("above the 8,192 MiB", forecast.Details);
+        Assert.Contains("configured fallback rather than show a warning", forecast.Details);
+    }
+
+    [Fact]
+    public void OversizedCoalesceOnlyIndex_StillForecastsAttention()
+    {
+        var trend = new ActiveLayerStorageTrend(
+            new ActiveLayerStorageBreakdown(
+                BaseBytes: 25_861 * MiB, BaseCount: 1,
+                FullBuildPagingBytes: 0, FullBuildPagingCount: 0,
+                IncrementalBytes: 251 * MiB, IncrementalCount: 8),
+            Now.AddMinutes(-51),
+            Now.AddMinutes(-5));
+
+        IndexCompactionForecast forecast = IndexCompactionForecaster.Estimate(
+            @"C:\", trend, Policy(mode: IndexSizeManagementModes.Coalesce),
+            maxDeltaSegments: 8, compactionThresholdMB: 512, AutomaticSettings(), Now);
+
         Assert.Equal(IndexCompactionForecastKind.CleanupAttentionLikely, forecast.Kind);
         Assert.Contains("Estimated cleanup warning", forecast.Summary);
-        Assert.Contains("outside the 8,192 MiB", forecast.Details);
-        Assert.Contains("ask what to do", forecast.Details);
+        Assert.Contains("mode forbids full compaction", forecast.Details);
     }
 
     /// <summary>

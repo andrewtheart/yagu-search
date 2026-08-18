@@ -4076,6 +4076,13 @@ public sealed partial class SettingsWindow : Window
             var remindersGroup = AddSettingsGroupBox(g, "Reminders and Warnings");
             var loggingGroup = AddSettingsGroupBox(g, "Logging");
 
+            static void ShowResetOutcome(Button button, bool succeeded, string successText)
+            {
+                button.Content = succeeded
+                    ? successText
+                    : "Reset failed - settings could not be saved";
+            }
+
             var showMemoryPressureLabel = new CheckBox
             {
                 Content = "Show memory pressure warning label",
@@ -4261,9 +4268,11 @@ public sealed partial class SettingsWindow : Window
             resetMultilineNewlinePrompt.Click += async (_, _) =>
             {
                 await _viewModel.ResetMultilineNewlineSuggestionAsync();
-                MarkSettingsDirty(requireValueChanges: false);
-                resetMultilineNewlinePrompt.Content = "Multiline search prompt reset";
-                resetMultilineNewlinePrompt.IsEnabled = false;
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetMultilineNewlinePrompt,
+                    !_viewModel.MultilineNewlineSuggestionDismissed,
+                    "Multiline search prompt reset");
             };
             RegisterDefaultResetButton(resetMultilineNewlinePrompt,
                 () => !_viewModel.MultilineNewlineSuggestionDismissed);
@@ -4286,9 +4295,11 @@ public sealed partial class SettingsWindow : Window
             resetIndexWarmSearchWarning.Click += async (_, _) =>
             {
                 await _viewModel.ResetIndexWarmSearchWarningAsync();
-                MarkSettingsDirty(requireValueChanges: false);
-                resetIndexWarmSearchWarning.Content = "Index warm-up search warning reset";
-                resetIndexWarmSearchWarning.IsEnabled = false;
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetIndexWarmSearchWarning,
+                    !_viewModel.SuppressIndexWarmSearchWarning,
+                    "Index warm-up search warning reset");
             };
             RegisterDefaultResetButton(resetIndexWarmSearchWarning,
                 () => !_viewModel.SuppressIndexWarmSearchWarning);
@@ -4296,6 +4307,60 @@ public sealed partial class SettingsWindow : Window
             remindersGroup.Children.Add(new TextBlock
             {
                 Text = "Re-enables the warning shown when starting a search would pause an in-progress content-index warm-up.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetIndexOnboardingPrompt = new Button
+            {
+                Content = "Reset indexing setup prompt (re-prompt on startup)",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetIndexOnboardingPrompt.Click += async (_, _) =>
+            {
+                await _viewModel.ResetIndexOnboardingAsync();
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetIndexOnboardingPrompt,
+                    _viewModel.Settings.RePromptIndexOnboardingOnNextLaunch,
+                    "Indexing setup prompt reset");
+            };
+            RegisterDefaultResetButton(resetIndexOnboardingPrompt,
+                () => _viewModel.Settings.RePromptIndexOnboardingOnNextLaunch);
+            remindersGroup.Children.Add(resetIndexOnboardingPrompt);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Shows the first-run indexing setup again on the next launch, including folder selection, maintenance choices, and maximum indexed file size. Registered folders and stored indexes are left unchanged.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetIndexLiteralPathNotice = new Button
+            {
+                Content = "Reset index filter migration notice",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetIndexLiteralPathNotice.Click += async (_, _) =>
+            {
+                await _viewModel.ResetIndexLiteralPathFilterNoticeAsync();
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetIndexLiteralPathNotice,
+                    !_viewModel.Settings.HasPromptedIndexLiteralPathFilters,
+                    "Index filter migration notice reset");
+            };
+            RegisterDefaultResetButton(resetIndexLiteralPathNotice,
+                () => !_viewModel.Settings.HasPromptedIndexLiteralPathFilters);
+            remindersGroup.Children.Add(resetIndexLiteralPathNotice);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Shows the literal-path index-filter migration notice again on the next launch when maintained roots are affected. Index filters and stored indexes are left unchanged.",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,
@@ -4335,9 +4400,11 @@ public sealed partial class SettingsWindow : Window
             resetTabTargetPrompts.Click += async (_, _) =>
             {
                 await _viewModel.ResetTabTargetPromptsAsync();
-                MarkSettingsDirty(requireValueChanges: false);
                 RefreshDefaultResetButtons();
-                resetTabTargetPrompts.Content = "Tab destination prompts reset";
+                ShowResetOutcome(
+                    resetTabTargetPrompts,
+                    _viewModel.AreTabTargetPromptsReset,
+                    "Tab destination prompts reset");
             };
             RegisterDefaultResetButton(resetTabTargetPrompts, () => _viewModel.AreTabTargetPromptsReset);
             remindersGroup.Children.Add(resetTabTargetPrompts);
@@ -4374,6 +4441,222 @@ public sealed partial class SettingsWindow : Window
                 TextWrapping = TextWrapping.Wrap,
             });
 
+            var resetExplorerContextMenuPrompt = new Button
+            {
+                Content = "Reset Explorer context-menu prompt (re-prompt on startup)",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetExplorerContextMenuPrompt.Click += async (_, _) =>
+            {
+                await _viewModel.ResetExplorerContextMenuPromptAsync();
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetExplorerContextMenuPrompt,
+                    !_viewModel.HasCompletedFirstRun,
+                    "Explorer context-menu prompt reset");
+            };
+            RegisterDefaultResetButton(resetExplorerContextMenuPrompt,
+                () => !_viewModel.HasCompletedFirstRun);
+            remindersGroup.Children.Add(resetExplorerContextMenuPrompt);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Shows the \u201cAdd Explorer Context Menu?\u201d prompt on the next launch when the integration is not installed. An existing context-menu registration is not removed.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetResultStoreTempLocationPrompt = new Button
+            {
+                Content = "Reset result-storage location prompt (re-prompt on startup)",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetResultStoreTempLocationPrompt.Click += async (_, _) =>
+            {
+                await _viewModel.ResetResultStoreTempLocationPromptAsync();
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetResultStoreTempLocationPrompt,
+                    !_viewModel.HasChosenSearchResultTempDirectory,
+                    "Result-storage location prompt reset");
+            };
+            RegisterDefaultResetButton(resetResultStoreTempLocationPrompt,
+                () => !_viewModel.HasChosenSearchResultTempDirectory);
+            remindersGroup.Children.Add(resetResultStoreTempLocationPrompt);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Shows the search-result temporary-storage chooser again on the next launch. The current directory remains selected until you accept another choice.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetTelemetryConsentPrompt = new Button
+            {
+                Content = "Reset telemetry consent prompt (re-prompt on startup)",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetTelemetryConsentPrompt.Click += async (_, _) =>
+            {
+                await _viewModel.ResetTelemetryConsentPromptAsync();
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetTelemetryConsentPrompt,
+                    !_viewModel.TelemetryConsentPromptShown,
+                    "Telemetry consent prompt reset");
+            };
+            RegisterDefaultResetButton(resetTelemetryConsentPrompt,
+                () => !_viewModel.TelemetryConsentPromptShown);
+            remindersGroup.Children.Add(resetTelemetryConsentPrompt);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Shows the \u201cHelp improve Yagu?\u201d telemetry and bug-reporting choices again on the next launch. Your current choices remain active until you answer the prompt.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetAppUpdateConsentPrompt = new Button
+            {
+                Content = "Reset update-check choice (re-prompt on startup)",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetAppUpdateConsentPrompt.Click += async (_, _) =>
+            {
+                await _viewModel.ResetAppUpdateConsentPromptAsync();
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetAppUpdateConsentPrompt,
+                    _viewModel.Settings.AppUpdateCheckMode == AppUpdateCheckMode.Prompt,
+                    "Update-check choice reset");
+            };
+            RegisterDefaultResetButton(resetAppUpdateConsentPrompt,
+                () => _viewModel.Settings.AppUpdateCheckMode == AppUpdateCheckMode.Prompt);
+            remindersGroup.Children.Add(resetAppUpdateConsentPrompt);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Shows the update-check mode chooser again on the next launch. Prompt mode makes no network request before you select and save a choice.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetOcrDownloadConsent = new Button
+            {
+                Content = "Reset OCR download consent",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetOcrDownloadConsent.Click += async (_, _) =>
+            {
+                await _viewModel.ResetOcrDownloadConsentAsync();
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetOcrDownloadConsent,
+                    !_viewModel.Settings.OcrDownloadConsented,
+                    "OCR download consent reset");
+            };
+            RegisterDefaultResetButton(resetOcrDownloadConsent,
+                () => !_viewModel.Settings.OcrDownloadConsented);
+            remindersGroup.Children.Add(resetOcrDownloadConsent);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Asks for consent again before a future OCR search downloads any missing component. Already-installed OCR components are not removed.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetCpuSemanticWarning = new Button
+            {
+                Content = "Reset CPU-only AI warning",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetCpuSemanticWarning.Click += async (_, _) =>
+            {
+                await _viewModel.ResetCpuSemanticWarningAsync();
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetCpuSemanticWarning,
+                    !_viewModel.Settings.CpuSemanticWarningShown,
+                    "CPU-only AI warning reset");
+            };
+            RegisterDefaultResetButton(resetCpuSemanticWarning,
+                () => !_viewModel.Settings.CpuSemanticWarningShown);
+            remindersGroup.Children.Add(resetCpuSemanticWarning);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Shows the CPU-only AI warning again when AI search is enabled and no GPU or NPU is available. Current AI and default-search-mode settings are unchanged.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetSemanticSuggestion = new Button
+            {
+                Content = "Reset AI search suggestion",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetSemanticSuggestion.Click += async (_, _) =>
+            {
+                await _viewModel.ResetSemanticSuggestionAsync();
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetSemanticSuggestion,
+                    !_viewModel.Settings.SemanticSuggestionDismissed,
+                    "AI search suggestion reset");
+            };
+            RegisterDefaultResetButton(resetSemanticSuggestion,
+                () => !_viewModel.Settings.SemanticSuggestionDismissed);
+            remindersGroup.Children.Add(resetSemanticSuggestion);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Re-enables the suggestion to switch a natural-language Traditional query to AI search after \u201cDon't remind me again\u201d was selected.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetSlowSemanticModelWarnings = new Button
+            {
+                Content = "Reset slow AI model warnings",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetSlowSemanticModelWarnings.Click += async (_, _) =>
+            {
+                await _viewModel.ResetSlowSemanticModelWarningsAsync();
+                RefreshDefaultResetButtons();
+                ShowResetOutcome(
+                    resetSlowSemanticModelWarnings,
+                    _viewModel.Settings.SuppressedSlowSemanticModelKeys.Count == 0,
+                    "Slow AI model warnings reset");
+            };
+            RegisterDefaultResetButton(resetSlowSemanticModelWarnings,
+                () => _viewModel.Settings.SuppressedSlowSemanticModelKeys.Count == 0);
+            remindersGroup.Children.Add(resetSlowSemanticModelWarnings);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Re-enables the slow-interpretation warning for every AI model variant previously suppressed. Selected and downloaded models are unchanged.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
             var resetSemanticModelCheck = new Button
             {
                 Content = "Reset AI model check (re-prompt on startup)",
@@ -4384,9 +4667,11 @@ public sealed partial class SettingsWindow : Window
             resetSemanticModelCheck.Click += async (_, _) =>
             {
                 await _viewModel.ResetSemanticModelQualificationAsync();
-                MarkSettingsDirty(requireValueChanges: false);
                 RefreshDefaultResetButtons();
-                resetSemanticModelCheck.Content = "AI model check reset";
+                ShowResetOutcome(
+                    resetSemanticModelCheck,
+                    !_viewModel.HasSemanticModelQualificationState && _viewModel.SemanticSearchAvailable,
+                    "AI model check reset");
             };
             RegisterDefaultResetButton(resetSemanticModelCheck,
                 () => !_viewModel.HasSemanticModelQualificationState);

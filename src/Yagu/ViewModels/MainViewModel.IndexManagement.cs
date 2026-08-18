@@ -12,6 +12,47 @@ namespace Yagu.ViewModels;
 /// </summary>
 public sealed partial class MainViewModel
 {
+    public bool IsAutomaticCompactionBackoffActive(string root, DateTimeOffset nowUtc)
+        => IndexAutomaticCompactionRetryState.IsActive(_settings, root, nowUtc);
+
+    internal async Task RecordAutomaticCompactionMaintenanceResultsAsync(
+        IReadOnlyList<IndexMaintenanceRootResult> roots,
+        DateTimeOffset nowUtc)
+    {
+        await IndexAutomaticCompactionRetryState.RecordAsync(
+            _settingsService,
+            _settings,
+            roots,
+            nowUtc).ConfigureAwait(true);
+    }
+
+            internal async Task ClearAutomaticCompactionBackoffAsync(string root)
+            {
+                await IndexAutomaticCompactionRetryState.ClearAsync(
+                    _settingsService,
+                    _settings,
+                    root).ConfigureAwait(true);
+            }
+
+    /// <summary>Shows the one-time literal-path index-filter migration notice again on the next launch
+    /// when any maintained roots are affected. Filters, roots, and stored indexes are unchanged.</summary>
+    public async Task ResetIndexLiteralPathFilterNoticeAsync()
+    {
+        await PersistPromptResetAsync(settings => settings.HasPromptedIndexLiteralPathFilters = false)
+            .ConfigureAwait(true);
+    }
+
+    /// <summary>Schedules the index onboarding flow for the next launch without changing registered roots,
+    /// stored indexes, filters, or maintenance settings.</summary>
+    public async Task ResetIndexOnboardingAsync()
+    {
+        await PersistPromptResetAsync(settings =>
+        {
+            settings.HasPromptedIndexOnboarding = false;
+            settings.RePromptIndexOnboardingOnNextLaunch = true;
+        }).ConfigureAwait(true);
+    }
+
     /// <summary>
     /// Enables the content-index feature (if it is off), registers <paramref name="folder"/> as an indexed
     /// root, persists settings, and starts a background build of that folder. Backs the main-window
@@ -43,13 +84,16 @@ public sealed partial class MainViewModel
         string? buildTrigger,
         string? updateMode = null,
         bool applyFirstRunDriveIndexingProfile = false,
-        IReadOnlyList<string>? firstRunExcludedPaths = null)
+        IReadOnlyList<string>? firstRunExcludedPaths = null,
+        int? maxFileSizeMB = null)
     {
         if (folders is null || folders.Count == 0)
             return;
 
         if (applyFirstRunDriveIndexingProfile)
             _settings.ApplyFirstRunDriveIndexingProfile();
+        if (maxFileSizeMB.HasValue)
+            _settings.IndexMaxFileSizeMB = AppSettings.NormalizeIndexMaxFileSizeMB(maxFileSizeMB.Value);
         _settings.EnableContentIndex = true;
         UseContentIndex = true;
         if (!string.IsNullOrWhiteSpace(buildTrigger))
@@ -442,6 +486,9 @@ public sealed partial class MainViewModel
                 _settings.IndexUseNativeWorker,
                 IndexBuildCancellationToken,
                 (progressRoot, percent, stage) => ReportIndexBuildProgress(progressRoot, percent, stage)).ConfigureAwait(true);
+            await RecordAutomaticCompactionMaintenanceResultsAsync(
+                result.Roots,
+                DateTimeOffset.UtcNow).ConfigureAwait(true);
 
             IndexMaintenanceRootResult? rootResult = result.Roots.FirstOrDefault();
             StatusText = rootResult?.Action switch
@@ -524,6 +571,7 @@ public sealed partial class MainViewModel
                     p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4), IndexBuildStages.Ocr),
                 postBuildCatchUpProgress: _ => ReportFullBuildProgress(
                     99, IndexBuildStages.PostBuildCatchUp)).ConfigureAwait(true);
+            await ClearAutomaticCompactionBackoffAsync(root).ConfigureAwait(true);
             YaguLog.For("ContentIndex").LogInformation("Blocking index {Action} complete for '{Root}'.", rebuild ? "rebuild" : "build", root);
         }
         catch (OperationCanceledException)

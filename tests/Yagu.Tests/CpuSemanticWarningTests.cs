@@ -55,6 +55,19 @@ public sealed class CpuSemanticWarningTests
         // persisted false), while keeping AI leaves it enabled — so the setting matches the choice.
         Assert.Contains("SemanticSearchAvailable = false;", src);
         Assert.Contains("SemanticSearchAvailable = true;", src);
+
+        Assert.Contains("public async Task ResetCpuSemanticWarningAsync()", src);
+        Assert.Contains("settings => settings.CpuSemanticWarningShown = false", src);
+    }
+
+    [Fact]
+    public void DeveloperOptions_CanResetCpuOnlyWarning()
+    {
+        string settings = File.ReadAllText(Path.Combine(
+            Root, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+        Assert.Contains("Reset CPU-only AI warning", settings);
+        Assert.Contains("await _viewModel.ResetCpuSemanticWarningAsync();", settings);
+        Assert.Contains("RegisterDefaultResetButton(resetCpuSemanticWarning", settings);
     }
 
     [Fact]

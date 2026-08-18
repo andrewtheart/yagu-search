@@ -327,12 +327,17 @@ public sealed partial class MainWindow
         ViewModel.ReportIndexBuildProgress(indexRoot, 2, IndexUpdateStages.CompactAnalyzing);
         try
         {
-            await coordinator.RunMaintenancePreferWorkerAsync(
+            IndexMaintenanceSuccess result = await coordinator.RunMaintenancePreferWorkerAsync(
                 operation,
                 settings.IndexUseNativeWorker,
                 ViewModel.IndexBuildCancellationToken,
                 (root, percent, stage) => DispatcherQueue.TryEnqueue(
                     () => ViewModel.ReportIndexBuildProgress(root, percent, stage))).ConfigureAwait(true);
+            await ViewModel.RecordAutomaticCompactionMaintenanceResultsAsync(
+                result.Roots,
+                DateTimeOffset.UtcNow).ConfigureAwait(true);
+            if (result.Roots.Any(static root => root.Action == IndexMaintenanceActions.Failed))
+                throw new IOException("The index could not be compacted; the existing index remains valid.");
         }
         finally
         {

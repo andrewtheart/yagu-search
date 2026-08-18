@@ -61,6 +61,18 @@ public sealed class SlowSemanticModelWarningTests
         // Faster-model listing delegates to the pure advisor and the translator's runnable-model list.
         Assert.Contains("public async Task<IReadOnlyList<SemanticModelOption>> GetFasterSemanticModelOptionsAsync(", src);
         Assert.Contains("SlowSemanticModelAdvisor.SelectFasterOptions(", src);
+        Assert.Contains("public async Task ResetSlowSemanticModelWarningsAsync()", src);
+        Assert.Contains("settings => settings.SuppressedSlowSemanticModelKeys.Clear()", src);
+    }
+
+    [Fact]
+    public void DeveloperOptions_CanResetEverySuppressedSlowModelWarning()
+    {
+        string settings = File.ReadAllText(Path.Combine(
+            Root, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+        Assert.Contains("Reset slow AI model warnings", settings);
+        Assert.Contains("await _viewModel.ResetSlowSemanticModelWarningsAsync();", settings);
+        Assert.Contains("RegisterDefaultResetButton(resetSlowSemanticModelWarnings", settings);
     }
 
     [Fact]

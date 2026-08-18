@@ -631,12 +631,12 @@ public sealed partial class SettingsWindow
             ],
             s => s.IndexSizeManagementMode,
             (s, v) => s.IndexSizeManagementMode = IndexSizeManagementModes.Normalize(v),
-            "How every index reclaims storage, unless a folder overrides it under Manage Indexes ▸ Size. Coalescing merges bounded runs of small delta segments. Compaction streams every layer into a fresh base and can reclaim more, but it does more I/O and needs temporary spool space, so automatic passes are capped below. Neither operation loads the whole index into memory. Off lets an index grow until you rebuild it.");
+            "How every index reclaims storage, unless a folder overrides it under Manage Indexes ▸ Size. Coalescing merges bounded runs of small delta segments. Compaction streams every layer into a fresh base and can reclaim more. If no bounded merge can make progress, compact-capable modes use streaming compaction automatically even above the routine cap. Neither operation loads the whole index into memory. Off lets an index grow until you rebuild it.");
         AddIndexNumber(sizeGroup, "Auto-compaction size cap (MB, 0 = no cap):",
             s => s.IndexMaxAutoCompactionSizeMB,
             (s, v) => s.IndexMaxAutoCompactionSizeMB = AppSettings.NormalizeIndexMaxAutoCompactionSizeMB(v),
             0, 1048576,
-            "The largest total index size an automatic compaction will fold. The 8192 MB default covers medium-sized indexes while keeping very large whole-drive folds user-approved because they can take close to an hour and need substantial temporary disk space. Above this cap, searches still use the segmented index. 0 disables the cap.");
+            "Defers routine full compaction above this size while bounded coalescing is making progress. If no bounded merge can run, Coalesce-then-compact and Compact-only modes automatically use worker-isolated streaming compaction even above the cap instead of prompting. Choose Coalesce-only or Off to forbid automatic full compaction. Default 8192; 0 removes routine deferral.");
         AddIndexNumber(sizeGroup, "Coalescing: largest segment to merge (MB):",
             s => s.IndexCoalesceMaxSegmentMB,
             (s, v) => s.IndexCoalesceMaxSegmentMB = AppSettings.NormalizeIndexCoalesceMaxSegmentMB(v),
@@ -696,7 +696,9 @@ public sealed partial class SettingsWindow
         {
             await _viewModel.RestoreContentIndexLiveScanWarningsAsync();
             UpdateDismissedWarningSummary();
-            SetIndexStatus("Live-scan warnings restored.");
+            SetIndexStatus(_viewModel.Settings.ContentIndexLiveScanWarningDismissedRoots.Count == 0
+                ? "Live-scan warnings restored."
+                : "Could not restore live-scan warnings because settings could not be saved.");
         };
         presentationGroup.Children.Add(restoreLiveScanWarnings);
         presentationGroup.Children.Add(dismissedWarningSummary);

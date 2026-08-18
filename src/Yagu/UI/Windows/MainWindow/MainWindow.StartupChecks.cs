@@ -81,6 +81,8 @@ public sealed partial class MainWindow
             await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.IndexLiteralPathFilters, ShowIndexLiteralPathFilterNoticeIfNeededAsync);
             await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.FontContrast, ShowFontContrastWarningIfNeededAsync);
             await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.CpuSemanticWarning, ShowCpuSemanticWarningIfNeededAsync);
+            if (!ViewModel.ShouldOfferSemanticModelQualification)
+                startupDialogPlan.Remove(StartupDialogStep.SemanticQualification);
             await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.SemanticQualification, OfferSemanticModelQualificationIfNeededAsync);
             // Update checks: the one-time consent prompt (only on a fresh install / undecided user) stays in
             // the awaited startup-modal chain so it never races or stacks with first-run, telemetry, indexing,
@@ -299,6 +301,16 @@ public sealed partial class MainWindow
         try
         {
             AppSettings settings = ViewModel.Settings;
+            DateTimeOffset maintenanceStartedUtc = DateTimeOffset.UtcNow;
+            IReadOnlyList<string> dueRoots = roots
+                .Where(root => !ViewModel.IsAutomaticCompactionBackoffActive(root, maintenanceStartedUtc))
+                .ToArray();
+            if (dueRoots.Count == 0)
+            {
+                YaguLog.For("ContentIndex").LogInformation(
+                    "Automatic index maintenance skipped: every requested root is in compaction retry backoff.");
+                return;
+            }
 
             // Respect the pause conditions (plan §6.1): don't drain the battery, fight a running search,
             // or fill a nearly-full disk with an unattended build.
@@ -369,13 +381,16 @@ public sealed partial class MainWindow
             }
 
             IndexMaintenanceOperation operation = IndexBuildOperationFactory.CreateMaintenance(
-                settings, roots, maintenanceMode, rebuildWhenDirty);
+                settings, dueRoots, maintenanceMode, rebuildWhenDirty);
             var coordinator = new IndexBuildCoordinator();
             result = await coordinator.RunMaintenancePreferWorkerAsync(
                 operation,
                 settings.IndexUseNativeWorker,
                 ViewModel.IndexBuildCancellationToken,
                 ReportRootProgress).ConfigureAwait(true);
+            await ViewModel.RecordAutomaticCompactionMaintenanceResultsAsync(
+                result.Roots,
+                maintenanceStartedUtc).ConfigureAwait(true);
             YaguLog.For("ContentIndex").LogInformation(
                 "Startup index maintenance ({Mode}): built {Built}, skipped {Skipped}, failed {Failed} of {Total} root(s).",
                 maintenanceMode, result.Built, result.Skipped, result.Failed, result.Built + result.Skipped + result.Failed);
@@ -440,6 +455,9 @@ public sealed partial class MainWindow
                             // Honor a user pause (right-click ▸ Pause indexing).
                             if (ViewModel.IsIndexingPaused || ViewModel.IsShutdownRequested)
                                 return;
+                            DateTimeOffset maintenanceStartedUtc = DateTimeOffset.UtcNow;
+                            if (ViewModel.IsAutomaticCompactionBackoffActive(changedRoot, maintenanceStartedUtc))
+                                return;
                             string mode = AppSettings.NormalizeIndexUpdateMode(settings.IndexUpdateMode);
                             bool incremental = string.Equals(mode, AppSettings.IndexUpdateModeAutomaticIncremental, StringComparison.Ordinal);
                             activityStarted = TryBeginWatcherIndexActivity(changedRoot, incremental);
@@ -459,6 +477,10 @@ public sealed partial class MainWindow
                                 operation,
                                 settings.IndexUseNativeWorker,
                                 ViewModel.IndexBuildCancellationToken).GetAwaiter().GetResult();
+                            DispatcherQueue.TryEnqueue(() =>
+                                _ = ViewModel.RecordAutomaticCompactionMaintenanceResultsAsync(
+                                    r.Roots,
+                                    maintenanceStartedUtc));
                             if (r.Built > 0)
                                 YaguLog.For("ContentIndex").LogInformation("Watcher-hinted incremental refresh updated '{ChangedRoot}'.", changedRoot);
                         }

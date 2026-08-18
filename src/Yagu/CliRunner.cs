@@ -2001,7 +2001,8 @@ internal static partial class CliRunner
     // -----------------------------------------------------------------------
     private static int RunIndexManagement(CliArgs args)
     {
-        var settings = LoadEffectiveSettings(args);
+        var settingsService = ResolveSettingsService(args);
+        var settings = settingsService.Load();
 
         if (args.IndexConfigRequested)
             return RunIndexConfig(args);
@@ -2049,7 +2050,7 @@ internal static partial class CliRunner
         }
 
         if (args.IndexCompactRequested)
-            return RunIndexCompact(args, settings, manager);
+            return RunIndexCompact(args, settings, settingsService, manager);
 
         if (args.IndexValidateRequested)
             return RunIndexValidate(args, settings);
@@ -2120,6 +2121,10 @@ internal static partial class CliRunner
             var coordinator = new IndexBuildCoordinator();
             IndexBuildSuccess result = coordinator.BuildFullScopePreferWorkerAsync(
                 operation, settings.IndexUseNativeWorker, buildCts.Token).GetAwaiter().GetResult();
+            IndexAutomaticCompactionRetryState.ClearAsync(
+                settingsService,
+                settings,
+                buildRoot).GetAwaiter().GetResult();
             Console.Out.WriteLine($"Built content index for {buildRoot} ({result.LastPublishedArtifactId}).");
             Console.Out.WriteLine($"  {result.Summary}");
             if (result.PdfStatus is not null)
@@ -2406,7 +2411,11 @@ internal static partial class CliRunner
     /// Explicit one-shot compaction, the CLI counterpart of the GUI's <b>Compact now</b>. It ignores the
     /// automatic-compaction size cap for this run only and never persists a change to it.
     /// </summary>
-    private static int RunIndexCompact(CliArgs args, AppSettings settings, ContentIndexManager manager)
+    private static int RunIndexCompact(
+        CliArgs args,
+        AppSettings settings,
+        SettingsService settingsService,
+        ContentIndexManager manager)
     {
         string root = ResolveIndexRoot(args.IndexCompactPath);
         IndexMetadataStatus status = manager.GetMetadataStatusForRoot(root);
@@ -2424,8 +2433,19 @@ internal static partial class CliRunner
             IndexMaintenanceOperation operation = IndexBuildOperationFactory.CreateMaintenance(
                 settings, new[] { root }, IndexMaintenanceOperation.ModeCompactOnly, rebuildWhenDirty: false);
             var coordinator = new IndexBuildCoordinator();
-            coordinator.RunMaintenancePreferWorkerAsync(
+            IndexMaintenanceSuccess result = coordinator.RunMaintenancePreferWorkerAsync(
                 operation, settings.IndexUseNativeWorker, cts.Token).GetAwaiter().GetResult();
+            IndexAutomaticCompactionRetryState.RecordAsync(
+                settingsService,
+                settings,
+                result.Roots,
+                DateTimeOffset.UtcNow).GetAwaiter().GetResult();
+            IndexMaintenanceRootResult? rootResult = result.Roots.FirstOrDefault();
+            if (rootResult?.Action == IndexMaintenanceActions.Failed)
+            {
+                WriteError("error: compaction failed; the existing index is unchanged.");
+                return (int)ContentIndexExitCode.BuildFailure;
+            }
             IndexMetadataStatus after = manager.GetMetadataStatusForRoot(root);
             Console.Out.WriteLine($"Compacted the content index for {root}.");
             Console.Out.WriteLine($"  segments:    {status.SegmentCount:N0} -> {after.SegmentCount:N0}");

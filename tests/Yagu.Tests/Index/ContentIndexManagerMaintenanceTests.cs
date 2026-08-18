@@ -429,6 +429,76 @@ public sealed class ContentIndexManagerMaintenanceTests : IDisposable
     }
 
     [Fact]
+    public void AutomaticCompactionFailureMarker_RoundTripsBackoffAndClears()
+    {
+        PublishGeneration();
+        string scopeId = ContentIndexManager.ScopeIdForRoot(_root);
+        var store = new ContentIndexStore(_paths, scopeId);
+        DateTimeOffset failedUtc = new(2026, 8, 18, 12, 0, 0, TimeSpan.Zero);
+
+        ContentIndexManager.RecordAutomaticCompactionFailure(
+            store,
+            new IOException("scratch disk unavailable"),
+            failedUtc);
+
+        var manager = new ContentIndexManager(_paths);
+        IndexAutomaticCompactionFailure failure = Assert.IsType<IndexAutomaticCompactionFailure>(
+            manager.TryReadAutomaticCompactionFailureForRoot(_root));
+        Assert.Equal(failedUtc, failure.FailedUtc);
+        Assert.Equal(failedUtc.Add(ContentIndexManager.AutomaticCompactionRetryDelay), failure.RetryAfterUtc);
+        Assert.Contains("scratch disk unavailable", failure.Reason);
+
+        ContentIndexManager.ClearAutomaticCompactionFailure(store);
+        Assert.Null(manager.TryReadAutomaticCompactionFailureForRoot(_root));
+
+        ContentIndexManager.RecordAutomaticCompactionFailure(
+            store,
+            new IOException("retryable failure"),
+            failedUtc);
+        Assert.NotNull(manager.TryReadAutomaticCompactionFailureForRoot(_root));
+        PublishGeneration(new UsnCheckpoint(1, 200));
+        Assert.Null(manager.TryReadAutomaticCompactionFailureForRoot(_root));
+    }
+
+    [Fact]
+    public void CompactionDisabled_ClearsPriorAutomaticCompactionFailureMarker()
+    {
+        PublishGeneration();
+        string scopeId = ContentIndexManager.ScopeIdForRoot(_root);
+        var store = new ContentIndexStore(_paths, scopeId);
+        for (int index = 0; index < 2; index++)
+        {
+            var segment = new ContentIndexDeltaSegmentBuilder(Policy());
+            segment.AddChangedDocument(
+                Path.Combine(_root, $"delta-{index}.txt"),
+                Encoding.UTF8.GetBytes($"delta content {index}"));
+            store.PublishSegmentFast(segment.Build(
+                scopeId,
+                Path.GetPathRoot(_root)!,
+                IndexScopeIdentity.NormalizePath(_root),
+                new UsnCheckpoint(1, 200 + index),
+                DateTimeOffset.UtcNow));
+        }
+        ContentIndexManager.RecordAutomaticCompactionFailure(
+            store,
+            new IOException("prior failure"),
+            DateTimeOffset.UtcNow);
+
+        var settings = new IndexMaintenanceSettings
+        {
+            MaxDeltaSegments = 1,
+            CompactionThresholdMB = 8192,
+            SizeManagementMode = IndexSizeManagementModes.Off,
+        };
+        Assert.False(new ContentIndexManager(_paths).CompactScopeIfOverSegmented(
+            _root,
+            Policy(),
+            settings,
+            DateTimeOffset.UtcNow));
+        Assert.Null(new ContentIndexManager(_paths).TryReadAutomaticCompactionFailureForRoot(_root));
+    }
+
+    [Fact]
     public void MaintenanceMethods_OrdinaryProviderFailuresReturnFalse()
     {
         var manager = new ContentIndexManager(new ThrowingPathProvider(_indexRoot));

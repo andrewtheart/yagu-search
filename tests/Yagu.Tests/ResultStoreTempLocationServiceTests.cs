@@ -483,6 +483,25 @@ public sealed class ResultStoreTempLocationStartupTests
             settings);
     }
 
+    [Fact]
+    public void DeveloperOptions_CanResetResultStoragePromptWithoutClearingTheSelectedPath()
+    {
+        string root = FindRepoRoot();
+        string viewModel = MainViewModelPartials.Text;
+        string settings = File.ReadAllText(Path.Combine(
+            root, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+
+        Assert.Contains("public async Task ResetResultStoreTempLocationPromptAsync()", viewModel);
+        Assert.Contains("settings => settings.HasChosenSearchResultTempDirectory = false", viewModel);
+        int start = viewModel.IndexOf("public async Task ResetResultStoreTempLocationPromptAsync()", StringComparison.Ordinal);
+        string reset = viewModel.Substring(start, Math.Min(750, viewModel.Length - start));
+        Assert.DoesNotContain("settings.SearchResultTempDirectory =", reset);
+
+        Assert.Contains("Reset result-storage location prompt (re-prompt on startup)", settings);
+        Assert.Contains("await _viewModel.ResetResultStoreTempLocationPromptAsync();", settings);
+        Assert.Contains("RegisterDefaultResetButton(resetResultStoreTempLocationPrompt", settings);
+    }
+
     private static string ExtractMethod(string source, string startMarker, string endMarker)
     {
         source = source.Replace("\r\n", "\n", StringComparison.Ordinal);

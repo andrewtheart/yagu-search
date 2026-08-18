@@ -3109,61 +3109,40 @@ tab.)</td>
 </tr>
 <tr>
 <td>Index Size Management</td>
-<td>How each index reclaims storage. An index only ever grows on its
-own: every incremental update appends a delta segment, and storage comes
-back only through <strong>coalescing</strong> (merging a bounded run of
-neighbouring small segments) or <strong>compaction</strong> (streaming
-every active layer into a fresh base, which can reclaim more). The
-<strong>default size-management strategy</strong> picks which an index
-may use: <em>Coalesce, then compact</em> (default), <em>Coalesce
-only</em> (least maintenance work), <em>Compact only</em>, or
-<em>Off</em>. The <strong>auto-compaction size cap</strong> (default
-8192 MB, 0 = no cap) lets medium-sized indexes compact automatically
-while leaving hour-scale whole-drive folds user-approved because those
-consume substantial I/O and temporary disk space. Above the cap only
-coalescing, an explicitly requested compaction, or a rebuild reclaims
-space. The four <strong>coalescing</strong> controls set the largest
-segment eligible to merge (default 1024 MB), the largest merge batch
-(default 4096 MB — this bounds the work and disk I/O of one merge, not
-the memory it holds, which is set by the build memory budget; keep it at
-or above the run minimum multiplied by the segment cap so a full-length
-run can fit), the fewest neighbouring segments worth merging (default
-3), and how many merges one maintenance pass may perform (default 8).
-Merging and compaction both run as bounded streaming passes: records are
-ordered on disk in chunks sized by the build memory budget, so folding
-even a very large index never loads the whole index into memory. Only
-accumulated <strong>update history</strong> is merged; the pages of a
-single full build are disjoint parts of one index, so merging them would
-reclaim nothing and is deliberately skipped. If the largest-segment
-value is set below your typical segment size, coalescing can never find
-work and a large index will have no way to reclaim storage. Every folder
-can override the strategy, the size budget, and the compaction cap under
-<strong>Manage Indexes ▸ Size…</strong>. If an index does reach its
-budget and automatic clean-up cannot bring it back under, Yagu says so
-directly: the index-health row reports <strong>updates paused — reached
-its N MB size limit</strong>, and a dialog explains in plain language
-that searches remain complete (uncovered files are read live) but the
-index is no longer being kept up to date. The dialog fixes it for you —
-<strong>Rebuild this index</strong> (recommended; frees almost all the
-space and resumes updates, with the current index still working until
-the new one is ready), <strong>Raise the limit</strong>, <strong>Compact
-it instead</strong>, or <strong>Delete this index</strong> — and applies
-your choice immediately rather than sending you elsewhere. Separately,
-an index can keep updating and still be unable to shed the history those
-updates leave behind — when its accumulated update history passes the
-clean-up thresholds and neither merging nor compacting is permitted at
-its size. That row reports <strong>still updating, but N MB of
-accumulated update history cannot be reclaimed automatically</strong>,
-and its dialog offers <strong>Compact now</strong> (recommended; a
-one-shot, user-approved streaming fold that does not change your
-automatic-compaction cap), <strong>Rebuild this index</strong>,
-<strong>Delete this index</strong>, or <strong>Review size
-settings</strong>. Turn on <strong>Stop updating an index that can no
-longer be cleaned up</strong> if you would rather Yagu paused that index
-than let it grow — it is off by default, because pausing costs search
-speed. None of these settings can change search results — an index that
-stays segmented, or one paused at its budget, simply prunes less, and
-anything it cannot prove safe to skip is read live.</td>
+<td>How each index reclaims storage. Every incremental update appends a
+delta segment, and storage comes back through
+<strong>coalescing</strong> (merging a bounded run of neighbouring small
+segments) or <strong>compaction</strong> (streaming every active layer
+into a fresh base). The <strong>default size-management
+strategy</strong> chooses <em>Coalesce, then compact</em> (default),
+<em>Coalesce only</em>, <em>Compact only</em>, or <em>Off</em>. The
+<strong>auto-compaction size cap</strong> (default 8192 MB, 0 = no cap)
+defers routine full compaction while bounded coalescing is making
+progress. If clean-up is due and no bounded merge can make progress,
+<em>Coalesce, then compact</em> and <em>Compact only</em> automatically
+run worker-isolated streaming compaction even above that cap instead of
+showing a clean-up dialog. Choose <em>Coalesce only</em> or <em>Off</em>
+when full compaction must never start automatically. The coalescing
+controls set the largest eligible segment (default 1024 MB), largest
+batch (default 4096 MB), minimum neighbouring run (default 3), and
+maximum merges per pass (default 8). Both cleanup paths are bounded
+streaming operations sized by the build-memory budget, so even a large
+compaction does not load the whole index into memory. Only accumulated
+<strong>update history</strong> is coalesced; full-build pages are
+disjoint data and are skipped. Every folder can override its strategy,
+size budget, and routine compaction cap under <strong>Manage Indexes ▸
+Size…</strong>. A compact-capable index that exceeds its storage budget
+first attempts streaming compaction; if the compacted base still cannot
+fit, updates pause and health reports the failure without opening the
+clean-up dialog. For <em>Coalesce only</em> or <em>Off</em>, a budget or
+unreclaimable-history dialog remains available because full compaction
+is not an automatic option; it offers rebuild, limit/settings changes,
+one-shot compaction where appropriate, or deletion. Turn on <strong>Stop
+updating an index that can no longer be cleaned up</strong> if Yagu
+should pause such a coalesce-only/off index instead of letting it grow.
+None of these settings can change results: an index that stays segmented
+or pauses simply prunes less, and anything it cannot safely skip is read
+live.</td>
 </tr>
 <tr>
 <td>Status &amp; Provenance</td>
@@ -3273,15 +3252,20 @@ validated.</td>
 <p><strong>Compaction estimates.</strong> The bottom-right
 <strong>Index</strong> hover panel and each corresponding card under
 <strong>Settings ▸ Indexing ▸ Index storage</strong> show an estimated
-date/time for the next full automatic compaction. If the projected index
-will be above its automatic-compaction cap, the same line estimates when
-clean-up attention is likely instead. Choose <strong>More
-details</strong> for the observed update-history size, layer count,
-recent growth rate, threshold, projected index size,
-automatic-compaction decision, and any smaller coalescing pass expected
-first. The estimate assumes recent file churn continues and Yagu remains
-open; coalescing, pausing, closing Yagu, or a burst of file changes can
-move it.</p>
+date/time for the next full automatic compaction. For compact-capable
+modes, an estimate above the routine size cap explains that streaming
+compaction becomes the automatic fallback if bounded coalescing cannot
+make progress. A clean-up-attention estimate is reserved for modes that
+forbid full compaction. Choose <strong>More details</strong> for the
+observed update-history size, layer count, recent growth rate,
+threshold, projected index size, automatic-compaction decision, and any
+smaller coalescing pass expected first. The estimate assumes recent file
+churn continues and Yagu remains open; coalescing, pausing, closing
+Yagu, or a burst of file changes can move it. If automatic compaction
+fails, the existing index remains active, health shows the failure
+without opening the clean-up dialog, and Yagu waits six hours before
+attempting the expensive fold again; a successful compaction or rebuild
+clears that warning.</p>
 <p><strong>Index size history graph.</strong> The graph button at the
 top-right of the bottom status bar’s <strong>Indexing overview</strong>
 opens a line graph of physical index storage over time. <strong>All

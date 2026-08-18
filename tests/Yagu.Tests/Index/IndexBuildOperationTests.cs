@@ -129,6 +129,65 @@ public sealed class IndexBuildOperationTests : IDisposable
     }
 
     [Fact]
+    public void AutomaticCompactionRetryState_TracksFailuresAndUnresolvedBudgetsUntilSuccess()
+    {
+        const string root = @"C:\data";
+        DateTimeOffset nowUtc = new(2026, 8, 18, 12, 0, 0, TimeSpan.Zero);
+        var settings = new AppSettings
+        {
+            IndexSizeManagementMode = IndexSizeManagementModes.CoalesceThenCompact,
+        };
+
+        IndexAutomaticCompactionRetryState.ApplyResults(
+            settings,
+            [new IndexMaintenanceRootResult
+            {
+                Root = root,
+                Action = IndexMaintenanceActions.Failed,
+                Outcome = "compactionFailed",
+            }],
+            nowUtc);
+
+        Assert.True(IndexAutomaticCompactionRetryState.IsActive(settings, root, nowUtc));
+        Assert.Equal(
+            nowUtc.Add(ContentIndexManager.AutomaticCompactionRetryDelay),
+            settings.IndexAutomaticCompactionRetryAfterUtcByRoot[root]);
+
+        IndexAutomaticCompactionRetryState.ApplyResults(
+            settings,
+            [new IndexMaintenanceRootResult
+            {
+                Root = root,
+                Action = IndexMaintenanceActions.SizeBudgetReached,
+            }],
+            nowUtc.AddMinutes(1));
+        Assert.Equal(
+            nowUtc.AddMinutes(1).Add(ContentIndexManager.AutomaticCompactionRetryDelay),
+            settings.IndexAutomaticCompactionRetryAfterUtcByRoot[root]);
+
+        IndexAutomaticCompactionRetryState.ApplyResults(
+            settings,
+            [new IndexMaintenanceRootResult
+            {
+                Root = root,
+                Action = IndexMaintenanceActions.Compacted,
+            }],
+            nowUtc.AddMinutes(2));
+        Assert.Empty(settings.IndexAutomaticCompactionRetryAfterUtcByRoot);
+
+        settings.IndexSizeManagementMode = IndexSizeManagementModes.Coalesce;
+        IndexAutomaticCompactionRetryState.ApplyResults(
+            settings,
+            [new IndexMaintenanceRootResult
+            {
+                Root = root,
+                Action = IndexMaintenanceActions.SizeBudgetReached,
+            }],
+            nowUtc.AddMinutes(3));
+        Assert.Empty(settings.IndexAutomaticCompactionRetryAfterUtcByRoot);
+    }
+
+    [Fact]
     public void PostBuildCatchUpResult_DescribesEveryOutcome()
     {
         var cases = new (PostBuildCatchUpResult Result, bool NeedsAttention, string Description)[]

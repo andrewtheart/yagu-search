@@ -49,6 +49,15 @@ public sealed partial class MainViewModel
         await PersistSettingsAsync().ConfigureAwait(true);
     }
 
+    /// <summary>Shows the CPU-only AI warning again the next time its hardware and feature gates apply.
+    /// The current AI enablement and default search mode are left unchanged.</summary>
+    public async Task ResetCpuSemanticWarningAsync()
+    {
+        if (await PersistPromptResetAsync(settings => settings.CpuSemanticWarningShown = false)
+            .ConfigureAwait(true))
+            OnPropertyChanged(nameof(ShouldShowCpuSemanticWarning));
+    }
+
     /// <summary>
     /// True when an interactive Traditional-mode submit should first offer to switch to AI (Semantic)
     /// search because <paramref name="query"/> reads like a natural-language request. Gated on a
@@ -83,6 +92,14 @@ public sealed partial class MainViewModel
             IsSemanticQueryMode = true;
         }
         await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Re-enables the natural-language query suggestion without changing AI enablement,
+    /// downloaded models, or the selected search mode.</summary>
+    public async Task ResetSemanticSuggestionAsync()
+    {
+        await PersistPromptResetAsync(settings => settings.SemanticSuggestionDismissed = false)
+            .ConfigureAwait(true);
     }
 
     /// <summary>
@@ -137,25 +154,24 @@ public sealed partial class MainViewModel
     /// <summary>Re-enables the index warm-up search warning from Developer Options.</summary>
     public async Task ResetIndexWarmSearchWarningAsync()
     {
-        SuppressIndexWarmSearchWarning = false;
-        await PersistSettingsAsync().ConfigureAwait(true);
+        if (await PersistPromptResetAsync(settings => settings.SuppressIndexWarmSearchWarning = false)
+            .ConfigureAwait(true))
+            OnPropertyChanged(nameof(SuppressIndexWarmSearchWarning));
     }
 
     /// <summary>Restores pre-search warnings for unindexed locations without saving unrelated live
     /// Settings-window edits that have not been applied yet.</summary>
     public async Task RestoreContentIndexLiveScanWarningsAsync()
     {
-        _settings.ContentIndexLiveScanWarningDismissedRoots.Clear();
-        AppSettings persisted = await _settingsService.LoadAsync().ConfigureAwait(true);
-        persisted.ContentIndexLiveScanWarningDismissedRoots.Clear();
-        await _settingsService.SaveAsync(persisted).ConfigureAwait(true);
+        await PersistPromptResetAsync(settings => settings.ContentIndexLiveScanWarningDismissedRoots.Clear())
+            .ConfigureAwait(true);
     }
 
     /// <summary>Re-enables the literal-"\n" multiline suggestion prompt after the user dismissed it
     /// (Developer Options → Reminders and Warnings reset). Persists so the reset survives a restart.</summary>
     public async Task ResetMultilineNewlineSuggestionAsync()
     {
-        _settings.MultilineNewlineSuggestionDismissed = false;
-        await PersistSettingsAsync().ConfigureAwait(true);
+        await PersistPromptResetAsync(settings => settings.MultilineNewlineSuggestionDismissed = false)
+            .ConfigureAwait(true);
     }
 }

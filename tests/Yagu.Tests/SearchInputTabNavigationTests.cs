@@ -88,6 +88,8 @@ public sealed class SearchInputTabNavigationTests
         Assert.Contains("public async Task RecordTabTargetChoiceAsync(SearchInputTabScope scope, bool skipInlineControls)", MainViewModelTabTargetsSource);
         Assert.Contains("await _settingsService.SaveAsync(_settings).ConfigureAwait(false);", MainViewModelTabTargetsSource);
         Assert.Contains("public async Task ResetTabTargetPromptsAsync()", MainViewModelTabTargetsSource);
+        Assert.Contains("await PersistPromptResetAsync(settings =>", MainViewModelTabTargetsSource);
+        Assert.DoesNotContain("await PersistSettingsAsync()", MainViewModelTabTargetsSource);
 
         Assert.Contains("Content = \"Reset Tab destination prompts\"", SettingsWindowSource);
         Assert.Contains("await _viewModel.ResetTabTargetPromptsAsync();", SettingsWindowSource);

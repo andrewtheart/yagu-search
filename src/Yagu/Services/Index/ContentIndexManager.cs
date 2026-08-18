@@ -19,6 +19,18 @@ public enum ContentIndexExitCode
 /// <summary>Status of a scope's index (plan §6.3 <c>--index-status</c>).</summary>
 public sealed record IndexScopeStatus(bool Exists, IndexManifest? Manifest, string? Summary);
 
+internal enum IndexAutomaticCompactionOutcome
+{
+    NotNeeded,
+    Maintained,
+    Failed,
+}
+
+public readonly record struct IndexAutomaticCompactionFailure(
+    DateTimeOffset FailedUtc,
+    DateTimeOffset RetryAfterUtc,
+    string Reason);
+
 /// <summary>Cheap manifest-only scope metadata. <see cref="Exists"/> means pointer/manifest presence;
 /// it deliberately does not claim that the full base and segments are structurally valid.</summary>
 public readonly record struct IndexMetadataStatus(
@@ -1517,10 +1529,11 @@ public sealed partial class ContentIndexManager
     public bool CompactScopeIfOverSegmented(string rootDirectory, IndexIngestionPolicy policy, IndexMaintenanceSettings settings, DateTimeOffset builtUtc)
     {
         using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
-        return CompactScopeIfOverSegmentedUnderLease(mutation, rootDirectory, policy, settings, builtUtc);
+        return CompactScopeIfOverSegmentedUnderLease(
+            mutation, rootDirectory, policy, settings, builtUtc) == IndexAutomaticCompactionOutcome.Maintained;
     }
 
-    internal bool CompactScopeIfOverSegmentedUnderLease(
+    internal IndexAutomaticCompactionOutcome CompactScopeIfOverSegmentedUnderLease(
         IndexMutationContext mutation,
         string rootDirectory,
         IndexIngestionPolicy policy,
@@ -1533,16 +1546,20 @@ public sealed partial class ContentIndexManager
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(settings);
         bool smallSegmentsCoalesced = false;
+        string scopeId = ScopeIdForRoot(rootDirectory);
+        ContentIndexStore? store = null;
         try
         {
-            string scopeId = ScopeIdForRoot(rootDirectory);
-            var store = new ContentIndexStore(_paths, scopeId, _retainedGenerations);
+            store = new ContentIndexStore(_paths, scopeId, _retainedGenerations);
             store.ProduceV3QueryStructures = settings.ProduceV3QueryStructures;
             int maxSegments = Math.Clamp(settings.MaxDeltaSegments, 1, 64);
             int thresholdMB = Math.Clamp(settings.CompactionThresholdMB, 1, 8192);
             EffectiveIndexSizePolicy size = settings.ResolveSizePolicy(rootDirectory);
             if (!store.ShouldCompact(maxSegments, thresholdMB))
-                return false;
+            {
+                ClearAutomaticCompactionFailure(store);
+                return IndexAutomaticCompactionOutcome.NotNeeded;
+            }
 
             // First collapse only bounded contiguous runs of small segments. This never opens the base or
             // unrelated layers and is therefore safe even when the full index is far above the in-process
@@ -1553,41 +1570,173 @@ public sealed partial class ContentIndexManager
                 mutation, maxSegments, CancellationToken.None, size,
                 IndexMergeResourceBudget.FromSettings(settings)) > 0;
             if (!store.ShouldCompact(maxSegments, thresholdMB))
-                return smallSegmentsCoalesced;
-
-            // Full compaction is a bounded-memory external merge, but a very large automatic pass still does
-            // substantial sequential I/O and needs scratch space for sorted runs plus the replacement layer.
-            // Above the per-index cap, leave the index segmented until the user explicitly approves that work.
-            long indexBytes = store.TotalActiveIndexBytes();
-            if (!size.AllowsCompactingIndexOf(indexBytes))
             {
+                ClearAutomaticCompactionFailure(store);
+                return smallSegmentsCoalesced
+                    ? IndexAutomaticCompactionOutcome.Maintained
+                    : IndexAutomaticCompactionOutcome.NotNeeded;
+            }
+
+            // Keep the cap while bounded coalescing is making progress. If no bounded run could be merged,
+            // streaming full compaction is the automatic fallback for modes that permit it; otherwise the
+            // index grows indefinitely and repeatedly asks the user to approve work Yagu can safely schedule.
+            long indexBytes = store.TotalActiveIndexBytes();
+            bool boundedMergeCanStillProgress = size.AllowsCoalescing
+                && store.ActiveSegmentCount() > maxSegments
+                && store.TryFindIncrementalSegmentRun(
+                    size.CoalesceMinRun,
+                    EffectiveIndexSizePolicy.MaximumCoalesceRun,
+                    size.CoalesceMaxSegmentBytes,
+                    size.CoalesceMaxBatchBytes,
+                    out _);
+            if (!size.AllowsAutomaticCompactionOf(
+                indexBytes,
+                boundedMergeCanProgress: boundedMergeCanStillProgress))
+            {
+                if (!size.AllowsCompaction)
+                    ClearAutomaticCompactionFailure(store);
                 if (size.ExceedsBudget(indexBytes))
                 {
                     YaguLog.For("ContentIndex").LogWarning("Scope {Scope} for '{Root}' is {IndexMB} MB, over its {BudgetMB} MB size budget, but its '{Mode}' size-management mode cannot reclaim further — rebuild this index to reclaim the space.", scopeId, rootDirectory, indexBytes / (1024 * 1024), size.SizeBudgetMB, size.Mode);
                 }
                 else
                 {
-                    YaguLog.For("ContentIndex").LogInformation("Skipping auto-compaction of over-segmented scope {Scope} for '{Root}': the index is {IndexMB} MB (> {MaxCompactMB} MB cap, mode '{Mode}') — leaving this large background I/O pass for explicit approval.", scopeId, rootDirectory, indexBytes / (1024 * 1024), size.MaxAutoCompactionSizeMB, size.Mode);
+                    YaguLog.For("ContentIndex").LogInformation(
+                        size.AllowsCompaction
+                            ? "Deferring full auto-compaction of scope {Scope} for '{Root}': bounded coalescing made progress and the {IndexMB} MB index remains above its {MaxCompactMB} MB routine cap (mode '{Mode}')."
+                            : "Skipping full auto-compaction of scope {Scope} for '{Root}': size-management mode '{Mode}' does not permit compaction (index {IndexMB} MB, cap {MaxCompactMB} MB).",
+                        scopeId,
+                        rootDirectory,
+                        indexBytes / (1024 * 1024),
+                        size.MaxAutoCompactionSizeMB,
+                        size.Mode);
                 }
-                return smallSegmentsCoalesced;
+                return smallSegmentsCoalesced
+                    ? IndexAutomaticCompactionOutcome.Maintained
+                    : IndexAutomaticCompactionOutcome.NotNeeded;
+            }
+            if (TryReadAutomaticCompactionFailure(store, out IndexAutomaticCompactionFailure priorFailure)
+                && priorFailure.RetryAfterUtc > DateTimeOffset.UtcNow)
+            {
+                YaguLog.For("ContentIndex").LogWarning(
+                    "Deferring automatic compaction of scope {Scope} for '{Root}' until {RetryAfter:u} after the prior failure: {Reason}",
+                    scopeId,
+                    rootDirectory,
+                    priorFailure.RetryAfterUtc,
+                    priorFailure.Reason);
+                return IndexAutomaticCompactionOutcome.Failed;
+            }
+            if (!size.AllowsCompactingIndexOf(indexBytes))
+            {
+                YaguLog.For("ContentIndex").LogInformation(
+                    "Auto-compacting over-cap scope {Scope} for '{Root}': the {IndexMB} MB index has no bounded incremental merge that can make progress, so streaming compaction is the configured cleanup fallback (cap {MaxCompactMB} MB, mode '{Mode}').",
+                    scopeId,
+                    rootDirectory,
+                    indexBytes / (1024 * 1024),
+                    size.MaxAutoCompactionSizeMB,
+                    size.Mode);
             }
             YaguLog.For("ContentIndex").LogInformation("Compacting fresh over-segmented scope {Scope} for '{Root}' into a fresh base.", scopeId, rootDirectory);
             RunStreamingCompactionUnderLease(mutation, store, scopeId, rootDirectory, settings, builtUtc, null, CancellationToken.None);
+            ClearAutomaticCompactionFailure(store);
             YaguLog.For("ContentIndex").LogInformation("Compaction complete for scope {Scope} ('{Root}').", scopeId, rootDirectory);
-            return true;
+            return IndexAutomaticCompactionOutcome.Maintained;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            if (store is not null)
+                RecordAutomaticCompactionFailure(store, ex, DateTimeOffset.UtcNow);
             YaguLog.For("ContentIndex").LogWarning(ex, "Over-segmented compaction failed for '{Root}' \u2014 left as-is.", rootDirectory);
-            return smallSegmentsCoalesced;
+            return IndexAutomaticCompactionOutcome.Failed;
+        }
+    }
+
+    internal const string AutomaticCompactionFailureFile = "automatic-compaction.failure";
+    internal static readonly TimeSpan AutomaticCompactionRetryDelay = TimeSpan.FromHours(6);
+
+    internal static void RecordAutomaticCompactionFailure(
+        ContentIndexStore store,
+        Exception error,
+        DateTimeOffset failedUtc)
+    {
+        string reason = $"{error.GetType().Name}: {error.Message}".Replace('\r', ' ').Replace('\n', ' ');
+        string marker = Path.Combine(store.ScopeDirectory, AutomaticCompactionFailureFile);
+        string temp = marker + ".tmp";
+        try
+        {
+            Directory.CreateDirectory(store.ScopeDirectory);
+            File.WriteAllLines(temp, [failedUtc.ToUniversalTime().ToString("O"), reason]);
+            File.Move(temp, marker, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            YaguLog.For("ContentIndex").LogDebug(ex, "Could not record automatic compaction failure for '{Scope}'.", store.ScopeDirectory);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+        }
+    }
+
+    internal static bool TryReadAutomaticCompactionFailure(
+        ContentIndexStore store,
+        out IndexAutomaticCompactionFailure failure)
+    {
+        failure = default;
+        try
+        {
+            string marker = Path.Combine(store.ScopeDirectory, AutomaticCompactionFailureFile);
+            string[] lines = File.ReadAllLines(marker);
+            if (lines.Length < 2
+                || !DateTimeOffset.TryParse(
+                    lines[0],
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out DateTimeOffset failedUtc))
+                return false;
+            failure = new IndexAutomaticCompactionFailure(
+                failedUtc,
+                failedUtc.Add(AutomaticCompactionRetryDelay),
+                lines[1]);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    internal static void ClearAutomaticCompactionFailure(ContentIndexStore store)
+    {
+        try { File.Delete(Path.Combine(store.ScopeDirectory, AutomaticCompactionFailureFile)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            YaguLog.For("ContentIndex").LogDebug(ex, "Could not clear automatic compaction failure for '{Scope}'.", store.ScopeDirectory);
+        }
+    }
+
+    public IndexAutomaticCompactionFailure? TryReadAutomaticCompactionFailureForRoot(string rootDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(rootDirectory))
+            return null;
+        try
+        {
+            var store = new ContentIndexStore(_paths, ScopeIdForRoot(rootDirectory), _retainedGenerations);
+            return TryReadAutomaticCompactionFailure(store, out IndexAutomaticCompactionFailure failure)
+                ? failure
+                : null;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return null;
         }
     }
 
     /// <summary>
     /// Explicit, user-approved <b>Compact now</b>: folds every active layer into a fresh base by streaming,
-    /// regardless of the automatic-compaction size cap. The cap exists so background maintenance never
-    /// starts an expensive fold on its own; it is not a correctness limit, and this path does not persist
-    /// any change to it. Throws on failure so the caller can report why; the live index is untouched until
+    /// regardless of routine automatic deferral or retry backoff. Automatic maintenance can also exceed
+    /// the cap when no bounded merge can progress; this explicit path runs immediately and does not persist
+    /// any setting change. Throws on failure so the caller can report why; the live index is untouched until
     /// the single pointer flip at the end.
     /// </summary>
     public void CompactScopeNow(
@@ -1619,7 +1768,21 @@ public sealed partial class ContentIndexManager
         {
             ProduceV3QueryStructures = settings.ProduceV3QueryStructures,
         };
-        RunStreamingCompactionUnderLease(mutation, store, scopeId, rootDirectory, settings, builtUtc, progress, cancellationToken);
+        try
+        {
+            RunStreamingCompactionUnderLease(
+                mutation, store, scopeId, rootDirectory, settings, builtUtc, progress, cancellationToken);
+            ClearAutomaticCompactionFailure(store);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            RecordAutomaticCompactionFailure(store, ex, DateTimeOffset.UtcNow);
+            throw;
+        }
     }
 
     internal static void RunStreamingCompactionUnderLease(

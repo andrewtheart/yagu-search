@@ -946,6 +946,177 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void IndexOnboardingRePrompt_DefaultsFalseAndRoundTrips()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "qg-index-onboarding-reprompt-" + Guid.NewGuid() + ".json");
+        try
+        {
+            Assert.False(new AppSettings().RePromptIndexOnboardingOnNextLaunch);
+            var service = new SettingsService(path);
+            service.Save(new AppSettings { RePromptIndexOnboardingOnNextLaunch = true });
+
+            Assert.True(service.Load().RePromptIndexOnboardingOnNextLaunch);
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ChangesOnlyTheSelectedPersistedField()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "qg-settings-update-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var service = new SettingsService(path);
+            service.Save(new AppSettings
+            {
+                ThemeModeIndex = 2,
+                MaxResults = 12_345,
+                TelemetryConsentPromptShown = true,
+            });
+
+            Assert.True(await service.UpdateAsync(settings => settings.TelemetryConsentPromptShown = false));
+            AppSettings loaded = service.Load();
+            Assert.False(loaded.TelemetryConsentPromptShown);
+            Assert.Equal(2, loaded.ThemeModeIndex);
+            Assert.Equal(12_345, loaded.MaxResults);
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_UnreadableJsonDoesNotOverwriteTheSettingsFile()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "qg-settings-update-invalid-" + Guid.NewGuid() + ".json");
+        const string invalidJson = "{ not valid json";
+        try
+        {
+            await File.WriteAllTextAsync(path, invalidJson);
+            var service = new SettingsService(path);
+
+            Assert.False(await service.UpdateAsync(settings => settings.TelemetryConsentPromptShown = false));
+            Assert.Equal(invalidJson, await File.ReadAllTextAsync(path));
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_AppliesPendingMigrationsBeforeSavingResetFields()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "qg-settings-update-migration-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var legacy = new AppSettings
+            {
+                IndexSizeDefaultsMigrated = false,
+                IndexMaxDiskSizeMB = AppSettings.LegacyDefaultIndexMaxDiskSizeMB,
+                TelemetryConsentPromptShown = true,
+            };
+            await using (var output = File.Create(path))
+            {
+                await System.Text.Json.JsonSerializer.SerializeAsync(
+                    output,
+                    legacy,
+                    AppSettingsJsonContext.Default.AppSettings);
+            }
+
+            var service = new SettingsService(path);
+            Assert.True(await service.UpdateAsync(settings => settings.TelemetryConsentPromptShown = false));
+
+            AppSettings loaded = service.Load();
+            Assert.False(loaded.TelemetryConsentPromptShown);
+            Assert.True(loaded.IndexSizeDefaultsMigrated);
+            Assert.Equal(AppSettings.DefaultIndexMaxDiskSizeMB, loaded.IndexMaxDiskSizeMB);
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_AppliesLiveCommitBeforeAQueuedBroadSaveCanRun()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "qg-settings-update-order-" + Guid.NewGuid() + ".json");
+        using var commitEntered = new ManualResetEventSlim();
+        using var releaseCommit = new ManualResetEventSlim();
+        try
+        {
+            var service = new SettingsService(path);
+            var competingService = new SettingsService(path);
+            var liveSettings = new AppSettings { TelemetryConsentPromptShown = true, ThemeModeIndex = 2 };
+            service.Save(liveSettings);
+
+            Task<bool> update = service.UpdateAsync(
+                settings => settings.TelemetryConsentPromptShown = false,
+                afterCommit: () =>
+                {
+                    liveSettings.TelemetryConsentPromptShown = false;
+                    commitEntered.Set();
+                    releaseCommit.Wait();
+                });
+            Assert.True(commitEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            Task competingSave = competingService.SaveAsync(liveSettings);
+            releaseCommit.Set();
+            Assert.True(await update);
+            await competingSave;
+
+            AppSettings loaded = service.Load();
+            Assert.False(loaded.TelemetryConsentPromptShown);
+            Assert.Equal(2, loaded.ThemeModeIndex);
+        }
+        finally
+        {
+            releaseCommit.Set();
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [Fact]
+    public void AutomaticCompactionRetryState_NormalizesAndRoundTrips()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "qg-compaction-retry-" + Guid.NewGuid() + ".json");
+        DateTimeOffset retry = new(2026, 8, 18, 12, 0, 0, TimeSpan.FromHours(-4));
+        try
+        {
+            var service = new SettingsService(path);
+            service.Save(new AppSettings
+            {
+                IndexAutomaticCompactionRetryAfterUtcByRoot = new Dictionary<string, DateTimeOffset>
+                {
+                    [@" C:\ "] = retry,
+                    [" "] = retry,
+                },
+            });
+
+            AppSettings loaded = service.Load();
+            Assert.Single(loaded.IndexAutomaticCompactionRetryAfterUtcByRoot);
+            Assert.Equal(retry.ToUniversalTime(), loaded.IndexAutomaticCompactionRetryAfterUtcByRoot[@"C:\"]);
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
+    [Theory]
+    [InlineData(Yagu.Services.Index.IndexSizeManagementModes.Coalesce)]
+    [InlineData(Yagu.Services.Index.IndexSizeManagementModes.Off)]
+    public void AutomaticCompactionRetryState_IsClearedWhenCompactionIsDisabled(string mode)
+    {
+        string path = Path.Combine(Path.GetTempPath(), "qg-compaction-retry-off-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var service = new SettingsService(path);
+            service.Save(new AppSettings
+            {
+                IndexSizeManagementMode = mode,
+                IndexAutomaticCompactionRetryAfterUtcByRoot = new Dictionary<string, DateTimeOffset>
+                {
+                    [@"C:\"] = DateTimeOffset.UtcNow.AddHours(6),
+                },
+            });
+
+            Assert.Empty(service.Load().IndexAutomaticCompactionRetryAfterUtcByRoot);
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
+    [Fact]
     public void SemanticModelQualificationFields_DefaultToNotCompletedEmptyAlias()
     {
         var s = new AppSettings();

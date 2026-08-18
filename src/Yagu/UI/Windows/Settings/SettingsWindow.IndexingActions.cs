@@ -1715,6 +1715,7 @@ public sealed partial class SettingsWindow
                 pdfProgress: p => _viewModel.ReportIndexBuildProgress(root, p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5), IndexBuildStages.Pdf),
                 imageOcrProgress: p => _viewModel.ReportIndexBuildProgress(root, p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4), IndexBuildStages.Ocr),
                 postBuildCatchUpProgress: _ => _viewModel.ReportIndexBuildProgress(root, 99, IndexBuildStages.PostBuildCatchUp));
+            await _viewModel.ClearAutomaticCompactionBackoffAsync(root).ConfigureAwait(true);
             string ocrSummary = string.IsNullOrWhiteSpace(result.ImageOcrStatus)
                 ? string.Empty
                 : $" Image-text index: {result.ImageOcrStatus} ({result.ImagesAdmitted:N0}/{result.ImagesSeen:N0} images admitted).";
@@ -1824,12 +1825,21 @@ public sealed partial class SettingsWindow
         SetIndexStatus($"Compacting the index for {root}\u2026 this rewrites every stored record, so it can take a while.");
         try
         {
-            await coordinator.RunMaintenancePreferWorkerAsync(
+            IndexMaintenanceSuccess result = await coordinator.RunMaintenancePreferWorkerAsync(
                 operation,
                 settings.IndexUseNativeWorker,
                 _indexBuildCts.Token,
                 (progressRoot, percent, stage) => DispatcherQueue.TryEnqueue(
                     () => SetIndexStatus($"Compacting {progressRoot}\u2026 {stage} {percent}%"))).ConfigureAwait(true);
+            await _viewModel.RecordAutomaticCompactionMaintenanceResultsAsync(
+                result.Roots,
+                DateTimeOffset.UtcNow).ConfigureAwait(true);
+            IndexMaintenanceRootResult? rootResult = result.Roots.FirstOrDefault();
+            if (rootResult?.Action == IndexMaintenanceActions.Failed)
+            {
+                SetIndexStatus("Compaction failed; the existing index is unchanged. Yagu will retry automatically after the backoff period.");
+                return;
+            }
 
             ActiveLayerStorageBreakdown? breakdown = CreateIndexManager().TryReadActiveLayerStorageBreakdownForRoot(root);
             SetIndexStatus(breakdown is { } b

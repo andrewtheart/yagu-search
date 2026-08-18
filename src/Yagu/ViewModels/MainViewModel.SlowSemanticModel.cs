@@ -46,6 +46,14 @@ public sealed partial class MainViewModel
         await PersistSettingsAsync().ConfigureAwait(true);
     }
 
+    /// <summary>Re-enables slow-interpretation warnings for every model variant without changing the
+    /// selected model or any downloaded model assets.</summary>
+    public async Task ResetSlowSemanticModelWarningsAsync()
+    {
+        await PersistPromptResetAsync(settings => settings.SuppressedSlowSemanticModelKeys.Clear())
+            .ConfigureAwait(true);
+    }
+
     /// <summary>Lists the locally-runnable models that are smaller (and therefore typically faster) than
     /// the model currently running, smallest-first. Empty when none exist or the feature is unavailable —
     /// the caller then skips the slow-interpretation prompt.</summary>

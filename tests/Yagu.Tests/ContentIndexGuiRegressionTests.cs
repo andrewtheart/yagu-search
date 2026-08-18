@@ -222,6 +222,7 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("public bool SuppressIndexWarmSearchWarning", SettingsServiceSource);
         Assert.Contains("public bool SuppressIndexWarmSearchWarning", MainViewModelSource);
         Assert.Contains("ResetIndexWarmSearchWarningAsync()", MainViewModelSource);
+        Assert.Contains("settings => settings.SuppressIndexWarmSearchWarning = false", MainViewModelSource);
         Assert.Contains("Reset index warm-up search warning", SettingsWindowSource);
         Assert.Contains("_viewModel.ResetIndexWarmSearchWarningAsync()", SettingsWindowSource);
         Assert.Contains("Reset index warm-up search warning", HelpMarkdown);
@@ -852,7 +853,7 @@ public sealed class ContentIndexGuiRegressionTests
         // The V1 AutomaticFullRebuildWhenDirty update mode rebuilds dirty roots at startup (plan §6.1).
         Assert.Contains("AppSettings.IndexUpdateModeAutomaticFullRebuildWhenDirty", StartupChecksSource);
         Assert.Contains("maintenanceMode = IndexMaintenanceOperation.ModeBuildDue;", StartupChecksSource);
-        Assert.Contains("settings, roots, maintenanceMode, rebuildWhenDirty", StartupChecksSource);
+        Assert.Contains("settings, dueRoots, maintenanceMode, rebuildWhenDirty", StartupChecksSource);
     }
 
     [Fact]
@@ -1195,7 +1196,7 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("RefreshAllDriveIndexStatus();", ExtractFrom(
             MainViewModelSource,
             "public async Task AddFoldersToIndexAndBuildAsync(",
-            3500));
+            4200));
         Assert.Contains("RefreshAllDriveIndexStatus();", ExtractFrom(
             MainViewModelSource,
             "public async Task AddFolderToIndexAndBuildAsync(string folder)",
@@ -1381,7 +1382,8 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("selected by default", IndexOnboardingSource);
         Assert.Contains("selectedSuggestedExclusions.Remove(path);", IndexOnboardingSource);
         Assert.Contains("IndexOnboardingPlan.SuggestedSystemExclusions(chosen, windowsDirectory)", IndexOnboardingSource);
-        Assert.Contains("firstRunExcludedPaths);", IndexOnboardingSource);
+        Assert.Contains("firstRunExcludedPaths,", IndexOnboardingSource);
+        Assert.Contains("maxFileSizeMB: maxFileSizeMB);", IndexOnboardingSource);
 
         string addFolders = ExtractFrom(
             MainViewModelSource,
@@ -1423,6 +1425,12 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("ShowTitleBar = false", notice);
         Assert.Contains("Searches stay correct either way", notice);
         Assert.Equal(2, notice.Split("ViewModel.Settings.HasPromptedIndexLiteralPathFilters = true;").Length - 1);
+
+        Assert.Contains("public async Task ResetIndexLiteralPathFilterNoticeAsync()", MainViewModelSource);
+        Assert.Contains("settings => settings.HasPromptedIndexLiteralPathFilters = false", MainViewModelSource);
+        Assert.Contains("Reset index filter migration notice", SettingsWindowSource);
+        Assert.Contains("await _viewModel.ResetIndexLiteralPathFilterNoticeAsync();", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(resetIndexLiteralPathNotice", SettingsWindowSource);
     }
 
     [Fact]
@@ -1525,7 +1533,7 @@ public sealed class ContentIndexGuiRegressionTests
     public void IndexOnboarding_FirstRunPrompt_IsOnceAndFlowsIntoAddDialog()
     {
         Assert.Contains("private async Task CheckFirstRunIndexOnboardingAsync()", IndexOnboardingSource);
-        Assert.Contains("if (ViewModel.Settings.HasPromptedIndexOnboarding)", IndexOnboardingSource);
+        Assert.Contains("if (ViewModel.Settings.HasPromptedIndexOnboarding && !rePromptOnNextLaunch)", IndexOnboardingSource);
         Assert.Contains("ViewModel.Settings.IndexedRoots.Count > 0", IndexOnboardingSource);
         Assert.Contains("DefaultContentIndexPathProvider.TryGetPreservedStorageDirectory", IndexOnboardingSource);
         Assert.Contains("DefaultContentIndexPathProvider.ClearPreservedStorageDirectory();", IndexOnboardingSource);
@@ -1564,6 +1572,28 @@ public sealed class ContentIndexGuiRegressionTests
     }
 
     [Fact]
+    public void IndexOnboarding_AllowsAdjustingMaximumIndexedFileSizeBeforeBuilding()
+    {
+        Assert.Contains(
+            "int maxFileSizeMB = AppSettings.NormalizeIndexMaxFileSizeMB(ViewModel.Settings.IndexMaxFileSizeMB);",
+            IndexOnboardingSource);
+        Assert.Contains("Text = \"Maximum file size to index:\"", IndexOnboardingSource);
+        Assert.Contains("Minimum = AppSettings.MinimumIndexMaxFileSizeMB", IndexOnboardingSource);
+        Assert.Contains("Maximum = AppSettings.MaximumIndexMaxFileSizeMB", IndexOnboardingSource);
+        Assert.Contains("maxFileSizeMB: maxFileSizeMB", IndexOnboardingSource);
+
+        string addFoldersMethod = ExtractFrom(MainViewModelSource, "public async Task AddFoldersToIndexAndBuildAsync(", 2600);
+        Assert.Contains("int? maxFileSizeMB = null", addFoldersMethod);
+        Assert.Contains(
+            "_settings.IndexMaxFileSizeMB = AppSettings.NormalizeIndexMaxFileSizeMB(maxFileSizeMB.Value);",
+            addFoldersMethod);
+        Assert.True(
+            addFoldersMethod.IndexOf("_settings.ApplyFirstRunDriveIndexingProfile();", StringComparison.Ordinal)
+                < addFoldersMethod.IndexOf("_settings.IndexMaxFileSizeMB =", StringComparison.Ordinal),
+            "The user's onboarding choice must be applied after the first-run profile sets its defaults.");
+    }
+
+    [Fact]
     public void Startup_RunsFirstRunIndexOnboardingInAwaitedChain()
         => Assert.Contains(
             "StartupDialogStep.IndexOnboarding, CheckFirstRunIndexOnboardingAsync",
@@ -1582,6 +1612,31 @@ public sealed class ContentIndexGuiRegressionTests
     [Fact]
     public void Settings_DeclaresIndexOnboardingPromptFlag()
         => Assert.Contains("public bool HasPromptedIndexOnboarding { get; set; }", SettingsServiceSource);
+
+    [Fact]
+    public void DeveloperOptions_CanRePromptIndexOnboardingOnNextLaunchWithoutDeletingIndexes()
+    {
+        Assert.Contains("public bool RePromptIndexOnboardingOnNextLaunch { get; set; }", SettingsServiceSource);
+        Assert.Contains("Reset indexing setup prompt (re-prompt on startup)", SettingsWindowSource);
+        Assert.Contains("await _viewModel.ResetIndexOnboardingAsync();", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(resetIndexOnboardingPrompt", SettingsWindowSource);
+        Assert.Contains("static void ShowResetOutcome(Button button, bool succeeded, string successText)", SettingsWindowSource);
+        Assert.Contains("Reset failed - settings could not be saved", SettingsWindowSource);
+        Assert.Contains("ShowResetOutcome(\r\n                    resetIndexOnboardingPrompt", SettingsWindowSource);
+
+        string resetMethod = ExtractFrom(MainViewModelSource, "public async Task ResetIndexOnboardingAsync()", 700);
+        Assert.Contains("settings.HasPromptedIndexOnboarding = false;", resetMethod);
+        Assert.Contains("settings.RePromptIndexOnboardingOnNextLaunch = true;", resetMethod);
+        Assert.Contains("await PersistPromptResetAsync(", resetMethod);
+        Assert.DoesNotContain("IndexedRoots", resetMethod);
+        Assert.DoesNotContain("Delete", resetMethod);
+
+        string startup = ExtractFrom(IndexOnboardingSource, "private async Task CheckFirstRunIndexOnboardingAsync()", 6200);
+        Assert.Contains("bool rePromptOnNextLaunch = ViewModel.Settings.RePromptIndexOnboardingOnNextLaunch;", startup);
+        Assert.Contains("if (!rePromptOnNextLaunch && ViewModel.Settings.IndexedRoots.Count > 0)", startup);
+        Assert.Contains("ViewModel.Settings.RePromptIndexOnboardingOnNextLaunch = false;", startup);
+        Assert.Contains("Title = \"Speed up searches with an index?\"", startup);
+    }
 
     // ── Indexing-in-progress indicator: "Indexing…" in the status bar while a background build runs ──
 
@@ -1624,7 +1679,10 @@ public sealed class ContentIndexGuiRegressionTests
         int perItem = updater.IndexOf("ReportMerge(++merged);", StringComparison.Ordinal);
         int write = updater.IndexOf("progress?.Invoke(IndexUpdateStages.WriteFloor, IndexUpdateStages.Writing);", StringComparison.Ordinal);
         int publish = updater.IndexOf("progress?.Invoke(IndexUpdateStages.PublishFloor, IndexUpdateStages.Publishing);", StringComparison.Ordinal);
-        int compact = updater.IndexOf("progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);", StringComparison.Ordinal);
+        int compact = updater.IndexOf(
+            "progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);",
+            publish + 1,
+            StringComparison.Ordinal);
         Assert.True(signature >= 0 && signature < merge && merge < perItem && perItem < write && write < publish && publish < compact);
         // Per-phase timings so a slow update can be attributed from the log alone.
         Assert.Contains("merge {MergeMs} ms, serialize {BuildMs} ms, publish {PublishMs} ms", updater);
@@ -1907,10 +1965,10 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("Restore live-scan warnings", SettingsIndexingSource);
         Assert.Contains("await _viewModel.RestoreContentIndexLiveScanWarningsAsync();", SettingsIndexingSource);
         Assert.Contains("public async Task RestoreContentIndexLiveScanWarningsAsync()", MainViewModelSource);
-        Assert.Contains("AppSettings persisted = await _settingsService.LoadAsync()", MainViewModelSource);
-        Assert.Contains("persisted.ContentIndexLiveScanWarningDismissedRoots.Clear();", MainViewModelSource);
-        Assert.Contains("await _settingsService.SaveAsync(persisted)", MainViewModelSource);
+        Assert.Contains("settings => settings.ContentIndexLiveScanWarningDismissedRoots.Clear()", MainViewModelSource);
+        Assert.DoesNotContain("AppSettings persisted = await _settingsService.LoadAsync()", MainViewModelSource);
         Assert.Contains("Live-scan warnings restored.", SettingsIndexingSource);
+        Assert.Contains("Could not restore live-scan warnings because settings could not be saved.", SettingsIndexingSource);
     }
 
     // ── Right-click "Pause indexing" / "Resume indexing" on the status-bar indicator ──

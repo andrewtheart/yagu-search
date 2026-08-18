@@ -54,11 +54,13 @@ public sealed partial class MainViewModel
     /// <summary>Re-arms both prompts and restores the default (move to the inline controls) destination.</summary>
     public async Task ResetTabTargetPromptsAsync()
     {
-        _settings.HasPromptedDirectoryTabTarget = false;
-        _settings.DirectoryTabSkipsInlineControls = false;
-        _settings.HasPromptedSearchPatternTabTarget = false;
-        _settings.SearchPatternTabSkipsInlineControls = false;
-        OnPropertyChanged(nameof(AreTabTargetPromptsReset));
-        await PersistSettingsAsync().ConfigureAwait(true);
+        if (await PersistPromptResetAsync(settings =>
+        {
+            settings.HasPromptedDirectoryTabTarget = false;
+            settings.DirectoryTabSkipsInlineControls = false;
+            settings.HasPromptedSearchPatternTabTarget = false;
+            settings.SearchPatternTabSkipsInlineControls = false;
+        }).ConfigureAwait(true))
+            OnPropertyChanged(nameof(AreTabTargetPromptsReset));
     }
 }

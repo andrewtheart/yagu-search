@@ -227,6 +227,7 @@ public sealed class ContentIndexStore
         IndexMutationFaults.Hit(IndexMutationFaults.BaseMarkerCleared);
         RetainAfterCommit();
         IndexMutationFaults.Hit(IndexMutationFaults.BaseCleanupFinished);
+        DeleteFileSafe(Path.Combine(_scopeDir, ContentIndexManager.AutomaticCompactionFailureFile));
         YaguLog.For("ContentIndex").LogDebug("Published base generation '{GenerationId}' seq={Sequence} (scope {Scope}, segments reset).", generationId, newSequence, _scopeId);
         return new PublishResult(generationId, newSequence);
     }
@@ -1475,6 +1476,7 @@ public sealed class ContentIndexStore
         }
         IndexMutationFaults.Hit(IndexMutationFaults.ImportBeforePointer);
         WriteTargetSlot(pointerSequence, baseId, importedSegments);
+        DeleteFileSafe(Path.Combine(_scopeDir, ContentIndexManager.AutomaticCompactionFailureFile));
         IndexMutationFaults.Hit(IndexMutationFaults.ImportPointerPublished);
         DeleteFileSafe(Path.Combine(destinationBase, ImportMarkerFile));
         foreach (string segmentId in importedSegments)

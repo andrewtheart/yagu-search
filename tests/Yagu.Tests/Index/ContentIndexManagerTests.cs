@@ -505,10 +505,10 @@ public sealed class ContentIndexManagerTests : IDisposable
     }
 
     [Fact]
-    public void CompactScopeIfOverSegmented_SkipsWhenIndexExceedsSizeCap_LeavesSegmented()
+    public void CompactScopeIfOverSegmented_OverCapWithNoMergePath_CompactsAutomatically()
     {
-        // A large-ish over-segmented index: folding it in-process would spike memory. The size cap must skip
-        // the automatic compaction and leave the segments in place; a 0 cap then compacts the same index.
+        // A large-ish over-segmented index whose mode permits only full compaction. The automatic size
+        // cap cannot strand it because no bounded coalescing path exists.
         const int total = 700;
         for (int i = 0; i < total; i++)
         {
@@ -524,24 +524,70 @@ public sealed class ContentIndexManagerTests : IDisposable
         manager.BuildScope(_corpus, Policy(), buildMemoryBudgetMB: 1);
 
         var store = new ContentIndexStore(_paths, ContentIndexManager.ScopeIdForRoot(_corpus));
-        int segmentsBefore = store.ActiveSegmentCount();
-        Assert.True(segmentsBefore >= 2, $"Setup expected >=2 segments, got {segmentsBefore}.");
+        Assert.True(store.ActiveSegmentCount() >= 2, $"Setup expected >=2 segments, got {store.ActiveSegmentCount()}.");
         Assert.True(store.TotalActiveIndexBytes() > 1L * 1024 * 1024, "Setup expected a >1 MB index for the cap to bite.");
 
-        Assert.True(store.TryGetCurrentLayerDirectories(out string? baseBefore, out _));
+        // Compact-only mode has no bounded merge path. The same 1 MB cap is therefore bypassed and the
+        // worker-safe streaming fold runs automatically instead of leaving a blocked index/dialog state.
+        var fallback = new IndexMaintenanceSettings
+        {
+            MaxDeltaSegments = 1,
+            CompactionThresholdMB = 1,
+            MaxAutoCompactionSizeMB = 1,
+            SizeManagementMode = IndexSizeManagementModes.CoalesceThenCompact,
+            CoalesceMinRun = 64,
+        };
+        Assert.True(manager.CompactScopeIfOverSegmented(_corpus, Policy(), fallback, DateTimeOffset.UtcNow));
+        Assert.Equal(0, store.ActiveSegmentCount());
+    }
 
-        // 1 MB cap, index is larger → a full base fold is forbidden. Bounded small-run coalescing may
-        // still reduce the segment count because it never opens the base or exceeds its independent cap.
-        var capped = new IndexMaintenanceSettings { MaxDeltaSegments = 1, CompactionThresholdMB = 1, MaxAutoCompactionSizeMB = 1 };
-        bool boundedMaintenance = manager.CompactScopeIfOverSegmented(_corpus, Policy(), capped, DateTimeOffset.UtcNow);
-        Assert.Equal(store.ActiveSegmentCount() < segmentsBefore, boundedMaintenance);
-        Assert.True(store.ActiveSegmentCount() > 0); // not folded into a new base
-        Assert.True(store.TryGetCurrentLayerDirectories(out string? baseAfter, out _));
-        Assert.Equal(baseBefore, baseAfter);
+    [Fact]
+    public void CompactScopeIfOverSegmented_ByteThresholdBeforeSegmentLimit_FallsBackToCompaction()
+    {
+        var manager = new ContentIndexManager(_paths);
+        string scopeId = ContentIndexManager.ScopeIdForRoot(_corpus);
+        var store = new ContentIndexStore(_paths, scopeId);
+        var baseBuilder = new ContentIndexGenerationBuilder(Policy());
+        baseBuilder.AddDocument(Path.Combine(_corpus, "base.txt"), Encoding.UTF8.GetBytes("small base"));
+        store.Publish(baseBuilder.Build(
+            scopeId,
+            "volume",
+            IndexScopeIdentity.NormalizePath(_corpus),
+            new UsnCheckpoint(1, 100),
+            DateTimeOffset.UtcNow));
+        for (int layer = 0; layer < 3; layer++)
+        {
+            var segment = new ContentIndexDeltaSegmentBuilder(Policy());
+            for (int file = 0; file < 250; file++)
+            {
+                string body = string.Concat(Enumerable.Range(0, 40)
+                    .Select(_ => Guid.NewGuid().ToString("N")));
+                segment.AddChangedDocument(
+                    Path.Combine(_corpus, $"layer-{layer}-{file}.txt"),
+                    Encoding.UTF8.GetBytes(body));
+            }
+            store.PublishSegmentFast(segment.Build(
+                scopeId,
+                "volume",
+                IndexScopeIdentity.NormalizePath(_corpus),
+                new UsnCheckpoint(1, 200 + layer),
+                DateTimeOffset.UtcNow));
+        }
+        Assert.True(store.TotalActiveSegmentBytes() > 1024 * 1024);
+        Assert.True(store.ActiveSegmentCount() < 64);
 
-        // 0 = no cap → the same index DOES fold into a single base.
-        var uncapped = new IndexMaintenanceSettings { MaxDeltaSegments = 1, CompactionThresholdMB = 1, MaxAutoCompactionSizeMB = 0 };
-        Assert.True(manager.CompactScopeIfOverSegmented(_corpus, Policy(), uncapped, DateTimeOffset.UtcNow));
+        var settings = new IndexMaintenanceSettings
+        {
+            MaxDeltaSegments = 64,
+            CompactionThresholdMB = 1,
+            MaxAutoCompactionSizeMB = 1,
+            SizeManagementMode = IndexSizeManagementModes.CoalesceThenCompact,
+        };
+        Assert.True(manager.CompactScopeIfOverSegmented(
+            _corpus,
+            Policy(),
+            settings,
+            DateTimeOffset.UtcNow));
         Assert.Equal(0, store.ActiveSegmentCount());
     }
 

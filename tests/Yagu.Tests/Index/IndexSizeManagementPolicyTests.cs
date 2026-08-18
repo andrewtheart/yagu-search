@@ -124,6 +124,19 @@ public class IndexSizeManagementPolicyTests
     }
 
     [Fact]
+    public void AllowsAutomaticCompactionOf_OverCap_FallsBackOnlyWhenBoundedMergeCannotProgress()
+    {
+        long oversized = 33L * 1024 * 1024 * 1024;
+        var policy = EffectiveIndexSizePolicy.Default with { MaxAutoCompactionSizeMB = 512 };
+
+        Assert.False(policy.AllowsAutomaticCompactionOf(oversized, boundedMergeCanProgress: true));
+        Assert.True(policy.AllowsAutomaticCompactionOf(oversized, boundedMergeCanProgress: false));
+
+        EffectiveIndexSizePolicy coalesceOnly = policy with { Mode = IndexSizeManagementModes.Coalesce };
+        Assert.False(coalesceOnly.AllowsAutomaticCompactionOf(oversized, boundedMergeCanProgress: false));
+    }
+
+    [Fact]
     public void CoalescingBounds_AreConfigurableRatherThanFixed()
     {
         // The shipped defaults previously could not match a real whole-drive index, whose segments run to

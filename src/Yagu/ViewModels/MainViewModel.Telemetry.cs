@@ -91,6 +91,15 @@ public sealed partial class MainViewModel
         await PersistSettingsAsync().ConfigureAwait(true);
     }
 
+    /// <summary>Shows the telemetry/bug-reporting consent prompt again on the next launch while
+    /// preserving the currently selected telemetry and bug-reporting settings until then.</summary>
+    public async Task ResetTelemetryConsentPromptAsync()
+    {
+        if (await PersistPromptResetAsync(settings => settings.TelemetryConsentPromptShown = false)
+            .ConfigureAwait(true))
+            OnPropertyChanged(nameof(TelemetryConsentPromptShown));
+    }
+
     /// <summary>Persists the contact email the user supplied in a bug report so it pre-fills next time.</summary>
     public Task SetBugReportContactEmailAsync(string email)
     {

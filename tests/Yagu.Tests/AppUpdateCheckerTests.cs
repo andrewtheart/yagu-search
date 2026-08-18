@@ -723,6 +723,14 @@ public sealed class AppUpdateWiringRegressionTests
         Assert.Contains("AppUpdateChecksEnabled = mode != AppUpdateCheckMode.Off", settings);
         Assert.Contains("Content = \"Check for updates now\"", settings);
         Assert.Contains("_checkForUpdatesNow?.Invoke(_settingsHwnd)", settings);
+        Assert.Contains("Reset update-check choice (re-prompt on startup)", settings);
+        Assert.Contains("await _viewModel.ResetAppUpdateConsentPromptAsync();", settings);
+        Assert.Contains("RegisterDefaultResetButton(resetAppUpdateConsentPrompt", settings);
+
+        string viewModel = MainViewModelPartials.Text;
+        Assert.Contains("public async Task ResetAppUpdateConsentPromptAsync()", viewModel);
+        Assert.Contains("settings.AppUpdateCheckMode = AppUpdateCheckMode.Prompt;", viewModel);
+        Assert.Contains("settings.AppUpdateChecksEnabled = true;", viewModel);
 
         int updatesTab = settings.IndexOf("AddTab(\"Updates\")", StringComparison.Ordinal);
         int updateMode = settings.IndexOf("var appUpdateMode = new ComboBox", StringComparison.Ordinal);

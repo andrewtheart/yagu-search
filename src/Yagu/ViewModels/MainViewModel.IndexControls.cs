@@ -68,6 +68,7 @@ public sealed partial class MainViewModel
                     pdfProgress: p => ReportIndexBuildProgress(root, p.Total <= 0 ? -1 : 90 + Math.Clamp(p.Processed * 5 / p.Total, 0, 5), IndexBuildStages.Pdf),
                     imageOcrProgress: p => ReportIndexBuildProgress(root, p.Total <= 0 ? -1 : 95 + Math.Clamp(p.Processed * 4 / p.Total, 0, 4), IndexBuildStages.Ocr),
                     postBuildCatchUpProgress: _ => ReportIndexBuildProgress(root, 99, IndexBuildStages.PostBuildCatchUp));
+                _dispatcher.TryEnqueue(() => _ = ClearAutomaticCompactionBackoffAsync(root));
                 YaguLog.For("ContentIndex").LogInformation(
                     "Background index {Action} complete for '{Root}'.", rebuild ? "rebuild" : "build", root);
             }

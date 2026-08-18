@@ -197,15 +197,31 @@ public sealed partial class MainViewModel
     /// the recommended and selected model so the re-run starts from the automatic pick.</summary>
     public async Task ResetSemanticModelQualificationAsync()
     {
-        SemanticModelQualificationCoordinator.Reset(_settings);
-        // Re-enable AI search so ShouldOfferSemanticModelQualification returns true on the next launch.
-        SemanticSearchAvailable = true;
-        // Drop any live model override so the re-run sweep starts from the automatic pick.
-        SemanticModelAlias = string.Empty;
+        if (!await PersistPromptResetAsync(settings =>
+        {
+            SemanticModelQualificationCoordinator.Reset(settings);
+            settings.SemanticSearchEnabled = true;
+        }).ConfigureAwait(true))
+            return;
+
+        // Update the live state without invoking the broad-save property handlers: the targeted update
+        // above is already durable and must not sweep unrelated Settings-window edits into the file.
+        bool queryModeWasInitialized = _queryModeInitialized;
+        _queryModeInitialized = false;
+        try
+        {
+            SemanticSearchAvailable = true;
+            // Drop any live model override so the re-run sweep starts from the automatic pick.
+            SemanticModelAlias = string.Empty;
+        }
+        finally
+        {
+            _queryModeInitialized = queryModeWasInitialized;
+        }
+        _semanticTranslator?.SetEnabled(true);
         _semanticTranslator?.SetModelOverride(null);
         OnPropertyChanged(nameof(CurrentSemanticModelDisplay));
         OnPropertyChanged(nameof(HasSemanticModelQualificationState));
-        await PersistSettingsAsync().ConfigureAwait(true);
     }
 
     /// <summary>

@@ -212,4 +212,13 @@ public sealed partial class MainViewModel
         _settings.OcrDownloadConsented = true;
         await PersistSettingsAsync().ConfigureAwait(true);
     }
+
+    /// <summary>Revokes authorization for future OCR component downloads so the consent prompt appears
+    /// again when an asset is missing. Already-installed OCR components are not changed.</summary>
+    public async Task ResetOcrDownloadConsentAsync()
+    {
+        if (await PersistPromptResetAsync(settings => settings.OcrDownloadConsented = false)
+            .ConfigureAwait(true))
+            Yagu.Services.Ocr.OcrDownloadGate.ConsentGranted = false;
+    }
 }

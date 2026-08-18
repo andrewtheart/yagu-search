@@ -11,6 +11,8 @@ public sealed class StartupDialogProgressTests
         "UI", "Windows", "YaguDialog.cs");
     private static readonly string TestSettingsIsolation = File.ReadAllText(
         Path.Combine(RepoRoot, "tests", "Yagu.Tests", "TestSettingsIsolation.cs"));
+    private static readonly string SettingsWindow = ReadAppFile(
+        "UI", "Windows", "Settings", "SettingsWindow.xaml.cs");
 
     [Fact]
     public void TestHarness_SuppressesStartupDialogsForInheritedChildProcesses()
@@ -22,6 +24,22 @@ public sealed class StartupDialogProgressTests
         Assert.Contains(
             "Environment.SetEnvironmentVariable(SuppressStartupDialogsEnvVar, \"1\");",
             TestSettingsIsolation);
+    }
+
+    [Fact]
+    public void DeveloperOptions_CanResetExplorerContextMenuOnboardingWithoutUnregisteringIt()
+    {
+        string viewModel = MainViewModelPartials.Text;
+        Assert.Contains("public async Task ResetExplorerContextMenuPromptAsync()", viewModel);
+        Assert.Contains("settings => settings.HasCompletedFirstRun = false", viewModel);
+        int resetStart = viewModel.IndexOf(
+            "public async Task ResetExplorerContextMenuPromptAsync()", StringComparison.Ordinal);
+        string reset = viewModel.Substring(resetStart, Math.Min(650, viewModel.Length - resetStart));
+        Assert.DoesNotContain("Unregister", reset);
+
+        Assert.Contains("Reset Explorer context-menu prompt (re-prompt on startup)", SettingsWindow);
+        Assert.Contains("await _viewModel.ResetExplorerContextMenuPromptAsync();", SettingsWindow);
+        Assert.Contains("RegisterDefaultResetButton(resetExplorerContextMenuPrompt", SettingsWindow);
     }
 
     [Fact]
@@ -50,6 +68,10 @@ public sealed class StartupDialogProgressTests
             Assert.True(current > previous, $"Expected startup call in order: {call}");
             previous = current;
         }
+
+        Assert.Contains("if (!ViewModel.ShouldOfferSemanticModelQualification)", StartupChecks);
+        Assert.Contains("startupDialogPlan.Remove(StartupDialogStep.SemanticQualification);", StartupChecks);
+        Assert.Contains("public void Remove(StartupDialogStep step) => _steps.Remove(step);", StartupProgress);
     }
 
     [Fact]
@@ -81,8 +103,9 @@ public sealed class StartupDialogProgressTests
         Assert.Contains("if (detection.EverythingExePath is null)", StartupProgress);
         Assert.Contains("return !ViewModel.SuppressEverythingNotRunningPrompt;", StartupProgress);
         Assert.Contains("if (!ViewModel.HasCompletedFirstRun && !_preparedContextMenuRegistered.Value)", StartupProgress);
+        Assert.Contains("if (ViewModel.Settings.RePromptIndexOnboardingOnNextLaunch", StartupProgress);
         Assert.Contains(
-            "if (!ViewModel.Settings.HasPromptedIndexOnboarding && ViewModel.Settings.IndexedRoots.Count == 0)",
+            "|| (!ViewModel.Settings.HasPromptedIndexOnboarding && ViewModel.Settings.IndexedRoots.Count == 0))",
             StartupProgress);
         Assert.Contains("if (WillShowFontContrastStartupPrompt())", StartupProgress);
         Assert.Contains("FontContrastWarningService.ShouldCheck(", StartupProgress);

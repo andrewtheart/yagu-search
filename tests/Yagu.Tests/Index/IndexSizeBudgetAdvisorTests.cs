@@ -38,14 +38,11 @@ public class IndexSizeBudgetAdvisorTests
     }
 
     [Fact]
-    public void Diagnose_OverBudgetAndTooLargeToCompact_ReportsTheStall()
+    public void Diagnose_OverBudgetAndAboveRoutineCap_CompactCapableModeWaitsForAutomaticCleanup()
     {
         IndexSizeBudgetDiagnosis d = IndexSizeBudgetAdvisor.Diagnose(Policy(), 33_178 * Mb);
 
-        Assert.True(d.AtBudget);
-        Assert.Equal(33_178, d.ActiveMB);
-        Assert.Equal(4096, d.BudgetMB);
-        Assert.True(d.CompactionBlockedByCap);
+        Assert.False(d.AtBudget);
     }
 
     [Fact]
@@ -75,7 +72,8 @@ public class IndexSizeBudgetAdvisorTests
     [Fact]
     public void Explain_TellsTheUserSearchesAreStillComplete()
     {
-        string text = IndexSizeBudgetAdvisor.Diagnose(Policy(), 33_178 * Mb).Explain();
+        string text = IndexSizeBudgetAdvisor.Diagnose(
+            Policy(mode: IndexSizeManagementModes.Coalesce), 33_178 * Mb).Explain();
 
         // The single most important reassurance: no match is ever lost by this condition.
         Assert.Contains("no match is missed", text);
@@ -85,23 +83,23 @@ public class IndexSizeBudgetAdvisorTests
     [Fact]
     public void SuggestedBudget_ClearsTheCurrentSizeWithHeadroom()
     {
-        IndexSizeBudgetDiagnosis d = IndexSizeBudgetAdvisor.Diagnose(Policy(), 33_178 * Mb);
+        IndexSizeBudgetDiagnosis d = IndexSizeBudgetAdvisor.Diagnose(
+            Policy(mode: IndexSizeManagementModes.Coalesce), 33_178 * Mb);
 
         Assert.True(d.SuggestedBudgetMB > d.ActiveMB, "A raised limit must exceed the current size.");
         Assert.Equal(0, d.SuggestedBudgetMB % 1024);
     }
 
     [Fact]
-    public void Remedies_LeadWithRebuild_AndOfferCompactionOnlyWhenTheCapIsWhatBlocks()
+    public void Remedies_AreDeferredForCompactCapableMode_AndActionableForBlockedModes()
     {
-        IReadOnlyList<IndexSizeBudgetRemedy> capped = IndexSizeBudgetAdvisor.Diagnose(Policy(), 33_178 * Mb).Remedies();
-        Assert.Equal(IndexSizeBudgetRemedy.Rebuild, capped[0]);
-        Assert.Contains(IndexSizeBudgetRemedy.AllowCompaction, capped);
-        Assert.Contains(IndexSizeBudgetRemedy.Delete, capped);
+        Assert.Empty(IndexSizeBudgetAdvisor.Diagnose(Policy(), 33_178 * Mb).Remedies());
 
-        IReadOnlyList<IndexSizeBudgetRemedy> off = IndexSizeBudgetAdvisor
-            .Diagnose(Policy(mode: IndexSizeManagementModes.Off), 33_178 * Mb).Remedies();
-        Assert.DoesNotContain(IndexSizeBudgetRemedy.AllowCompaction, off);
+        IReadOnlyList<IndexSizeBudgetRemedy> coalesceOnly = IndexSizeBudgetAdvisor
+            .Diagnose(Policy(mode: IndexSizeManagementModes.Coalesce), 33_178 * Mb).Remedies();
+        Assert.Equal(IndexSizeBudgetRemedy.Rebuild, coalesceOnly[0]);
+        Assert.Contains(IndexSizeBudgetRemedy.Delete, coalesceOnly);
+        Assert.DoesNotContain(IndexSizeBudgetRemedy.AllowCompaction, coalesceOnly);
     }
 
     [Fact]
@@ -111,7 +109,8 @@ public class IndexSizeBudgetAdvisorTests
     [Fact]
     public void RemedyText_IsPlainLanguageForEveryRemedy()
     {
-        IndexSizeBudgetDiagnosis d = IndexSizeBudgetAdvisor.Diagnose(Policy(), 33_178 * Mb);
+        IndexSizeBudgetDiagnosis d = IndexSizeBudgetAdvisor.Diagnose(
+            Policy(mode: IndexSizeManagementModes.Coalesce), 33_178 * Mb);
         foreach (IndexSizeBudgetRemedy remedy in d.Remedies())
         {
             Assert.False(string.IsNullOrWhiteSpace(IndexSizeBudgetAdvisor.RemedyLabel(remedy)));
@@ -122,7 +121,8 @@ public class IndexSizeBudgetAdvisorTests
     [Fact]
     public void HealthStatus_NamesBothTheLimitAndTheCurrentSize()
     {
-        string status = IndexSizeBudgetAdvisor.HealthStatus(IndexSizeBudgetAdvisor.Diagnose(Policy(), 33_178 * Mb));
+        string status = IndexSizeBudgetAdvisor.HealthStatus(IndexSizeBudgetAdvisor.Diagnose(
+            Policy(mode: IndexSizeManagementModes.Coalesce), 33_178 * Mb));
         Assert.Contains("4,096 MB", status);
         Assert.Contains("33,178 MB", status);
         Assert.Contains("updates paused", status);

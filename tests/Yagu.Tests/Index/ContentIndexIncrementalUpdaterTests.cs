@@ -311,7 +311,7 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
     }
 
     [Fact]
-    public void Apply_ExceedingSegmentBound_SkipsCompactionAboveAutomaticSizeCap()
+    public void Apply_ExceedingSegmentBound_OverCapWithNoMergePath_CompactsAutomatically()
     {
         var store = NewStore();
         var builder = new ContentIndexGenerationBuilder(OpenPolicy);
@@ -326,7 +326,7 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
 
         var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
         var settings = Settings(maxSegments: 1, thresholdMB: 4096);
-        settings.IndexSizeManagementMode = IndexSizeManagementModes.Compact;
+        settings.IndexCoalesceMinRun = 64; // default mode, but no bounded run can progress
         settings.IndexMaxAutoCompactionSizeMB = 1;
 
         Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, updater.Apply(
@@ -338,16 +338,7 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
             new[] { Change(@"C:\r\s1.txt", "second segment") }, Array.Empty<string>(),
             new UsnCheckpoint(1, 300), settings, DateTimeOffset.UtcNow);
 
-        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, capped);
-        Assert.Equal(2, store.ActiveSegmentCount());
-
-        settings.IndexMaxAutoCompactionSizeMB = 0;
-        IncrementalUpdateOutcome uncapped = updater.Apply(
-            _scopeId, "vol", _root,
-            new[] { Change(@"C:\r\s2.txt", "third segment") }, Array.Empty<string>(),
-            new UsnCheckpoint(1, 400), settings, DateTimeOffset.UtcNow);
-
-        Assert.Equal(IncrementalUpdateOutcome.Compacted, uncapped);
+        Assert.Equal(IncrementalUpdateOutcome.Compacted, capped);
         Assert.Equal(0, store.ActiveSegmentCount());
     }
 
@@ -388,6 +379,86 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
     }
 
     [Fact]
+    public void Apply_CompactCapableBaseStillOverBudget_HaltsBeforeAppendingAndRecordsFailure()
+    {
+        var store = NewStore();
+        var builder = new ContentIndexGenerationBuilder(OpenPolicy);
+        for (int index = 0; index < 700; index++)
+        {
+            string wideBody = string.Concat(Enumerable.Range(0, 40)
+                .Select(_ => Guid.NewGuid().ToString("N")));
+            builder.AddDocument($@"C:\r\base-{index}.txt", Encoding.UTF8.GetBytes(wideBody));
+        }
+        store.Publish(builder.Build(
+            _scopeId, "vol", _root, new UsnCheckpoint(1, 100), DateTimeOffset.UtcNow));
+        Assert.True(store.TotalActiveIndexBytes() > 1024 * 1024);
+
+        var settings = new IndexMaintenanceSettings
+        {
+            SizeBudgetMB = 1,
+            SizeManagementMode = IndexSizeManagementModes.CoalesceThenCompact,
+            MaxAutoCompactionSizeMB = 1,
+        };
+        var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
+
+        IncrementalUpdateOutcome outcome = updater.Apply(
+            _scopeId,
+            "vol",
+            _root,
+            [Change(@"C:\r\new.txt", "new content")],
+            Array.Empty<string>(),
+            new UsnCheckpoint(1, 200),
+            settings,
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(IncrementalUpdateOutcome.SizeBudgetReached, outcome);
+        Assert.Equal(0, store.ActiveSegmentCount());
+        Assert.True(ContentIndexManager.TryReadAutomaticCompactionFailure(
+            store,
+            out IndexAutomaticCompactionFailure failure));
+        Assert.Contains("still exceeds", failure.Reason);
+    }
+
+    [Fact]
+    public void Apply_NewDeltaCrossesBudget_CompactsImmediatelyThenPausesWhenCorpusCannotFit()
+    {
+        var store = NewStore();
+        PublishBase(store, (@"C:\r\base.txt", "small base"));
+        Assert.True(store.TotalActiveIndexBytes() < 1024 * 1024);
+
+        var changes = new List<IncrementalChange>();
+        for (int index = 0; index < 700; index++)
+        {
+            string wideBody = string.Concat(Enumerable.Range(0, 40)
+                .Select(_ => Guid.NewGuid().ToString("N")));
+            changes.Add(Change($@"C:\r\delta-{index}.txt", wideBody));
+        }
+        var settings = new IndexMaintenanceSettings
+        {
+            SizeBudgetMB = 1,
+            SizeManagementMode = IndexSizeManagementModes.CoalesceThenCompact,
+            MaxAutoCompactionSizeMB = 1,
+            MaxDeltaSegments = 64,
+            CompactionThresholdMB = 8192,
+        };
+
+        IncrementalUpdateOutcome outcome = new ContentIndexIncrementalUpdater(store, OpenPolicy).Apply(
+            _scopeId,
+            "vol",
+            _root,
+            changes,
+            Array.Empty<string>(),
+            new UsnCheckpoint(1, 200),
+            settings,
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(IncrementalUpdateOutcome.SizeBudgetReached, outcome);
+        Assert.Equal(0, store.ActiveSegmentCount());
+        Assert.True(store.TotalActiveIndexBytes() > 1024 * 1024);
+        Assert.True(ContentIndexManager.TryReadAutomaticCompactionFailure(store, out _));
+    }
+
+    [Fact]
     public void Apply_CorruptOlderLayer_KeepsTheNewlyPublishedSegmentWhenReclamationFails()
     {
         var store = NewStore();
@@ -425,7 +496,7 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
             settings,
             DateTimeOffset.UtcNow);
 
-        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, outcome);
+        Assert.Equal(IncrementalUpdateOutcome.CompactionFailed, outcome);
         Assert.Equal(4, store.ActiveSegmentCount());
     }
 

@@ -54,6 +54,60 @@ public sealed class IndexReclamationWiringTests
     }
 
     [Fact]
+    public void AutomaticFallbackCompaction_PreventsTheDialogWhenCompactionIsConfigured()
+    {
+        string policy = Read("src", "Yagu", "Services", "Index", "EffectiveIndexSizePolicy.cs");
+        string manager = Read("src", "Yagu", "Services", "Index", "ContentIndexManager.cs");
+        string updater = Read("src", "Yagu", "Services", "Index", "ContentIndexIncrementalUpdater.cs");
+
+        Assert.Contains("AllowsAutomaticCompactionOf", policy);
+        Assert.Contains("boundedMergeCanProgress: boundedMergeCanStillProgress", manager);
+        Assert.Contains("AllowsAutomaticCompactionOf(indexBytes, boundedMergeCanStillProgress)", updater);
+        Assert.Contains("ActiveSegmentCount() > maxSegments", manager);
+        Assert.Contains("ActiveSegmentCount() > maxSegments", updater);
+        Assert.Contains("if (reclamation.ReclamationBlocked)", Read(
+            "src", "Yagu", "ViewModels", "MainViewModel.IndexStatusRefresh.cs"));
+        Assert.Contains("TryReadAutomaticCompactionFailureForRoot", Read(
+            "src", "Yagu", "ViewModels", "MainViewModel.IndexStatusRefresh.cs"));
+        Assert.Contains("IndexRootHealthKind.StorageProblem", Read(
+            "src", "Yagu", "ViewModels", "MainViewModel.IndexStatusRefresh.cs"));
+
+        string viewModel = string.Join(
+            Environment.NewLine,
+            Directory.GetFiles(Path.Combine(RepoRoot, "src", "Yagu", "ViewModels"), "MainViewModel*.cs")
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .Select(File.ReadAllText));
+        string startup = Read(
+            "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs");
+        string retryState = Read(
+            "src", "Yagu", "Services", "Index", "IndexBuildOperationFactory.cs");
+        string sizeAttention = Read(
+            "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.IndexSizeBudget.cs");
+        string indexControls = Read(
+            "src", "Yagu", "ViewModels", "MainViewModel.IndexControls.cs");
+        string indexingActions = Read(
+            "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.IndexingActions.cs");
+        string rebuildAdvice = Read(
+            "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.IndexRebuildAdvice.cs");
+        Assert.Contains("IndexAutomaticCompactionRetryAfterUtcByRoot", viewModel);
+        Assert.Contains("settings.IndexAutomaticCompactionRetryAfterUtcByRoot.TryGetValue(", viewModel);
+        Assert.DoesNotContain("_settings.IndexAutomaticCompactionRetryAfterUtcByRoot.TryGetValue(", viewModel);
+        Assert.Contains("IsAutomaticCompactionBackoffActive", viewModel);
+        Assert.Contains("RecordAutomaticCompactionMaintenanceResultsAsync", viewModel);
+        Assert.Contains("ClearAutomaticCompactionBackoffAsync", viewModel);
+        Assert.Contains("result.Action == IndexMaintenanceActions.SizeBudgetReached", retryState);
+        Assert.Contains("ContentIndexManager.AutomaticCompactionRetryDelay", retryState);
+        Assert.Contains("IsAutomaticCompactionBackoffActive(root, maintenanceStartedUtc)", startup);
+        Assert.Contains("RecordAutomaticCompactionMaintenanceResultsAsync(", startup);
+        Assert.Contains("IsAutomaticCompactionBackoffActive(changedRoot, maintenanceStartedUtc)", startup);
+        Assert.Contains("RecordAutomaticCompactionMaintenanceResultsAsync(", sizeAttention);
+        Assert.Contains("ClearAutomaticCompactionBackoffAsync", indexControls);
+        Assert.Contains("RecordAutomaticCompactionMaintenanceResultsAsync(", indexingActions);
+        Assert.Contains("ClearAutomaticCompactionBackoffAsync", indexingActions);
+        Assert.Contains("ClearAutomaticCompactionBackoffAsync", rebuildAdvice);
+    }
+
+    [Fact]
     public void Dialog_SaysTheIndexIsStillUpdating_AndCompactsWithoutPersistingAnUncappedSetting()
     {
         Assert.Contains("ShowIndexSizeAttentionDialogAsync", MainWindowSource);
@@ -91,6 +145,10 @@ public sealed class IndexReclamationWiringTests
         Assert.Contains("WriteIndexLayerCohorts(manager, settings, root)", cli);
         Assert.Contains("TryReadActiveLayerStorageBreakdownForRoot(root)", cli);
         Assert.Contains("IndexMaintenanceOperation.ModeCompactOnly", cli);
+        Assert.Contains("IndexAutomaticCompactionRetryState.RecordAsync(", cli);
+        Assert.Contains("rootResult?.Action == IndexMaintenanceActions.Failed", cli);
+        Assert.Contains("ContentIndexExitCode.BuildFailure", cli);
+        Assert.Contains("IndexAutomaticCompactionRetryState.ClearAsync(", cli);
 
         string help = Read("HELP.md");
         Assert.Contains("`--compact-index [<path>]`", help);
@@ -211,17 +269,16 @@ public sealed class IndexReclamationAdvisorTests
     }
 
     [Fact]
-    public void NoEligibleRunAndCompactionOverTheCap_IsBlocked()
+    public void NoEligibleRunAndCompactionOverTheCap_FallsBackToAutomaticStreamingCompaction()
     {
         IndexReclamationDiagnosis diagnosis = IndexReclamationAdvisor.Diagnose(
             Breakdown(incrementalCount: 40, incrementalBytes: 20L * 1024 * 1024 * 1024),
             Policy(maxAutoCompactionSizeMB: 512), maxDeltaSegments: 8, compactionThresholdMB: 256,
             hasEligibleIncrementalRun: false);
 
-        Assert.True(diagnosis.ReclamationBlocked);
-        Assert.Contains("cannot be reclaimed automatically", IndexReclamationAdvisor.HealthStatus(diagnosis));
-        Assert.Contains("merge limits you set", diagnosis.ExplainWhyAutomaticCleanupIsUnavailable());
-        Assert.Contains("512", diagnosis.ExplainWhyAutomaticCleanupIsUnavailable());
+        Assert.True(diagnosis.CleanupDue);
+        Assert.False(diagnosis.ReclamationBlocked);
+        Assert.Equal(string.Empty, diagnosis.ExplainWhyAutomaticCleanupIsUnavailable());
     }
 
     [Fact]
@@ -233,10 +290,8 @@ public sealed class IndexReclamationAdvisorTests
             Policy(maxAutoCompactionSizeMB: 512), maxDeltaSegments: 8, compactionThresholdMB: 256,
             hasEligibleIncrementalRun: false);
 
-        string why = diagnosis.ExplainWhyAutomaticCleanupIsUnavailable();
-        Assert.True(diagnosis.ReclamationBlocked);
-        Assert.Contains("3 update layer(s), fewer than the 4", why);
-        Assert.DoesNotContain("individually larger", why);
+        Assert.False(diagnosis.ReclamationBlocked);
+        Assert.Equal(string.Empty, diagnosis.ExplainWhyAutomaticCleanupIsUnavailable());
     }
 
     [Fact]
@@ -322,7 +377,7 @@ public sealed class IndexReclamationAdvisorTests
     {
         IndexReclamationDiagnosis diagnosis = IndexReclamationAdvisor.Diagnose(
             Breakdown(incrementalCount: 40, incrementalBytes: 20L * 1024 * 1024 * 1024),
-            Policy(), maxDeltaSegments: 8, compactionThresholdMB: 256,
+            Policy(IndexSizeManagementModes.Coalesce), maxDeltaSegments: 8, compactionThresholdMB: 256,
             hasEligibleIncrementalRun: false);
 
         IReadOnlyList<IndexSizeAttentionRemedy> remedies = diagnosis.Remedies();
@@ -375,7 +430,7 @@ public sealed class IndexReclamationAdvisorTests
     {
         IndexReclamationDiagnosis diagnosis = IndexReclamationAdvisor.Diagnose(
             Breakdown(incrementalCount: 40, incrementalBytes: 20L * 1024 * 1024 * 1024),
-            Policy(), maxDeltaSegments: 8, compactionThresholdMB: 256,
+            Policy(IndexSizeManagementModes.Coalesce), maxDeltaSegments: 8, compactionThresholdMB: 256,
             hasEligibleIncrementalRun: false);
 
         Assert.Contains("keeps being updated", diagnosis.Explain());

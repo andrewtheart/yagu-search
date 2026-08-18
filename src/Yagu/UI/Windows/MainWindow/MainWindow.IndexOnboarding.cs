@@ -1164,7 +1164,8 @@ public sealed partial class MainWindow
     /// </summary>
     private async Task CheckFirstRunIndexOnboardingAsync()
     {
-        if (ViewModel.Settings.HasPromptedIndexOnboarding)
+        bool rePromptOnNextLaunch = ViewModel.Settings.RePromptIndexOnboardingOnNextLaunch;
+        if (ViewModel.Settings.HasPromptedIndexOnboarding && !rePromptOnNextLaunch)
             return;
 
         if (string.IsNullOrWhiteSpace(ViewModel.Settings.IndexStorageDirectory)
@@ -1177,7 +1178,7 @@ public sealed partial class MainWindow
 
         // Registered roots prove that this settings file has already completed index setup. Older builds can
         // rewrite the shared settings file without newer fields, so migrate that known configuration quietly.
-        if (ViewModel.Settings.IndexedRoots.Count > 0)
+        if (!rePromptOnNextLaunch && ViewModel.Settings.IndexedRoots.Count > 0)
         {
             ViewModel.Settings.HasPromptedIndexOnboarding = true;
             await ViewModel.PersistSettingsAsync();
@@ -1188,9 +1189,11 @@ public sealed partial class MainWindow
         if (YaguDialog.HasOpenOwnedWindow(_hwnd))
             return;
 
-        IReadOnlyList<string> reusableRoots = await Task.Run(() => new ContentIndexManager(
-            DefaultContentIndexPathProvider.Create(ViewModel.Settings.IndexStorageDirectory),
-            ViewModel.Settings.IndexRetainedGenerationCount).GetReusableStoredIndexRoots());
+        IReadOnlyList<string> reusableRoots = rePromptOnNextLaunch
+            ? []
+            : await Task.Run(() => new ContentIndexManager(
+                DefaultContentIndexPathProvider.Create(ViewModel.Settings.IndexStorageDirectory),
+                ViewModel.Settings.IndexRetainedGenerationCount).GetReusableStoredIndexRoots());
         if (reusableRoots.Count > 0)
         {
             try
@@ -1244,6 +1247,7 @@ public sealed partial class MainWindow
 
         // Mark shown regardless of the choice, so the prompt never nags on later launches.
         ViewModel.Settings.HasPromptedIndexOnboarding = true;
+        ViewModel.Settings.RePromptIndexOnboardingOnNextLaunch = false;
         await ViewModel.PersistSettingsAsync();
 
         // The native folder picker — and the moment between our YaguDialogs closing and it opening — is not
@@ -1372,6 +1376,7 @@ public sealed partial class MainWindow
         string updateMode = ContentIndexBuildScheduler.RecommendedUpdateMode(
             string.Join(",", selectedTriggers), initialUpdateMode);
         bool updateModeOverridden = false;
+        int maxFileSizeMB = AppSettings.NormalizeIndexMaxFileSizeMB(ViewModel.Settings.IndexMaxFileSizeMB);
 
         List<string> chosen;
         while (true)
@@ -1568,6 +1573,34 @@ public sealed partial class MainWindow
             panel.Children.Add(updateModeCombo);
             panel.Children.Add(updateModeHint);
 
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Maximum file size to index:",
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Margin = new Thickness(0, 6, 0, 0),
+            });
+            var maxFileSizeBox = new NumberBox
+            {
+                Value = maxFileSizeMB,
+                Minimum = AppSettings.MinimumIndexMaxFileSizeMB,
+                Maximum = AppSettings.MaximumIndexMaxFileSizeMB,
+                SmallChange = 1,
+                LargeChange = 100,
+                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+                Width = 180,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Header = "Megabytes (MB)",
+            };
+            panel.Children.Add(maxFileSizeBox);
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Files larger than this are skipped by the index and searched live when needed. "
+                     + "This applies to every indexed folder and can be changed later in Settings \u25B8 Indexing.",
+                Opacity = 0.75,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
             // "Included Locations" context (inspired by the Windows Indexing Options dialog).
             panel.Children.Add(new TextBlock
             {
@@ -1627,6 +1660,10 @@ public sealed partial class MainWindow
             }
             if (updateModeCombo.SelectedItem is ComboBoxItem { Tag: string selectedMode })
                 updateMode = selectedMode;
+            maxFileSizeMB = AppSettings.NormalizeIndexMaxFileSizeMB(
+                double.IsNaN(maxFileSizeBox.Value)
+                    ? AppSettings.DefaultIndexMaxFileSizeMB
+                    : (int)maxFileSizeBox.Value);
 
             if (result == YaguDialogResult.Secondary)
             {
@@ -1674,7 +1711,8 @@ public sealed partial class MainWindow
             buildTrigger,
             updateMode,
             applyFirstRunDriveIndexingProfile,
-            firstRunExcludedPaths);
+            firstRunExcludedPaths,
+            maxFileSizeMB: maxFileSizeMB);
 
         string folderList = chosen.Count == 1
             ? chosen[0]
