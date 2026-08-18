@@ -18,10 +18,10 @@ files in this folder are configuration and this README.
 
 | Installer | Direct download |
 | --- | --- |
-| x64 (most PCs) | [YaguSetup-1.0.0.2408-x64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2408/YaguSetup-1.0.0.2408-x64.exe) (~195 MB) |
-| x64 · Offline (OCR + Everything bundled) | [YaguSetup-1.0.0.2408-x64-offline.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2408/YaguSetup-1.0.0.2408-x64-offline.exe) (~495 MB) |
-| Arm64 (Windows on ARM) | [YaguSetup-1.0.0.2408-arm64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2408/YaguSetup-1.0.0.2408-arm64.exe) (~192 MB) |
-| x86 (32-bit Windows) | [YaguSetup-1.0.0.2408-x86.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2408/YaguSetup-1.0.0.2408-x86.exe) (~174 MB) |
+| x64 (most PCs) | [YaguSetup-1.0.0.2409-x64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2409/YaguSetup-1.0.0.2409-x64.exe) (~195 MB) |
+| x64 · Offline (OCR + Everything bundled) | [YaguSetup-1.0.0.2409-x64-offline.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2409/YaguSetup-1.0.0.2409-x64-offline.exe) (~495 MB) |
+| Arm64 (Windows on ARM) | [YaguSetup-1.0.0.2409-arm64.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2409/YaguSetup-1.0.0.2409-arm64.exe) (~192 MB) |
+| x86 (32-bit Windows) | [YaguSetup-1.0.0.2409-x86.exe](https://github.com/andrewtheart/yagu-search/releases/download/v1.0.0.2409/YaguSetup-1.0.0.2409-x86.exe) (~174 MB) |
 
 See the [README "Download Installer" section](../README.md#download-installer) for which edition to
 pick and details about offline/OCR support.
