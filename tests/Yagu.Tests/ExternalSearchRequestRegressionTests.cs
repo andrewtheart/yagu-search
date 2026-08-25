@@ -150,6 +150,20 @@ public sealed class ExternalSearchRequestRegressionTests
     }
 
     [Fact]
+    public void TrayMenu_ItemsAreClickableAcrossTheFullRow()
+    {
+        string menu = Read("src", "Yagu", "UI", "Windows", "TrayMenuWindow.cs");
+        string item = ExtractWindow(menu, "private static Button BuildMenuItem", 1000);
+
+        AssertContainsInOrder(item,
+            "HorizontalAlignment = HorizontalAlignment.Stretch,",
+            "HorizontalContentAlignment = HorizontalAlignment.Left,",
+            "Background = new SolidColorBrush(Colors.Transparent),",
+            "button.Click += (_, _) => onClick();");
+        Assert.DoesNotContain("Background = null", item);
+    }
+
+    [Fact]
     public void TrayMenu_HasNoCaptionButtons_AndAnchorsToTheClickedPoint()
     {
         string menu = Read("src", "Yagu", "UI", "Windows", "TrayMenuWindow.cs");
@@ -192,6 +206,12 @@ public sealed class ExternalSearchRequestRegressionTests
         Assert.Contains("int x = _anchorX - width;", menu);
         Assert.Contains("int y = _anchorY - height;", menu);
         Assert.Contains("MonitorFromPoint(new POINT { X = _anchorX, Y = _anchorY }", menu);
+
+        // Both dimensions come from the measured content, so the menu is only as large as it needs to be.
+        // MaxMenuWidthDip is the measure constraint (an upper bound), never the width itself.
+        Assert.Contains("Math.Clamp(_root.DesiredSize.Width, 40, MaxMenuWidthDip)", menu);
+        Assert.Contains("Math.Max(_root.DesiredSize.Height, 40)", menu);
+        Assert.DoesNotContain("int width = (int)Math.Ceiling(MaxMenuWidthDip * scale);", menu);
     }
 
     // ---- Listener lifecycle ----

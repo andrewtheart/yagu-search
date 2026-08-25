@@ -40,7 +40,8 @@ internal sealed record TrayQuickSearchRequest(
 /// </summary>
 internal sealed partial class TrayMenuWindow : Window
 {
-    private const int MenuWidthDip = 300;
+    /// <summary>Upper bound only; the menu is sized to its measured content and is usually narrower.</summary>
+    private const int MaxMenuWidthDip = 300;
 
     private static TrayMenuWindow? s_open;
 
@@ -212,7 +213,7 @@ internal sealed partial class TrayMenuWindow : Window
             Content = content,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Left,
-            Background = null,
+            Background = new SolidColorBrush(Colors.Transparent),
             BorderThickness = new Thickness(0),
             Padding = new Thickness(10, 8, 10, 8),
         };
@@ -322,8 +323,10 @@ internal sealed partial class TrayMenuWindow : Window
         {
             double scale = GetAnchorScale();
 
-            _root.Measure(new Windows.Foundation.Size(MenuWidthDip, double.PositiveInfinity));
-            int width = (int)Math.Ceiling(MenuWidthDip * scale);
+            // Measure against the max so DesiredSize reports what the content actually needs: the collapsed
+            // menu is only as wide as its longest entry, and it grows when Quick search expands.
+            _root.Measure(new Windows.Foundation.Size(MaxMenuWidthDip, double.PositiveInfinity));
+            int width = (int)Math.Ceiling(Math.Clamp(_root.DesiredSize.Width, 40, MaxMenuWidthDip) * scale);
             int height = (int)Math.Ceiling(Math.Max(_root.DesiredSize.Height, 40) * scale);
             _appWindow.Resize(new SizeInt32(width, height));
 
