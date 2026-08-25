@@ -207,6 +207,46 @@ public sealed class SessionLoadDialogRegressionTests
         Assert.DoesNotContain("Loaded session:", loadMethod);
     }
 
+    [Fact]
+    public void LoadSession_RestoresTheSearchParametersSoPreviewHighlightingMatchesTheResults()
+    {
+        // No search runs when a session is loaded, so BuildSearchHighlightRegex would fall back to
+        // the LIVE search-box toggles. ExactMatch defaults to ON (whole word), so a session saved
+        // from a substring search highlighted only the occurrences that happened to be whole words.
+        string loadMethod = ExtractWindow(
+            MainViewModelSource,
+            "public async Task<SessionFileService.SessionHeader> LoadSessionAsync",
+            "private void BeginSessionProgress(string initialText)");
+        Assert.Contains("ApplyLoadedSessionSearchParameters(h);", loadMethod);
+
+        string apply = ExtractWindow(
+            MainViewModelSource,
+            "private void ApplyLoadedSessionSearchParameters",
+            "public async Task<int> SaveSessionAsync");
+        AssertContainsInOrder(apply,
+            "if (header.SearchOptions is { } options)",
+            "LastSearchExactMatch = options.ExactMatch;");
+        // The pattern travels with the flags, so a session cannot pair one search's pattern with
+        // another search's flags.
+        Assert.Contains("options.Pattern", apply);
+        // Legacy sessions clear only the two flags that can LOSE a highlight.
+        Assert.Contains("LastSearchExactMatch = false;", apply);
+        Assert.Contains("LastSearchCaseSensitive = false;", apply);
+        // A shareable file must never be able to turn its stored pattern into a live regex: line-mode
+        // regexes have no match timeout, so that would hand it a UI-thread hang.
+        Assert.Contains("LastSearchUseRegex = UseRegex;", apply);
+        Assert.DoesNotContain("LastSearchUseRegex = options.UseRegex;", apply);
+
+        // Saving records what the results were actually produced with, not the live toggles.
+        string capture = ExtractWindow(
+            MainViewModelSource,
+            "private SessionFileService.SessionSearchOptions CaptureSessionSearchOptions()",
+            "private void ApplyLoadedSessionSearchParameters");
+        Assert.Contains("string.IsNullOrEmpty(LastSearchPattern)", capture);
+        Assert.Contains("Pattern: LastSearchPattern,", capture);
+        Assert.Contains("searchOptions: CaptureSessionSearchOptions()", MainViewModelSource);
+    }
+
     // ══════════════════════════════════════════════════════════════════
     // Sortable table structure
     // ══════════════════════════════════════════════════════════════════

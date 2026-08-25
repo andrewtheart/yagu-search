@@ -44,7 +44,37 @@ public static class SessionFileService
         string Query,
         string SearchRoot,
         SessionStats Stats,
-        int ResultCount);
+        int ResultCount,
+        SessionSearchOptions? SearchOptions = null);
+
+    /// <summary>
+    /// The flags the search that produced these results actually ran with, so a loaded session
+    /// highlights matches the same way that search matched them. Written as an optional header
+    /// object, which readers of older schema versions skip, so it needs no schema bump. Null when
+    /// the file was written before this was recorded.
+    /// </summary>
+    public sealed record SessionSearchOptions(
+        string Pattern,
+        bool CaseSensitive,
+        bool UseRegex,
+        bool ExactMatch,
+        bool Multiline,
+        bool MultilineDotAll);
+
+    private static void WriteSearchOptions(Utf8JsonWriter writer, SessionSearchOptions? searchOptions)
+    {
+        if (searchOptions is null)
+            return;
+
+        writer.WriteStartObject("searchOptions");
+        writer.WriteString("pattern", searchOptions.Pattern ?? string.Empty);
+        writer.WriteBoolean("caseSensitive", searchOptions.CaseSensitive);
+        writer.WriteBoolean("useRegex", searchOptions.UseRegex);
+        writer.WriteBoolean("exactMatch", searchOptions.ExactMatch);
+        writer.WriteBoolean("multiline", searchOptions.Multiline);
+        writer.WriteBoolean("multilineDotAll", searchOptions.MultilineDotAll);
+        writer.WriteEndObject();
+    }
 
     /// <summary>Writes a session file containing the supplied results and metadata.</summary>
     /// <param name="progress">Optional progress reporter (0.0..1.0).</param>
@@ -55,6 +85,7 @@ public static class SessionFileService
         SessionStats stats,
         IReadOnlyList<SearchResult> results,
         IProgress<double>? progress = null,
+        SessionSearchOptions? searchOptions = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -71,6 +102,7 @@ public static class SessionFileService
         writer.WriteString("savedUtc", DateTime.UtcNow.ToString("o"));
         writer.WriteString("query", query);
         writer.WriteString("searchRoot", searchRoot);
+        WriteSearchOptions(writer, searchOptions);
 
         writer.WriteStartObject("stats");
         writer.WriteString("startedUtc", stats.StartedUtc.ToString("o"));
@@ -128,6 +160,7 @@ public static class SessionFileService
         Func<int, IReadOnlyList<SearchResult>> prepareGroup,
         Action<int>? releaseGroup,
         IProgress<double>? progress = null,
+        SessionSearchOptions? searchOptions = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -144,6 +177,7 @@ public static class SessionFileService
         writer.WriteString("savedUtc", DateTime.UtcNow.ToString("o"));
         writer.WriteString("query", query);
         writer.WriteString("searchRoot", searchRoot);
+        WriteSearchOptions(writer, searchOptions);
 
         writer.WriteStartObject("stats");
         writer.WriteString("startedUtc", stats.StartedUtc.ToString("o"));
@@ -364,9 +398,10 @@ public static class SessionFileService
     /// </summary>
     private sealed class SessionStreamParser
     {
-        private enum Scope { None, Root, Stats, Results, Result, StringArray, Skip }
-        private enum HeaderField { Unknown, Schema, SavedUtc, Query, SearchRoot, Stats, ResultCount, Results }
+        private enum Scope { None, Root, Stats, SearchOptions, Results, Result, StringArray, Skip }
+        private enum HeaderField { Unknown, Schema, SavedUtc, Query, SearchRoot, Stats, SearchOptions, ResultCount, Results }
         private enum StatsField { Unknown, StartedUtc, ElapsedMs, FilesScanned, BytesScanned, MatchesFound }
+        private enum SearchOptionsField { Unknown, Pattern, CaseSensitive, UseRegex, ExactMatch, Multiline, MultilineDotAll }
         private enum ResultField { Unknown, F, Ln, Ml, Mc, Sc, Mlen, Mel, Mec, Before, After }
 
         private readonly Stack<Scope> _stack = new();
@@ -374,6 +409,7 @@ public static class SessionFileService
 
         private HeaderField _headerField;
         private StatsField _statsField;
+        private SearchOptionsField _searchOptionsField;
         private ResultField _resultField;
 
         // Header + stats accumulators.
@@ -388,6 +424,9 @@ public static class SessionFileService
         private long _statsBytes;
         private int _statsMatches;
         private bool _schemaChecked;
+        private bool _hasSearchOptions;
+        private string _optPattern = string.Empty;
+        private bool _optCaseSensitive, _optUseRegex, _optExactMatch, _optMultiline, _optMultilineDotAll;
 
         // Current result being assembled.
         private string _rf = string.Empty;
@@ -420,7 +459,11 @@ public static class SessionFileService
             var stats = new SessionStats(
                 _statsStarted, TimeSpan.FromMilliseconds(_statsElapsedMs),
                 _statsFiles, _statsBytes, _statsMatches);
-            return new SessionHeader(_schema, _savedUtc, _query, _searchRoot, stats, _resultCount);
+            var searchOptions = _hasSearchOptions
+                ? new SessionSearchOptions(
+                    _optPattern, _optCaseSensitive, _optUseRegex, _optExactMatch, _optMultiline, _optMultilineDotAll)
+                : null;
+            return new SessionHeader(_schema, _savedUtc, _query, _searchRoot, stats, _resultCount, searchOptions);
         }
 
         /// <summary>
@@ -456,6 +499,10 @@ public static class SessionFileService
             _stack.Push(_scope);
             if (_scope == Scope.None) _scope = Scope.Root;
             else if (_scope == Scope.Root && _headerField == HeaderField.Stats) _scope = Scope.Stats;
+            else if (_scope == Scope.Root && _headerField == HeaderField.SearchOptions && !HeaderReady)
+            {
+                _scope = Scope.SearchOptions;
+            }
             else if (_scope == Scope.Results) { _scope = Scope.Result; BeginResult(); }
             else _scope = Scope.Skip;
         }
@@ -500,6 +547,7 @@ public static class SessionFileService
                         reader.ValueTextEquals("query"u8) ? HeaderField.Query :
                         reader.ValueTextEquals("searchRoot"u8) ? HeaderField.SearchRoot :
                         reader.ValueTextEquals("stats"u8) ? HeaderField.Stats :
+                        reader.ValueTextEquals("searchOptions"u8) ? HeaderField.SearchOptions :
                         reader.ValueTextEquals("resultCount"u8) ? HeaderField.ResultCount :
                         reader.ValueTextEquals("results"u8) ? HeaderField.Results :
                         HeaderField.Unknown;
@@ -512,6 +560,16 @@ public static class SessionFileService
                         reader.ValueTextEquals("bytesScanned"u8) ? StatsField.BytesScanned :
                         reader.ValueTextEquals("matchesFound"u8) ? StatsField.MatchesFound :
                         StatsField.Unknown;
+                    break;
+                case Scope.SearchOptions:
+                    _searchOptionsField =
+                        reader.ValueTextEquals("pattern"u8) ? SearchOptionsField.Pattern :
+                        reader.ValueTextEquals("caseSensitive"u8) ? SearchOptionsField.CaseSensitive :
+                        reader.ValueTextEquals("useRegex"u8) ? SearchOptionsField.UseRegex :
+                        reader.ValueTextEquals("exactMatch"u8) ? SearchOptionsField.ExactMatch :
+                        reader.ValueTextEquals("multiline"u8) ? SearchOptionsField.Multiline :
+                        reader.ValueTextEquals("multilineDotAll"u8) ? SearchOptionsField.MultilineDotAll :
+                        SearchOptionsField.Unknown;
                     break;
                 case Scope.Result:
                     _resultField =
@@ -536,6 +594,7 @@ public static class SessionFileService
             {
                 case Scope.Root: ApplyHeaderValue(ref reader); break;
                 case Scope.Stats: ApplyStatsValue(ref reader); break;
+                case Scope.SearchOptions: ApplySearchOptionsValue(ref reader); break;
                 case Scope.Result: ApplyResultValue(ref reader); break;
                 case Scope.StringArray:
                     if (reader.TokenType == JsonTokenType.String)
@@ -558,6 +617,31 @@ public static class SessionFileService
                 case HeaderField.Query: _query = reader.GetString() ?? string.Empty; break;
                 case HeaderField.SearchRoot: _searchRoot = reader.GetString() ?? string.Empty; break;
                 case HeaderField.ResultCount: _resultCount = ReadIntOrZero(ref reader); break;
+            }
+        }
+
+        private void ApplySearchOptionsValue(ref Utf8JsonReader reader)
+        {
+            if (_searchOptionsField == SearchOptionsField.Unknown)
+                return;
+
+            // Only a recognized field marks the block as present, so an empty or reshaped block falls
+            // back to the legacy path instead of masquerading as an all-false record.
+            _hasSearchOptions = true;
+            if (_searchOptionsField == SearchOptionsField.Pattern)
+            {
+                _optPattern = reader.GetString() ?? string.Empty;
+                return;
+            }
+
+            bool value = reader.TokenType == JsonTokenType.True;
+            switch (_searchOptionsField)
+            {
+                case SearchOptionsField.CaseSensitive: _optCaseSensitive = value; break;
+                case SearchOptionsField.UseRegex: _optUseRegex = value; break;
+                case SearchOptionsField.ExactMatch: _optExactMatch = value; break;
+                case SearchOptionsField.Multiline: _optMultiline = value; break;
+                case SearchOptionsField.MultilineDotAll: _optMultilineDotAll = value; break;
             }
         }
 

@@ -19,6 +19,113 @@ public class SessionFileServiceTests
             ContextAfter: [$"// after line {i}"]);
 
     [Fact]
+    public async Task SearchOptions_Roundtrip_SoAReloadedSessionHighlightsLikeItsSearchMatched()
+    {
+        var options = new SessionFileService.SessionSearchOptions(
+            Pattern: "need.e", CaseSensitive: true, UseRegex: true,
+            ExactMatch: false, Multiline: true, MultilineDotAll: true);
+        var stats = MakeStats();
+        var results = Enumerable.Range(0, 3).Select(MakeResult).ToList();
+
+        using var ms = new MemoryStream();
+        await SessionFileService.WriteAsync(
+            ms, "needle", @"C:\code", stats, results, searchOptions: options);
+
+        ms.Position = 0;
+        var readResults = new List<SearchResult>();
+        var header = await SessionFileService.ReadAsync(
+            ms, _ => { }, batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.Equal(options, header.SearchOptions);
+        // The block sits between other header fields, so everything after it must survive the detour.
+        Assert.Equal("needle", header.Query);
+        Assert.Equal(@"C:\code", header.SearchRoot);
+        Assert.Equal(3, header.ResultCount);
+        Assert.Equal(stats.FilesScanned, header.Stats.FilesScanned);
+        Assert.Equal(stats.MatchesFound, header.Stats.MatchesFound);
+        Assert.Equal(3, readResults.Count);
+        Assert.Equal(results[2].MatchLine, readResults[2].MatchLine);
+    }
+
+    [Fact]
+    public async Task SearchOptions_RoundtripFalseFlags_AreNotConfusedWithAnAbsentBlock()
+    {
+        var options = new SessionFileService.SessionSearchOptions(
+            Pattern: "needle", CaseSensitive: false, UseRegex: false,
+            ExactMatch: false, Multiline: false, MultilineDotAll: false);
+
+        using var ms = new MemoryStream();
+        await SessionFileService.WriteStreamingAsync(
+            ms, "needle", @"C:\code", MakeStats(), 1, 1, _ => [MakeResult(0)], null, searchOptions: options);
+
+        ms.Position = 0;
+        var readResults = new List<SearchResult>();
+        var header = await SessionFileService.ReadAsync(
+            ms, _ => { }, batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.NotNull(header.SearchOptions);
+        Assert.Equal(options, header.SearchOptions);
+        Assert.Single(readResults);
+    }
+
+    [Fact]
+    public async Task SearchOptions_EmptyBlock_FallsBackToLegacyInsteadOfAllFalse()
+    {
+        // An empty/reshaped block must not masquerade as "substring, case-insensitive, non-regex".
+        string json = "{\"schema\":\"" + SessionFileService.SchemaVersion + "\","
+            + "\"query\":\"needle\",\"searchRoot\":\"C:\\\\code\","
+            + "\"searchOptions\":{},"
+            + "\"resultCount\":0,\"results\":[]}";
+        using var ms = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
+
+        var header = await SessionFileService.ReadAsync(ms, _ => { }, _ => Task.CompletedTask);
+
+        Assert.Null(header.SearchOptions);
+        Assert.Equal("needle", header.Query);
+    }
+
+    [Fact]
+    public async Task SearchOptions_AreOptional_SoOlderSessionsStillLoad()
+    {
+        using var ms = new MemoryStream();
+        await SessionFileService.WriteAsync(ms, "needle", @"C:\code", MakeStats(), [MakeResult(0)]);
+
+        ms.Position = 0;
+        var readResults = new List<SearchResult>();
+        var header = await SessionFileService.ReadAsync(
+            ms, _ => { }, batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.Null(header.SearchOptions);
+        Assert.Single(readResults);
+    }
+
+    [Fact]
+    public async Task UnknownHeaderObject_IsSkipped_SoNewerFilesStayReadable()
+    {
+        // A future header block must not break this reader, which is why searchOptions could be
+        // added without a schema bump. Everything after the unknown block must still parse.
+        string json = "{\"schema\":\"" + SessionFileService.SchemaVersion + "\","
+            + "\"query\":\"needle\","
+            + "\"somethingNew\":{\"a\":1,\"b\":{\"c\":true},\"d\":[1,2]},"
+            + "\"searchRoot\":\"C:\\\\code\","
+            + "\"stats\":{\"filesScanned\":7,\"matchesFound\":1},"
+            + "\"resultCount\":1,"
+            + "\"results\":[{\"f\":\"C:\\\\code\\\\a.cs\",\"ln\":3,\"ml\":\"needle here\",\"mc\":0,\"mlen\":6}]}";
+        using var ms = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
+
+        var readResults = new List<SearchResult>();
+        var header = await SessionFileService.ReadAsync(
+            ms, _ => { }, batch => { readResults.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.Equal("needle", header.Query);
+        Assert.Equal(@"C:\code", header.SearchRoot);
+        Assert.Equal(7, header.Stats.FilesScanned);
+        Assert.Null(header.SearchOptions);
+        Assert.Single(readResults);
+        Assert.Equal(3, readResults[0].LineNumber);
+    }
+
+    [Fact]
     public async Task WriteAndRead_Roundtrip_PreservesHeaderAndResults()
     {
         var stats = MakeStats();

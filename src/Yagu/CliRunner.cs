@@ -1729,7 +1729,14 @@ internal static partial class CliRunner
                                     (int)filesScanned,
                                     bytesScanned,
                                     c.Summary.TotalMatches,
-                                    useColor);
+                                    useColor,
+                                    new SessionFileService.SessionSearchOptions(
+                                        Pattern: options.Query,
+                                        CaseSensitive: options.CaseSensitive,
+                                        UseRegex: options.UseRegex,
+                                        ExactMatch: options.ExactMatch,
+                                        Multiline: options.Multiline,
+                                        MultilineDotAll: options.MultilineDotAll));
                         }
 
                         if (c.Summary.Cancelled) return 130;
@@ -1958,7 +1965,8 @@ internal static partial class CliRunner
         int filesScanned,
         long bytesScanned,
         int matchesFound,
-        bool useColor)
+        bool useColor,
+        SessionFileService.SessionSearchOptions? searchOptions = null)
     {
         try
         {
@@ -1970,7 +1978,8 @@ internal static partial class CliRunner
                 bufferSize: 64 * 1024, useAsync: true);
 
             await SessionFileService.WriteAsync(
-                fs, query ?? string.Empty, searchRoot ?? string.Empty, stats, results).ConfigureAwait(false);
+                fs, query ?? string.Empty, searchRoot ?? string.Empty, stats, results,
+                searchOptions: searchOptions).ConfigureAwait(false);
 
             WriteError($"Saved session ({results.Count:N0} matches) to {path}", useColor);
         }
@@ -2440,7 +2449,7 @@ internal static partial class CliRunner
                 settings,
                 result.Roots,
                 DateTimeOffset.UtcNow).GetAwaiter().GetResult();
-            IndexMaintenanceRootResult? rootResult = result.Roots.FirstOrDefault();
+            IndexMaintenanceRootResult? rootResult = result.Roots.Count > 0 ? result.Roots[0] : null;
             if (rootResult?.Action == IndexMaintenanceActions.Failed)
             {
                 WriteError("error: compaction failed; the existing index is unchanged.");

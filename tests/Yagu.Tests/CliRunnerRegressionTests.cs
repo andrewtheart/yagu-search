@@ -12,6 +12,24 @@ public sealed class CliRunnerRegressionTests
     }
 
     [Fact]
+    public void CliSavedSession_RecordsTheSearchParametersItWasProducedWith()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+
+        // A session saved by the CLI must carry the same provenance the GUI records, or reloading it
+        // highlights with the loader's live toggles instead of the search that produced the results.
+        // Named arguments keep the five same-typed bools from being silently transposed.
+        Assert.Contains("new SessionFileService.SessionSearchOptions(", source);
+        Assert.Contains("Pattern: options.Query,", source);
+        Assert.Contains("CaseSensitive: options.CaseSensitive,", source);
+        Assert.Contains("UseRegex: options.UseRegex,", source);
+        Assert.Contains("ExactMatch: options.ExactMatch,", source);
+        Assert.Contains("Multiline: options.Multiline,", source);
+        Assert.Contains("MultilineDotAll: options.MultilineDotAll));", source);
+        Assert.Contains("searchOptions: searchOptions).ConfigureAwait(false);", source);
+    }
+
+    [Fact]
     public void CliParser_RecognizesDashHelpAlias()
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));

@@ -15,6 +15,63 @@ public sealed partial class MainViewModel
     // without re-running the search.
     // -----------------------------------------------------------------------
 
+    /// <summary>The pattern and flags the search that produced the current results ran with, captured
+    /// together so a reloaded session cannot pair one search's pattern with another's flags. Falls back
+    /// to the live search box only before any search has run.</summary>
+    private SessionFileService.SessionSearchOptions CaptureSessionSearchOptions()
+        => string.IsNullOrEmpty(LastSearchPattern)
+            ? new SessionFileService.SessionSearchOptions(
+                Pattern: Query ?? string.Empty,
+                CaseSensitive: CaseSensitive,
+                UseRegex: UseRegex,
+                ExactMatch: ExactMatch,
+                Multiline: Multiline,
+                MultilineDotAll: MultilineDotAll)
+            : new SessionFileService.SessionSearchOptions(
+                Pattern: LastSearchPattern,
+                CaseSensitive: LastSearchCaseSensitive,
+                UseRegex: LastSearchUseRegex,
+                ExactMatch: LastSearchExactMatch,
+                Multiline: LastSearchMultiline,
+                MultilineDotAll: LastSearchMultilineDotAll);
+
+    /// <summary>
+    /// Restores the search parameters a loaded session's results were produced with. Without this
+    /// no search has run in this process, so preview/editor highlighting falls back to the LIVE
+    /// search-box toggles — whose defaults (whole-word on) silently fail to highlight matches the
+    /// saved search found as substrings.
+    /// <para>
+    /// The regex toggle is deliberately NOT taken from the file: line-mode search regexes carry
+    /// <see cref="System.Text.RegularExpressions.Regex.InfiniteMatchTimeout"/> by design, so letting a
+    /// shareable file turn a stored pattern into a live regex would let it wedge the UI thread on
+    /// catastrophic backtracking. A file's pattern is only ever escaped as a literal unless the user
+    /// themselves has Regex enabled, exactly as before.
+    /// </para>
+    /// </summary>
+    private void ApplyLoadedSessionSearchParameters(SessionFileService.SessionHeader header)
+    {
+        LastSearchUseRegex = UseRegex;
+        if (header.SearchOptions is { } options)
+        {
+            LastSearchPattern = string.IsNullOrEmpty(options.Pattern)
+                ? header.Query ?? string.Empty
+                : options.Pattern;
+            LastSearchCaseSensitive = options.CaseSensitive;
+            LastSearchExactMatch = options.ExactMatch;
+            LastSearchMultiline = options.Multiline;
+            LastSearchMultilineDotAll = options.MultilineDotAll;
+            return;
+        }
+
+        // Sessions written before the flags were recorded carry none, so clear only the two flags that
+        // can LOSE a highlight and keep the live multiline mode.
+        LastSearchPattern = header.Query ?? string.Empty;
+        LastSearchCaseSensitive = false;
+        LastSearchExactMatch = false;
+        LastSearchMultiline = Multiline;
+        LastSearchMultilineDotAll = MultilineDotAll;
+    }
+
     /// <summary>
     /// Save the current results plus search query / stats to a <c>.yagu-session</c>
     /// file. Evicted results are hydrated one group at a time and re-evicted after
@@ -94,7 +151,8 @@ public sealed partial class MainViewModel
                 progress: new Progress<double>(p =>
                     ReportSessionProgress(0.05 + 0.95 * p,
                         $"Writing session: {p * 100:N0}% ({totalResults:N0} match(es))")),
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                cancellationToken: cancellationToken,
+                searchOptions: CaptureSessionSearchOptions()).ConfigureAwait(false);
 
             var savedStatus = $"Saved session: {totalResults:N0} match(es) → {Path.GetFileName(path)}";
             if (!_dispatcher.TryEnqueue(() => StatusText = savedStatus))
@@ -176,6 +234,7 @@ public sealed partial class MainViewModel
                         Query = h.Query ?? string.Empty;
                         if (!string.IsNullOrWhiteSpace(h.SearchRoot))
                             Directory = h.SearchRoot;
+                        ApplyLoadedSessionSearchParameters(h);
                         _searchStartedUtc = h.Stats.StartedUtc;
                         _lastSearchElapsed = h.Stats.Elapsed;
                         FilesScanned = h.Stats.FilesScanned;
