@@ -1918,6 +1918,12 @@ public sealed partial class MainWindow
 
     private void SetPreviewEditorVisible(bool visible)
     {
+        if (visible)
+        {
+            StopPreviewSelectionAutoScroll("editor-visible");
+            ClearPreviewCustomSelection();
+        }
+
         PreviewEditorContainer.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         PreviewEditor.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         PreviewScrollViewer.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;

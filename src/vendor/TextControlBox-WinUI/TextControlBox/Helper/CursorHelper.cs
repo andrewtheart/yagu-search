@@ -20,7 +20,7 @@ internal class CursorHelper
         // click-to-line mapping aligns with where text is actually rendered.
         const int DefaultVerticalScrollSensitivity = 4;
         double topInset = textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
-        double adjustedY = Math.Max(0, point.Y - topInset);
+        double adjustedY = Math.Max(0, point.Y + textRenderer.VerticalSubRowOffset - topInset);
         int relativeLine = (int)Math.Floor(adjustedY / textRenderer.SingleLineHeight);
 
         return Math.Max(0, relativeLine + textRenderer.NumberOfStartLine);

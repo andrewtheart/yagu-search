@@ -465,14 +465,9 @@ internal class PointerActionsManager
         //Scroll vertical using mousewheel
         else
         {
+            double beforeOffset = scrollManager.OffsetSource.VerticalOffset;
             scrollManager.OffsetSource.VerticalOffset -= delta * scrollManager._VerticalScrollSensitivity;
-            //Only update when a line was scrolled
-            int currentScrollRow = (int)(scrollManager.OffsetSource.VerticalOffset / Math.Max(1, textRenderer.SingleLineHeight));
-            int renderedStartRow = coreTextbox.WordWrap ? textRenderer.StartVisualRow : textRenderer.NumberOfStartLine;
-            if (currentScrollRow != renderedStartRow)
-            {
-                needsUpdate = true;
-            }
+            needsUpdate = Math.Abs(scrollManager.OffsetSource.VerticalOffset - beforeOffset) > 0.01;
         }
 
         if (selectionManager.IsSelecting)

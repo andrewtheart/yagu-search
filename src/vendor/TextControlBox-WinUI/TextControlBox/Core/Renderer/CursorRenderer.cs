@@ -97,6 +97,7 @@ internal class CursorRenderer
                 ? textTopPadding + topInset
                 : textRenderer.GetLineTopY(cursorManager.LineNumber) + textTopPadding + topInset)
             : (float)((cursorManager.LineNumber - textRenderer.NumberOfStartLine) * textRenderer.SingleLineHeight) + textTopPadding + topInset;
+        renderPosY -= textRenderer.VerticalSubRowOffset;
         if (renderPosY > canvasCursor.ActualHeight || renderPosY + textRenderer.SingleLineHeight < 0)
             return;
 

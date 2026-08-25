@@ -3617,6 +3617,7 @@ public sealed partial class MainWindow
             else
             {
                 // Wrap to start.
+                LogMatchNavWrapDiagnostic();
                 _currentMatchIndex = 0;
                 wrappedToStart = true;
             }
@@ -3704,6 +3705,46 @@ public sealed partial class MainWindow
 
     // Tracks how many match entries the last MaterializeNextLazySection call added.
     private int _lazySectionJustAdded;
+
+    /// <summary>
+    /// Records why forward navigation had to wrap. Wrapping at the true end is normal; wrapping while
+    /// the label still promises more means a counter is holding matches the navigator cannot reach.
+    /// </summary>
+    private void LogMatchNavWrapDiagnostic()
+    {
+        var (deferredFiles, deferredMatches) = GetDeferredCounts();
+        int overflowRemaining = 0;
+        foreach (var ov in _sectionOverflow.Values)
+            overflowRemaining += CountOverflowRemainingMatches(ov);
+
+        int label = GetStableMatchNavTotal();
+        int pending = _lazyMatchCount + deferredMatches + overflowRemaining;
+        bool unreachable = label - pending > _matchParagraphs.Count;
+
+        var log = YaguLog.For("MatchNav");
+        if (!unreachable && !LogService.Instance.IsVerboseEnabled)
+            return;
+
+        const string template =
+            "MatchNavWrap: idx={Idx}, matchParagraphs={MatchParagraphs}, label={Label}, rendered={Rendered}, known={Known}, "
+            + "lazy={Lazy}, lazySections={LazySections}, deferredFiles={DeferredFiles}, deferredMatches={DeferredMatches}, "
+            + "overflowSections={OverflowSections}, overflowRemaining={OverflowRemaining}, "
+            + "registeredSections={RegisteredSections}, registeredTotal={RegisteredTotal}, "
+            + "previewTotalMatchCount={PreviewTotal}, previewStableTotal={StableTotal}, previewTotalFileCount={FileCount}";
+        object?[] args =
+        [
+            _currentMatchIndex, _matchParagraphs.Count, label, GetRenderedMatchTotal(), GetKnownPreviewMatchTotal(),
+            _lazyMatchCount, _lazySections.Count, deferredFiles, deferredMatches,
+            _sectionOverflow.Count, overflowRemaining,
+            _sectionTotalMatchCounts.Count, _sectionTotalMatchCounts.Values.Sum(),
+            _previewTotalMatchCount, _previewStableMatchNavTotal, _previewTotalFileCount,
+        ];
+
+        if (unreachable)
+            log.LogWarning(template, args);
+        else
+            log.LogDebug(template, args);
+    }
 
     /// <summary>
     /// Finds the next (or previous) lazy section in visual order and materializes it.

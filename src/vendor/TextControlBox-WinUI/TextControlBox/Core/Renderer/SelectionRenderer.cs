@@ -379,7 +379,8 @@ namespace TextControlBoxNS.Core.Renderer
 
         private float GetSelectionTopMargin()
         {
-            float topInset = textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity;
+            float topInset = textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity
+                - textRenderer.VerticalSubRowOffset;
             if (!textRenderer.IsWordWrapEnabled)
                 return topInset;
 

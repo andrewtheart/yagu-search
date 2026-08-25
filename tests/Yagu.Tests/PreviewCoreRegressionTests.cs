@@ -186,7 +186,7 @@ public sealed class PreviewCoreRegressionTests
     public void LauncherMode_RetainsCardSpacingWithoutExtraWindowBottomSpace()
     {
         string searchCard = ExtractXamlWindow("<!-- Search controls card -->", 600);
-        Assert.Contains("Margin=\"16,10,16,4\"", searchCard);
+        Assert.Contains("Margin=\"10,6,10,4\"", searchCard);
         Assert.Contains("Padding=\"16,18,16,6\"", searchCard);
         Assert.DoesNotContain("Margin=\"16,10,16,0\"", searchCard);
         Assert.DoesNotContain("Padding=\"16,12,16,2\"", searchCard);
@@ -194,7 +194,7 @@ public sealed class PreviewCoreRegressionTests
 
         string progressRow = ExtractXamlWindow("x:Name=\"SearchStatusPanel\"", 900);
         Assert.Contains("Grid.Row=\"3\"", progressRow);
-        Assert.Contains("Padding=\"16,2,16,2\"", progressRow);
+        Assert.Contains("Padding=\"10,2,10,2\"", progressRow);
         Assert.Contains("Spacing=\"4\"", progressRow);
         // The status panel must NOT reserve a fixed height for the search progress bar — that left too
         // large a permanent gap between the search card and the results/preview panes. The search bar is
@@ -204,9 +204,13 @@ public sealed class PreviewCoreRegressionTests
         Assert.DoesNotContain("Padding=\"16,0,16,0\"", progressRow);
 
         string splitPane = ExtractXamlWindow("x:Name=\"SplitPaneGrid\"", 300);
-        Assert.Contains("Margin=\"16,2,16,4\"", splitPane);
+        // The search card, status panel and split pane share one outer inset, so they stay flush.
+        Assert.Contains("Margin=\"10,2,10,4\"", splitPane);
         Assert.DoesNotContain("Margin=\"16,2,20,4\"", splitPane);
         Assert.DoesNotContain("Margin=\"16,0,16,4\"", splitPane);
+
+        string searchProgressOverlay = ExtractXamlWindow("x:Name=\"SearchProgressOverlay\"", 400);
+        Assert.Contains("Margin=\"10,-6,10,0\"", searchProgressOverlay);
 
         Assert.Contains("private const double MinimumLauncherHeightDip = 190;", MainWindowSource);
         Assert.Contains("private const double DefaultSearchResultsWindowHeightDip = 900;", MainWindowSource);
@@ -857,6 +861,24 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void PreviewSectionHeader_ActionButtonsAreBareUntilHovered()
+    {
+        string style = ExtractMethodWindow(MainWindowSource, "ApplyPreviewHeaderActionButtonStyle", 1800);
+        AssertContainsInOrder(style,
+            "button.Background = transparent;",
+            "button.BorderThickness = new Thickness(0);",
+            "button.Resources[\"ButtonBackground\"] = transparent;",
+            "button.Resources[\"ButtonBackgroundPointerOver\"] = ThemeBrush(\"SubtleFillColorSecondaryBrush\");",
+            "button.Resources[\"ButtonBackgroundPressed\"] = ThemeBrush(\"SubtleFillColorTertiaryBrush\");",
+            "button.Resources[\"ButtonBackgroundDisabled\"] = transparent;");
+
+        string header = ExtractMethodWindow(MainWindowSource, "BuildPreviewSectionHeader", 12000);
+        Assert.Equal(7, System.Text.RegularExpressions.Regex.Matches(
+            header,
+            "ApplyPreviewHeaderActionButtonStyle\\(").Count);
+    }
+
+    [Fact]
     public void PreviewSectionHeader_FileNameHugsFolderIconAtAnyWidth()
     {
         string header = ExtractMethodWindow(MainWindowSource, "BuildPreviewSectionHeader", 4200);
@@ -1037,6 +1059,53 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void EditorVerticalScroll_AppliesFractionalPixelOffsetAcrossEveryLayer()
+    {
+        string editorRoot = Path.Combine(
+            RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox");
+        string textRenderer = File.ReadAllText(Path.Combine(editorRoot, "Core", "Renderer", "TextRenderer.cs"));
+        string cursorRenderer = File.ReadAllText(Path.Combine(editorRoot, "Core", "Renderer", "CursorRenderer.cs"));
+        string selectionRenderer = File.ReadAllText(Path.Combine(editorRoot, "Core", "Renderer", "SelectionRenderer.cs"));
+        string lineNumberRenderer = File.ReadAllText(Path.Combine(editorRoot, "Core", "Renderer", "LineNumberRenderer.cs"));
+        string cursorHelper = File.ReadAllText(Path.Combine(editorRoot, "Helper", "CursorHelper.cs"));
+
+        // The pixel seam retains the fractional distance into the current visual row. Text rendering
+        // subtracts it from every wrap mode, and keeps an extra bottom row ready as that row appears.
+        Assert.Contains("ScrollOffsetMath.VerticalSubRowOffset(source.VerticalOffset, SingleLineHeight)", textRenderer);
+        Assert.Contains("SingleLineHeight - VerticalSubRowOffset", textRenderer);
+        Assert.Contains("if (VerticalSubRowOffset > 0.01f)", textRenderer);
+        Assert.Contains("Height = canvasText.Size.Height + SingleLineHeight", textRenderer);
+
+        // Every overlay follows exactly the same translation, so the caret, selection, line highlighter,
+        // and gutter cannot lag behind the moving text.
+        Assert.Contains("renderPosY -= textRenderer.VerticalSubRowOffset;", cursorRenderer);
+        Assert.Contains("- textRenderer.VerticalSubRowOffset;", selectionRenderer);
+        Assert.Contains("textY -= textRenderer.VerticalSubRowOffset;", lineNumberRenderer);
+        Assert.Contains("(float)canvas.Size.Height + textRenderer.SingleLineHeight", lineNumberRenderer);
+
+        // Hit testing adds the same offset back before mapping the pointer to a document row.
+        Assert.Contains("point.Y + textRenderer.VerticalSubRowOffset - topInset", cursorHelper);
+        Assert.Contains("y + VerticalSubRowOffset", textRenderer);
+
+        // Small wheel deltas repaint immediately through the 16 ms batch redrawer instead of waiting
+        // invisibly for a whole row, and the handled event cannot bubble beyond the editor.
+        string wheel = ExtractMethodWindow(EditorPointerActionsSource, "PointerWheelAction", 3400);
+        AssertContainsInOrder(wheel,
+            "double beforeOffset = scrollManager.OffsetSource.VerticalOffset;",
+            "scrollManager.OffsetSource.VerticalOffset -= delta * scrollManager._VerticalScrollSensitivity;",
+            "needsUpdate = Math.Abs(scrollManager.OffsetSource.VerticalOffset - beforeOffset) > 0.01;",
+            "canvasUpdateManager.UpdateAll();");
+
+        string wheelHandler = ExtractMethodWindow(EditorCoreSource, "Canvas_Selection_PointerWheelChanged", 300);
+        AssertContainsInOrder(wheelHandler,
+            "pointerActionsManager.PointerWheelAction(zoomManager, e);",
+            "e.Handled = true;");
+
+        string thumb = ExtractMethodWindow(EditorScrollManagerSource, "VerticalScrollBar_Scroll", 300);
+        Assert.Contains("canvasHelper.UpdateAll();", thumb);
+    }
+
+    [Fact]
     public void EditorMatchReveal_CentersMatchHorizontally_NotAtTheEdge()
     {
         // Jumping to a search match in the built-in editor must CENTER the match column in the
@@ -1208,8 +1277,16 @@ public sealed class PreviewCoreRegressionTests
             "CollapseAdvancedOptionsForSearch();",
             "await SubmitSearchWithSlowModelWatchAsync();");
 
-        string autoSearch = ExtractMethodWindow(MainWindowSource, "OnContentLoaded", 4800);
-        AssertContainsInOrder(autoSearch,
+        // The auto-search path sits ~4.8k chars into OnContentLoaded and drifts further down every
+        // time a startup step is added ahead of it, so anchor the ordering assertion on the gate call
+        // (unique in the MainWindow sources) instead of on a fixed window from the method definition.
+        string autoSearch = ExtractMethodWindow(MainWindowSource, "OnContentLoaded");
+        Assert.Contains("if (await RunPreSearchWarningGatesAsync())", autoSearch);
+
+        int gate = MainWindowSource.IndexOf("if (await RunPreSearchWarningGatesAsync())", StringComparison.Ordinal);
+        Assert.True(gate >= 0, "Pre-search warning gate call not found.");
+        string gateBlock = MainWindowSource[gate..Math.Min(MainWindowSource.Length, gate + 300)];
+        AssertContainsInOrder(gateBlock,
             "if (await RunPreSearchWarningGatesAsync())",
             "CollapseAdvancedOptionsForSearch();",
             "await ViewModel.StartSearchAsync();");
@@ -1631,7 +1708,13 @@ public sealed class PreviewCoreRegressionTests
             "double visibleRight = Math.Min(contentRightBound, right);",
             "if (bandTop < topClipBound)",
             "bandTop = topClipBound;",
-            "GetPreviewCustomSelectionOverlayMarker(markerIndex++)",
+            "GetPreviewCustomSelectionOverlayMarker(markerIndex++)");
+
+        // Every drawer paints into one shared marker pool, so the pool is trimmed and the overlay
+        // revealed once by the wrapper after all drawers are painted — not per drawer.
+        string overlayWrapper = ExtractMethodWindow(MainWindowSource, "private void DrawPreviewCustomSelectionOverlay", window: 3000);
+        AssertContainsInOrder(overlayWrapper,
+            "_previewCustomSelectionOverlayMarkers[index].Visibility = Visibility.Collapsed;",
             "PreviewSelectionOverlay.Visibility = Visibility.Visible;");
         // The wrapped path clamps its bands with the same scroller-left bound so continuation rows
         // never paint over the gutter either, and the same top clip so they never paint over the header.
@@ -1801,7 +1884,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("=> true;", shouldUse);
 
         // The overlay renders wrapped selections row-by-row instead of one flat strip.
-        string overlay = ExtractMethodWindow(MainWindowSource, "DrawPreviewCustomSelectionOverlay", window: 6800);
+        string overlay = ExtractMethodWindow(MainWindowSource, "private void DrawPreviewCustomSelectionBands", window: 6800);
         AssertContainsInOrder(overlay,
             "block.TextWrapping == TextWrapping.Wrap",
             "TryBuildWrappedPreviewSelectionRows(",
@@ -2108,6 +2191,48 @@ public sealed class PreviewCoreRegressionTests
         // only returning RichTextBlocks that are registered as content blocks (its keys).
         string finder = ExtractMethodWindow(MainWindowSource, "FindFirstSectionContentRichTextBlock", window: 600);
         Assert.Contains("_sectionGutterBlocks.ContainsKey(rtb) ? rtb : null", finder);
+    }
+
+    [Fact]
+    public void SelectAll_InAContinuationDrawer_SelectsAndCopiesEveryDrawerOfThatFile()
+    {
+        // A long file is split across a first drawer plus continuation drawers, but that split is a
+        // layout detail — Ctrl+A/Ctrl+C must act on the whole file, not the drawer that had focus.
+        string selectAll = ExtractMethodWindow(MainWindowSource, "TrySelectAllPreviewContent", window: 3200);
+        Assert.Contains("_previewCustomSelectionGroupBlocks = ResolvePreviewSelectionDrawerGroup(block);", selectAll);
+
+        // Drawers are grouped by file path in panel order, and a group of one stays on the single path.
+        string group = ExtractMethodWindow(MainWindowSource, "ResolvePreviewSelectionDrawerGroup", window: 1600);
+        Assert.Contains("foreach (var child in PreviewSectionsPanel.Children)", group);
+        Assert.Contains("ResolvePreviewBlockFilePath(content), filePath, StringComparison.OrdinalIgnoreCase", group);
+        Assert.Contains("group.Count < 2", group);
+        // A stale block→expander mapping must not yield a partial group that silently truncates the copy.
+        Assert.Contains("!group.Any(candidate => ReferenceEquals(candidate, block))", group);
+
+        // Copy concatenates every drawer; only the drawer Ctrl+A ran in uses the anchor/current range.
+        string copy = ExtractMethodWindow(MainWindowSource, "TryBuildPreviewCustomSelectionText", window: 1800);
+        Assert.Contains("var primary = _previewCustomSelectionBlock;", copy);
+        AssertContainsInOrder(copy,
+            "ReferenceEquals(drawer, primary)",
+            "BuildPreviewDrawerSelectionText(drawer, selectionStart, selectionEnd, withLineNumbers)",
+            "BuildPreviewDrawerSelectionText(drawer, 0, GetBlockTotalTextLength(drawer), withLineNumbers)");
+
+        // Right-clicking any drawer in the group must copy the whole group, not fall back to no selection.
+        string has = ExtractMethodWindow(MainWindowSource, "private bool HasPreviewCustomSelection", window: 400);
+        Assert.Contains("IsPreviewSelectionGroupMember(block)", has);
+
+        // Every drawer is painted from one shared marker pool so the overlay cap bounds the whole
+        // selection, and the pool is trimmed once after all drawers are drawn rather than per drawer.
+        string draw = ExtractMethodWindow(MainWindowSource, "private void DrawPreviewCustomSelectionOverlay", window: 1800);
+        Assert.Contains("int markerIndex = 0;", draw);
+        Assert.Contains("foreach (var drawer in group)", draw);
+        Assert.Contains("ref markerIndex", draw);
+        string bands = ExtractMethodWindow(MainWindowSource, "private void DrawPreviewCustomSelectionBands", window: 400);
+        Assert.DoesNotContain("int markerIndex = 0;", bands);
+
+        // A new drag must drop the group, or the next copy would still emit sibling drawers.
+        string clear = ExtractMethodWindow(MainWindowSource, "private void ClearPreviewCustomSelection", window: 400);
+        Assert.Contains("_previewCustomSelectionGroupBlocks = null;", clear);
     }
 
     [Fact]
@@ -2701,7 +2826,14 @@ public sealed class PreviewCoreRegressionTests
             "return 0;",
             "results = results.Where(result => result.LineNumber > 0).ToList();");
 
-        Assert.Contains("RegisterSectionMatchTotal(block, CountContentMatchResults(results));", MainWindowSource);
+        // The per-section total is subtracted from the running nav total when the section is removed,
+        // but the total was incremented with ComputeMatchCount. Registering a plain result-row count
+        // double-counts two results on one line, so the sticky total keeps unreachable phantom matches
+        // and Next-match wraps below the displayed total.
+        Assert.Contains(
+            "RegisterSectionMatchTotal(block, ComputeMatchCount(\n                results, null, ViewModel.PreviewModeIndex == 1, ViewModel.PreviewContextLines, BuildSearchHighlightRegex()));".ReplaceLineEndings(),
+            MainWindowSource.ReplaceLineEndings());
+        Assert.DoesNotContain("RegisterSectionMatchTotal(block, CountContentMatchResults(results));", MainWindowSource);
 
         Assert.Contains("private static List<SearchResult> GetPreviewableResults(FileGroup group, int maxResults = int.MaxValue)", MainWindowSource);
         Assert.Contains("Math.Min(GetPreviewResultSnapshotLimit(), Math.Max(0, maxResults))", MainWindowSource);
@@ -4688,7 +4820,7 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void OpeningFullFileEditor_CancelsPendingMatchNavigationToAvoidNativeAccessViolation()
+    public void OpeningFullFileEditor_ClearsPreviewSelectionAndCancelsPendingNavigation()
     {
         // Double-tapping a match opens the full-file editor, which collapses the
         // preview surface. Any match-nav scroll/overlay retries queued by the last
@@ -4703,9 +4835,15 @@ public sealed class PreviewCoreRegressionTests
             "_activeMatchOverlayUpdateRequestId++;",
             "HideActiveMatchOverlay();");
 
-        // Opening the editor must invoke that cancellation, not just hide the overlay.
-        string setVisible = ExtractMethodWindow(PreviewEditorSource, "SetPreviewEditorVisible", 1500);
-        Assert.Contains("CancelPendingPreviewMatchNavigation();", setVisible);
+        // Opening the editor must terminate any selection drag and collapse all custom-selection
+        // markers before swapping surfaces, then cancel match navigation rather than only hiding it.
+        string setVisible = ExtractMethodWindow(PreviewEditorSource, "SetPreviewEditorVisible", 1900);
+        AssertContainsInOrder(setVisible,
+            "if (visible)",
+            "StopPreviewSelectionAutoScroll(\"editor-visible\");",
+            "ClearPreviewCustomSelection();",
+            "PreviewEditorContainer.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;",
+            "CancelPendingPreviewMatchNavigation();");
 
         // The manual-scroll path (which never reproduced the crash) shares the
         // exact same cancellation, so the two surface-swap paths cannot drift.

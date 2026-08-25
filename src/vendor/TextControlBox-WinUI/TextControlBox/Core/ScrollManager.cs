@@ -58,13 +58,7 @@ internal class ScrollManager
     }
     internal void VerticalScrollBar_Scroll(object sender, ScrollEventArgs e)
     {
-        //only update when a line was scrolled
-        int currentScrollRow = (int)(OffsetSource.VerticalOffset / Math.Max(1, textRenderer.SingleLineHeight));
-        int renderedStartRow = coreTextbox.WordWrap ? textRenderer.StartVisualRow : textRenderer.NumberOfStartLine;
-        if (currentScrollRow != renderedStartRow)
-        {
-            canvasHelper.UpdateAll();
-        }
+        canvasHelper.UpdateAll();
     }
 
     internal void HorizontalScrollBar_Scroll(object sender, ScrollEventArgs e)

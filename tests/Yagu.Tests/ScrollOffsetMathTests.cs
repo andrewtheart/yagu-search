@@ -72,6 +72,22 @@ public sealed class ScrollOffsetMathTests
         Assert.Equal(pixels, back, precision: 9);
     }
 
+    [Theory]
+    [InlineData(0, 20, 0)]
+    [InlineData(7.5, 20, 7.5)]
+    [InlineData(20, 20, 0)]
+    [InlineData(27.5, 20, 7.5)]
+    [InlineData(59.9, 20, 19.9)]
+    [InlineData(-5, 20, 0)]
+    [InlineData(7.5, 0, 0.5)]
+    public void VerticalSubRowOffset_ReturnsFractionWithinCurrentVisualRow(
+        double offsetPixels,
+        double rowHeightPixels,
+        double expected)
+    {
+        Assert.Equal(expected, ScrollOffsetMath.VerticalSubRowOffset(offsetPixels, rowHeightPixels), precision: 9);
+    }
+
     // ── Vertical extent ↔ maximum ─────────────────────────────────────────────────────────────────
     [Fact]
     public void VerticalMaximumToExtentPixels_AddsViewportAfterScaling()

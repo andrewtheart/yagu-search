@@ -38,6 +38,12 @@ public sealed partial class MainWindow
     private ScrollViewer? _previewSelectionAutoScrollVerticalScroller;
     private Timer? _previewSelectionAutoScrollTimer;
     private RichTextBlock? _previewCustomSelectionBlock;
+    /// <summary>
+    /// Every drawer of the same file when Ctrl+A selected a file that overflowed into continuation
+    /// drawers, in panel order and including <see cref="_previewCustomSelectionBlock"/>. Null for an
+    /// ordinary single-drawer selection. Non-primary members are always selected in full.
+    /// </summary>
+    private List<RichTextBlock>? _previewCustomSelectionGroupBlocks;
     private TextHighlighter? _previewCustomSelectionHighlighter;
     private readonly List<Border> _previewCustomSelectionOverlayMarkers = new();
     private readonly SolidColorBrush _previewCustomSelectionOverlayBrush = new(Windows.UI.Color.FromArgb(135, 0, 120, 215));
@@ -910,6 +916,44 @@ public sealed partial class MainWindow
             return;
         }
 
+        // One shared marker pool across every drawer, so the cap bounds the whole selection.
+        int markerIndex = 0;
+        var group = _previewCustomSelectionGroupBlocks;
+        if (group is null)
+        {
+            DrawPreviewCustomSelectionBands(block, selectionStart, selectionEnd, overlayWidth, overlayHeight, ref markerIndex);
+        }
+        else
+        {
+            foreach (var drawer in group)
+            {
+                if (ReferenceEquals(drawer, block))
+                    DrawPreviewCustomSelectionBands(drawer, selectionStart, selectionEnd, overlayWidth, overlayHeight, ref markerIndex);
+                else
+                    DrawPreviewCustomSelectionBands(drawer, 0, GetBlockTotalTextLength(drawer), overlayWidth, overlayHeight, ref markerIndex);
+
+                if (markerIndex >= PreviewCustomSelectionOverlayMaxMarkers)
+                    break;
+            }
+        }
+
+        for (int index = markerIndex; index < _previewCustomSelectionOverlayMarkers.Count; index++)
+            _previewCustomSelectionOverlayMarkers[index].Visibility = Visibility.Collapsed;
+
+        PreviewSelectionOverlay.Visibility = Visibility.Visible;
+    }
+
+    private void DrawPreviewCustomSelectionBands(
+        RichTextBlock block,
+        int selectionStart,
+        int selectionEnd,
+        double overlayWidth,
+        double overlayHeight,
+        ref int markerIndex)
+    {
+        if (selectionEnd <= selectionStart)
+            return;
+
         // Clamp every highlight band to the visible content region of the BLOCK's own horizontal
         // scroller — the per-section content scroller on the sections surface (which sits to the RIGHT
         // of the line-number gutter and is narrower than the outer viewer), or the outer
@@ -939,7 +983,6 @@ public sealed partial class MainWindow
         double topClipBound = ResolvePreviewSelectionOverlayTopClip();
         bool hasInlineGutter = !_sectionGutterBlocks.ContainsKey(block);
 
-        int markerIndex = 0;
         ParagraphMetrics metrics = GetPreviewSelectionParagraphMetrics(block);
         Paragraph[] paragraphs = metrics.TextParagraphs!;
         int[] paragraphStarts = metrics.TextStarts!;
@@ -1101,11 +1144,6 @@ public sealed partial class MainWindow
             if (markerIndex >= PreviewCustomSelectionOverlayMaxMarkers)
                 break;
         }
-
-        for (int index = markerIndex; index < _previewCustomSelectionOverlayMarkers.Count; index++)
-            _previewCustomSelectionOverlayMarkers[index].Visibility = Visibility.Collapsed;
-
-        PreviewSelectionOverlay.Visibility = Visibility.Visible;
     }
 
     private bool TryResolveVisiblePreviewSelectionIndexRange(
@@ -1394,6 +1432,7 @@ public sealed partial class MainWindow
     {
         RemovePreviewCustomSelectionHighlighter();
         _previewCustomSelectionBlock = null;
+        _previewCustomSelectionGroupBlocks = null;
         _previewCustomSelectionAnchorIndex = -1;
         _previewCustomSelectionCurrentIndex = -1;
         _previewCustomSelectionDragging = false;
@@ -1412,8 +1451,21 @@ public sealed partial class MainWindow
     }
 
     private bool HasPreviewCustomSelection(RichTextBlock block)
-        => ReferenceEquals(_previewCustomSelectionBlock, block)
+        => (ReferenceEquals(_previewCustomSelectionBlock, block) || IsPreviewSelectionGroupMember(block))
            && Math.Abs(_previewCustomSelectionCurrentIndex - _previewCustomSelectionAnchorIndex) > 0;
+
+    private bool IsPreviewSelectionGroupMember(RichTextBlock block)
+    {
+        var group = _previewCustomSelectionGroupBlocks;
+        if (group is null)
+            return false;
+        foreach (var drawer in group)
+        {
+            if (ReferenceEquals(drawer, block))
+                return true;
+        }
+        return false;
+    }
 
     private bool TryBuildPreviewCustomSelectionText(RichTextBlock block, bool withLineNumbers, out string text)
     {
@@ -1423,6 +1475,42 @@ public sealed partial class MainWindow
 
         int selectionStart = Math.Min(_previewCustomSelectionAnchorIndex, _previewCustomSelectionCurrentIndex);
         int selectionEnd = Math.Max(_previewCustomSelectionAnchorIndex, _previewCustomSelectionCurrentIndex);
+
+        var group = _previewCustomSelectionGroupBlocks;
+        if (group is null)
+        {
+            text = BuildPreviewDrawerSelectionText(block, selectionStart, selectionEnd, withLineNumbers);
+            return text.Length > 0;
+        }
+
+        // Continuation drawers are one file split for layout, so copy them back as one document.
+        // The ranged drawer is the one Ctrl+A ran in, not whichever drawer asked for the copy.
+        var primary = _previewCustomSelectionBlock;
+        var combined = new StringBuilder();
+        foreach (var drawer in group)
+        {
+            string part = ReferenceEquals(drawer, primary)
+                ? BuildPreviewDrawerSelectionText(drawer, selectionStart, selectionEnd, withLineNumbers)
+                : BuildPreviewDrawerSelectionText(drawer, 0, GetBlockTotalTextLength(drawer), withLineNumbers);
+            if (part.Length == 0)
+                continue;
+            if (combined.Length > 0)
+                combined.AppendLine();
+            combined.Append(part);
+        }
+
+        text = combined.ToString();
+        YaguLog.For("PreviewSelection").LogDebug(
+            "TryBuildPreviewCustomSelectionText: drawers={Drawers}, length={Length}", group.Count, text.Length);
+        return text.Length > 0;
+    }
+
+    private string BuildPreviewDrawerSelectionText(
+        RichTextBlock block, int selectionStart, int selectionEnd, bool withLineNumbers)
+    {
+        if (selectionEnd <= selectionStart)
+            return string.Empty;
+
         bool hasInlineGutter = !_sectionGutterBlocks.ContainsKey(block);
         var selectedText = new StringBuilder();
         int blockIndex = 0;
@@ -1484,8 +1572,7 @@ public sealed partial class MainWindow
             }
         }
 
-        text = selectedText.ToString();
-        return text.Length > 0;
+        return selectedText.ToString();
     }
 
     private static int GetInlineGutterTextLength(Paragraph paragraph)
@@ -1597,10 +1684,48 @@ public sealed partial class MainWindow
             return false;
 
         _previewCustomSelectionBlock = block;
+        _previewCustomSelectionGroupBlocks = ResolvePreviewSelectionDrawerGroup(block);
         _previewCustomSelectionAnchorIndex = 0;
         _previewCustomSelectionCurrentIndex = totalLength;
         UpdatePreviewCustomSelectionHighlighter();
         return true;
+    }
+
+    /// <summary>
+    /// All drawers rendering <paramref name="block"/>'s file, in panel order, when that file overflowed
+    /// into continuation drawers. A very long file is split across several sections that are one file to
+    /// the user, so Ctrl+A must take the whole file rather than the drawer that happened to have focus.
+    /// Returns null when the file occupies a single drawer, which keeps the ordinary path allocation-free.
+    /// </summary>
+    private List<RichTextBlock>? ResolvePreviewSelectionDrawerGroup(RichTextBlock block)
+    {
+        if (PreviewSectionsPanel.Visibility != Visibility.Visible)
+            return null;
+
+        string? filePath = ResolvePreviewBlockFilePath(block);
+        if (string.IsNullOrEmpty(filePath))
+            return null;
+
+        var group = new List<RichTextBlock>();
+        foreach (var child in PreviewSectionsPanel.Children)
+        {
+            if (child is not FrameworkElement fe || fe.Visibility != Visibility.Visible)
+                continue;
+            var content = FindFirstSectionContentRichTextBlock(fe);
+            if (content is null)
+                continue;
+            if (string.Equals(ResolvePreviewBlockFilePath(content), filePath, StringComparison.OrdinalIgnoreCase))
+                group.Add(content);
+        }
+
+        // The focused drawer must be part of the group; if the panel walk missed it the mapping is stale
+        // and a partial group would silently drop text from the copy.
+        if (group.Count < 2 || !group.Any(candidate => ReferenceEquals(candidate, block)))
+            return null;
+
+        YaguLog.For("PreviewSelection").LogDebug(
+            "ResolvePreviewSelectionDrawerGroup: file='{File}', drawers={Drawers}", filePath, group.Count);
+        return group;
     }
 
     private static int GetBlockTotalTextLength(RichTextBlock block)

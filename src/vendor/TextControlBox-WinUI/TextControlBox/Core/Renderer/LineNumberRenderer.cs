@@ -100,11 +100,12 @@ namespace TextControlBoxNS.Core.Renderer
                     ? textRenderer.SingleLineHeight
                     : textRenderer.SingleLineHeight - (textRenderer.WrappedStartRowOffset * textRenderer.SingleLineHeight))
                 : textRenderer.SingleLineHeight;
+            textY -= textRenderer.VerticalSubRowOffset;
             float layoutHeight = textRenderer.IsWordWrapEnabled
                 ? (textRenderer.IsVirtualizedWrappedLine
                     ? (float)canvas.Size.Height + (2 * textRenderer.SingleLineHeight)
                     : (float)canvas.Size.Height + ((textRenderer.WrappedStartRowOffset + 2) * textRenderer.SingleLineHeight))
-                : (float)canvas.Size.Height;
+                : (float)canvas.Size.Height + textRenderer.SingleLineHeight;
             LineNumberTextLayout = textLayoutManager.CreateTextLayout(canvas, LineNumberTextFormat, LineNumberTextToRender, posX, layoutHeight);
 
             args.DrawingSession.DrawTextLayout(

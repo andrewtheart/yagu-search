@@ -2626,7 +2626,14 @@ public sealed partial class MainWindow
         // setting it on the Expander itself would also show when hovering the
         // content body, which is noisy.
         if (results is not null)
-            RegisterSectionMatchTotal(block, CountContentMatchResults(results));
+        {
+            // Must use the same occurrence-per-rendered-line unit the running total was incremented
+            // with, and that _matchParagraphs navigates. A plain result-row count double-counts two
+            // results on one line, so removing a section subtracts less than was added and the
+            // (sticky) nav total keeps phantom matches the user can never reach.
+            RegisterSectionMatchTotal(block, ComputeMatchCount(
+                results, null, ViewModel.PreviewModeIndex == 1, ViewModel.PreviewContextLines, BuildSearchHighlightRegex()));
+        }
         _blockExpanderCache[block] = expander;
         _expanderFilePaths[expander] = filePath;
         _expanderHeaderArgs[expander] = (filePath, detail, block, results);
@@ -2659,6 +2666,22 @@ public sealed partial class MainWindow
 
         return new SolidColorBrush(
             ColorStringHelper.Parse(configuredColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)));
+    }
+
+    private static void ApplyPreviewHeaderActionButtonStyle(Button button)
+    {
+        var transparent = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        button.Background = transparent;
+        button.BorderThickness = new Thickness(0);
+        button.CornerRadius = new CornerRadius(4);
+        button.Resources["ButtonBackground"] = transparent;
+        button.Resources["ButtonBackgroundPointerOver"] = ThemeBrush("SubtleFillColorSecondaryBrush");
+        button.Resources["ButtonBackgroundPressed"] = ThemeBrush("SubtleFillColorTertiaryBrush");
+        button.Resources["ButtonBackgroundDisabled"] = transparent;
+        button.Resources["ButtonBorderBrush"] = transparent;
+        button.Resources["ButtonBorderBrushPointerOver"] = transparent;
+        button.Resources["ButtonBorderBrushPressed"] = transparent;
+        button.Resources["ButtonBorderBrushDisabled"] = transparent;
     }
 
     private Grid BuildPreviewSectionHeader(string filePath, string? detail, RichTextBlock? sectionBlock = null, List<SearchResult>? sectionResults = null)
@@ -2769,6 +2792,7 @@ public sealed partial class MainWindow
             Content = new FontIcon { Glyph = "\uE8A7", FontSize = 12 },
             IsEnabled = !isExtractedTextMatch,
         };
+        ApplyPreviewHeaderActionButtonStyle(popOutBtn);
         ToolTipService.SetToolTip(popOutBtn, isExtractedTextMatch ? $"Pop out (not available for {extractedTextNoun})" : "Pop out this preview into its own window");
         var popOutResults = sectionResults;
         popOutBtn.Click += async (_, _) => await PopOutPreviewDrawerAsync(path, popOutResults);
@@ -2782,6 +2806,7 @@ public sealed partial class MainWindow
                 Content = new FontIcon { Glyph = "\uE81E", FontSize = 12 },
                 IsEnabled = !isExtractedTextMatch,
             };
+            ApplyPreviewHeaderActionButtonStyle(fullFileBtn);
             ToolTipService.SetToolTip(fullFileBtn, isExtractedTextMatch ? $"Show full file (not available for {extractedTextNoun})" : "Show full file");
             var capturedBlock = sectionBlock;
             var capturedResults = sectionResults;
@@ -2798,6 +2823,7 @@ public sealed partial class MainWindow
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
             Content = new FontIcon { Glyph = "\uE8C8", FontSize = 12 },
         };
+        ApplyPreviewHeaderActionButtonStyle(copyBtn);
         ToolTipService.SetToolTip(copyBtn, "Copy full file path");
         copyBtn.Click += (_, _) => SetClipboardText(path, "section file path");
         buttonPanel.Children.Add(copyBtn);
@@ -2807,6 +2833,7 @@ public sealed partial class MainWindow
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
             Content = new FontIcon { Glyph = "\uE7AC", FontSize = 12 },
         };
+        ApplyPreviewHeaderActionButtonStyle(openBtn);
         ToolTipService.SetToolTip(openBtn, "Open with default application");
         openBtn.Click += (_, _) =>
         {
@@ -2821,6 +2848,7 @@ public sealed partial class MainWindow
             Content = new FontIcon { Glyph = "\uE70F", FontSize = 12 },
             IsEnabled = !isExtractedTextMatch,
         };
+        ApplyPreviewHeaderActionButtonStyle(editorBtn);
         ToolTipService.SetToolTip(editorBtn, isExtractedTextMatch ? $"Edit file (not available for {extractedTextNoun})" : "Edit file");
         editorBtn.Click += async (_, _) =>
         {
@@ -2835,6 +2863,7 @@ public sealed partial class MainWindow
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
             Content = new FontIcon { Glyph = "\uED25", FontSize = 12 },
         };
+        ApplyPreviewHeaderActionButtonStyle(explorerBtn);
         ToolTipService.SetToolTip(explorerBtn, "Open containing folder in Explorer");
         explorerBtn.Click += (_, _) =>
         {
@@ -2849,6 +2878,7 @@ public sealed partial class MainWindow
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
             Content = new FontIcon { Glyph = "\uE9F9", FontSize = 12 },
         };
+        ApplyPreviewHeaderActionButtonStyle(reportBtn);
         ToolTipService.SetToolTip(reportBtn, "Export report (HTML/JSON/CSV)");
         reportBtn.Click += async (_, _) => await ExportSingleFileHtmlReportAsync(path);
         buttonPanel.Children.Add(reportBtn);

@@ -23,6 +23,9 @@ internal class TextRenderer
     public bool NeedsTextFormatUpdate = true;
     public float SingleLineHeight { get => TextFormat == null ? 0 : TextFormat.LineSpacing; }
     public float HorizontalOffset => (float)-scrollManager.HorizontalScroll + HorizontalSlicePixelOffset;
+    public float VerticalSubRowOffset => scrollManager?.OffsetSource is { } source
+        ? (float)ScrollOffsetMath.VerticalSubRowOffset(source.VerticalOffset, SingleLineHeight)
+        : 0;
     public int NumberOfStartLine = 0;
     public int NumberOfRenderedLines = 0;
     public string RenderedText = "";
@@ -664,7 +667,7 @@ internal class TextRenderer
 
     public int GetVisualRowFromPointY(double y)
     {
-        return CalculateVisualRowFromPointY(y, StartVisualRow, SingleLineHeight, scrollManager.DefaultVerticalScrollSensitivity);
+        return CalculateVisualRowFromPointY(y + VerticalSubRowOffset, StartVisualRow, SingleLineHeight, scrollManager.DefaultVerticalScrollSensitivity);
     }
 
     public int GetWrappedRowOffsetInLineFromPointY(int lineIndex, double y)
@@ -679,7 +682,7 @@ internal class TextRenderer
         if (IsVirtualizedWrappedLine && lineIndex == NumberOfStartLine)
         {
             return CalculateWrappedLineHitTestYFromPointY(
-                y,
+                y + VerticalSubRowOffset,
                 0,
                 SingleLineHeight,
                 scrollManager.DefaultVerticalScrollSensitivity,
@@ -687,7 +690,7 @@ internal class TextRenderer
         }
 
         return CalculateWrappedLineHitTestYFromPointY(
-            y,
+            y + VerticalSubRowOffset,
             GetLineTopY(lineIndex),
             SingleLineHeight,
             scrollManager.DefaultVerticalScrollSensitivity,
@@ -788,7 +791,9 @@ internal class TextRenderer
         scrollManager.verticalScrollBar.ViewportSize = coreTextbox.canvasText.ActualHeight;
 
         //Calculate number of lines that need to be rendered
-        int linesToRenderCount = (int)(coreTextbox.canvasText.ActualHeight / singleLineHeight);
+        int linesToRenderCount = (int)Math.Ceiling(coreTextbox.canvasText.ActualHeight / singleLineHeight);
+        if (VerticalSubRowOffset > 0.01f)
+            linesToRenderCount++;
         linesToRenderCount = Math.Min(linesToRenderCount, textManager.LinesCount);
 
         int startLine = (int)((scrollManager.VerticalScroll * scrollManager.DefaultVerticalScrollSensitivity) / singleLineHeight);
@@ -901,8 +906,10 @@ internal class TextRenderer
             : 0;
         DrawTextOffsetX = IsWordWrapEnabled ? 0 : (float)-scrollManager.HorizontalScroll + hSlicePixelOffset;
         DrawTextOffsetY = IsVirtualizedWrappedLine
-            ? SingleLineHeight
-            : (IsWordWrapEnabled ? SingleLineHeight - (WrappedStartRowOffset * SingleLineHeight) : SingleLineHeight);
+            ? SingleLineHeight - VerticalSubRowOffset
+            : (IsWordWrapEnabled
+                ? SingleLineHeight - (WrappedStartRowOffset * SingleLineHeight) - VerticalSubRowOffset
+                : SingleLineHeight - VerticalSubRowOffset);
         int renderedVisualRows = IsVirtualizedWrappedLine
             ? VirtualizedWrappedRowsToRender
             : GetRenderedVisualRowCount(NumberOfStartLine, NumberOfRenderedLines);
@@ -914,7 +921,11 @@ internal class TextRenderer
                     : Math.Max(canvasText.Size.Height + (WrappedStartRowOffset + 2) * SingleLineHeight, (renderedVisualRows + 2) * SingleLineHeight),
                 Width = GetWrapWidth(canvasText)
             }
-            : new Size { Height = canvasText.Size.Height, Width = coreTextbox.ActualWidth };
+            : new Size
+            {
+                Height = canvasText.Size.Height + SingleLineHeight,
+                Width = coreTextbox.ActualWidth
+            };
 
         //check rendering and calculation updates
         lineNumberRenderer.CheckGenerateLineNumberText();
@@ -962,7 +973,7 @@ internal class TextRenderer
                         searchManager.MatchingSearchLines,
                         searchManager.searchParameter.SearchExpression,
                         DrawTextOffsetX,
-                        IsWordWrapEnabled ? DrawTextOffsetY - SingleLineHeight + (SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity) : SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity,
+                        DrawTextOffsetY - SingleLineHeight + (SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity),
                         designHelper._Design.SearchHighlightColor,
                         coreTextbox.MaxSearchHighlightsPerRender,
                         logDiagnostics: IsWordWrapEnabled,

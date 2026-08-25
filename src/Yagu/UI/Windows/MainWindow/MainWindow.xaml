@@ -434,7 +434,7 @@
         </StackPanel>
 
         <!-- Search controls card -->
-        <Border x:Name="SearchControlsBorder" Grid.Row="2" Margin="16,10,16,4" Padding="16,18,16,6"
+        <Border x:Name="SearchControlsBorder" Grid.Row="2" Margin="10,6,10,4" Padding="16,18,16,6"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1" CornerRadius="8">
@@ -676,7 +676,7 @@
                             <ToggleButton x:Name="ExactMatchToggle"
                                           AccessKey="E"
                                           IsChecked="{x:Bind ViewModel.ExactMatch, Mode=TwoWay}"
-                                          ToolTipService.ToolTip="Exact Match — on: treat the whole query as one term. Off: split on spaces and match any term. (Alt+E). Ignored while Multiline is on"
+                                          ToolTipService.ToolTip="Exact Match — on: the whole query is one term, matched as a whole word (&quot;async&quot; will not match &quot;asynchronously&quot;). Off: split on spaces and match any term anywhere, including inside longer words. (Alt+E). Ignored while Multiline is on"
                                           Padding="4,2" MinWidth="0" MinHeight="0"
                                           Width="28" Height="24" FontSize="12"
                                           VerticalAlignment="Center">
@@ -1546,7 +1546,7 @@
         <!-- Status / progress: session progress, fallback/error text, and the semantic-status row.
              The SEARCH progress bar + percentage is a floating overlay (SearchProgressOverlay, below) so it
              never reserves flow height nor pushes the results/preview panes down. -->
-        <StackPanel x:Name="SearchStatusPanel" Grid.Row="3" Padding="16,2,16,2" Spacing="4">
+        <StackPanel x:Name="SearchStatusPanel" Grid.Row="3" Padding="10,2,10,2" Spacing="4">
             <Grid Visibility="{x:Bind ViewModel.IsSessionBusy, Mode=OneWay}" ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -1587,7 +1587,7 @@
              A small negative top margin centers the bar on the inter-card gap so it does not cover the
              results header, and IsHitTestVisible=False keeps the header buttons underneath clickable. -->
         <Grid x:Name="SearchProgressOverlay" Grid.Row="3" Grid.RowSpan="2"
-              VerticalAlignment="Top" HorizontalAlignment="Left" Margin="16,-6,16,0" ColumnSpacing="8"
+              VerticalAlignment="Top" HorizontalAlignment="Left" Margin="10,-6,10,0" ColumnSpacing="8"
               Canvas.ZIndex="6" IsHitTestVisible="False"
               Visibility="{x:Bind ViewModel.IsSearchActive, Mode=OneWay}">
             <Grid.ColumnDefinitions>
@@ -1612,7 +1612,7 @@
         </Grid>
 
         <!-- Split pane: results + preview -->
-          <Grid x:Name="SplitPaneGrid" Grid.Row="4" Margin="16,2,16,4"
+                    <Grid x:Name="SplitPaneGrid" Grid.Row="4" Margin="10,2,10,4"
               SizeChanged="OnTopExpandedPreviewLayoutSourceSizeChanged">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="ResultsColumn" Width="*" MinWidth="200" />

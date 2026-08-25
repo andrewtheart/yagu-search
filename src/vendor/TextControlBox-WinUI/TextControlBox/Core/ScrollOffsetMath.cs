@@ -27,6 +27,16 @@ internal static class ScrollOffsetMath
     internal static double PixelsToVerticalValue(double pixels, int sensitivity)
         => Math.Max(0, pixels) / NormalizeSensitivity(sensitivity);
 
+    /// <summary>Returns the fractional pixel distance scrolled into the current visual row. Renderers
+    /// translate every layer upward by this amount so sub-row wheel/touchpad deltas move immediately
+    /// instead of accumulating invisibly and jumping when the next whole row is crossed.</summary>
+    internal static double VerticalSubRowOffset(double verticalOffsetPixels, double rowHeightPixels)
+    {
+        double rowHeight = Math.Max(1, rowHeightPixels);
+        double offset = Math.Max(0, verticalOffsetPixels);
+        return offset - Math.Floor(offset / rowHeight) * rowHeight;
+    }
+
     /// <summary>Vertical <c>ScrollBar.Maximum</c> (legacy units) + viewport pixels → total content height
     /// in pixels (<c>ScrollViewer.ExtentHeight</c> semantics).</summary>
     internal static double VerticalMaximumToExtentPixels(double maximum, int sensitivity, double viewportHeightPixels)

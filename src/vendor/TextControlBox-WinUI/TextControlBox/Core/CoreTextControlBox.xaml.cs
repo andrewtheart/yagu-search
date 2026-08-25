@@ -494,6 +494,7 @@ internal sealed partial class CoreTextControlBox : UserControl
     private void Canvas_Selection_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
         pointerActionsManager.PointerWheelAction(zoomManager, e);
+        e.Handled = true;
     }
     private void Canvas_LineNumber_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
