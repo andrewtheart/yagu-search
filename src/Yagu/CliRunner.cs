@@ -8,6 +8,8 @@ using Microsoft.Extensions.Logging;
 using Yagu.Models;
 using Yagu.Services;
 using Yagu.Services.Ai;
+using Yagu.Services.Cli;
+using Yagu.Services.Cli.MachineOutput;
 using Yagu.Services.Index;
 using Yagu.Services.Logging;
 using YaguLogLevel = Yagu.Services.LogLevel;
@@ -88,6 +90,21 @@ internal static partial class CliRunner
             return 0;
         }
 
+        // Machine mode (--output json) plus --settings-source / --non-interactive / --request-id are
+        // resolved BEFORE any command dispatches, so every command shares one versioned protocol and
+        // one exit-code map instead of a writer buried in the search path.
+        if (!TryConfigureMachineMode(args, out int configError))
+            return configError;
+
+        // --read <file> --lines <first>-<last>: emit a bounded line window and exit. Self-contained,
+        // never runs a search — the CLI counterpart of the GUI preview pane.
+        if (!string.IsNullOrWhiteSpace(args.ReadPath))
+            return RunRead(args);
+
+        // --replace-commit <id>: apply the edits a previous dry run recorded. Never re-runs the pattern.
+        if (!string.IsNullOrWhiteSpace(args.ReplaceCommitId))
+            return RunReplaceCommit(args.ReplaceCommitId!, args);
+
         // --calc: evaluate an inline calculator / unit-conversion expression and exit. Self-contained,
         // never runs a search — parity with the GUI search box's inline calculator banner.
         if (!string.IsNullOrWhiteSpace(args.CalcExpression))
@@ -96,18 +113,25 @@ internal static partial class CliRunner
         // Content-index management commands (build/status/rebuild/delete/clear/config) short-circuit the
         // search pipeline; they manage the persistent index and exit.
         if (args.IsIndexManagementCommand)
-            return RunIndexManagement(args);
+            return RunIndexManagementMachine(args);
 
         // --load-session short-circuits the entire search pipeline: just
         // read the file and re-emit results in grep-style format.
         if (!string.IsNullOrWhiteSpace(args.LoadSessionPath))
-            return RunLoadSession(args.LoadSessionPath!, vtEnabled);
+            return RunLoadSession(args.LoadSessionPath!, vtEnabled, args);
 
         // --semantic-batch: translate a file of natural-language queries through a single loaded model
         // and print one delimited --explain block per query (evaluation/benchmark harness). This is a
         // dry-run — it never executes a search — so it short-circuits the pipeline like --load-session.
         if (!string.IsNullOrWhiteSpace(args.SemanticBatch))
         {
+            // Its transcript goes to stdout, which machine mode owns for protocol frames only.
+            if (MachineMode)
+            {
+                return CompleteMachineRun(CliExitCode.InvalidInput, "unsupported-in-machine-mode",
+                    "--semantic-batch writes a human transcript to stdout, so it cannot be combined with --output json.");
+            }
+
             var batchSettings = LoadEffectiveSettings(args);
             return RunSemanticBatchAsync(args, batchSettings).GetAwaiter().GetResult();
         }
@@ -118,26 +142,37 @@ internal static partial class CliRunner
         {
             var semanticSettings = LoadEffectiveSettings(args);
             var (semCode, stop) = RunSemanticAsync(args, semanticSettings).GetAwaiter().GetResult();
-            if (stop) return semCode;
+            if (stop)
+            {
+                // Every terminal semantic path has to close the protocol stream. Returning the raw code
+                // leaves the bridge with no summary, which it reports as a crashed CLI rather than as the
+                // translation failure or the --explain dry run that actually happened.
+                return semCode == 0
+                    ? CompleteMachineRun(CliExitCode.Success)
+                    : CompleteMachineRun(CliExitCode.InvalidInput, "semantic-translation-failed",
+                        "the request could not be interpreted; see stderr for details.");
+            }
         }
 
         // An omitted --directory means "search all drives". A specified directory must exist.
         if (!string.IsNullOrWhiteSpace(args.Directory) && !Directory.Exists(args.Directory))
         {
             WriteError($"error: directory does not exist: {args.Directory}");
-            return 2;
+            return CompleteMachineRun(CliExitCode.InvalidInput, "directory-not-found",
+                $"directory does not exist: {args.Directory}");
         }
 
         if (string.IsNullOrWhiteSpace(args.Pattern))
         {
             WriteError("error: a search pattern is required (positional arg or --pattern).");
             WriteError("usage: Yagu.exe --cli --directory <path> PATTERN [options]");
-            return 2;
+            return CompleteMachineRun(CliExitCode.InvalidInput, "pattern-required",
+                "a search pattern is required (positional arg or --pattern).");
         }
 
         WarnIfNotAdmin(args);
 
-        if (vtEnabled)
+        if (vtEnabled && !NonInteractive)
             OfferEverythingSetupAsync().GetAwaiter().GetResult();
 
         var settingsService = ResolveSettingsService(args);
@@ -152,11 +187,15 @@ internal static partial class CliRunner
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
         LogService.InitFromSettings((YaguLogLevel)settings.LogLevelIndex, YaguLogLevel.Critical);
 
+        // Match-line trimming is a persisted user setting the GUI applies via MainViewModel. Without
+        // this the CLI silently used the built-in 500 regardless of what the user configured.
+        Helpers.LineTruncator.TruncatedLength = settings.LineTruncationLength;
+
         // Seed the OCR download consent gate from settings and register a console-based warning so
         // image-text (OCR) search never downloads the engine/models without explicit consent.
         Yagu.Services.Ocr.OcrDownloadGate.ConsentGranted = settings.OcrDownloadConsented;
         Yagu.Services.Ocr.OcrDownloadGate.PromptAsync =
-            requirement => Task.FromResult(ConfirmOcrDownloadOnConsole(requirement, args, vtEnabled));
+            requirement => Task.FromResult(ConfirmOcrDownloadOnConsole(requirement, args, vtEnabled && !NonInteractive));
 
         // Headless mode: never emit telemetry or surface the bug-report modal from the CLI, regardless
         // of persisted consent (those are interactive-app features only).
@@ -165,18 +204,22 @@ internal static partial class CliRunner
         // First-run interactive prompts that mirror the GUI startup chain (index onboarding, temp-file
         // location, Explorer context menu, telemetry consent, CPU-only AI warning, new-model alerts).
         // Each is gated by the SAME persisted setting as the GUI, so answering on either surface
-        // suppresses it on the other. No-ops when stdin is redirected (non-interactive/piped).
-        CliFirstRunPrompts.RunAsync(settings, settingsService).GetAwaiter().GetResult();
+        // suppresses it on the other. No-ops when stdin is redirected (non-interactive/piped), and hard
+        // suppressed by --non-interactive / machine mode, where a console read would deadlock the caller.
+        if (!NonInteractive)
+            CliFirstRunPrompts.RunAsync(settings, settingsService).GetAwaiter().GetResult();
 
         var perRootOptions = BuildPerRootSearchOptions(args, settings);
         if (perRootOptions.Count == 0)
         {
             WriteError("error: no drives are available to search.");
-            return 2;
+            return CompleteMachineRun(CliExitCode.InvalidInput, "no-searchable-roots",
+                "no drives are available to search.");
         }
 
-        PromptEverythingIndexCoverageAsync(perRootOptions, settings, settingsService)
-            .GetAwaiter().GetResult();
+        if (!NonInteractive)
+            PromptEverythingIndexCoverageAsync(perRootOptions, settings, settingsService)
+                .GetAwaiter().GetResult();
 
         return RunSearchAsync(perRootOptions, args, vtEnabled).GetAwaiter().GetResult();
     }
@@ -295,6 +338,12 @@ internal static partial class CliRunner
             return (2, true);
         }
 
+        if ((!result.Success || result.Plan is null) && SemanticQuerySalvage.TryBuildPlan(semanticText, out var salvagePlan))
+        {
+            WriteError("AI could not interpret the request; using a deterministic best guess.");
+            result = SemanticTranslationResult.Ok(salvagePlan, result.RawModelOutput ?? string.Empty);
+        }
+
         if (!result.Success || result.Plan is null)
         {
             if (args.Explain)
@@ -313,8 +362,16 @@ internal static partial class CliRunner
         var resolved = SemanticPlanApplier.Resolve(result.Plan, context);
         args.ApplySemanticOverlay(SemanticPlanApplier.ToOverlay(resolved));
 
+        // Machine mode reports the interpretation as a structured record and then runs the search in the
+        // SAME invocation. Re-running the CLI to get the plan separately would double the model load and
+        // resample, so the second run could plan differently from the one that produced the results.
+        WriteMachineSemanticPlan(args, resolved, translator.SelectedModelAlias);
+
         foreach (var w in resolved.Warnings)
+        {
             WriteError($"warning: {w}");
+            s_machine?.WriteWarning("semantic-plan", w);
+        }
 
         if (args.Explain)
         {
@@ -354,14 +411,16 @@ internal static partial class CliRunner
         if (!settings.SemanticSearchEnabled)
         {
             WriteError("error: semantic search is disabled (SemanticSearchEnabled = false in settings).");
-            return 2;
+            return CompleteMachineRun(CliExitCode.InvalidInput, "semantic-disabled",
+                "semantic search is disabled (SemanticSearchEnabled = false in settings).");
         }
 
         string batchPath = args.SemanticBatch!;
         if (!File.Exists(batchPath))
         {
             WriteError($"error: batch query file does not exist: {batchPath}");
-            return 2;
+            return CompleteMachineRun(CliExitCode.InvalidInput, "batch-file-not-found",
+                $"batch query file does not exist: {batchPath}");
         }
 
         var queries = File.ReadAllLines(batchPath)
@@ -371,7 +430,8 @@ internal static partial class CliRunner
         if (queries.Count == 0)
         {
             WriteError($"error: batch query file contains no queries: {batchPath}");
-            return 2;
+            return CompleteMachineRun(CliExitCode.InvalidInput, "batch-file-empty",
+                $"batch query file contains no queries: {batchPath}");
         }
 
         string? modelAlias = string.IsNullOrWhiteSpace(args.SemanticModel)
@@ -411,6 +471,11 @@ internal static partial class CliRunner
             try
             {
                 var result = await translator.TranslateAsync(query, context, progress, CancellationToken.None).ConfigureAwait(false);
+                if ((!result.Success || result.Plan is null) && SemanticQuerySalvage.TryBuildPlan(query, out var salvagePlan))
+                {
+                    WriteError("AI could not interpret the request; using a deterministic best guess.");
+                    result = SemanticTranslationResult.Ok(salvagePlan, result.RawModelOutput ?? string.Empty);
+                }
                 if (!result.Success || result.Plan is null)
                 {
                     o.WriteLine($"  error          : {result.Error ?? "could not interpret the request."}");
@@ -506,10 +571,11 @@ internal static partial class CliRunner
     private static async Task<SemanticModelSetup> RunModelQualificationCliAsync(
         FoundryLocalSemanticQueryTranslator translator, CliArgs args, AppSettings settings, CancellationToken ct)
     {
-        // A redirected/non-interactive stdin means we cannot prompt. The check is heavy (downloads + probes
-        // several models), so only run it automatically when the user opted in with --accept-model-download;
-        // otherwise fall back to Traditional.
-        bool interactive = !Console.IsInputRedirected;
+        // A redirected/non-interactive stdin — or an explicit --non-interactive / machine-mode run —
+        // means we cannot prompt. The check is heavy (downloads + probes several models), so only run it
+        // automatically when the user opted in with --accept-model-download; otherwise fall back to
+        // Traditional.
+        bool interactive = !Console.IsInputRedirected && !NonInteractive;
         if (!interactive && !args.AcceptModelDownload)
         {
             WriteError("Semantic search needs a one-time AI model check (first-time setup), but this console");
@@ -847,9 +913,14 @@ internal static partial class CliRunner
     }
 
     /// <summary>Prints the interpreted search parameters to stdout for an <c>--explain</c> dry-run.</summary>
+    /// <remarks>
+    /// In machine mode this goes to stderr instead. stdout is the protocol stream there, and this writer
+    /// is a different buffer over the same handle, so its lines would be spliced into a half-written
+    /// record. The interpretation is already reported structurally by <see cref="WriteMachineSemanticPlan"/>.
+    /// </remarks>
     private static void PrintSemanticExplanation(CliArgs args, ResolvedSearchPlan resolved)
     {
-        var o = Console.Out;
+        var o = MachineMode ? Console.Error : Console.Out;
         o.WriteLine("Semantic query interpreted as:");
         o.WriteLine($"  summary        : {SemanticPlanApplier.BuildExplanation(resolved)}");
         o.WriteLine($"  directory      : {args.Directory}");
@@ -1266,6 +1337,16 @@ internal static partial class CliRunner
     /// </summary>
     private static SettingsService ResolveSettingsService(CliArgs args)
     {
+        // 0. An explicit --settings-source pins the file. Machine callers use it so an editor-launched
+        // run can never silently inherit whichever workspace happened to be the working directory.
+        switch (s_settingsSource.Kind)
+        {
+            case CliSettingsSourceKind.Global:
+                return new SettingsService(SettingsService.ResolveInstanceSettingsPath());
+            case CliSettingsSourceKind.File when !string.IsNullOrWhiteSpace(s_settingsSource.Path):
+                return new SettingsService(s_settingsSource.Path!);
+        }
+
         // 1. Prefer a .yagu.json beside the current working directory.
         var cwdSettings = Path.Combine(Directory.GetCurrentDirectory(), LocalSettingsFileName);
         if (File.Exists(cwdSettings))
@@ -1416,10 +1497,25 @@ internal static partial class CliRunner
             ? new HashSet<string>(args.SkipExtensions, StringComparer.OrdinalIgnoreCase)
             : ParseSkipExtensions(s.SkipExtensions);
 
+        var searchMode = args.SearchMode ?? SearchMode.Both;
+        string queryPattern = args.Pattern!;
+
+        // Parity with the GUI: a bare glob in file-name mode is a file filter, not a name to match.
+        bool queryRouted = false;
+        if (FileNameGlobQuery.TryRoute(searchMode, useRegex, queryPattern, includeGlobs, out var routedGlobs))
+        {
+            includeGlobs = routedGlobs;
+            includeMode = FilterPatternMode.GlobPath;
+            queryPattern = FileNameGlobQuery.MatchAllPattern;
+            useRegex = true;
+            queryRouted = true;
+        }
+
         var searchOptions = new SearchOptions
         {
             Directory             = directoryOverride ?? args.Directory ?? string.Empty,
-            Query                 = args.Pattern!,
+            Query                 = queryPattern,
+            QueryRoutedToIncludeFilter = queryRouted,
             CaseSensitive         = caseSensitive,
             UseRegex              = useRegex,
             ExactMatch            = exactMatch,
@@ -1428,7 +1524,7 @@ internal static partial class CliRunner
             MaxMultilineBytes     = args.MaxMultilineBytes ?? SearchOptions.DefaultMaxMultilineBytes,
             MultilineEngine       = (MultilineEngineKind)(args.MultilineEngineIndex ?? 0),
             ContextLines          = contextLines,
-            SearchMode            = args.SearchMode ?? SearchMode.Both,
+            SearchMode            = searchMode,
             IncludeGlobs          = includeGlobs,
             ExcludeGlobs          = excludeGlobs,
             IncludeFilterMode     = includeMode,
@@ -1449,7 +1545,7 @@ internal static partial class CliRunner
                 DriveEnumerator.GetDriveTypeForPath(directoryOverride ?? args.Directory)),
             FileIoTimeoutSeconds  = fileIoTimeoutSeconds,
             UseContentIndex       = useContentIndex,
-            SearchOnlineOnlyFiles = s.SearchOnlineOnlyFiles,
+            SearchOnlineOnlyFiles = args.SearchOnlineOnlyFiles ?? s.SearchOnlineOnlyFiles,
             SearchHiddenFiles     = args.SearchHiddenFiles ?? s.SearchHiddenFiles,
             ObeyGitignore         = obeyGitignore,
             GitignoreTakesPrecedence = gitignorePrecedence,
@@ -1619,6 +1715,11 @@ internal static partial class CliRunner
         // native multiline engine or the managed fallback.
         bool streamingMultiline = options.Multiline && !needsCollection;
 
+        // Machine mode owns stdout: the native DirectOutputSink writes grep bytes straight from Rust's
+        // buffers, which cannot carry the JSON envelope, so it is disabled and every match is emitted
+        // through the bounded MachineOutputWriter instead.
+        bool machine = s_machine is not null;
+
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
@@ -1630,7 +1731,7 @@ internal static partial class CliRunner
         // per-match writes into block writes like a buffered stdout. Disabled while collecting
         // results for post-processing (sort/export/replace/group/save-session) and in multiline mode
         // (which streams through the managed writer instead).
-        Stream? directStream = (needsCollection || streamingMultiline) ? null : new BufferedStream(Console.OpenStandardOutput(), 1 << 17);
+        Stream? directStream = (needsCollection || streamingMultiline || machine) ? null : new BufferedStream(Console.OpenStandardOutput(), 1 << 17);
         object? directOutputLock = directStream is null ? null : new object();
         foreach (var rootOptions in perRootOptions)
         {
@@ -1639,15 +1740,17 @@ internal static partial class CliRunner
             rootOptions.DirectOutputLock = directOutputLock;
         }
 
-        var progress = vtEnabled ? new ProgressLine(useColor) : null;
+        var progress = vtEnabled && !machine ? new ProgressLine(useColor) : null;
         var collectedResults = needsCollection ? new List<SearchResult>() : null;
-        GrepStyleWriter? multilineWriter = streamingMultiline
+        GrepStyleWriter? multilineWriter = streamingMultiline && !machine
             ? new GrepStyleWriter(new StreamWriter(new BufferedStream(Console.OpenStandardOutput(), 1 << 17), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)) { AutoFlush = false }, useColor)
             : null;
         long filesScanned = 0;
         long bytesScanned = 0;
         DateTime searchStarted = DateTime.UtcNow;
         bool memoryPressureWarningShown = false;
+        DateTime lastMachineProgress = DateTime.MinValue;
+        ReplaceOutcome? replaceOutcome = null;
 
         try
         {
@@ -1657,11 +1760,13 @@ internal static partial class CliRunner
                 {
                     case SearchEvent.Progress p:
                         progress?.Update(p.Snapshot);
+                        EmitMachineProgress(p.Snapshot, ref lastMachineProgress);
                         break;
 
                     case SearchEvent.SearchError e:
                         progress?.Hide();
                         WriteError($"error: {e.Message}", useColor);
+                        s_machine?.WriteWarning("search-error", e.Message);
                         progress?.Show();
                         break;
 
@@ -1675,6 +1780,7 @@ internal static partial class CliRunner
                             memoryPressureWarningShown = true;
                             progress?.Hide();
                             WriteError("warning: memory pressure detected; search continues in degraded mode.", useColor);
+                            s_machine?.WriteWarning("memory-pressure", "memory pressure detected; search continues in degraded mode.");
                             progress?.Show();
                         }
                         break;
@@ -1682,6 +1788,7 @@ internal static partial class CliRunner
                     case SearchEvent.Fallback f:
                         progress?.Hide();
                         WriteError($"info: file-lister fallback - {f.Reason}", useColor);
+                        s_machine?.WriteWarning("file-lister-fallback", f.Reason);
                         progress?.Show();
                         break;
 
@@ -1691,7 +1798,8 @@ internal static partial class CliRunner
                         bytesScanned = c.Summary.BytesScanned;
                         multilineWriter?.Flush();
                         directStream?.Flush();
-                        WriteCompletionSummary(c.Summary, useColor);
+                        if (!machine)
+                            WriteCompletionSummary(c.Summary, useColor);
 
                         if (needsCollection && collectedResults != null)
                         {
@@ -1702,7 +1810,11 @@ internal static partial class CliRunner
 
                             // Replace in files (replace prints its own per-file summary).
                             if (replacing)
-                                await RunReplaceAsync(sortedResults, options, args, useColor);
+                                replaceOutcome = await RunReplaceAsync(sortedResults, options, args, useColor);
+                            else if (machine)
+                                // Machine mode renders every collection mode through the bounded writer,
+                                // so grouping/sorting affects ORDER only — never the envelope shape.
+                                WriteMachineResults(sortedResults);
                             else if (grouping)
                                 // Grouping waits for the whole search, then renders grouped
                                 // (and, within each group, sorted) — never streamed live.
@@ -1739,8 +1851,19 @@ internal static partial class CliRunner
                                         MultilineDotAll: options.MultilineDotAll));
                         }
 
-                        if (c.Summary.Cancelled) return 130;
-                        return c.Summary.TotalMatches > 0 ? 0 : 1;
+                        if (c.Summary.Cancelled)
+                            return CompleteSearchMachineRun(CliExitCode.Cancelled, c.Summary, replaceOutcome);
+
+                        // A replace that could not rewrite every file it matched is a PARTIAL failure, not
+                        // a success: the historical code accumulated those errors without affecting the
+                        // exit code at all, so a caller could not tell.
+                        if (replaceOutcome is { Failed: > 0 })
+                            return CompleteSearchMachineRun(CliExitCode.PartialFailure, c.Summary, replaceOutcome);
+
+                        return CompleteSearchMachineRun(
+                            c.Summary.TotalMatches > 0 ? CliExitCode.Success : CliExitCode.NoResults,
+                            c.Summary,
+                            replaceOutcome);
                 }
 
                 // Collect results for post-processing
@@ -1750,6 +1873,24 @@ internal static partial class CliRunner
                         collectedResults!.Add(m.Result);
                     else if (ev is SearchEvent.MatchBatch mb)
                         collectedResults!.AddRange(mb.Results);
+                }
+                else if (machine)
+                {
+                    // One bounded page per invocation: once the writer's budget is spent there is nothing
+                    // more this response can carry, so stop the scan rather than burn IO on discarded work.
+                    if (ev is SearchEvent.Match m && !WriteConfinedMatch(m.Result))
+                        await cts.CancelAsync();
+                    else if (ev is SearchEvent.MatchBatch mb)
+                    {
+                        foreach (var r in mb.Results)
+                        {
+                            if (!WriteConfinedMatch(r))
+                            {
+                                await cts.CancelAsync();
+                                break;
+                            }
+                        }
+                    }
                 }
                 else if (multilineWriter != null)
                 {
@@ -1766,19 +1907,120 @@ internal static partial class CliRunner
         catch (OperationCanceledException)
         {
             progress?.Dismiss();
+
+            // A machine run that filled its page cancels itself deliberately; that is a completed
+            // bounded response, not a user cancellation.
+            if (machine && s_machine!.Truncated)
+                return CompleteSearchMachineRun(CliExitCode.Success, summary: null);
+
             WriteError("search cancelled.");
-            return 130;
+            return CompleteSearchMachineRun(CliExitCode.Cancelled, summary: null);
         }
         catch (IOException)
         {
             // Broken pipe — consumer closed the pipe before we finished.
             // This is normal when users pipe to head/Select-Object -First N.
             progress?.Dismiss();
-            return 0;
+            return CliExitCode.Success;
         }
 
         progress?.Dismiss();
-        return 1;
+        return CompleteSearchMachineRun(CliExitCode.NoResults, summary: null);
+    }
+
+    /// <summary>Writes a collected result page through the machine writer, stopping at the budget.</summary>
+    private static void WriteMachineResults(IReadOnlyList<SearchResult> results)
+    {
+        foreach (var result in results)
+        {
+            if (!WriteConfinedMatch(result))
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Emits the closing machine <c>summary</c> for a search, carrying the scan statistics a client
+    /// needs to reason about coverage. <c>totalKnown</c> is always false: each invocation is a fresh
+    /// bounded scan, so no stable global total exists.
+    /// </summary>
+    private static int CompleteSearchMachineRun(int exitCode, SearchSummary? summary, ReplaceOutcome? replace = null)
+    {
+        if (s_machine is null)
+            return exitCode;
+
+        s_machine.WriteSummary(exitCode, w =>
+        {
+            // Files this run wrote itself. Reported here rather than only as a result record because a
+            // summary is a control record: it is exempt from the payload ceiling, so the caller always
+            // learns whether the report or session actually landed on disk.
+            WriteOutcome(w, "export", s_exportOutcome);
+            WriteOutcome(w, "session", s_sessionOutcome);
+
+            if (replace is not null)
+            {
+                w.WriteStartObject("replace");
+
+                // First, and always present: filesChanged/totalReplacements count files that WOULD change
+                // on a dry run, and nothing distinguished the two runs, so a client could read a preview as
+                // a completed rewrite.
+                w.WriteBoolean("dryRun", replace.DryRun);
+                w.WriteNumber("filesAttempted", replace.FilesAttempted);
+                w.WriteNumber("filesChanged", replace.FilesChanged);
+                w.WriteNumber("filesUnchanged", Math.Max(0, replace.FilesAttempted - replace.FilesChanged - replace.Failed));
+                w.WriteNumber("archivesSkipped", replace.ArchivesSkipped);
+                w.WriteNumber("filesFailed", replace.Failed);
+                w.WriteNumber("totalReplacements", replace.TotalReplacements);
+                w.WriteEndObject();
+            }
+
+            if (summary is null)
+                return;
+
+            w.WriteNumber("filesScanned", summary.FilesScanned);
+            w.WriteNumber("filesSkipped", summary.FilesSkipped);
+            w.WriteNumber("filesWithMatches", summary.FilesWithMatches);
+            w.WriteNumber("bytesScanned", summary.BytesScanned);
+            w.WriteNumber("totalMatches", summary.TotalMatches);
+            w.WriteNumber("elapsedSeconds", Math.Round(summary.Elapsed.TotalSeconds, 3));
+            w.WriteBoolean("engineTruncated", summary.Truncated);
+            w.WriteBoolean("cancelled", summary.Cancelled);
+        });
+        s_machine.Flush();
+        return exitCode;
+
+        static void WriteOutcome(System.Text.Json.Utf8JsonWriter w, string name, MachineWriteOutcome? outcome)
+        {
+            if (outcome is null)
+                return;
+
+            w.WriteStartObject(name);
+            w.WriteString("path", outcome.Path);
+            w.WriteBoolean("written", outcome.Written);
+            if (outcome.Failure is not null)
+                w.WriteString("error", outcome.Failure);
+            w.WriteEndObject();
+        }
+    }
+
+    /// <summary>
+    /// Emits a throttled machine progress heartbeat. Progress records are never counted against the
+    /// payload budget, so they are rate-limited instead — a drive-scale scan raises thousands.
+    /// </summary>
+    private static void EmitMachineProgress(SearchProgress snapshot, ref DateTime lastEmitted)
+    {
+        if (s_machine is null)
+            return;
+
+        var now = DateTime.UtcNow;
+        if (now - lastEmitted < TimeSpan.FromMilliseconds(500))
+            return;
+
+        lastEmitted = now;
+        s_machine.WriteProgress(
+            snapshot.FilesScanned,
+            snapshot.BytesScanned,
+            snapshot.MatchesFound,
+            snapshot.TotalFiles > 0 ? snapshot.FilesScanned * 100.0 / snapshot.TotalFiles : null);
     }
 
     private const string Orange = "\x1B[38;5;208m";
@@ -1883,8 +2125,32 @@ internal static partial class CliRunner
         long filesScanned,
         long bytesScanned)
     {
-        if (string.IsNullOrWhiteSpace(args.ExportPath) || results.Count == 0)
+        if (string.IsNullOrWhiteSpace(args.ExportPath))
             return;
+
+        // A junction inside the search root yields matches whose real location is outside it. The report
+        // is written HERE, so filtering downstream would be too late: the out-of-root path and its
+        // matching text would already be in the file.
+        if (s_confinement.IsActive)
+        {
+            int before = results.Count;
+            results = [.. results.Where(r => s_confinement.Allows(r.FilePath))];
+            if (results.Count != before)
+            {
+                s_machine?.WriteWarning("export-confined",
+                    $"{before - results.Count} match(es) were withheld from the report because they resolve outside the allowed roots.");
+            }
+        }
+
+        // A search with no matches writes NO file. Saying so is not cosmetic: a caller (the MCP export
+        // tool especially) otherwise reports "wrote the report" for a path that does not exist.
+        if (results.Count == 0)
+        {
+            WriteError($"No matches, so no report was written to {args.ExportPath}");
+            s_machine?.WriteWarning("export-empty",
+                $"no matches, so no report was written to {args.ExportPath}.");
+            return;
+        }
 
         var format = args.ExportFormat switch
         {
@@ -1921,23 +2187,63 @@ internal static partial class CliRunner
         if (!string.IsNullOrEmpty(exportDir) && !Directory.Exists(exportDir))
             Directory.CreateDirectory(exportDir);
 
-        await using var fs = new FileStream(args.ExportPath, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous);
-        using var w = new StreamWriter(fs, new UTF8Encoding(false), bufferSize: 64 * 1024, leaveOpen: false);
-
-        switch (format)
+        // Written beside the destination and moved into place. Opening the destination directly means a
+        // disk-full or mid-write failure has already truncated the previous report, and the caller is
+        // told nothing was written while a partial file sits there.
+        //
+        // Unique and created exclusively, matching the commit path: a fixed "<path>.yagu-export-tmp" is
+        // a name anyone can predict, so an ordinary file planted there would be truncated and then
+        // deleted by the cleanup below, and a link there would carry the whole report to whatever it
+        // points at. CreateNew fails rather than following either.
+        string exportTemp = args.ExportPath + $".{Guid.NewGuid():n}.yagu-export-tmp";
+        try
         {
-            case ReportFormat.Json:
-                await ReportExportService.WriteJsonReportAsync(w, query, groups, stats, exportOptions).ConfigureAwait(false);
-                break;
-            case ReportFormat.Csv:
-                await ReportExportService.WriteCsvReportAsync(w, query, groups, exportOptions).ConfigureAwait(false);
-                break;
-            default:
-                await HtmlReportExportService.WriteMultiFileReportAsync(w, query, groups, stats).ConfigureAwait(false);
-                break;
+            await using (var fs = new FileStream(exportTemp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous))
+            using (var w = new StreamWriter(fs, new UTF8Encoding(false), bufferSize: 64 * 1024, leaveOpen: false))
+            {
+                switch (format)
+                {
+                    case ReportFormat.Json:
+                        await ReportExportService.WriteJsonReportAsync(w, query, groups, stats, exportOptions).ConfigureAwait(false);
+                        break;
+                    case ReportFormat.Csv:
+                        await ReportExportService.WriteCsvReportAsync(w, query, groups, exportOptions).ConfigureAwait(false);
+                        break;
+                    default:
+                        await HtmlReportExportService.WriteMultiFileReportAsync(w, query, groups, stats).ConfigureAwait(false);
+                        break;
+                }
+            }
+
+            File.Move(exportTemp, args.ExportPath, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            try { if (File.Exists(exportTemp)) File.Delete(exportTemp); } catch (IOException) { }
+            WriteError($"error: failed to write report to {args.ExportPath}: {ex.Message}");
+            s_exportOutcome = new MachineWriteOutcome(false, args.ExportPath!, ex.Message);
+            s_machine?.WriteWarning("export-failed", $"{args.ExportPath}: {ex.Message}");
+            return;
         }
 
         WriteError($"Exported {format.ToString().ToUpperInvariant()} report ({groups.Count:N0} files, {results.Count:N0} matches) to {args.ExportPath}");
+
+        // Recorded for the CLOSING SUMMARY as well as the record below. The summary is a control record
+        // and bypasses the payload ceiling; this result record does not, so a full page of matches can
+        // consume the budget and leave the caller with a report on disk and no confirmation it exists.
+        s_exportOutcome = new MachineWriteOutcome(true, args.ExportPath!, null);
+
+        s_machine?.WriteResult(w =>
+        {
+            w.WriteString("exportPath", args.ExportPath);
+            w.WriteString("format", format.ToString().ToLowerInvariant());
+            w.WriteNumber("files", groups.Count);
+            w.WriteNumber("matches", results.Count);
+            // The engine applies its own ceiling on top of --max-results, so a caller cannot tell a
+            // complete file from one the engine shortened without being told the effective limit.
+            w.WriteNumber("maxResultsApplied", Math.Min(args.MaxResults ?? int.MaxValue, SearchOptions.MaxResultsCeiling));
+            w.WriteBoolean("written", true);
+        });
     }
 
     private static ReportFormat InferFormatFromExtension(string path)
@@ -1970,22 +2276,62 @@ internal static partial class CliRunner
     {
         try
         {
+            // Same reason as the export: the session file is written here, so an out-of-root match would
+            // be stored in it and re-emitted by every later --load-session.
+            if (s_confinement.IsActive)
+            {
+                int before = results.Count;
+                results = [.. results.Where(r => s_confinement.Allows(r.FilePath))];
+                if (results.Count != before)
+                {
+                    s_machine?.WriteWarning("session-confined",
+                        $"{before - results.Count} match(es) were withheld from the session because they resolve outside the allowed roots.");
+                }
+            }
+
             var stats = new SessionFileService.SessionStats(
                 searchStarted, elapsed, filesScanned, bytesScanned, matchesFound);
 
-            await using var fs = new FileStream(
-                path, FileMode.Create, FileAccess.Write, FileShare.None,
-                bufferSize: 64 * 1024, useAsync: true);
+            // Same reason as the export: a failed write must not destroy the previous session file, and
+            // the temp name must be unpredictable and exclusively created so it cannot be pre-planted.
+            string sessionTemp = path + $".{Guid.NewGuid():n}.yagu-session-tmp";
+            await using (var fs = new FileStream(
+                sessionTemp, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                bufferSize: 64 * 1024, useAsync: true))
+            {
+                await SessionFileService.WriteAsync(
+                    fs, query ?? string.Empty, searchRoot ?? string.Empty, stats, results,
+                    searchOptions: searchOptions).ConfigureAwait(false);
+            }
 
-            await SessionFileService.WriteAsync(
-                fs, query ?? string.Empty, searchRoot ?? string.Empty, stats, results,
-                searchOptions: searchOptions).ConfigureAwait(false);
+            try
+            {
+                File.Move(sessionTemp, path, overwrite: true);
+            }
+            catch
+            {
+                try { if (File.Exists(sessionTemp)) File.Delete(sessionTemp); } catch (IOException) { }
+                throw;
+            }
 
             WriteError($"Saved session ({results.Count:N0} matches) to {path}", useColor);
+
+            // Same reason as the export: the confirmation record competes with matches for the payload
+            // budget, so the authoritative statement goes in the budget-exempt closing summary.
+            s_sessionOutcome = new MachineWriteOutcome(true, path, null);
+
+            s_machine?.WriteResult(w =>
+            {
+                w.WriteString("sessionPath", path);
+                w.WriteNumber("matches", results.Count);
+                w.WriteBoolean("written", true);
+            });
         }
         catch (Exception ex)
         {
             WriteError($"error: failed to save session to {path}: {ex.Message}", useColor);
+            s_sessionOutcome = new MachineWriteOutcome(false, path, ex.Message);
+            s_machine?.WriteWarning("session-write-failed", $"{path}: {ex.Message}");
         }
     }
 
@@ -1997,10 +2343,24 @@ internal static partial class CliRunner
         {
             WriteError($"error: not a recognizable expression: {expression}");
             WriteError("usage: Yagu.exe --cli --calc \"2 + 2\"   or   --calc \"5 km to miles\"");
-            return 2;
+            return CompleteMachineRun(CliExitCode.InvalidInput, "not-an-expression",
+                $"not a recognizable expression: {expression}");
         }
+
+        if (s_machine is not null)
+        {
+            s_machine.WriteResult(w =>
+            {
+                w.WriteString("expression", expression);
+                w.WriteString("display", result.Display);
+                w.WriteString("value", result.Value);
+                w.WriteString("kind", result.Kind.ToString().ToLowerInvariant());
+            });
+            return CompleteMachineRun(CliExitCode.Success);
+        }
+
         Console.Out.WriteLine(result.Display);
-        return 0;
+        return CliExitCode.Success;
     }
 
     // -----------------------------------------------------------------------
@@ -2515,19 +2875,29 @@ internal static partial class CliRunner
         }
     }
 
-    private static int RunLoadSession(string path, bool vtEnabled)
+    /// <summary>
+    /// Re-emits a saved session. Honors the caller's output mode and result limits: the historical
+    /// version took only a path plus color and streamed every stored result through the grep writer,
+    /// which a bounded machine caller cannot use.
+    /// </summary>
+    private static int RunLoadSession(string path, bool vtEnabled, CliArgs args)
     {
         bool useColor = vtEnabled;
 
         if (!File.Exists(path))
         {
             WriteError($"error: session file not found: {path}", useColor);
-            return 2;
+            return CompleteMachineRun(CliExitCode.InvalidInput, "session-not-found", $"session file not found: {path}");
         }
 
+        // A session can hold millions of stored results, so the same ceilings a live search honors
+        // apply here: --max-results, and in machine mode the response budget.
+        int limit = args.MaxResults is > 0 ? args.MaxResults.Value : int.MaxValue;
+
         SessionFileService.SessionHeader? header = null;
-        var writer = new GrepStyleWriter(Console.Out, useColor);
+        var writer = s_machine is null ? new GrepStyleWriter(Console.Out, useColor) : null;
         int emitted = 0;
+        bool limitReached = false;
 
         try
         {
@@ -2543,36 +2913,70 @@ internal static partial class CliRunner
                 {
                     foreach (var r in batch)
                     {
-                        writer.Add(r);
+                        if (limitReached)
+                            break;
+
+                        if (emitted >= limit)
+                        {
+                            limitReached = true;
+                            break;
+                        }
+
+                        if (writer is not null)
+                            writer.Add(r);
+                        else if (!WriteConfinedMatch(r))
+                        {
+                            limitReached = true;
+                            break;
+                        }
+
                         emitted++;
                     }
                     return Task.CompletedTask;
                 }).GetAwaiter().GetResult();
 
-            writer.Flush();
+            writer?.Flush();
         }
         catch (InvalidDataException ex)
         {
             WriteError($"error: {ex.Message}", useColor);
-            return 2;
+            return CompleteMachineRun(CliExitCode.InvalidInput, "invalid-session", ex.Message);
         }
         catch (Exception ex)
         {
             WriteError($"error: failed to load session: {ex.Message}", useColor);
-            return 2;
+            return CompleteMachineRun(CliExitCode.InternalFailure, "session-read-failed", ex.Message);
         }
 
         var query = header?.Query ?? string.Empty;
         var root = header?.SearchRoot ?? string.Empty;
         var savedUtc = header?.SavedUtc ?? DateTime.UtcNow;
+        int exitCode = emitted > 0 ? CliExitCode.Success : CliExitCode.NoResults;
+
+        if (s_machine is not null)
+        {
+            s_machine.WriteSummary(exitCode, w =>
+            {
+                w.WriteString("sessionPath", path);
+                w.WriteString("query", query);
+                w.WriteString("searchRoot", root);
+                w.WriteString("savedUtc", savedUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+                w.WriteBoolean("limitReached", limitReached);
+            });
+            s_machine.Flush();
+            return exitCode;
+        }
+
         WriteError($"\nLoaded {emitted:N0} match(es) from session '{Path.GetFileName(path)}'", useColor);
         if (!string.IsNullOrEmpty(query))
             WriteError($"  query: {query}", useColor);
         if (!string.IsNullOrEmpty(root))
             WriteError($"  root:  {root}", useColor);
         WriteError($"  saved: {savedUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}", useColor);
+        if (limitReached)
+            WriteError($"  note:  output stopped at --max-results {limit:N0}", useColor);
 
-        return emitted > 0 ? 0 : 1;
+        return exitCode;
     }
 
     // -----------------------------------------------------------------------
@@ -2784,11 +3188,42 @@ internal static partial class CliRunner
     // Replace in files
     // -----------------------------------------------------------------------
 
-    private static async Task RunReplaceAsync(IReadOnlyList<SearchResult> results, SearchOptions options, CliArgs args, bool useColor)
+    /// <summary>Per-run replace tallies, kept separate so a caller can tell "nothing matched" from "some
+    /// files could not be rewritten".</summary>
+    /// <param name="FilesChanged">
+    /// Files with at least one replacement. When <paramref name="DryRun"/> is true these are the files
+    /// that WOULD change — nothing was written — so a machine consumer must read both fields together.
+    /// </param>
+    private sealed record ReplaceOutcome(
+        int FilesAttempted,
+        int FilesChanged,
+        int TotalReplacements,
+        int ArchivesSkipped,
+        int Failed,
+        bool DryRun = false);
+
+    private static async Task<ReplaceOutcome> RunReplaceAsync(IReadOnlyList<SearchResult> results, SearchOptions options, CliArgs args, bool useColor)
     {
         var replacement = args.ReplaceText!;
         bool dryRun = args.ReplaceDryRun;
         bool noBackup = args.ReplaceNoBackup;
+
+        // A routed file-name glob left a synthetic match-all in Query. It selected WHICH files to
+        // report; it is not the text the user asked to replace. Reusing it here would rewrite every
+        // character of every matched file ("hello" -> "XXXXX" for --replace X), so refuse instead:
+        // there is no replacement matcher to recover, because the user never typed a content term.
+        if (options.QueryRoutedToIncludeFilter)
+        {
+            WriteError(
+                "error: a file-name glob selects files, it does not match text inside them, so there is "
+                + "nothing to replace. Pass the text to replace as the query and the glob as --glob.",
+                useColor);
+            s_machine?.WriteError("replace-filename-glob",
+                "a file-name glob selects files rather than text inside them; pass the text to replace "
+                + "as the query and the glob as --glob.",
+                CliExitCode.InvalidInput);
+            return new ReplaceOutcome(0, 0, 0, 0, Failed: 1, DryRun: dryRun);
+        }
 
         // Build a matcher that mirrors the search semantics exactly so replace
         // touches precisely what the search matched:
@@ -2811,7 +3246,8 @@ internal static partial class CliRunner
         catch (ArgumentException ex)
         {
             WriteError($"error: invalid replace pattern '{options.Query}': {ex.Message}", useColor);
-            return;
+            s_machine?.WriteError("invalid-replace-pattern", ex.Message, CliExitCode.InvalidInput);
+            return new ReplaceOutcome(0, 0, 0, 0, Failed: 1, DryRun: dryRun);
         }
 
         // The replacement is always literal text — return it verbatim from the
@@ -2830,18 +3266,37 @@ internal static partial class CliRunner
             .Where(p => !ZipArchiveSearcher.IsArchivePath(p))
             .ToList();
 
+        // Never rewrite a file that only appears inside the root through a link. This also bounds the
+        // recorded commit plan, so a later --replace-commit cannot touch a linked-away file.
+        if (s_confinement.IsActive)
+        {
+            int before = filePaths.Count;
+            filePaths = [.. filePaths.Where(s_confinement.Allows)];
+            if (filePaths.Count != before)
+            {
+                WriteError($"note: {before - filePaths.Count:N0} file(s) skipped because they resolve outside the allowed roots.", useColor);
+                s_machine?.WriteWarning("replace-confined",
+                    $"{before - filePaths.Count} file(s) were skipped because they resolve outside the allowed roots.");
+            }
+        }
+
         if (archiveSkipped > 0)
             WriteError($"note: {archiveSkipped:N0} archive file(s) skipped (archives are read-only).", useColor);
 
         if (filePaths.Count == 0)
         {
             WriteError("No files to replace in.", useColor);
-            return;
+            return new ReplaceOutcome(0, 0, 0, archiveSkipped, Failed: 0, DryRun: dryRun);
         }
 
         int totalReplacements = 0;
         int filesModified = 0;
         int errors = 0;
+
+        // A machine-mode dry run records exactly what it would do, so a later commit can replay those
+        // edits instead of re-running the pattern over content that may have moved on since.
+        bool recordPlan = dryRun && MachineMode && LoadEffectiveSettings(args).McpAllowReplaceWrites;
+        var plannedFiles = recordPlan ? new List<Yagu.Services.Mcp.McpReplaceFilePlan>() : null;
 
         foreach (var path in filePaths)
         {
@@ -2849,32 +3304,44 @@ internal static partial class CliRunner
 
             try
             {
-                Encoding encoding;
+                // ONE snapshot. The bytes that get hashed, decoded, and edited must be the same bytes:
+                // re-opening the file to hash it after reading its text lets a concurrent writer swap
+                // the content in between, so the plan would record offsets computed from content the
+                // hash never covered — and the commit would splice them into a file nobody reviewed.
+                byte[] rawBytes = ReadFileSnapshot(path, out long lastWriteUtcTicks);
+
+                Encoding encoding = Helpers.EncodingDetector.DetectEncoding(rawBytes);
+                if (encoding is UTF8Encoding)
+                    encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+
                 string original;
-                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
-                           FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan))
+                using (var buffer = new MemoryStream(rawBytes, writable: false))
+                using (var reader = new StreamReader(buffer, encoding, detectEncodingFromByteOrderMarks: true))
                 {
-                    encoding = Helpers.EncodingDetector.DetectEncoding(stream);
-                    if (encoding is UTF8Encoding)
-                        encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
-                    using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
                     original = await reader.ReadToEndAsync().ConfigureAwait(false);
                     encoding = reader.CurrentEncoding;
                 }
 
                 int replaceCount = 0;
                 string replaced;
+                var edits = recordPlan ? new List<Yagu.Services.Mcp.McpReplaceEdit>() : null;
                 if (options.Multiline)
                 {
                     // Multiline replace maps each cross-line match span back to the ORIGINAL buffer via
                     // the LF-shadow offset map and splices in the replacement (§3/§6). We must NOT call
                     // regex.Replace(original) — the regex ran over the LF shadow, so a `foo$` hit found
                     // during search would not replace in `foo\r\n`.
-                    replaced = ReplaceMultiline(regex, original, Eval, out replaceCount);
+                    replaced = ReplaceMultiline(regex, original, Eval, out replaceCount, edits);
                 }
                 else
                 {
-                    replaced = regex.Replace(original, m => { replaceCount++; return Eval(m); });
+                    replaced = regex.Replace(original, m =>
+                    {
+                        replaceCount++;
+                        string value = Eval(m);
+                        edits?.Add(new Yagu.Services.Mcp.McpReplaceEdit(m.Index, m.Length, value));
+                        return value;
+                    });
                 }
 
                 if (replaceCount == 0) continue;
@@ -2885,6 +3352,19 @@ internal static partial class CliRunner
                 if (dryRun)
                 {
                     WriteError($"  {path}: {replaceCount} replacement(s) (dry run)", useColor);
+                    WriteMachineReplacePreview(path, encoding, replaceCount, original, replaced, dryRun: true);
+
+                    if (plannedFiles is not null && edits is not null)
+                    {
+                        plannedFiles.Add(new Yagu.Services.Mcp.McpReplaceFilePlan(
+                            path,
+                            encoding.WebName,
+                            Yagu.Services.Mcp.McpReplaceCommitPlan.HashBytes(rawBytes),
+                            rawBytes.LongLength,
+                            lastWriteUtcTicks,
+                            replaceCount,
+                            edits));
+                    }
                     continue;
                 }
 
@@ -2904,11 +3384,13 @@ internal static partial class CliRunner
 
                 await File.WriteAllTextAsync(path, replaced, encoding).ConfigureAwait(false);
                 WriteError($"  {path}: {replaceCount} replacement(s)", useColor);
+                WriteMachineReplacePreview(path, encoding, replaceCount, original, replaced, dryRun: false);
             }
             catch (Exception ex)
             {
                 errors++;
                 WriteError($"  error: {path}: {ex.Message}", useColor);
+                s_machine?.WriteWarning("replace-failed", $"{path}: {ex.Message}");
             }
         }
 
@@ -2917,6 +3399,160 @@ internal static partial class CliRunner
         WriteError($"\nReplaced {totalReplacements:N0} occurrence(s) in {filesModified:N0} file(s){mode}.", useColor);
         if (errors > 0)
             WriteError($"  {errors} file(s) had errors.", useColor);
+
+        EmitReplaceCommitPlan(plannedFiles, options, replacement);
+
+        return new ReplaceOutcome(filePaths.Count, filesModified, totalReplacements, archiveSkipped, errors, DryRun: dryRun);
+    }
+
+    /// <summary>
+    /// Stores the previewed edits and tells the caller the id it can commit them with.
+    /// </summary>
+    /// <remarks>
+    /// Emitted only when the user has enabled replacement writes. Without that setting a preview stays
+    /// exactly what it has always been — a report — and there is nothing to commit.
+    /// </remarks>
+    private static void EmitReplaceCommitPlan(
+        List<Yagu.Services.Mcp.McpReplaceFilePlan>? plannedFiles, SearchOptions options, string replacement)
+    {
+        if (plannedFiles is null || plannedFiles.Count == 0 || s_machine is null)
+            return;
+
+        // A preview record refused by the response ceiling means the caller never saw that file, but the
+        // plan still contains it. Issuing a commit id here would let it write a file nobody reviewed and
+        // that the server never re-authorized, since the server rebuilds commit scope from what it saw.
+        if (s_replacePreviewTruncated)
+        {
+            s_machine.WriteWarning("commit-plan-incomplete",
+                "the preview exceeded the response limit, so no commit id was issued. Narrow the scope, or raise "
+                + "Settings > MCP Server > Response Limits, and preview again.");
+            return;
+        }
+
+        Yagu.Services.Mcp.McpReplaceCommitPlan.PurgeExpired(
+            DateTimeOffset.UtcNow,
+            Yagu.Services.Mcp.McpReplaceCommitPlan.PendingDirectory);
+
+        var now = DateTimeOffset.UtcNow;
+        var plan = new Yagu.Services.Mcp.McpReplaceCommitPlan(
+            Yagu.Services.Mcp.McpReplaceCommitPlan.NewId(),
+            now,
+            now + Yagu.Services.Mcp.McpReplaceCommitPlan.Lifetime,
+            options.Query,
+            replacement,
+            options.UseRegex,
+            options.CaseSensitive,
+            options.ExactMatch,
+            options.Multiline,
+            plannedFiles);
+
+        if (plan.Save(Yagu.Services.Mcp.McpReplaceCommitPlan.PendingDirectory) is null)
+        {
+            s_machine.WriteWarning("commit-plan-unavailable", "the previewed edits could not be stored, so they cannot be committed.");
+            return;
+        }
+
+        s_machine.WriteResult(w =>
+        {
+            w.WriteString("commitId", plan.Id);
+            w.WriteString("commitExpiresUtc", plan.ExpiresUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+            w.WriteNumber("commitFiles", plannedFiles.Count);
+        });
+    }
+
+    /// <summary>
+    /// Emits a bounded structured preview of one file's edit: the counts plus a sample of the lines that
+    /// actually differ. The historical output was a bare replacement count, which is not enough for a
+    /// caller to judge whether the edit is the one it intended.
+    /// </summary>
+    private static void WriteMachineReplacePreview(
+        string path, Encoding encoding, int replaceCount, string original, string replaced, bool dryRun)
+    {
+        if (s_machine is null)
+            return;
+
+        var budget = s_budget;
+        List<(int Line, string Before, string After)> changes =
+            BuildBoundedLineDiff(original, replaced, budget.MaxContextLines, out bool moreChanges);
+
+        bool emitted = s_machine.WriteResult(w =>
+        {
+            w.WriteString("path", path);
+            w.WriteString("encoding", encoding.WebName);
+            w.WriteNumber("replacements", replaceCount);
+            w.WriteBoolean("dryRun", dryRun);
+
+            w.WriteStartArray("changes");
+            foreach (var (line, before, after) in changes)
+            {
+                w.WriteStartObject();
+                w.WriteNumber("line", line);
+                w.WriteString("before", MachineOutputBudget.TruncateUtf8(before, budget.MaxLineBytes, out _, out _));
+                w.WriteString("after", MachineOutputBudget.TruncateUtf8(after, budget.MaxLineBytes, out _, out _));
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+
+            if (moreChanges)
+                w.WriteBoolean("changesTruncated", true);
+        });
+
+        if (!emitted)
+            s_replacePreviewTruncated = true;
+    }
+
+    /// <summary>
+    /// Compares the two buffers line by line and returns at most <paramref name="maxChanges"/> differing
+    /// pairs. A replacement containing newlines shifts subsequent lines, so this is explicitly a bounded
+    /// SAMPLE of the edit rather than a complete patch.
+    /// </summary>
+    /// <param name="truncated">
+    /// True when differences were found that this sample does not show. Reported separately from the
+    /// pair count because "the cap was reached exactly" and "there is more" are different statements.
+    /// </param>
+    private static List<(int Line, string Before, string After)> BuildBoundedLineDiff(
+        string original, string replaced, int maxChanges, out bool truncated)
+    {
+        var changes = new List<(int, string, string)>();
+        truncated = false;
+
+        string[] before = original.Split('\n');
+        string[] after = replaced.Split('\n');
+
+        if (maxChanges <= 0)
+        {
+            truncated = !before.AsSpan().SequenceEqual(after);
+            return changes;
+        }
+
+        int shared = Math.Min(before.Length, after.Length);
+
+        for (int i = 0; i < shared; i++)
+        {
+            if (string.Equals(before[i], after[i], StringComparison.Ordinal))
+                continue;
+
+            if (changes.Count == maxChanges) { truncated = true; return changes; }
+            changes.Add((i + 1, Trim(before[i]), Trim(after[i])));
+        }
+
+        // Lines only ONE side has. Stopping at the shorter array is why replacing "a" with "a\nb" — or
+        // collapsing "a\nb" back to "a" — reported an empty change list with no truncation marker, while
+        // still issuing a commit id for an edit nobody could see.
+        int tail = Math.Max(before.Length, after.Length);
+        for (int i = shared; i < tail; i++)
+        {
+            if (changes.Count == maxChanges) { truncated = true; return changes; }
+
+            changes.Add((
+                i + 1,
+                i < before.Length ? Trim(before[i]) : string.Empty,
+                i < after.Length ? Trim(after[i]) : string.Empty));
+        }
+
+        return changes;
+
+        static string Trim(string line) => line.TrimEnd('\r');
     }
 
     /// <summary>
@@ -2927,6 +3563,13 @@ internal static partial class CliRunner
     /// which would match raw CRLF text rather than the LF shadow the search used.
     /// </summary>
     internal static string ReplaceMultiline(Regex regex, string original, Func<Match, string> eval, out int replaceCount)
+        => ReplaceMultiline(regex, original, eval, out replaceCount, edits: null);
+
+    /// <inheritdoc cref="ReplaceMultiline(Regex, string, Func{Match, string}, out int)"/>
+    /// <param name="edits">Collects each spliced span in ORIGINAL-buffer offsets, for the commit plan.</param>
+    internal static string ReplaceMultiline(
+        Regex regex, string original, Func<Match, string> eval, out int replaceCount,
+        List<Yagu.Services.Mcp.McpReplaceEdit>? edits)
     {
         var shadow = Helpers.MultilineTextShadow.Build(original);
         var sb = new StringBuilder(original.Length);
@@ -2939,7 +3582,9 @@ internal static partial class CliRunner
             int origEnd = shadow.ToOriginalOffset(m.Index + m.Length);
             if (origStart < lastOrig) continue; // defensive: never splice overlapping spans
             sb.Append(original, lastOrig, origStart - lastOrig);
-            sb.Append(eval(m));
+            string value = eval(m);
+            sb.Append(value);
+            edits?.Add(new Yagu.Services.Mcp.McpReplaceEdit(origStart, origEnd - origStart, value));
             lastOrig = origEnd;
             count++;
         }
@@ -2975,6 +3620,72 @@ internal static partial class CliRunner
                                           "15% of 340") or a unit conversion (e.g. "5 km to miles",
                                           "72 f to c", "2 gb to mb") and print the answer, then exit.
 
+            READ A FILE WINDOW (no search):
+              --read <path>               Print a bounded window of one file and exit — the CLI
+                                          counterpart of the GUI preview pane. Encoding is detected
+                                          from the byte-order mark, falling back to UTF-8.
+                  --lines <first>-<last>  1-based inclusive window (default: the whole file, bounded by
+                                          the output budget). Accepts "10-20", "500-" (open-ended)
+                                          and "7" (a single line).
+
+            MACHINE / AUTOMATION:
+              --output <grep|json>        Output format (default: grep). "json" emits one JSON envelope
+                                          per line (NDJSON) on stdout for EVERY command — search,
+                                          --read, --calc, --load-session and the index commands — each
+                                          record carrying schemaVersion, type, sequence and requestId.
+                                          Record types: match, result, plan, progress, warning,
+                                          summary, error, diagnostic. Implies --non-interactive.
+              --request-id <id>           Correlation id stamped on every record (default: generated).
+              --non-interactive           Never prompt on the console. Suppresses first-run setup, the
+                                          Everything offer, index-coverage prompts, the OCR download
+                                          question and the AI model check, so an automated caller can
+                                          never be blocked waiting for an answer that never comes.
+              --settings-source <src>     Which settings file to use: "global" (the per-user profile
+                                          settings) or "file:<path>". Without this the CLI resolves a
+                                          .yagu.json from the current working directory first, so a
+                                          tool-launched run can silently inherit workspace defaults.
+
+            MCP SERVER (AI client integration; no search, and no --cli needed):              --mcp-config                Print the JSON an AI client needs in order to launch Yagu's
+                                          MCP server, built from the allowed folders, capabilities and
+                                          limits saved in Settings > MCP Server, then exit. The JSON goes
+                                          to stdout and the guidance to stderr, so "--mcp-config >
+                                          mcp.json" writes a clean file. Always reads the per-user
+                                          profile settings, never a workspace .yagu.json. Exits 2 when
+                                          no allowed folder is configured, because a server started
+                                          without one authorizes nothing and refuses to run.
+                  --mcp-client <client>   Which client to emit for: vscode (default), vs, copilot-cli
+                                          or claude.
+              --mcp-install <client>      Merge Yagu's entry into that client's configuration file
+                                          ("all" does every client). Merges, never overwrites: other
+                                          servers, comments and unknown settings survive, and a file
+                                          that cannot be parsed is left untouched.
+              --mcp-remove <client>       Remove Yagu's entry, and only Yagu's entry.
+              --mcp-status                Print what is configured: folders, capabilities, transport,
+                                          sign-in task, and which clients have Yagu installed.
+              --mcp-regenerate-token      Issue a new loopback HTTP token. Clients holding the old one
+                                          are refused once the server restarts. Never printed.
+              --mcp-autostart <on|off>    Register (or remove) the per-user scheduled task that starts
+                                          the loopback HTTP server when you sign in.
+
+            REPLACEMENT COMMIT (machine mode):
+              --replace-commit <id>       Apply the edits recorded by an earlier
+                                          "--replace --dry-run --output json" run, named by the commitId
+                                          it printed. Replays those exact edits; it never re-runs the
+                                          pattern, and refuses any file that changed since the preview
+                                          rather than rewriting it. Single-use, expires after 15
+                                          minutes, writes a .yagubak backup beside each file, and rolls
+                                          the whole batch back if any file fails. Requires replacement
+                                          writes to be enabled in Settings > MCP Server.
+
+            EXIT CODES:
+              0   success (results were produced)      3   partial failure
+              1   no results — a SUCCESS outcome       4   busy (a conflicting operation holds the lock)
+              2   invalid input                        70  internal failure
+              130 cancelled
+              The index management commands keep their own published codes (2 invalid arguments,
+              3 unsupported scope, 4 cancelled, 5 build failure, 6 already running); in --output json
+              the summary record reports both that code and the mapped protocol outcome.
+
             MATCHING:
               -e, --regex                 Treat pattern as a regular expression.
                   --no-regex              Treat pattern as a literal string (default).
@@ -2989,6 +3700,7 @@ internal static partial class CliRunner
                                           files; slower/heavier — pair with a narrow scope.
                   --no-multiline          Match within single lines (default).
                   --multiline-dotall      With --multiline, the dot (.) also matches newlines ((?s)).
+                  --no-multiline-dotall   The dot (.) stops at newlines (default).
                   --max-multiline-bytes <size>  Skip files larger than this in multiline mode
                                           (default: 50MB; accepts e.g. 20MB, 1GB).
                   --multiline-engine <e>  Native multiline backend: regex (default) | grep. Both give
@@ -3022,10 +3734,24 @@ internal static partial class CliRunner
                                           query. The model loads once and is reused for every query,
                                           so a query set (or a sweep across models) can be evaluated
                                           without the cold-load cost per call. Always a dry-run.
+                                          Failed model responses may use the same deterministic
+                                          best-guess fallback as the GUI, with a stderr notice.
+                  Whole-file exclusion:  "files that mention X but not Y" (or "contain") checks
+                                          Y anywhere in each text file, returning one whole-file
+                                          match. Uses multiline size/timeout limits and managed
+                                          regex fallback; PDF/OCR/archive extraction is skipped.
 
             FILE FILTERING:
               -g, --glob <glob>           Include files matching GLOB (repeatable).
                   --exclude-glob <glob>   Exclude files/dirs matching GLOB (repeatable).
+                  --confine-to <path>     Only emit, export, save, read, or rewrite results that
+                                          resolve inside PATH after links are followed (repeatable).
+                                          A junction inside the scope can otherwise put a file that
+                                          really lives elsewhere into a report or a replacement.
+                                          Filtering of emitted matches applies to --output json;
+                                          plain text output is not filtered. --read is refused
+                                          outright when its target resolves outside PATH. The MCP
+                                          server passes this for every allowed folder.
                   --include-regex         Interpret include patterns as regex (default: glob).
                   --include-glob          Interpret include patterns as glob (default).
                   --exclude-regex         Interpret exclude patterns as regex (default: glob).
@@ -3066,6 +3792,11 @@ internal static partial class CliRunner
             CONTENT OPTIONS:
                   --hidden                Include files/folders with the Hidden attribute (default).
                   --no-hidden             Exclude hidden files/folders (system files always skipped).
+                  --online-only           Search cloud files that are online-only placeholders, which
+                                          forces the provider (OneDrive, Dropbox, …) to download each
+                                          one on access.
+                  --no-online-only        Skip online-only placeholders so a search never triggers a
+                                          cloud download (default).
                   --image-text            OCR image files and search the recognized text (off by default).
                   --no-image-text         Do not OCR images (default).
                   --pdf-text              Convert PDF files to text (via bundled pdftotext) and search it
@@ -3111,6 +3842,10 @@ internal static partial class CliRunner
                   --replace-no-backup     Do not create .yagubak backup files before replacing.
                   --replace-dry-run       Show what would be replaced without modifying any files.
                   --dry-run               Alias for --replace-dry-run.
+                                          Note: --replace rewrites file contents, so it cannot be
+                                          combined with a file-name-only query (a bare wildcard
+                                          under --search-mode filenames). Pass a content pattern and
+                                          narrow the file set with --include instead.
 
             SORT:
                   --sort <key>            Sort results by: matches, date, size, name, directory, path (default: unsorted).
@@ -4303,6 +5038,9 @@ internal sealed class CliArgs
     public int?             ContextLines { get; private set; }
     public List<string>     IncludeGlobs { get; } = [];
     public List<string>     ExcludeGlobs { get; } = [];
+
+    /// <summary>Roots this run may emit, write, or rewrite results under, after links are resolved.</summary>
+    public List<string>     ConfineToRoots { get; } = [];
     public long?            MinFileSizeBytes { get; private set; }
     public long?            MaxFileSizeBytes { get; private set; }
     public int?             MaxResults   { get; private set; }
@@ -4318,6 +5056,7 @@ internal sealed class CliArgs
     public int?             FileListerBackendIndex { get; private set; }
     public bool?            SearchInsideArchives { get; private set; }
     public bool?            SearchHiddenFiles { get; private set; }
+    public bool?            SearchOnlineOnlyFiles { get; private set; }
     public bool?            SearchImageText { get; private set; }
     public bool?            SearchPdfText { get; private set; }
     public string?          ImageOcrEngine { get; private set; }
@@ -4348,6 +5087,20 @@ internal sealed class CliArgs
     public DateTimeOffset?  ModifiedBefore { get; private set; }
     public bool             SuppressAdminWarning { get; private set; }
     public bool             ShowHelp     { get; private set; }
+
+    // Machine mode (--output json): a versioned NDJSON protocol shared by EVERY command, plus the
+    // supporting flags a non-interactive caller (the MCP bridge) needs to make a run deterministic.
+    public string?          OutputMode { get; private set; }
+    public string?          SettingsSource { get; private set; }
+    public string?          RequestId { get; private set; }
+    public bool             NonInteractive { get; private set; }
+
+    // --read <file> --lines <first>-<last>: emit a bounded line window from one file and exit.
+    public string?          ReadPath { get; private set; }
+    public string?          ReadLines { get; private set; }
+
+    // --replace-commit <id>: apply the edits recorded by an earlier machine-mode dry run.
+    public string?          ReplaceCommitId { get; private set; }
 
     // --calc <expr>: evaluate an inline calculator / unit-conversion expression and exit (no search).
     public string?          CalcExpression { get; private set; }
@@ -4456,6 +5209,9 @@ internal sealed class CliArgs
             if (Eq(tok, "--no-search-archives"))             { a.SearchInsideArchives = false; i++; continue; }
             if (Eq(tok, "--hidden", "--search-hidden"))      { a.SearchHiddenFiles = true; i++; continue; }
             if (Eq(tok, "--no-hidden", "--no-search-hidden")) { a.SearchHiddenFiles = false; i++; continue; }
+            if (Eq(tok, "--online-only", "--search-online-only"))      { a.SearchOnlineOnlyFiles = true; i++; continue; }
+            if (Eq(tok, "--no-online-only", "--no-search-online-only")) { a.SearchOnlineOnlyFiles = false; i++; continue; }
+            if (Eq(tok, "--non-interactive"))                { a.NonInteractive = true; i++; continue; }
             if (Eq(tok, "--image-text", "--search-image-text", "--ocr")) { a.SearchImageText = true; i++; continue; }
             if (Eq(tok, "--no-image-text", "--no-search-image-text", "--no-ocr")) { a.SearchImageText = false; i++; continue; }
             if (Eq(tok, "--pdf-text", "--search-pdf-text", "--pdf")) { a.SearchPdfText = true; i++; continue; }
@@ -4623,6 +5379,18 @@ internal sealed class CliArgs
                 { a.Pattern = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--calc"))
                 { a.CalcExpression = v; continue; }
+            if (TryGetVal(raw, ref i, out v, "--output"))
+                { a.OutputMode = v.Trim(); continue; }
+            if (TryGetVal(raw, ref i, out v, "--settings-source"))
+                { a.SettingsSource = v.Trim(); continue; }
+            if (TryGetVal(raw, ref i, out v, "--request-id"))
+                { a.RequestId = v.Trim(); continue; }
+            if (TryGetVal(raw, ref i, out v, "--read"))
+                { a.ReadPath = v.Trim('"'); continue; }
+            if (TryGetVal(raw, ref i, out v, "--replace-commit"))
+                { a.ReplaceCommitId = v.Trim().Trim('"'); continue; }
+            if (TryGetVal(raw, ref i, out v, "--lines"))
+                { a.ReadLines = v.Trim(); continue; }
             if (TryGetVal(raw, ref i, out v, "--semantic-pattern", "-SP"))
                 { a.SemanticPattern = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--semantic-model"))
@@ -4633,6 +5401,8 @@ internal sealed class CliArgs
                 { a.IncludeGlobs.Add(v); continue; }
             if (TryGetVal(raw, ref i, out v, "--exclude-glob", "--exclude"))
                 { a.ExcludeGlobs.Add(v); continue; }
+            if (TryGetVal(raw, ref i, out v, "--confine-to"))
+                { a.ConfineToRoots.Add(v.Trim().Trim('"')); continue; }
             if (TryGetVal(raw, ref i, out v, "--skip-extensions"))
             {
                 foreach (var ext in v.Split(s_extensionSeparators,

@@ -74,6 +74,11 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("\"--hidden\"", source);
         Assert.Contains("\"--no-hidden\"", source);
         Assert.Contains("ViewModel.SearchHiddenFiles == setting.SearchHiddenFiles", source);
+        // Online-only cloud files changes which files are searched, so a generated command that omitted
+        // it silently searched a smaller set than the GUI session it was copied from.
+        Assert.Contains("\"--online-only\"", source);
+        Assert.Contains("\"--no-online-only\"", source);
+        Assert.Contains("ViewModel.SearchOnlineOnlyFiles == setting.SearchOnlineOnlyFiles", source);
         // Image-text (OCR) scope must be reproducible via --image-text / --no-image-text.
         Assert.Contains("\"--image-text\"", source);
         Assert.Contains("\"--no-image-text\"", source);

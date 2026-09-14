@@ -179,6 +179,12 @@ public sealed partial class MainWindow
             parts.Add(ViewModel.SearchBinary ? "--binary" : "--no-binary");
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchHiddenFiles == setting.SearchHiddenFiles))
             parts.Add(ViewModel.SearchHiddenFiles ? "--hidden" : "--no-hidden");
+        // Online-only cloud files sits in the same Advanced Options grid as hidden/image/PDF and changes
+        // which files are searched, so it has to round-trip like its peers. Without this the generated
+        // command silently ran with cloud files OFF even when the session had them ON, quietly producing
+        // fewer results than the GUI the command was copied from.
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchOnlineOnlyFiles == setting.SearchOnlineOnlyFiles))
+            parts.Add(ViewModel.SearchOnlineOnlyFiles ? "--online-only" : "--no-online-only");
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchImageText == setting.SearchImageText))
             parts.Add(ViewModel.SearchImageText ? "--image-text" : "--no-image-text");
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchPdfText == setting.SearchPdfText))

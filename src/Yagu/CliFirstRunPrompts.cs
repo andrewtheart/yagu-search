@@ -317,6 +317,8 @@ internal static class CliFirstRunPrompts
         // Opt in: turn the master feature on and default the per-search toggle on.
         settings.EnableContentIndex = true;
         settings.UseContentIndexByDefault = true;
+        Console.Error.Write("Index cloud-only files? This may download online-only content while indexing. [y/N] ");
+        settings.IndexIncludeCloudOnlyFiles = ReadYesNo(defaultYes: false);
 
         // Build trigger(s): the same combinable choices as the GUI dialog / Settings ▸ Indexing.
         settings.IndexBuildTrigger = PromptIndexBuildTrigger(settings.IndexBuildTrigger);

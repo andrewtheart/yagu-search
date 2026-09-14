@@ -79,6 +79,8 @@ public sealed class CliRunnerRegressionTests
         // Actions reuse the same services as the GUI.
         Assert.Contains("ExplorerContextMenu.Register();", source);
         Assert.Contains("settings.IndexedRoots = IndexedRootsPolicy.Add(settings.IndexedRoots, folder);", source);
+        Assert.Contains("Index cloud-only files? This may download online-only content while indexing. [y/N]", source);
+        Assert.Contains("settings.IndexIncludeCloudOnlyFiles = ReadYesNo(defaultYes: false);", source);
         Assert.Contains("IndexBuildOperationFactory.CreateBuild(settings, effectiveRoot, rebuild: false)", source);
         Assert.Contains("coordinator.BuildFullScopePreferWorkerAsync(", source);
     }
@@ -278,11 +280,15 @@ public sealed class CliRunnerRegressionTests
         Assert.Contains("IndexedRootFilterPolicy.Find(settings.IndexedRootFilters, root)", source);
         Assert.Contains("directory (C:/path or C:\\path, case-insensitive) matches all descendants", source);
 
-        // Backing args + the management short-circuit dispatch.
+        // Backing args + the management short-circuit dispatch. The dispatch goes through the
+        // machine-aware wrapper so --output json gets structured records instead of a human transcript.
         Assert.Contains("public bool?            UseContentIndex { get; private set; }", source);
         Assert.Contains("public bool IsIndexManagementCommand", source);
         Assert.Contains("if (args.IsIndexManagementCommand)", source);
-        Assert.Contains("return RunIndexManagement(args);", source);
+        Assert.Contains("return RunIndexManagementMachine(args);", source);
+
+        string machineMode = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.MachineMode.cs"));
+        Assert.Contains("return RunIndexManagement(args);", machineMode);
     }
 
     [Fact]
@@ -667,7 +673,7 @@ public sealed class CliRunnerRegressionTests
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         AssertContainsInOrder(source,
-            "bool interactive = !Console.IsInputRedirected;",
+            "bool interactive = !Console.IsInputRedirected && !NonInteractive;",
             "if (!interactive && !args.AcceptModelDownload)",
             "return SemanticModelSetup.Declined;");
     }
@@ -709,5 +715,25 @@ public sealed class CliRunnerRegressionTests
             Assert.True(found >= 0, $"Expected to find '{item}' after position {position}.");
             position = found + item.Length;
         }
+    }
+
+    [Fact]
+    public void GlobFileNameQuery_IsRoutedToTheIncludeFilterInBothTheCliAndTheGui()
+    {
+        // The same typed query has to behave the same on both surfaces, so the routing lives in one
+        // shared helper and both call sites are pinned together.
+        string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
+        Assert.Contains("FileNameGlobQuery.TryRoute(searchMode, useRegex, queryPattern, includeGlobs, out var routedGlobs)", cli);
+        Assert.Contains("queryPattern = FileNameGlobQuery.MatchAllPattern;", cli);
+        Assert.Contains("includeMode = FilterPatternMode.GlobPath;", cli);
+        Assert.Contains("Query                 = queryPattern,", cli);
+
+        string viewModel = MainViewModelPartials.Text;
+        Assert.Contains("FileNameGlobQuery.TryRoute(", viewModel);
+        Assert.Contains("effectiveQuery = FileNameGlobQuery.MatchAllPattern;", viewModel);
+        Assert.Contains("effectiveIncludeFilterMode = FilterPatternMode.GlobPath;", viewModel);
+
+        // Routing changes what was searched, so it must never happen silently.
+        Assert.Contains("StatusText = FileNameGlobQuery.DescribeRouting(routedGlobs);", viewModel);
     }
 }
