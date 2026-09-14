@@ -432,18 +432,19 @@ public sealed class ConPtyTerminalServiceEdgeTests
 
         using var terminal = new ConPtyTerminalService();
         using var gotOutput = new ManualResetEventSlim(false);
+        using var exited = new ManualResetEventSlim(false);
         int? exitCode = null;
 
         terminal.OutputReceived += _ => gotOutput.Set();
-        terminal.ProcessExited += code => exitCode = code;
+        terminal.ProcessExited += code => { exitCode = code; exited.Set(); };
         terminal.Start(cols: 80, rows: 24);
 
         Assert.True(gotOutput.Wait(TimeSpan.FromSeconds(5)));
         terminal.Dispose();
 
-        // Give the event time to fire
-        Thread.Sleep(500);
-        // Process exit event should have fired (exit code may vary)
+        // Wait for the event rather than sleeping a fixed span: process exit is an OS notification, and
+        // on a loaded machine a fixed wait fails for reasons that have nothing to do with the behaviour.
+        Assert.True(exited.Wait(TimeSpan.FromSeconds(15)), "ProcessExited did not fire after Dispose.");
         Assert.NotNull(exitCode);
     }
 }

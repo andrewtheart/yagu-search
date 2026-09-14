@@ -1,0 +1,62 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    Yagu.McpServer exposes a defined subset of Yagu's search surface over the Model Context Protocol.
+
+    Why it exists as a separate process:
+      Yagu.exe is Native AOT + WinUI, so the MCP SDK (and ASP.NET Core, for the HTTP transport) cannot
+      live inside it. This worker is therefore a THIN BRIDGE: every tool shells out to the Yagu CLI and
+      consumes the versioned machine protocol (JSON output mode). It never links the search engine.
+
+    How it's built:
+      NOT referenced by Yagu.csproj (a ProjectReference would drag it into Yagu's Native-AOT publish
+      graph). Yagu.csproj publishes it as an isolated child `dotnet publish` and copies the result into
+      the app's mcp-server folder, mirroring the OCR / semantic / index workers.
+
+      Like Yagu.IndexWorker, and UNLIKE the OCR / semantic workers which are win-x64 only, this
+      worker's RID must MATCH the app's architecture. The installer ships a real x86 build, and an x64
+      executable cannot start on 32-bit Windows.
+
+      It SOURCE-LINKS the authorization policy and the machine protocol so the server, the app, and the
+      test assembly can never disagree about either.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Yagu.McpServer</RootNamespace>
+    <AssemblyName>Yagu.McpServer</AssemblyName>
+    <RuntimeIdentifiers>win-x64;win-x86;win-arm64</RuntimeIdentifiers>
+    <!-- The MCP SDK relies on runtime metadata; isolation is the point of this process anyway. -->
+    <PublishAot>false</PublishAot>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- stdio is a transport here: nothing may print to stdout except protocol frames. -->
+    <NoWarn>$(NoWarn);CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
+  </ItemGroup>
+
+  <!--
+    Single source of truth for the pieces the bridge and the app must agree on. These files have no
+    WinUI dependency, and the same files compile into Yagu.dll and Yagu.Tests.
+  -->
+  <ItemGroup>
+    <Compile Include="..\Yagu\Services\Mcp\McpCapability.cs" Link="Shared\McpCapability.cs" />
+    <Compile Include="..\Yagu\Services\Mcp\McpAuthorizationPolicy.cs" Link="Shared\McpAuthorizationPolicy.cs" />
+    <Compile Include="..\Yagu\Services\Mcp\McpTokenStore.cs" Link="Shared\McpTokenStore.cs" />
+    <Compile Include="..\Yagu\Services\Mcp\McpLoopbackOrigin.cs" Link="Shared\McpLoopbackOrigin.cs" />
+    <Compile Include="..\Yagu\Services\Cli\MachineOutput\CliExitCode.cs" Link="Shared\CliExitCode.cs" />
+    <Compile Include="..\Yagu\Services\Cli\MachineOutput\MachineOutputBudget.cs" Link="Shared\MachineOutputBudget.cs" />
+    <Compile Include="..\Yagu\Services\Cli\MachineOutput\MachineOutputMode.cs" Link="Shared\MachineOutputMode.cs" />
+    <Compile Include="..\Yagu\Services\Cli\MachineOutput\MachineProtocol.cs" Link="Shared\MachineProtocol.cs" />
+    <Compile Include="..\Yagu\Services\Cli\MachineOutput\MachineOutputReader.cs" Link="Shared\MachineOutputReader.cs" />
+    <Compile Include="..\Yagu\Services\Index\WindowsJobObject.cs" Link="Shared\WindowsJobObject.cs" />
+  </ItemGroup>
+
+</Project>

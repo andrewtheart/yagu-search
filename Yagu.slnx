@@ -9,10 +9,12 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Yagu.IndexWorker/Yagu.IndexWorker.csproj" />
+    <Project Path="src/Yagu.McpServer/Yagu.McpServer.csproj" />
     <Project Path="src/Yagu.SemanticWorker/Yagu.SemanticWorker.csproj" />
   </Folder>
   <Folder Name="/TestResults/" />
   <Folder Name="/tests/">
+    <Project Path="tests/Yagu.FakeCli/Yagu.FakeCli.csproj" />
     <Project Path="tests/Yagu.FakeIndexWorker/Yagu.FakeIndexWorker.csproj" />
   </Folder>
   <Folder Name="/vendor/" />

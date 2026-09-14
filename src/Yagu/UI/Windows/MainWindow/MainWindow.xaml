@@ -189,14 +189,21 @@
 
         <DataTemplate x:Key="FileGroupResultTemplate" x:DataType="models:FileGroup">
             <Grid Margin="-29,0,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border Width="{x:Bind ResultGroupIndent, Mode=OneWay}" />
                 <!-- No-drawer (file-name-only) row: inset its header by the SAME padding the Expander applies
                      to its header content, so the selection radio lines up with the drawer rows' radio. -->
-                <ContentControl Content="{Binding}"
+                <ContentControl Grid.Column="1"
+                                Content="{Binding}"
                                 ContentTemplate="{StaticResource FileGroupHeaderTemplate}"
                                 HorizontalContentAlignment="Stretch"
                                 Margin="{ThemeResource ExpanderHeaderPadding}"
                                 Visibility="{x:Bind IsFileNameOnlyMatch, Mode=OneWay}" />
-                <Expander AutomationProperties.AutomationId="FileGroupResultExpander"
+                <Expander Grid.Column="1"
+                          AutomationProperties.AutomationId="FileGroupResultExpander"
                           HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
                           Visibility="{x:Bind HasContentMatches, Mode=OneWay}"
                           IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}"
@@ -564,6 +571,7 @@
                         x:Name="QueryBox"
                         MinHeight="60"
                         MaxHeight="240"
+                        ui:PlaceholderTextStyler.Wrap="True"
                         MaxSuggestionListHeight="{x:Bind ViewModel.AutocompleteDropdownMaxHeight, Mode=OneWay}"
                         PlaceholderText="{x:Bind ViewModel.QueryPlaceholderText, Mode=OneWay}"
                         Text="{x:Bind ViewModel.Query, Mode=TwoWay}"
@@ -1523,8 +1531,6 @@
                                             </StackPanel>
                                         </Button>
                                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
-                                            <Button Content="Save as Defaults" Click="OnAdvancedOptionsSaveDefaultsClick"
-                                                    ToolTipService.ToolTip="Save the current Advanced Options to your settings file as the default options" />
                                             <Button Content="Reset" Click="OnAdvancedOptionsResetClick"
                                                     ToolTipService.ToolTip="Restore Advanced Options to the current settings defaults" />
                                             <Button Content="Apply" Style="{ThemeResource AccentButtonStyle}"
@@ -1568,6 +1574,13 @@
             <TextBlock Foreground="Red"
                        Visibility="{x:Bind ViewModel.HasErrorText, Mode=OneWay}"
                        Text="{x:Bind ViewModel.ErrorText, Mode=OneWay}" />
+            <!-- Offered when the failed query was a file glob: the fix is two toggles, not a rewrite. -->
+            <Button Visibility="{x:Bind ViewModel.HasGlobFileNameSuggestion, Mode=OneWay}"
+                    Command="{x:Bind ViewModel.UseGlobAsFileNameSearchCommand}"
+                    Content="{x:Bind ViewModel.GlobFileNameSuggestionLabel, Mode=OneWay}"
+                    HorizontalAlignment="Left"
+                    Margin="0,4,0,0"
+                    Padding="10,3,10,3" />
             <!-- Semantic translation status / interpretation (Foundry Local). Lives here, below the
                  search card, so it never shifts the search box when it appears. -->
             <StackPanel x:Name="QueryModeBar" Orientation="Horizontal" Spacing="8"

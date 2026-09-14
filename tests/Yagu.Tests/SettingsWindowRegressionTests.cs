@@ -739,28 +739,46 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
-    public void SearchDefaults_IncludeExcludePatternsUseWideTextBoxesAndModeSelectors()
+    public void SearchDefaults_DoesNotExposeSessionOnlyAdvancedOptionFilters()
     {
-        Assert.Contains("Default include patterns (comma/semicolon-separated):", SettingsWindowSource);
-        Assert.Contains("Default exclude patterns (comma/semicolon-separated):", SettingsWindowSource);
-        Assert.Contains("var incMode = new ComboBox", SettingsWindowSource);
-        Assert.Contains("var excMode = new ComboBox", SettingsWindowSource);
-        Assert.Contains("_viewModel.IncludeFilterModeIndex = incMode.SelectedIndex;", SettingsWindowSource);
-        Assert.Contains("_viewModel.ExcludeFilterModeIndex = excMode.SelectedIndex;", SettingsWindowSource);
-        Assert.Contains("PlaceholderText = _viewModel.IncludeFilterPlaceholder, Width = 620", SettingsWindowSource);
-        Assert.Contains("PlaceholderText = _viewModel.ExcludeFilterPlaceholder, Width = 620", SettingsWindowSource);
+        Assert.DoesNotContain("Default Include/Exclude Filters", SettingsWindowSource);
+        Assert.DoesNotContain("Default include patterns", SettingsWindowSource);
+        Assert.DoesNotContain("Default exclude patterns", SettingsWindowSource);
+        Assert.DoesNotContain("OnContent = NextSearchLabel(\"Search binary files\")", SettingsWindowSource);
 
         Assert.Contains("[JsonIgnore] public string IncludeGlobs", SettingsServiceSource);
         Assert.Contains("[JsonIgnore] public string ExcludeGlobs", SettingsServiceSource);
-        Assert.Contains("public int IncludeFilterModeIndex", SettingsServiceSource);
-        Assert.Contains("public int ExcludeFilterModeIndex", SettingsServiceSource);
-
-        Assert.Contains("IncludeFilterModeIndex = _settings.IncludeFilterModeIndex", MainViewModelSource);
-        Assert.Contains("ExcludeFilterModeIndex = _settings.ExcludeFilterModeIndex", MainViewModelSource);
-        Assert.Contains("_settings.IncludeFilterModeIndex = d is null ? IncludeFilterModeIndex : d.IncludeFilterModeIndex", MainViewModelSource);
-        Assert.Contains("_settings.ExcludeFilterModeIndex = d is null ? ExcludeFilterModeIndex : d.ExcludeFilterModeIndex", MainViewModelSource);
+        Assert.DoesNotContain("_settings.IncludeGlobs =", MainViewModelSource);
+        Assert.DoesNotContain("_settings.ExcludeGlobs =", MainViewModelSource);
         Assert.Contains("SelectedIndex=\"{x:Bind ViewModel.IncludeFilterModeIndex, Mode=TwoWay}\"", MainWindowXaml);
         Assert.Contains("SelectedIndex=\"{x:Bind ViewModel.ExcludeFilterModeIndex, Mode=TwoWay}\"", MainWindowXaml);
+    }
+
+    [Fact]
+    public void PersistedSearchDefaults_AreSeparateFromAdvancedOptionValues()
+    {
+        Assert.Contains("IsOn = _viewModel.SettingsSearchOnlineOnlyFiles", SettingsWindowSource);
+        Assert.Contains("IsOn = _viewModel.SettingsSearchHiddenFiles", SettingsWindowSource);
+        Assert.Contains("IsOn = _viewModel.SettingsSearchImageText", SettingsWindowSource);
+        Assert.Contains("_viewModel.SettingsSearchOnlineOnlyFiles = searchCloud.IsOn;", SettingsWindowSource);
+        Assert.Contains("_viewModel.SettingsSearchHiddenFiles = searchHidden.IsOn;", SettingsWindowSource);
+        Assert.Contains("_viewModel.SettingsSearchImageText = searchImageText.IsOn;", SettingsWindowSource);
+    }
+
+    [Fact]
+    public void SettingsWindow_ExposesTheSearchPdfTextDefault()
+    {
+        // SettingsSearchPdfText was seeded, loaded and written back with no writer on any surface, so
+        // the persisted default could never be changed -- PDF text search could only be turned on per
+        // search from the Advanced Options drawer. HELP.md documents this as
+        // "Settings > Path and File Type Filters > Search PDF text".
+        Assert.Contains("IsOn = _viewModel.SettingsSearchPdfText", SettingsWindowSource);
+        Assert.Contains("_viewModel.SettingsSearchPdfText = searchPdfText.IsOn;", SettingsWindowSource);
+
+        // The live toggle is dual-written like every other setting-backed filter, so the change applies
+        // to the current session instead of only the next launch.
+        Assert.Contains("_viewModel.SearchPdfText = searchPdfText.IsOn;", SettingsWindowSource);
+        Assert.Contains("pathTypeGroup.Children.Add(searchPdfText);", SettingsWindowSource);
     }
 
     [Fact]
@@ -1370,14 +1388,16 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("RestoreCleanFirstTimeIntroductoryTooltipValues();", restoreUnsaved);
 
         string trackedChanges = ExtractMethod(SettingsWindowSource, "HaveTrackedSettingValueChanges", window: 2200);
-        Assert.Contains("return HaveFirstTimeIntroductoryTooltipValuesChanged();", trackedChanges);
+        Assert.Contains("HaveFirstTimeIntroductoryTooltipValuesChanged()", trackedChanges);
     }
 
     [Fact]
     public void MainWindow_SettingsHelperCanOpenPerformanceAndDisplayTabs()
     {
-        // Tabs are sorted alphabetically at build time, so Display=2 and Performance=7.
-        Assert.Contains("private const int SettingsPerformanceTabIndex = 7;", MainWindowSource);
+        // Tabs are sorted alphabetically at build time, so Display=2 and Performance=9.
+        // SettingsTabIndexTests derives both from the AddTab(...) headers, so a stale value fails there
+        // too rather than quietly opening the wrong tab.
+        Assert.Contains("private const int SettingsPerformanceTabIndex = 9;", MainWindowSource);
         Assert.Contains("private const int SettingsDisplayTabIndex = 2;", MainWindowSource);
         Assert.Contains("OpenSettingsTab(SettingsPerformanceTabIndex);", MainWindowSource);
     }

@@ -1865,19 +1865,30 @@ public class GlobMatcherCoverageTests
 //  FindEsExe with delegate, NormalizeExtension, backend enum
 // ═══════════════════════════════════════════════════════════════════
 
+// FileLister.Backend is process-wide static state, so every class that writes it must share this
+// collection -- xUnit only serializes tests WITHIN a collection and runs separate collections in
+// parallel. Without it this class raced the search suites: it sets the backend per test and its
+// Dispose ran after every test method, so a concurrent test that had selected the deterministic
+// Managed walker could observe Auto instead, fall through to Everything, and find none of the
+// temp files it had just created (Everything's index has never seen them).
+[Collection("FileListerBackend")]
 public class FileListerCoverageTests : IDisposable
 {
     private readonly string _root;
+    private readonly FileListerBackend _originalBackend;
 
     public FileListerCoverageTests()
     {
+        _originalBackend = FileLister.Backend;
         _root = Path.Combine(Path.GetTempPath(), "qg-fl-cov-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);
     }
 
     public void Dispose()
     {
-        FileLister.Backend = FileListerBackend.Auto;
+        // Restore what was there rather than forcing Auto, so this class cannot dictate the backend
+        // for whatever runs next.
+        FileLister.Backend = _originalBackend;
         try { Directory.Delete(_root, recursive: true); } catch { }
     }
 

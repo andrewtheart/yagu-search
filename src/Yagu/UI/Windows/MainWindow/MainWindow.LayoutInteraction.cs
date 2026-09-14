@@ -24,6 +24,12 @@ public sealed partial class MainWindow
     // panel is revealed for the first time and the panels reorganize.
     private const double PreviewTopExpandedDrawerGap = 6;
 
+    // Horizontal inset every stacked left-column element uses so their card edges line up
+    // vertically: SearchControlsBorder/SplitPaneGrid margins and the SearchStatusPanel /
+    // SearchProgressOverlay insets in MainWindow.xaml. Any code that re-assigns one of those
+    // margins must use this, or the search card and results card drift out of alignment.
+    private const double StackedCardHorizontalInset = 10;
+
     // Minimum usable height for the Advanced Options drawer content before a
     // scrollbar is preferred over shrinking further.
     private const double MinAdvancedOptionsDrawerHeight = 160;

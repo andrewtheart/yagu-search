@@ -12,11 +12,12 @@ namespace Yagu;
 public sealed partial class MainWindow
 {
     // Settings tabs are sorted alphabetically at build time (see SettingsWindow.SortTabsAlphabetically):
-    // AI(0), Developer Options(1), Display(2), Editor(3), Interaction(4), Notifications(5), OCR(6),
-    // Performance(7), Search Defaults(8), Search Limits(9), Shortcuts & History(10),
-    // Terminal Emulator(11), Window(12).
-    // Keep these in sync when adding/renaming tabs.
-    private const int SettingsPerformanceTabIndex = 7;
+    // AI(0), Developer Options(1), Display(2), Editor(3), Indexing(4), Interaction(5), MCP Server(6),
+    // Notifications(7), OCR(8), Performance(9), Privacy(10), Search Defaults(11), Search Limits(12),
+    // Shortcuts & History(13), Terminal Emulator(14), Updates(15), Window(16).
+    // Keep these in sync when adding/renaming tabs; SettingsTabIndexTests derives the expected values
+    // from the AddTab(...) headers so a stale index fails the build rather than opening the wrong tab.
+    private const int SettingsPerformanceTabIndex = 9;
     private const int SettingsDisplayTabIndex = 2;
 
     private async void OnAdminLearnMore(object sender, RoutedEventArgs e)

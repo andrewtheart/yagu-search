@@ -547,6 +547,7 @@ public sealed partial class SettingsWindow : Window
             foreach (var lazyColor in _lazyColorSettings)
                 lazyColor.RestoreColor(lazyColor.CleanColor);
             RestoreCleanFirstTimeIntroductoryTooltipValues();
+            RestoreCleanMcpListSettings();
         }
         finally
         {
@@ -582,7 +583,7 @@ public sealed partial class SettingsWindow : Window
                 return true;
         }
 
-        return HaveFirstTimeIntroductoryTooltipValuesChanged();
+        return HaveFirstTimeIntroductoryTooltipValuesChanged() || HaveMcpListSettingsChanged();
     }
 
     private void OnSettingsContentPointerPressed(object sender, PointerRoutedEventArgs e)
@@ -626,10 +627,31 @@ public sealed partial class SettingsWindow : Window
 
     private void OnSettingsContentPointerExited(object sender, PointerRoutedEventArgs e)
     {
+        // Opening the help flyout takes pointer input, so this exit also fires while the pointer is
+        // still resting on the control. Dismissing then made the flyout reopen and flicker forever.
+        if (PointerIsWithin(_pendingSettingHelpTarget ?? _settingHelpFlyoutTarget, e))
+            return;
+
         _settingHelpHoverTimer?.Stop();
         _pendingSettingHelpTarget = null;
         if (_settingHelpFlyout is not null)
             ScheduleSettingHelpHide();
+    }
+
+    private static bool PointerIsWithin(UIElement? element, PointerRoutedEventArgs e)
+    {
+        if (element is not FrameworkElement frameworkElement
+            || frameworkElement.ActualWidth <= 0
+            || frameworkElement.ActualHeight <= 0)
+        {
+            return false;
+        }
+
+        var position = e.GetCurrentPoint(frameworkElement).Position;
+        return position.X >= 0
+            && position.Y >= 0
+            && position.X <= frameworkElement.ActualWidth
+            && position.Y <= frameworkElement.ActualHeight;
     }
 
     /// <summary>
@@ -757,6 +779,8 @@ public sealed partial class SettingsWindow : Window
         content.PointerExited += (_, _) =>
         {
             _settingHelpPointerOverFlyout = false;
+            // The pointer was on the flyout, not on the label, so the label is no longer hovered.
+            _pendingSettingHelpTarget = null;
             ScheduleSettingHelpHide();
         };
         content.KeyDown += (_, args) =>
@@ -840,6 +864,7 @@ public sealed partial class SettingsWindow : Window
             lazyColor.CleanColor = lazyColor.GetColor();
 
         CaptureCleanFirstTimeIntroductoryTooltipValues();
+        CaptureCleanMcpListSettings();
     }
 
     private void CaptureCleanFirstTimeIntroductoryTooltipValues()
@@ -2424,6 +2449,7 @@ public sealed partial class SettingsWindow : Window
         "Shortcuts & History" => "\uE765",
         "AI" => "\uE99A",
         "Indexing" => "\uE8F1",
+        "MCP Server" => "\uE71B",
         "Updates" => "\uE895",
         _ => "\uE7FC",
     };
@@ -2640,7 +2666,6 @@ public sealed partial class SettingsWindow : Window
         {
             var g = AddTab("Search Defaults");
             var contextGroup = AddSettingsGroupBox(g, "Match Context");
-            var filterGroup = AddSettingsGroupBox(g, "Default Include/Exclude Filters");
 
             contextGroup.Children.Add(NextSearchLabel("Context lines (lines shown before & after each match in results):"));
             var ctx = new NumberBox { Value = _viewModel.ContextLines, Minimum = 0, Maximum = 50 };
@@ -2653,64 +2678,6 @@ public sealed partial class SettingsWindow : Window
             prevCtx.ValueChanged += (_, args) => _viewModel.PreviewContextLines = (int)args.NewValue;
             contextGroup.Children.Add(prevCtx);
             contextGroup.Children.Add(new TextBlock { Text = "Used when Yagu builds preview snippets around each match. Larger values give more context but render more text.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-
-            var includeHeader = new Grid { ColumnSpacing = 8, HorizontalAlignment = HorizontalAlignment.Left, Width = 620 };
-            includeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            includeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            includeHeader.Children.Add(NextSearchLabel("Default include patterns (comma/semicolon-separated):"));
-            var incMode = new ComboBox
-            {
-                SelectedIndex = _viewModel.IncludeFilterModeIndex == 1 ? 1 : 0,
-                Width = 104,
-                MinWidth = 0,
-                Padding = new Thickness(8, 0, 8, 0),
-            };
-            incMode.Items.Add("Glob");
-            incMode.Items.Add("Regex");
-            ToolTipService.SetToolTip(incMode, "Interpret include patterns as globs or regular expressions");
-            Grid.SetColumn(incMode, 1);
-            includeHeader.Children.Add(incMode);
-            filterGroup.Children.Add(includeHeader);
-
-            var incGlobs = new TextBox { Text = _viewModel.IncludeGlobs, PlaceholderText = _viewModel.IncludeFilterPlaceholder, Width = 620, HorizontalAlignment = HorizontalAlignment.Left };
-            incGlobs.TextChanged += (_, _) => _viewModel.IncludeGlobs = incGlobs.Text;
-            incMode.SelectionChanged += (_, _) =>
-            {
-                if (incMode.SelectedIndex >= 0)
-                    _viewModel.IncludeFilterModeIndex = incMode.SelectedIndex;
-                incGlobs.PlaceholderText = _viewModel.IncludeFilterPlaceholder;
-            };
-            filterGroup.Children.Add(incGlobs);
-            filterGroup.Children.Add(new TextBlock { Text = "Leave blank to include every eligible file. Multiple entries can be separated with commas or semicolons.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-
-            var excludeHeader = new Grid { ColumnSpacing = 8, HorizontalAlignment = HorizontalAlignment.Left, Width = 620 };
-            excludeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            excludeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            excludeHeader.Children.Add(NextSearchLabel("Default exclude patterns (comma/semicolon-separated):"));
-            var excMode = new ComboBox
-            {
-                SelectedIndex = _viewModel.ExcludeFilterModeIndex == 1 ? 1 : 0,
-                Width = 104,
-                MinWidth = 0,
-                Padding = new Thickness(8, 0, 8, 0),
-            };
-            excMode.Items.Add("Glob");
-            excMode.Items.Add("Regex");
-            ToolTipService.SetToolTip(excMode, "Interpret exclude patterns as globs or regular expressions");
-            Grid.SetColumn(excMode, 1);
-            excludeHeader.Children.Add(excMode);
-            filterGroup.Children.Add(excludeHeader);
-
-            var excGlobs = new TextBox { Text = _viewModel.ExcludeGlobs, PlaceholderText = _viewModel.ExcludeFilterPlaceholder, Width = 620, HorizontalAlignment = HorizontalAlignment.Left };
-            excGlobs.TextChanged += (_, _) => _viewModel.ExcludeGlobs = excGlobs.Text;
-            excMode.SelectionChanged += (_, _) =>
-            {
-                if (excMode.SelectedIndex >= 0)
-                    _viewModel.ExcludeFilterModeIndex = excMode.SelectedIndex;
-                excGlobs.PlaceholderText = _viewModel.ExcludeFilterPlaceholder;
-            };
-            filterGroup.Children.Add(excGlobs);
-            filterGroup.Children.Add(new TextBlock { Text = "Exclude patterns are applied before content scanning, so broad excludes are the cheapest way to skip generated folders or noisy file trees.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             var precedenceGroup = AddSettingsGroupBox(g, "Gitignore Conflicts");
             precedenceGroup.Children.Add(NextSearchLabel("When .gitignore and your Include filter conflict:"));
@@ -2880,18 +2847,21 @@ public sealed partial class SettingsWindow : Window
                     && _viewModel.DefaultModifiedBeforeDate is null);
             defaultFiltersGroup.Children.Add(clearDateDefaults);
 
-            var searchBinary = new ToggleSwitch { OnContent = NextSearchLabel("Search binary files"), OffContent = NextSearchLabel("Search binary files"), IsOn = _viewModel.SearchBinary };
-            searchBinary.Toggled += (_, _) => _viewModel.SearchBinary = searchBinary.IsOn;
-            pathTypeGroup.Children.Add(searchBinary);
-            pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled, files detected as binary (null bytes, magic bytes) are included in content search. Off by default for faster searching.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-
-            var searchCloud = new ToggleSwitch { OnContent = NextSearchLabel("Search online-only cloud files"), OffContent = NextSearchLabel("Search online-only cloud files"), IsOn = _viewModel.SearchOnlineOnlyFiles };
-            searchCloud.Toggled += (_, _) => _viewModel.SearchOnlineOnlyFiles = searchCloud.IsOn;
+            var searchCloud = new ToggleSwitch { OnContent = NextSearchLabel("Search online-only cloud files"), OffContent = NextSearchLabel("Search online-only cloud files"), IsOn = _viewModel.SettingsSearchOnlineOnlyFiles };
+            searchCloud.Toggled += (_, _) =>
+            {
+                _viewModel.SettingsSearchOnlineOnlyFiles = searchCloud.IsOn;
+                _viewModel.SearchOnlineOnlyFiles = searchCloud.IsOn;
+            };
             pathTypeGroup.Children.Add(searchCloud);
             pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled, OneDrive/Google Drive ‘online-only’ placeholder files are downloaded on demand and searched — but only when the sync provider is running to serve them. Off by default: cloud-only files are skipped so the scan can never hang waiting on a download that may never complete. Searching them can be slow and use network/disk.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            var searchHidden = new ToggleSwitch { OnContent = NextSearchLabel("Search hidden files"), OffContent = NextSearchLabel("Search hidden files"), IsOn = _viewModel.SearchHiddenFiles };
-            searchHidden.Toggled += (_, _) => _viewModel.SearchHiddenFiles = searchHidden.IsOn;
+            var searchHidden = new ToggleSwitch { OnContent = NextSearchLabel("Search hidden files"), OffContent = NextSearchLabel("Search hidden files"), IsOn = _viewModel.SettingsSearchHiddenFiles };
+            searchHidden.Toggled += (_, _) =>
+            {
+                _viewModel.SettingsSearchHiddenFiles = searchHidden.IsOn;
+                _viewModel.SearchHiddenFiles = searchHidden.IsOn;
+            };
             pathTypeGroup.Children.Add(searchHidden);
             pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled (default), files and folders carrying the Windows Hidden attribute are included in searches. When disabled, hidden items are excluded — the file walker skips them and the Everything backends filter them with !attrib:h. System files (e.g. pagefile.sys, hiberfil.sys) are always skipped by the file walker regardless of this setting. This is the default for the Advanced Options ▸ Content options toggle.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
@@ -3037,6 +3007,18 @@ public sealed partial class SettingsWindow : Window
             archiveEntrySize.ValueChanged += (_, args) => _viewModel.ArchiveMaxEntryMB = (int)args.NewValue;
             archiveGroup.Children.Add(archiveEntrySize);
             archiveGroup.Children.Add(new TextBlock { Text = "Individual files inside archives larger than this are skipped. Higher values search larger archive entries but use more memory. 0 uses the default (64 MB).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            // The persisted default for the Advanced Options ▸ Filters "Search PDF text" toggle. Without
+            // this the setting was seeded and written back unchanged with no writer anywhere, so a
+            // persisted default was unreachable from every surface.
+            var searchPdfText = new ToggleSwitch { OnContent = NextSearchLabel("Search PDF text"), OffContent = NextSearchLabel("Search PDF text"), IsOn = _viewModel.SettingsSearchPdfText };
+            searchPdfText.Toggled += (_, _) =>
+            {
+                _viewModel.SettingsSearchPdfText = searchPdfText.IsOn;
+                _viewModel.SearchPdfText = searchPdfText.IsOn;
+            };
+            pathTypeGroup.Children.Add(searchPdfText);
+            pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled, PDF files are converted to text with the bundled Xpdf pdftotext on a background queue and their extracted text is searched. Off by default. Extraction runs off the scan thread, so PDF matches appear as each file finishes. This is the default for the Advanced Options \u25b8 Filters toggle.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── OCR ──
@@ -3047,8 +3029,12 @@ public sealed partial class SettingsWindow : Window
             var ocrWorkerGroup = AddSettingsGroupBox(g, "Worker Resources");
 
             // Master OCR toggle (migrated from the Search Limits tab).
-            var searchImageText = new ToggleSwitch { OnContent = NextSearchLabel("Search image text (OCR)"), OffContent = NextSearchLabel("Search image text (OCR)"), IsOn = _viewModel.SearchImageText };
-            searchImageText.Toggled += (_, _) => _viewModel.SearchImageText = searchImageText.IsOn;
+            var searchImageText = new ToggleSwitch { OnContent = NextSearchLabel("Search image text (OCR)"), OffContent = NextSearchLabel("Search image text (OCR)"), IsOn = _viewModel.SettingsSearchImageText };
+            searchImageText.Toggled += (_, _) =>
+            {
+                _viewModel.SettingsSearchImageText = searchImageText.IsOn;
+                _viewModel.SearchImageText = searchImageText.IsOn;
+            };
             ocrEnableGroup.Children.Add(searchImageText);
             ocrEnableGroup.Children.Add(new TextBlock { Text = "When enabled, raster images (PNG/JPG/BMP/GIF/TIFF/WebP) are OCR'd on a background queue and their recognized text is searched. Off by default. OCR runs on a separate, non-blocking thread so it never slows the file scan — image matches appear as each image finishes processing. This is the default for the Advanced Options ▸ Filters toggle.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
@@ -3488,6 +3474,12 @@ public sealed partial class SettingsWindow : Window
                 _applyWordWrap?.Invoke(false);
             };
             previewViewerGroup.Children.Add(wordWrap);
+
+            var previewSyntaxHighlight = new CheckBox { Content = "Syntax coloring based on file type", IsChecked = _viewModel.PreviewSyntaxHighlightingEnabled };
+            previewSyntaxHighlight.Checked += (_, _) => _viewModel.PreviewSyntaxHighlightingEnabled = true;
+            previewSyntaxHighlight.Unchecked += (_, _) => _viewModel.PreviewSyntaxHighlightingEnabled = false;
+            previewViewerGroup.Children.Add(previewSyntaxHighlight);
+            previewViewerGroup.Children.Add(new TextBlock { Text = "When enabled, the preview pane colors code (keywords, strings, comments, numbers, etc.) based on the previewed file's name or extension, using the same file types as the built-in editor. Highlighted search matches always keep their match color.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             previewViewerGroup.Children.Add(new TextBlock { Text = "Preview text font", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 12, 0, 0) });
 
@@ -5308,6 +5300,8 @@ public sealed partial class SettingsWindow : Window
         }
 
         BuildIndexingTab();
+
+        BuildMcpTab();
 
         SortTabsAlphabetically();
     }

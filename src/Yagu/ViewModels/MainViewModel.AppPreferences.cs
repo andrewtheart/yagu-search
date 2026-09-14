@@ -19,6 +19,7 @@ public sealed partial class MainViewModel
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
     [ObservableProperty] public partial bool ShowEditorSavedOverlay { get; set; } = true;
     [ObservableProperty] public partial bool EditorSyntaxHighlightingEnabled { get; set; } = true;
+    [ObservableProperty] public partial bool PreviewSyntaxHighlightingEnabled { get; set; } = true;
     [ObservableProperty] public partial int WindowFocusBehavior { get; set; } = 1; // 0 = MinimizeToTray, 1 = StayOpen (default), 2 = AlwaysOnTop
     [ObservableProperty] public partial bool StartInLauncherMode { get; set; } = true;
     [ObservableProperty] public partial bool CloseToTray { get; set; } = true;

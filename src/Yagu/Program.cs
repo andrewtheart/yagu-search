@@ -31,6 +31,7 @@ internal static class Program
         bool isGuiChild = ConsumeGuiChildFlag(ref args);
 
         bool isCli = args.Any(a => string.Equals(a, "--cli", StringComparison.OrdinalIgnoreCase))
+                  || CliRunner.IsMcpCommand(args)
                   || args.Any(a => IsHelpFlag(a));
 
         // Hide the console window immediately for GUI launches to prevent a brief flash.
@@ -46,6 +47,15 @@ internal static class Program
         {
             CliRunner.RunHelp();
             Environment.Exit(0);
+            return;
+        }
+
+        // MCP server administration (config, install/remove, status, token, autostart). Console
+        // commands, so they must not reach the GUI path even without --cli.
+        if (CliRunner.IsMcpCommand(args))
+        {
+            int mcpExitCode = CliRunner.RunMcpCommand(args);
+            Environment.Exit(mcpExitCode);
             return;
         }
 

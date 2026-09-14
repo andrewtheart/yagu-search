@@ -299,8 +299,12 @@ public sealed partial class MainWindow : Window, IDisposable
         ViewModel.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(ViewModel.PreviewContextLines)
-                || e.PropertyName == nameof(ViewModel.LineTruncationLength))
+                || e.PropertyName == nameof(ViewModel.LineTruncationLength)
+                || e.PropertyName == nameof(ViewModel.PreviewSyntaxHighlightingEnabled))
             {
+                if (e.PropertyName == nameof(ViewModel.PreviewSyntaxHighlightingEnabled))
+                    InvalidatePreviewSyntaxState();
+
                 if (_previewContextDebounceTimer is null)
                 {
                     _previewContextDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };

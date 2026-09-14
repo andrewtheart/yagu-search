@@ -300,6 +300,7 @@
 
   <Target Name="BuildInstallerAfterPublish"
           AfterTargets="Publish"
+          DependsOnTargets="CopyMcpServerToPublish"
           Condition="'$(BuildInstallerOnPublish)' != 'false' And '$(DesignTimeBuild)' != 'true' And '$(YaguInstallerArch)' != ''">
     <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\build-installer.ps1&quot; -SkipBuild -Architecture $(YaguInstallerArch)" />
   </Target>
@@ -323,6 +324,7 @@
   -->
   <Target Name="BuildAllInstallersAfterPublish"
           AfterTargets="Publish"
+          DependsOnTargets="CopyMcpServerToPublish"
           Condition="'$(BuildInstallerOnPublish)' != 'false' And '$(DesignTimeBuild)' != 'true' And '$(UseCurrentRuntimeIdentifier)' == 'true'">
     <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\build-all-installers.ps1&quot;" />
   </Target>
@@ -653,6 +655,76 @@
     </ItemGroup>
     <Copy SourceFiles="@(_YaguIndexWorkerPublishFiles)"
           DestinationFiles="@(_YaguIndexWorkerPublishFiles->'$(PublishDir)index-worker\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <!--
+    Out-of-process MCP SERVER (Yagu.McpServer) build + bundle.
+
+    Exposes a defined subset of the search surface over the Model Context Protocol. It is a THIN
+    BRIDGE: every tool shells out to the Yagu CLI in machine mode, so it never links the search engine.
+    Same isolation rules as the other workers: NO ProjectReference (would drag it into Yagu's
+    Native-AOT publish graph); built as an ISOLATED child `dotnet publish`; output copied into the
+    app's mcp-server folder.
+
+    Like the INDEX worker, its RID must MATCH the app's architecture: the installer ships a real x86
+    build, and an x64 executable cannot start on 32-bit Windows. So McpServerRid tracks
+    $(RuntimeIdentifier), and the RID-specific output directory keeps sequential installer builds from
+    copying a stale architecture.
+
+    Set -p:BuildMcpServer=false to skip.
+  -->
+  <PropertyGroup>
+    <BuildMcpServer Condition="'$(BuildMcpServer)' == ''">true</BuildMcpServer>
+    <McpServerProject>$(MSBuildThisFileDirectory)..\Yagu.McpServer\Yagu.McpServer.csproj</McpServerProject>
+    <McpServerRid Condition="'$(McpServerRid)' == '' And '$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</McpServerRid>
+    <McpServerRid Condition="'$(McpServerRid)' == ''">win-x64</McpServerRid>
+    <McpServerOutDir>$(MSBuildThisFileDirectory)..\Yagu.McpServer\bin\$(Configuration)\net10.0\$(McpServerRid)\publish\</McpServerOutDir>
+  </PropertyGroup>
+
+  <Target Name="BuildMcpServer"
+          BeforeTargets="BeforeBuild"
+          Condition="'$(BuildMcpServer)' == 'true' And '$(DesignTimeBuild)' != 'true' And Exists('$(McpServerProject)')">
+    <Exec Command="dotnet publish &quot;$(McpServerProject)&quot; -c $(Configuration) -r $(McpServerRid) --self-contained true --nologo -v quiet"
+          ContinueOnError="WarnAndContinue">
+      <Output TaskParameter="ExitCode" PropertyName="_McpServerPublishExitCode" />
+    </Exec>
+    <!-- A FAILED publish must not leave the previous output behind: the copy steps below only test for
+         the file's existence, so a stale (or wrong-architecture) server from an earlier run would be
+         staged and shipped, and a green build would say nothing about it. -->
+    <RemoveDir Condition="'$(_McpServerPublishExitCode)' != '0'" Directories="$(McpServerOutDir)" />
+    <Warning Condition="!Exists('$(McpServerOutDir)Yagu.McpServer.exe')"
+             Text="Yagu.McpServer did not publish to $(McpServerOutDir)Yagu.McpServer.exe; the MCP server will be unavailable. Build Yagu.McpServer manually, or pass -p:BuildMcpServer=false to silence this warning." />
+  </Target>
+
+  <Target Name="CopyMcpServerToOutput"
+          AfterTargets="Build"
+          Condition="'$(BuildMcpServer)' == 'true' And '$(DesignTimeBuild)' != 'true' And Exists('$(McpServerOutDir)Yagu.McpServer.exe')">
+    <ItemGroup>
+      <_YaguMcpServerFiles Include="$(McpServerOutDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YaguMcpServerFiles)"
+          DestinationFiles="@(_YaguMcpServerFiles->'$(OutDir)mcp-server\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyMcpServerToPublish"
+          AfterTargets="Publish"
+          Condition="'$(BuildMcpServer)' == 'true' And '$(DesignTimeBuild)' != 'true'">
+    <!-- Both installer targets take a DependsOnTargets on this one. Without it they were ordered only by
+         declaration position in this file, so moving a target — or any change to how MSBuild orders equal
+         AfterTargets hooks — would have packaged a publish folder with no mcp-server\ directory, producing
+         an installer that advertises MCP support and ships no server. -->
+    <!-- Fatal at PUBLISH time, unlike the warning during a dev build. A published Yagu advertises MCP
+         support in its UI, CLI and help, so shipping the feature without its server is a broken
+         release rather than a degraded build. -p:BuildMcpServer=false stays the deliberate opt-out. -->
+    <Error Condition="!Exists('$(McpServerOutDir)Yagu.McpServer.exe')"
+           Text="Yagu.McpServer was not published to $(McpServerOutDir)Yagu.McpServer.exe, so this payload would ship MCP support with no server. Fix the Yagu.McpServer publish, or pass -p:BuildMcpServer=false to publish without it deliberately." />
+    <ItemGroup>
+      <_YaguMcpServerPublishFiles Include="$(McpServerOutDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YaguMcpServerPublishFiles)"
+          DestinationFiles="@(_YaguMcpServerPublishFiles->'$(PublishDir)mcp-server\%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
   </Target>
 

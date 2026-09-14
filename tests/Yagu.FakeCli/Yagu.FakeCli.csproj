@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Yagu.FakeCli</AssemblyName>
+    <!-- A stand-in for Yagu.exe, driven by YaguCliBridge in the MCP server tests. It exists so the
+         bridge's real child-process handling - pipe draining, kill-on-timeout, inherited stdout
+         handles, protocol parsing - is exercised against an actual process rather than a mock. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>
