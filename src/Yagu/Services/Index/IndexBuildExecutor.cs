@@ -7,7 +7,7 @@ namespace Yagu.Services.Index;
 
 internal sealed class IndexBuildRuntime
 {
-    public Func<IndexMutationContext, ContentIndexManager, IContentIndexPathProvider, string, IndexIngestionPolicy, CancellationToken, Action<PdfBuildProgress>?, PdfExtendedSourceBuildResult> BuildPdf { get; init; }
+    public Func<IndexMutationContext, ContentIndexManager, IContentIndexPathProvider, string, IndexIngestionPolicy, IndexBuildOperation, CancellationToken, Action<PdfBuildProgress>?, PdfExtendedSourceBuildResult> BuildPdf { get; init; }
         = BuildProductionPdf;
 
     private static PdfExtendedSourceBuildResult BuildProductionPdf(
@@ -16,13 +16,22 @@ internal sealed class IndexBuildRuntime
         IContentIndexPathProvider stagingPaths,
         string root,
         IndexIngestionPolicy policy,
+        IndexBuildOperation operation,
         CancellationToken cancellationToken,
         Action<PdfBuildProgress>? progress)
     {
         string? toolPath = IndexWorkerToolPaths.ResolvePdfTextToolPath();
         var extractor = new PdfTextExtractor(toolPath);
         return manager.BuildPdfExtendedSourceUnderLeaseAsync(
-            mutation, root, policy, extractor, cancellationToken, progress).GetAwaiter().GetResult();
+            mutation,
+            root,
+            policy,
+            extractor,
+            cancellationToken,
+            progress,
+            TimeSpan.FromSeconds(operation.FileIoTimeoutSeconds),
+            operation.MaxDiskUsagePercent,
+            operation.PostBuildCatchUpSettings.MinimumFreeSpaceMB).GetAwaiter().GetResult();
     }
 
     public Func<IndexMutationContext, ContentIndexManager, IContentIndexPathProvider, string, IndexIngestionPolicy, IndexBuildOperation, CancellationToken, Action<ImageOcrBuildProgress>?, ImageOcrExtendedSourceBuildResult> BuildImageOcr { get; init; }
@@ -57,7 +66,10 @@ internal sealed class IndexBuildRuntime
                 operation.ImageOcrModel,
                 operation.ImageOcrMaxSide,
                 cancellationToken,
-                progress).GetAwaiter().GetResult();
+                progress,
+                TimeSpan.FromSeconds(operation.FileIoTimeoutSeconds),
+                operation.MaxDiskUsagePercent,
+                operation.PostBuildCatchUpSettings.MinimumFreeSpaceMB).GetAwaiter().GetResult();
         }
         finally
         {
@@ -152,6 +164,8 @@ internal sealed class IndexMaintenanceRuntime
         CancellationToken cancellationToken,
         Action<int, string>? progress)
     {
+        if (policy.IncludeCloudOnlyFiles)
+            CloudFileHelper.ResetProviderCache();
         string scopeId = ContentIndexManager.ScopeIdForRoot(root);
         var store = new ContentIndexStore(paths, scopeId, retainedGenerations);
         store.ProduceV3QueryStructures = settings.ProduceV3QueryStructures;
@@ -232,7 +246,14 @@ internal static class IndexBuildExecutor
             try
             {
                 PdfExtendedSourceBuildResult pdf = runtime.BuildPdf(
-                    mutation, stagedManager, transaction.Paths, operation.Root, policy, cancellationToken, pdfProgress);
+                    mutation,
+                    stagedManager,
+                    transaction.Paths,
+                    operation.Root,
+                    policy,
+                    operation,
+                    cancellationToken,
+                    pdfProgress);
                 pdfStatus = pdf.Status.ToString();
                 pdfsSeen = pdf.PdfsSeen;
                 pdfAdmitted = pdf.Admitted;
@@ -318,6 +339,30 @@ internal static class IndexBuildExecutor
             imagesAdmitted,
             imagesFailed,
             postBuildCatchUp);
+    }
+
+    /// <summary>
+    /// Builds the failed-compaction row. A disk-headroom stop is reported with its own outcome because it is
+    /// self-correcting: the host re-checks the volume on a short poll instead of arming the long generic
+    /// failure backoff.
+    /// </summary>
+    private static IndexMaintenanceRootResult CompactionFailedResult(
+        ContentIndexManager manager,
+        string root,
+        string warning)
+    {
+        bool diskSpace = manager.IsAutomaticCompactionDeferredForDiskSpace(root);
+        return new IndexMaintenanceRootResult
+        {
+            Root = root,
+            Action = IndexMaintenanceActions.Failed,
+            Outcome = diskSpace
+                ? IndexMaintenanceOutcomes.CompactionFailedDiskSpace
+                : IndexMaintenanceOutcomes.CompactionFailed,
+            Warning = diskSpace
+                ? "Automatic compaction stopped to keep the index drive inside your configured disk limits; the existing index was kept and compaction restarts as soon as the space is free."
+                : warning,
+        };
     }
 
     internal static IndexMaintenanceSuccess RunMaintenancePassUnderLease(
@@ -436,13 +481,10 @@ internal static class IndexBuildExecutor
                     }
                     if (compaction == IndexAutomaticCompactionOutcome.Failed)
                     {
-                        roots.Add(new IndexMaintenanceRootResult
-                        {
-                            Root = root,
-                            Action = IndexMaintenanceActions.Failed,
-                            Outcome = "compactionFailed",
-                            Warning = "Automatic compaction failed; the existing index was kept and a later pass will retry after the backoff period.",
-                        });
+                        roots.Add(CompactionFailedResult(
+                            manager,
+                            root,
+                            "Automatic compaction failed; the existing index was kept and a later pass will retry after the backoff period."));
                         failed++;
                         continue;
                     }
@@ -493,13 +535,10 @@ internal static class IndexBuildExecutor
                         built++;
                         break;
                     case IncrementalUpdateOutcome.CompactionFailed:
-                        roots.Add(new IndexMaintenanceRootResult
-                        {
-                            Root = root,
-                            Action = IndexMaintenanceActions.Failed,
-                            Outcome = "compactionFailed",
-                            Warning = "The incremental update was kept, but automatic compaction failed; a later pass will retry after the backoff period.",
-                        });
+                        roots.Add(CompactionFailedResult(
+                            manager,
+                            root,
+                            "The incremental update was kept, but automatic compaction failed; a later pass will retry after the backoff period."));
                         failed++;
                         break;
                     case IncrementalUpdateOutcome.NoChanges:
@@ -514,13 +553,10 @@ internal static class IndexBuildExecutor
                         }
                         else if (noChangeCompaction == IndexAutomaticCompactionOutcome.Failed)
                         {
-                            roots.Add(new IndexMaintenanceRootResult
-                            {
-                                Root = root,
-                                Action = IndexMaintenanceActions.Failed,
-                                Outcome = "compactionFailed",
-                                Warning = "Automatic compaction failed; the existing index was kept and a later pass will retry after the backoff period.",
-                            });
+                            roots.Add(CompactionFailedResult(
+                                manager,
+                                root,
+                                "Automatic compaction failed; the existing index was kept and a later pass will retry after the backoff period."));
                             failed++;
                         }
                         else if (runtime.Reanchor(mutation, manager, paths, operation.RetainedGenerations, root))

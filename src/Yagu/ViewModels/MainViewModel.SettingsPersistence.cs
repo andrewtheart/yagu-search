@@ -54,23 +54,14 @@ public sealed partial class MainViewModel
 
     public async Task PersistSettingsAsync()
     {
-        // While a completed semantic search's resolution is shown in Advanced Options, persist the saved
-        // filter DEFAULTS (from the snapshot) instead of the resolved values, so a semantic search never
-        // changes what a fresh Yagu instance opens with. (Directory is the one exception — a model-
-        // resolved directory is meant to override and persist.) The snapshot captures the ENTIRE filter
-        // surface — including the Skip/Binary/Archive extension lists (both the active and the persisted
-        // Settings* mirror) and the OCR toggle — so a transient "Include & search" un-skip or any future
-        // resolution path can never leak a resolved value to disk. Guard every filter field with `d`.
+        // Advanced Options are active-search state and must never be copied into AppSettings. Persisted
+        // defaults have dedicated Settings* properties (or, for extension lists, snapshot-protected
+        // Settings* mirrors). Directory is deliberately separate: a resolved directory may persist.
         var d = _semanticResolutionVisible ? _semanticDefaultsSnapshot : null;
 
         _settings.LastDirectory = Directory;
-        _settings.CaseSensitive = d is null ? CaseSensitive : d.CaseSensitive;
-        _settings.UseRegex = d is null ? UseRegex : d.UseRegex;
-        _settings.ExactMatch = d is null ? ExactMatch : d.ExactMatch;
-        _settings.MultilineSearchDefault = Multiline;
         _settings.ContextLines = ContextLines;
         _settings.PreviewContextLines = PreviewContextLines;
-        _settings.ObeyGitignore = d is null ? ObeyGitignore : d.ObeyGitignore;
         _settings.GitignoreTakesPrecedence = GitignoreTakesPrecedence;
         _settings.GitignorePrecedencePreference = GitignorePrecedencePreference;
         _settings.DefaultToTraditionalSearchMode = DefaultToTraditionalSearchMode;
@@ -78,16 +69,6 @@ public sealed partial class MainViewModel
         _settings.SemanticModelAlias = SemanticModelAlias;
         _settings.SemanticDevicePreferenceOrder = SemanticDevicePreferenceOrder;
         _settings.SemanticUnloadModelAfterUse = SemanticUnloadModelAfterUse;
-        _settings.IncludeGlobs = d is null ? IncludeGlobs : d.IncludeGlobs;
-        _settings.ExcludeGlobs = d is null ? ExcludeGlobs : d.ExcludeGlobs;
-        _settings.IncludeFilterModeIndex = d is null ? IncludeFilterModeIndex : d.IncludeFilterModeIndex;
-        _settings.ExcludeFilterModeIndex = d is null ? ExcludeFilterModeIndex : d.ExcludeFilterModeIndex;
-        _settings.MinFileSizeBytes = d is null ? MinFileSizeBytes : d.MinFileSizeBytes;
-        _settings.MaxFileSizeBytes = d is null ? MaxFileSizeBytes : d.MaxFileSizeBytes;
-        _settings.CreatedAfterDate = d is null ? CreatedAfterDate : d.CreatedAfterDate;
-        _settings.CreatedBeforeDate = d is null ? CreatedBeforeDate : d.CreatedBeforeDate;
-        _settings.ModifiedAfterDate = d is null ? ModifiedAfterDate : d.ModifiedAfterDate;
-        _settings.ModifiedBeforeDate = d is null ? ModifiedBeforeDate : d.ModifiedBeforeDate;
         _settings.DefaultMinFileSizeBytes = DefaultMinFileSizeBytes;
         _settings.DefaultMaxFileSizeBytes = DefaultMaxFileSizeBytes;
         _settings.DefaultCreatedAfterDate = DefaultCreatedAfterDate;
@@ -219,11 +200,10 @@ public sealed partial class MainViewModel
         _settings.MaxMatchesPerLine = MaxMatchesPerLine < 0 ? 0 : MaxMatchesPerLine;
         _settings.FileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds(FileIoTimeoutSeconds);
         _settings.AbsoluteMaxResults = AbsoluteMaxResults < 0 ? 0 : AbsoluteMaxResults;
-        _settings.SkipBinary = d is null ? SkipBinary : d.SkipBinary;
-        _settings.SearchOnlineOnlyFiles = SearchOnlineOnlyFiles;
-        _settings.SearchHiddenFiles = d is null ? SearchHiddenFiles : d.SearchHiddenFiles;
-        _settings.SearchImageText = d is null ? SearchImageText : d.SearchImageText;
-        _settings.SearchPdfText = SearchPdfText;
+        _settings.SearchOnlineOnlyFiles = SettingsSearchOnlineOnlyFiles;
+        _settings.SearchHiddenFiles = SettingsSearchHiddenFiles;
+        _settings.SearchImageText = SettingsSearchImageText;
+        _settings.SearchPdfText = SettingsSearchPdfText;
         _settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine);
         _settings.ImageOcrModel = AppSettings.NormalizeImageOcrModel(ImageOcrModel);
         _settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(ImageOcrMaxSide);
@@ -232,14 +212,13 @@ public sealed partial class MainViewModel
         // (PinnedStartupDirectory) is a snapshot written by SetStartupDirectoryPinnedAsync at click
         // time, so it is intentionally NOT recaptured here and never drifts as the box changes.
         _settings.PinStartupDirectory = PinStartupDirectory;
-        _settings.SearchInsideArchives = d is null ? SearchInsideArchives : d.SearchInsideArchives;
         _settings.ArchiveExtensions = d is null ? SettingsArchiveExtensions : d.SettingsArchiveExtensions;
         _settings.SkipExtensions = d is null ? SettingsSkipExtensions : d.SettingsSkipExtensions;
         _settings.BinaryExtensions = d is null ? SettingsBinaryExtensions : d.SettingsBinaryExtensions;
         _settings.SuppressAdminWarning = SuppressAdminWarning;
         _settings.SuppressEverythingNotRunningPrompt = SuppressEverythingNotRunningPrompt;
-        // Tab order is a drawer-layout preference, not a search option, so it is persisted directly
-        // and deliberately left out of the Advanced Options "save as defaults" / "reset" snapshot.
+        // Tab order and option placement are drawer-layout preferences, not search options, so they
+        // are persisted directly and deliberately left out of the Advanced Options reset behavior.
         _settings.AdvancedOptionsTabOrder = AdvancedOptionsTabOrder;
         _settings.AdvancedOptionPlacements = new Dictionary<string, string>(AdvancedOptionPlacements, StringComparer.Ordinal);
         _settings.SuppressEverythingIndexCoverageWarning = SuppressEverythingIndexCoverageWarning;
@@ -262,6 +241,7 @@ public sealed partial class MainViewModel
         _settings.BackupBeforeSave = BackupBeforeSave;
         _settings.ShowEditorSavedOverlay = ShowEditorSavedOverlay;
         _settings.EditorSyntaxHighlightingEnabled = EditorSyntaxHighlightingEnabled;
+        _settings.PreviewSyntaxHighlightingEnabled = PreviewSyntaxHighlightingEnabled;
         _settings.WindowFocusBehavior = WindowFocusBehavior;
         _settings.StartInLauncherMode = StartInLauncherMode;
         _settings.CloseToTray = CloseToTray;

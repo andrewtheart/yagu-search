@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Yagu.Services.Index;
 using Yagu.Services.Logging;
 
@@ -15,6 +16,11 @@ public sealed partial class SettingsWindow
     /// </summary>
     private async Task<bool> SaveSettingsAndOfferIndexRebuildAsync()
     {
+        // The autostart toggle applies its change on a background task (up to four 15s schtasks runs) and
+        // writes the corrected McpStartAtLogin when it finishes. Saving on top of a pending one persisted
+        // the stale value and then marked settings clean, discarding the correction permanently.
+        await AwaitPendingMcpAutostartAsync();
+
         ContentIndexSettingsSnapshot before = _cleanContentIndexSettings
             ?? ContentIndexSettingsChangeAdvisor.Capture(_viewModel.Settings);
         ContentIndexSettingsSnapshot after = ContentIndexSettingsChangeAdvisor.Capture(_viewModel.Settings);
@@ -22,11 +28,58 @@ public sealed partial class SettingsWindow
 
         await _viewModel.PersistSettingsAsync();
         MarkSettingsClean();
+        RefreshMcpAutostartRegistration();
+
+        bool mcpNeedsAttention = false;
+        if (_mcpAutostartWarning is { } mcpWarning)
+        {
+            _mcpAutostartWarning = null;
+            mcpNeedsAttention = true;
+            await ReportMcpAutostartFailureAsync(mcpWarning);
+        }
 
         if (!advice.HasRecommendation)
-            return false;
+            return mcpNeedsAttention;
 
-        return await OfferIndexRebuildAfterSettingsChangeAsync(advice);
+        return await OfferIndexRebuildAfterSettingsChangeAsync(advice) || mcpNeedsAttention;
+    }
+
+    /// <summary>
+    /// Reports a sign-in task that could not be put into the state the saved settings describe.
+    /// </summary>
+    /// <remarks>
+    /// The task's command line <b>is</b> the grant, so a failure here means folders the user just took
+    /// away are still being served. Settings is kept open and a dialog is shown rather than a status line
+    /// on a tab that is about to close, and the settings are written again because the refresh may have
+    /// turned autostart off to match a machine that no longer has the task.
+    /// </remarks>
+    private async Task ReportMcpAutostartFailureAsync(string message)
+    {
+        await _viewModel.PersistSettingsAsync();
+        MarkSettingsClean();
+        RefreshMcpTab();
+
+        await YaguDialog.ShowAsync(
+            _settingsHwnd,
+            new YaguDialogOptions
+            {
+                Title = "MCP server access changed",
+                TitleGlyph = "\uE7BA", // Warning
+                Content = new TextBlock
+                {
+                    Text = message,
+                    FontSize = 13,
+                    TextWrapping = TextWrapping.Wrap,
+                    IsTextSelectionEnabled = true,
+                },
+                CloseButtonText = "Close",
+                RequestedTheme = RootGrid.ActualTheme,
+                Width = 620,
+                Height = 340,
+                MaxContentHeight = 220,
+                ShowTitleBar = false,
+                ShowTopRightCloseButton = true,
+            });
     }
 
     private async Task<bool> OfferIndexRebuildAfterSettingsChangeAsync(ContentIndexSettingsChangeAdvice advice)

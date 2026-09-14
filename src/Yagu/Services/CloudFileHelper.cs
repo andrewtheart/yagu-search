@@ -66,6 +66,14 @@ internal static class CloudFileHelper
 
     private const int CF_SYNC_ROOT_INFO_PROVIDER = 2;
 
+    // HRESULT_FROM_WIN32(ERROR_MORE_DATA). CF_SYNC_ROOT_PROVIDER_INFO is a fixed record of WCHAR
+    // arrays whose exact size has grown between Windows releases (1028 bytes on Windows 11, i.e.
+    // four bytes past the obvious 1 KB guess). Sizing the buffer by hand therefore fails closed on
+    // every query, which silently reduced IsProviderLive to a constant false and made every
+    // "search/index online-only files" opt-in a no-op. Ask, then retry with the length the API reports.
+    private const int HresultMoreData = unchecked((int)0x800700EA);
+    private const int SyncRootProviderInfoInitialBytes = 2048;
+
     // CF_PROVIDER_STATUS values (cfapi.h). "Live" = a connected provider that can
     // hydrate: IDLE plus the active populate/sync states. DISCONNECTED(0),
     // CONNECTIVITY_LOST(64) and the TERMINATE/ERROR high-bit sentinels are not live.
@@ -93,7 +101,31 @@ internal static class CloudFileHelper
     public static void ResetProviderCache()
     {
         s_providerLiveByDir.Clear();
+        s_cloudSyncDirectory.Clear();
         s_syncRootPrefixes = null;
+    }
+
+    // ── Sync-root membership for DIRECTORIES ──
+    private static readonly ConcurrentDictionary<string, bool> s_cloudSyncDirectory =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when <paramref name="directory"/> is managed by a Windows Cloud Filter sync provider
+    /// (OneDrive Files On-Demand, Google Drive, Dropbox, …).
+    ///
+    /// <para>Such a directory carries <see cref="FileAttributes.ReparsePoint"/> but is <b>not</b> a link:
+    /// it has no link target, cannot form a cycle, and never leaves the volume. It also does <b>not</b>
+    /// carry the <c>RECALL_ON_*</c> attributes that mark placeholder <em>files</em>, so it cannot be
+    /// identified from attributes alone — only this API distinguishes it from a junction/symlink.</para>
+    ///
+    /// <para>Answering this question never hydrates anything; it inspects sync-root metadata only.</para>
+    /// </summary>
+    public static bool IsCloudSyncDirectory(string directory)
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 16299) || string.IsNullOrEmpty(directory))
+            return false;
+
+        return s_cloudSyncDirectory.GetOrAdd(directory, static d => TryQuerySyncRootProvider(d, out _));
     }
 
     // ── Sync-root prefix gate for paths discovered WITHOUT attributes (e.g. the
@@ -159,18 +191,28 @@ internal static class CloudFileHelper
     }
 
     private static bool QueryProviderLive(string path)
+        => TryQuerySyncRootProvider(path, out uint status)
+           && status >= CF_PROVIDER_STATUS_IDLE
+           && status <= CF_PROVIDER_STATUS_SYNC_FULL;
+
+    /// <summary>
+    /// Reads the Cloud Filter sync-root provider record for <paramref name="path"/>. Returns false when
+    /// the path is not under any sync root, when cldapi.dll is unavailable, or when the query fails —
+    /// all of which callers treat as "not hydratable". A too-small buffer is retried once at the exact
+    /// size the API reports rather than being misread as "not a sync root".
+    /// </summary>
+    private static bool TryQuerySyncRootProvider(string path, out uint providerStatus)
     {
-        const int bufLen = 1024;
-        IntPtr buf = Marshal.AllocHGlobal(bufLen);
+        providerStatus = 0;
+
         try
         {
-            int hr = CfGetSyncRootInfoByPath(path, CF_SYNC_ROOT_INFO_PROVIDER, buf, bufLen, out int _);
-            if (hr != 0)
-                return false; // not under a sync root, or the query failed → don't risk a read
+            if (TryQuerySyncRootProviderOnce(path, SyncRootProviderInfoInitialBytes, out providerStatus, out int hr, out int required))
+                return true;
+            if (hr != HresultMoreData || required <= SyncRootProviderInfoInitialBytes)
+                return false;
 
-            // CF_SYNC_ROOT_PROVIDER_INFO begins with CF_PROVIDER_STATUS ProviderStatus.
-            uint status = unchecked((uint)Marshal.ReadInt32(buf));
-            return status >= CF_PROVIDER_STATUS_IDLE && status <= CF_PROVIDER_STATUS_SYNC_FULL;
+            return TryQuerySyncRootProviderOnce(path, required, out providerStatus, out _, out _);
         }
         catch (DllNotFoundException)
         {
@@ -178,8 +220,25 @@ internal static class CloudFileHelper
         }
         catch (Exception ex)
         {
-            YaguLog.For("CloudFileHelper").LogDebug(ex, "Provider liveness query failed for {Path}", path);
+            YaguLog.For("CloudFileHelper").LogDebug(ex, "Sync-root provider query failed for {Path}", path);
             return false;
+        }
+    }
+
+    private static bool TryQuerySyncRootProviderOnce(
+        string path, int bufferBytes, out uint providerStatus, out int hr, out int requiredBytes)
+    {
+        providerStatus = 0;
+        IntPtr buf = Marshal.AllocHGlobal(bufferBytes);
+        try
+        {
+            hr = CfGetSyncRootInfoByPath(path, CF_SYNC_ROOT_INFO_PROVIDER, buf, bufferBytes, out requiredBytes);
+            if (hr != 0)
+                return false;
+
+            // CF_SYNC_ROOT_PROVIDER_INFO begins with CF_PROVIDER_STATUS ProviderStatus.
+            providerStatus = unchecked((uint)Marshal.ReadInt32(buf));
+            return true;
         }
         finally
         {

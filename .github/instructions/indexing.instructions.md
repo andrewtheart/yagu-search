@@ -106,6 +106,10 @@ postings look authoritative and incorrectly prune files.
   redundant on-disk child data is inert until explicitly deleted.
 - Per-root include/exclude globs are build-time ingestion policy. Excluded or otherwise unindexed
   files live-scan; they are not omitted from search results.
+- Cloud-only placeholder ingestion is a persisted, default-off build policy. When enabled, index a
+  placeholder only while its Cloud Filter provider is live and keep every open/read behind the bounded
+  I/O lane. A disconnected, unavailable, timed-out, or failed hydration must tombstone or leave the file
+  unindexed so searches fall back safely; never open an orphaned placeholder directly.
 - Query-family switches only narrow eligibility. Unsupported/unsafe regex shapes, non-ASCII
   case-insensitive queries, excessive candidate ratios, memory/size limits, startup timeout, stale
   layers, and unsupported binary cases must bypass acceleration and live-scan.

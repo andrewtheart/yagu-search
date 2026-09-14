@@ -370,11 +370,22 @@ public sealed class UsnJournalReaderTests
 
             // ReFS can reset to a small cursor without changing its journal id. A checkpoint from before
             // that reset must fail closed rather than report a trusted empty future interval.
-            var future = new UsnCheckpoint(info.UsnJournalId, info.NextUsn + 1);
+            //
+            // Both values below race live volume state, because NextUsn advances with any write anywhere
+            // on the volume -- including the rest of this suite running in parallel. So leave a wide
+            // margin instead of NextUsn + 1 (which the volume can overtake, making the checkpoint no
+            // longer "ahead"), and assert the reported cursor is monotonically at least what was
+            // sampled rather than exactly equal to a number that is stale the moment it is read.
+            var future = new UsnCheckpoint(info.UsnJournalId, info.NextUsn + 1_000_000);
             UsnReadResult result = UsnJournalReader.TryCollectChanges(dir, future);
 
             Assert.Equal(UsnReadStatus.CheckpointAhead, result.Status);
-            Assert.Equal(info.NextUsn, result.NextCheckpoint.NextUsn);
+            Assert.True(
+                result.NextCheckpoint.NextUsn >= info.NextUsn,
+                $"expected the reported cursor to be at least the sampled NextUsn {info.NextUsn}, got {result.NextCheckpoint.NextUsn}");
+            Assert.True(
+                result.NextCheckpoint.NextUsn < future.NextUsn,
+                "a checkpoint ahead of the volume must resync to the volume's cursor, not the future one");
         }
         finally
         {

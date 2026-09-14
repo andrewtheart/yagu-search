@@ -28,6 +28,8 @@ public sealed partial class MainWindow
     /// <summary>Prevents WhenIdle/Continuous maintenance from launching on every 30-second timer tick.
     /// Either trigger may run another pass after its own configured cadence elapses.</summary>
     private DateTimeOffset _lastIdleIndexRunUtc = DateTimeOffset.MinValue;
+    /// <summary>When the index volume was last probed for a compaction deferred on disk headroom.</summary>
+    private DateTimeOffset _lastCompactionDiskProbeUtc = DateTimeOffset.MinValue;
 
     private async void OnContentLoaded(object sender, RoutedEventArgs e)
     {
@@ -84,6 +86,7 @@ public sealed partial class MainWindow
             if (!ViewModel.ShouldOfferSemanticModelQualification)
                 startupDialogPlan.Remove(StartupDialogStep.SemanticQualification);
             await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.SemanticQualification, OfferSemanticModelQualificationIfNeededAsync);
+            await RunStartupDialogStepAsync(startupDialogPlan, StartupDialogStep.McpAllowedRoots, CheckFirstRunMcpAllowedRootsAsync);
             // Update checks: the one-time consent prompt (only on a fresh install / undecided user) stays in
             // the awaited startup-modal chain so it never races or stacks with first-run, telemetry, indexing,
             // or semantic dialogs. The Automatic-mode background check is fire-and-forget and only ever
@@ -142,6 +145,7 @@ public sealed partial class MainWindow
         {
             _ = RunScheduledIndexBuildIfDueAsync();
             _ = RunIdleIndexBuildIfDueAsync();
+            _ = ResumeDiskDeferredCompactionIfFreedAsync();
         };
         _indexScheduleTimer.Start();
 
@@ -152,6 +156,45 @@ public sealed partial class MainWindow
                 ViewModel.Settings.IndexBuildTrigger,
                 ContentIndexBuildScheduler.TriggerContinuous))
             _ = RunIdleIndexBuildIfDueAsync();
+    }
+
+    /// <summary>
+    /// Re-checks the index volume every <see cref="ContentIndexManager.AutomaticCompactionDiskRetryDelay"/>
+    /// while a compaction is deferred because the drive was outside the configured disk limits. That
+    /// condition is external and self-correcting, so once the space is back the backoff is dropped and a
+    /// maintenance pass starts immediately rather than waiting for another trigger.
+    /// </summary>
+    private async Task ResumeDiskDeferredCompactionIfFreedAsync()
+    {
+        try
+        {
+            DateTimeOffset nowUtc = DateTimeOffset.UtcNow;
+            if (nowUtc - _lastCompactionDiskProbeUtc < ContentIndexManager.AutomaticCompactionDiskRetryDelay)
+                return;
+            _lastCompactionDiskProbeUtc = nowUtc;
+
+            if (!ViewModel.Settings.EnableContentIndex
+                || ViewModel.IsIndexBuildActive
+                || ViewModel.IsIndexingPaused
+                || ViewModel.IsShutdownRequested)
+                return;
+
+            IReadOnlyList<string> roots = await Task.Run(
+                () => ViewModel.FindRootsWhoseDiskDeferredCompactionCanResume(nowUtc)).ConfigureAwait(true);
+            if (roots.Count == 0)
+                return;
+
+            YaguLog.For("ContentIndex").LogInformation(
+                "Index drive is back inside the configured disk limits — resuming deferred compaction for {RootCount} root(s).",
+                roots.Count);
+            foreach (string root in roots)
+                await ViewModel.ClearAutomaticCompactionBackoffAsync(root).ConfigureAwait(true);
+            await RunIndexBuildPassAsync(roots).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            YaguLog.For("ContentIndex").LogWarning(ex, "Deferred-compaction disk probe failed");
+        }
     }
 
     /// <summary>Runs idle-style maintenance. WhenIdle uses its configured no-input delay and Continuous uses

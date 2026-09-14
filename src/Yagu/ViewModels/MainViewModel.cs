@@ -371,10 +371,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         FileIoTimeoutSeconds = AppSettings.NormalizeFileIoTimeoutSeconds(_settings.FileIoTimeoutSeconds);
         AbsoluteMaxResults = _settings.AbsoluteMaxResults;
         SkipBinary = _settings.SkipBinary;
-        SearchOnlineOnlyFiles = _settings.SearchOnlineOnlyFiles;
-        SearchHiddenFiles = _settings.SearchHiddenFiles;
-        SearchImageText = _settings.SearchImageText;
-        SearchPdfText = _settings.SearchPdfText;
+        SettingsSearchOnlineOnlyFiles = _settings.SearchOnlineOnlyFiles;
+        SettingsSearchHiddenFiles = _settings.SearchHiddenFiles;
+        SettingsSearchImageText = _settings.SearchImageText;
+        SettingsSearchPdfText = _settings.SearchPdfText;
+        SearchOnlineOnlyFiles = SettingsSearchOnlineOnlyFiles;
+        SearchHiddenFiles = SettingsSearchHiddenFiles;
+        SearchImageText = SettingsSearchImageText;
+        SearchPdfText = SettingsSearchPdfText;
         // Session-only per-search content-index toggle (plan §5/§6.1). Seeded from the effective
         // default (master feature on AND used-by-default on); never persisted, so a per-search
         // opt-in/opt-out cannot change the saved default. Overrides apply on top of this.
@@ -418,6 +422,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         BackupBeforeSave = _settings.BackupBeforeSave;
         ShowEditorSavedOverlay = _settings.ShowEditorSavedOverlay;
         EditorSyntaxHighlightingEnabled = _settings.EditorSyntaxHighlightingEnabled;
+        PreviewSyntaxHighlightingEnabled = _settings.PreviewSyntaxHighlightingEnabled;
         WindowFocusBehavior = _settings.WindowFocusBehavior;
         StartInLauncherMode = _settings.StartInLauncherMode;
         CloseToTray = _settings.CloseToTray;

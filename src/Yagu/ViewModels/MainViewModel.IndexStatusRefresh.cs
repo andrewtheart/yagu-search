@@ -456,14 +456,19 @@ public sealed partial class MainViewModel
             {
                 DateTimeOffset retryAfterUtc = hostRetryAfter ?? localFailure!.Value.RetryAfterUtc;
                 string reason = localFailure?.Reason ?? "the previous automatic compaction attempt failed";
-                string retry = retryAfterUtc > DateTimeOffset.UtcNow
-                    ? $"will retry after {retryAfterUtc.ToLocalTime():g}"
-                    : "will retry on the next maintenance pass";
+                string retry = localFailure is { Cause: IndexAutomaticCompactionFailureCause.DiskHeadroom }
+                    ? "the index drive is re-checked every "
+                        + $"{ContentIndexManager.AutomaticCompactionDiskRetryDelay.TotalMinutes:N0} minutes and compaction "
+                        + "restarts as soon as it is back inside your configured disk limits"
+                    : retryAfterUtc > DateTimeOffset.UtcNow
+                        ? $"will retry after {retryAfterUtc.ToLocalTime():g}"
+                        : "will retry on the next maintenance pass";
                 return new IndexRootHealthEntry(
                     root,
                     IndexRootHealthKind.StorageProblem,
-                    $"automatic compaction failed; {retry}. The existing index remains valid ({reason})",
-                    CompactionForecast: forecast);
+                    $"{ContentIndexUiStatus.AutomaticCompactionFailedAlert}; {retry}. The existing index remains valid ({reason})",
+                    CompactionForecast: forecast,
+                    StatusAlertText: ContentIndexUiStatus.AutomaticCompactionFailedAlert);
             }
 
             // Checked before freshness: an index paused at its storage budget still has perfectly healthy

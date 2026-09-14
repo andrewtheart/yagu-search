@@ -99,7 +99,8 @@ public readonly record struct IndexRootHealthEntry(
     string? BuildRoot = null,
     string? SizeBudgetRoot = null,
     string? ReclamationBlockedRoot = null,
-    IndexCompactionForecast? CompactionForecast = null)
+    IndexCompactionForecast? CompactionForecast = null,
+    string? StatusAlertText = null)
 {
     public bool NeedsAttention => Kind is IndexRootHealthKind.RebuildRequired
         or IndexRootHealthKind.FreshnessUnavailable
@@ -157,6 +158,10 @@ public readonly record struct IndexActivityStageInfo(string Stage, string Title,
 /// </summary>
 public static class ContentIndexUiStatus
 {
+    /// <summary>The phrase in an automatic-compaction-failure status line that the overview renders in the
+    /// critical colour, so a failure is not mistaken for another grey detail line.</summary>
+    public const string AutomaticCompactionFailedAlert = "automatic compaction failed";
+
     /// <summary>
     /// Maps the single §3.5 path classification to a candidacy provenance. A
     /// <see cref="IndexPathClassification.FreshIndexedNonmember"/> is provisionally pruned and never

@@ -113,6 +113,150 @@ public sealed class ContentIndexManagerExtendedSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task BuildPdfExtendedSourceAsync_CloudSourceUsesBoundedLocalCopiesAndOriginalIdentity()
+    {
+        string pdf = Path.Combine(_corpus, "cloud.pdf");
+        Write("cloud.pdf", "pdf bytes");
+        var fileSystem = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = _ =>
+            [
+                new IndexCrawlEntry(
+                    pdf,
+                    new FileInfo(pdf).Length,
+                    FileAttributes.Normal | (FileAttributes)0x00400000),
+            ],
+        };
+        string? firstCopy = null;
+        int extractions = 0;
+        var extractor = new FakePdfExtractor(CreateTool(), (extractionPath, _) =>
+        {
+            extractions++;
+            Assert.NotEqual(pdf, extractionPath);
+            if (firstCopy is not null)
+                Assert.False(File.Exists(firstCopy));
+            firstCopy = extractionPath;
+            Assert.Equal("pdf bytes", File.ReadAllText(extractionPath));
+            return PdfTextResult.Ok("stable cloud PDF text");
+        });
+        var manager = new ContentIndexManager(
+            _paths,
+            2,
+            contentReader: null,
+            checkpointReader: _ => new UsnCheckpoint(7, 100),
+            crawlerFileSystem: fileSystem,
+            cloudFileCanHydrate: (_, _) => true);
+
+        PdfExtendedSourceBuildResult result = await manager.BuildPdfExtendedSourceAsync(
+            _corpus,
+            Policy(includeCloudOnlyFiles: true),
+            extractor,
+            fileIoTimeout: TimeSpan.FromSeconds(1));
+
+        Assert.Equal(PdfExtendedSourceBuildStatus.Published, result.Status);
+        Assert.Equal(1, result.PdfsSeen);
+        Assert.Equal(1, result.Admitted);
+        Assert.Equal(3, extractions);
+        ExtendedSourceNamespace stored = Assert.IsType<ExtendedSourceNamespace>(
+            new ExtendedSourceStore(_paths, result.ScopeId).TryLoad(SpecialSourceKind.PdfText));
+        Assert.True(stored.IsKnownSource(pdf));
+        Assert.NotNull(stored.SourceIdentityByKey[IndexScopeIdentity.NormalizePath(pdf)]);
+        Assert.DoesNotContain(
+            Directory.EnumerateDirectories(_paths.GetScopeDirectory(result.ScopeId)),
+            path => Path.GetFileName(path).StartsWith(".pdf-hydration-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BuildPdfExtendedSourceAsync_ConfiguredFreeSpaceReserveRejectsProjectedCloudCopy()
+    {
+        string pdf = Path.Combine(_corpus, "cloud.pdf");
+        Write("cloud.pdf", "pdf bytes");
+        var fileSystem = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = _ =>
+            [
+                new IndexCrawlEntry(
+                    pdf,
+                    new FileInfo(pdf).Length,
+                    FileAttributes.Normal | (FileAttributes)0x00400000),
+            ],
+        };
+        int hydrations = 0;
+        var manager = new ContentIndexManager(
+            _paths,
+            2,
+            contentReader: null,
+            checkpointReader: _ => new UsnCheckpoint(7, 100),
+            crawlerFileSystem: fileSystem,
+            cloudFileCanHydrate: (_, _) => true,
+            cloudFileHydrator: (_, _, _) =>
+            {
+                hydrations++;
+                return true;
+            });
+
+        PdfExtendedSourceBuildResult result = await manager.BuildPdfExtendedSourceAsync(
+            _corpus,
+            Policy(includeCloudOnlyFiles: true),
+            new FakePdfExtractor(CreateTool(), (_, _) => PdfTextResult.Ok("must not run")),
+            minimumFreeSpaceMB: int.MaxValue);
+
+        Assert.Equal(PdfExtendedSourceBuildStatus.SkippedNotDeterministic, result.Status);
+        Assert.Equal(0, result.Admitted);
+        Assert.Equal(0, hydrations);
+        Assert.Null(new ExtendedSourceStore(_paths, result.ScopeId).TryLoad(SpecialSourceKind.PdfText));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BuildPdfExtendedSourceAsync_CloudHydrationFailureNeverInvokesExtractor(bool timeOut)
+    {
+        string pdf = Path.Combine(_corpus, "cloud.pdf");
+        Write("cloud.pdf", "pdf bytes");
+        var fileSystem = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = _ =>
+            [
+                new IndexCrawlEntry(
+                    pdf,
+                    new FileInfo(pdf).Length,
+                    FileAttributes.Normal | (FileAttributes)0x00400000),
+            ],
+        };
+        int extractions = 0;
+        var manager = new ContentIndexManager(
+            _paths,
+            2,
+            contentReader: null,
+            checkpointReader: _ => new UsnCheckpoint(7, 100),
+            crawlerFileSystem: fileSystem,
+            cloudFileCanHydrate: (_, _) => true,
+            cloudFileHydrator: (_, _, _) =>
+            {
+                if (timeOut)
+                    Thread.Sleep(100);
+                return false;
+            });
+
+        PdfExtendedSourceBuildResult result = await manager.BuildPdfExtendedSourceAsync(
+            _corpus,
+            Policy(includeCloudOnlyFiles: true),
+            new FakePdfExtractor(CreateTool(), (_, _) =>
+            {
+                extractions++;
+                return PdfTextResult.Ok("must not run");
+            }),
+            fileIoTimeout: TimeSpan.FromMilliseconds(10));
+
+        Assert.Equal(PdfExtendedSourceBuildStatus.SkippedNotDeterministic, result.Status);
+        Assert.Equal(1, result.PdfsSeen);
+        Assert.Equal(0, result.Admitted);
+        Assert.Equal(0, extractions);
+        Assert.Null(new ExtendedSourceStore(_paths, result.ScopeId).TryLoad(SpecialSourceKind.PdfText));
+    }
+
+    [Fact]
     public async Task BuildImageOcrExtendedSourceAsync_MissingFingerprintAndEmptyScopeDoNotPublish()
     {
         var engine = new FakeOcrEngine(_ => OcrResult.Ok("unused"));
@@ -158,6 +302,162 @@ public sealed class ContentIndexManagerExtendedSourceTests : IDisposable
         Assert.NotNull(stored);
         Assert.True(stored!.IsKnownSource(Path.Combine(_corpus, "good.png")));
         Assert.False(stored.IsKnownSource(Path.Combine(_corpus, "bad.jpg")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BuildImageOcrExtendedSourceAsync_CloudHydrationMustFinishBeforeOcr(bool timeOut)
+    {
+        string image = Path.Combine(_corpus, "cloud.png");
+        Write("cloud.png", "image");
+        var fileSystem = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = _ =>
+            [
+                new IndexCrawlEntry(
+                    image,
+                    new FileInfo(image).Length,
+                    FileAttributes.Normal | (FileAttributes)0x00400000),
+            ],
+        };
+        int recognized = 0;
+        var manager = new ContentIndexManager(
+            _paths,
+            2,
+            contentReader: null,
+            checkpointReader: _ => new UsnCheckpoint(7, 100),
+            ocrFingerprintReader: (_, _, _) => OcrFingerprint(),
+            crawlerFileSystem: fileSystem,
+            cloudFileCanHydrate: (_, _) => true,
+            cloudFileHydrator: (_, _, _) =>
+            {
+                if (timeOut)
+                    Thread.Sleep(100);
+                return false;
+            });
+
+        ImageOcrExtendedSourceBuildResult result = await manager.BuildImageOcrExtendedSourceAsync(
+            _corpus,
+            Policy(includeCloudOnlyFiles: true),
+            new FakeOcrEngine(_ =>
+            {
+                recognized++;
+                return OcrResult.Ok("must not run");
+            }),
+            Extensions(),
+            "model",
+            960,
+            fileIoTimeout: TimeSpan.FromMilliseconds(10));
+
+        Assert.Equal(ImageOcrExtendedSourceBuildStatus.Published, result.Status);
+        Assert.Equal(1, result.ImagesSeen);
+        Assert.Equal(1, result.Failed);
+        Assert.Equal(0, recognized);
+    }
+
+    [Fact]
+    public async Task BuildImageOcrExtendedSourceAsync_DefaultCloudHydratorReadsCandidateBeforeOcr()
+    {
+        string image = Path.Combine(_corpus, "cloud.png");
+        Write("cloud.png", "image");
+        var fileSystem = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = _ =>
+            [
+                new IndexCrawlEntry(
+                    image,
+                    new FileInfo(image).Length,
+                    FileAttributes.Normal | (FileAttributes)0x00400000),
+            ],
+        };
+        int recognized = 0;
+        var manager = new ContentIndexManager(
+            _paths,
+            2,
+            contentReader: null,
+            checkpointReader: _ => new UsnCheckpoint(7, 100),
+            ocrFingerprintReader: (_, _, _) => OcrFingerprint(),
+            crawlerFileSystem: fileSystem,
+            cloudFileCanHydrate: (_, _) => true);
+
+        ImageOcrExtendedSourceBuildResult result = await manager.BuildImageOcrExtendedSourceAsync(
+            _corpus,
+            Policy(includeCloudOnlyFiles: true),
+            new FakeOcrEngine(ocrPath =>
+            {
+                recognized++;
+                Assert.NotEqual(image, ocrPath);
+                Assert.StartsWith(_paths.GetScopeDirectory(ContentIndexManager.ScopeIdForRoot(_corpus)), ocrPath);
+                Assert.Equal("image", File.ReadAllText(ocrPath));
+                return OcrResult.Ok("recognized cloud image");
+            }),
+            Extensions(),
+            "model",
+            960);
+
+        Assert.Equal(ImageOcrExtendedSourceBuildStatus.Published, result.Status);
+        Assert.Equal(1, result.ImagesSeen);
+        Assert.Equal(1, recognized);
+        Assert.DoesNotContain(
+            Directory.EnumerateDirectories(_paths.GetScopeDirectory(result.ScopeId)),
+            path => Path.GetFileName(path).StartsWith(".ocr-hydration-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BuildImageOcrExtendedSourceAsync_LaterCloudFailurePreservesEarlierStagedCandidate()
+    {
+        string available = Path.Combine(_corpus, "available.png");
+        string disconnected = Path.Combine(_corpus, "disconnected.png");
+        Write("available.png", "available image");
+        var fileSystem = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = _ =>
+            [
+                new IndexCrawlEntry(available, new FileInfo(available).Length, FileAttributes.Normal | (FileAttributes)0x00400000),
+                new IndexCrawlEntry(disconnected, 20, FileAttributes.Normal | (FileAttributes)0x00400000),
+            ],
+        };
+        var manager = new ContentIndexManager(
+            _paths,
+            2,
+            contentReader: null,
+            checkpointReader: _ => new UsnCheckpoint(7, 100),
+            ocrFingerprintReader: (_, _, _) => OcrFingerprint(),
+            crawlerFileSystem: fileSystem,
+            cloudFileCanHydrate: (_, _) => true,
+            cloudFileHydrator: (source, destination, _) =>
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                if (source == disconnected)
+                {
+                    Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(destination)!));
+                    return false;
+                }
+                File.Copy(source, destination);
+                return true;
+            });
+
+        ImageOcrExtendedSourceBuildResult result = await manager.BuildImageOcrExtendedSourceAsync(
+            _corpus,
+            Policy(includeCloudOnlyFiles: true),
+            new FakeOcrEngine(ocrPath =>
+            {
+                Assert.Equal("available image", File.ReadAllText(ocrPath));
+                return OcrResult.Ok("recognized available image");
+            }),
+            Extensions(),
+            "model",
+            960);
+
+        Assert.Equal(ImageOcrExtendedSourceBuildStatus.Published, result.Status);
+        Assert.Equal(2, result.ImagesSeen);
+        Assert.Equal(1, result.Admitted);
+        Assert.Equal(1, result.Failed);
+        ExtendedSourceNamespace stored = Assert.IsType<ExtendedSourceNamespace>(
+            new ExtendedSourceStore(_paths, result.ScopeId).TryLoad(SpecialSourceKind.ImageOcr));
+        Assert.True(stored.IsKnownSource(available));
+        Assert.False(stored.IsKnownSource(disconnected));
     }
 
     [Fact]
@@ -426,8 +726,8 @@ public sealed class ContentIndexManagerExtendedSourceTests : IDisposable
         File.WriteAllText(path, content);
     }
 
-    private static IndexIngestionPolicy Policy(long maxBytes = 0)
-        => new(maxBytes, null, null, true, false, 0);
+    private static IndexIngestionPolicy Policy(long maxBytes = 0, bool includeCloudOnlyFiles = false)
+        => new(maxBytes, null, null, true, false, 0, includeCloudOnlyFiles: includeCloudOnlyFiles);
 
     private static HashSet<string> Extensions()
         => new(["png", "jpg"], StringComparer.OrdinalIgnoreCase);

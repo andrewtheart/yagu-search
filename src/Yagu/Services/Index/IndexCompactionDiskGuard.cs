@@ -111,6 +111,33 @@ internal sealed class IndexCompactionDiskGuard
         _bytesSinceProbe += bytes;
     }
 
+    /// <summary>
+    /// True when the volume behind <paramref name="path"/> currently satisfies the configured limits, so a
+    /// merge that previously aborted for headroom could start again. Fails open like the guard itself: an
+    /// unreadable or unconfigured volume answers true rather than blocking maintenance forever.
+    /// </summary>
+    internal static bool HasConfiguredHeadroom(
+        string path,
+        int minimumFreeSpaceMB,
+        int maxDiskUsagePercent,
+        Func<string, IndexVolumeSpace?>? probe = null)
+    {
+        try
+        {
+            new IndexCompactionDiskGuard(path, minimumFreeSpaceMB, maxDiskUsagePercent, probe)
+                .EnsureHeadroomFor(0);
+            return true;
+        }
+        catch (IndexCompactionDiskGuardException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return true;
+        }
+    }
+
     private bool Breaches(IndexVolumeSpace snapshot, long projectedAvailable)
     {
         if (_minimumFreeBytes > 0 && projectedAvailable < _minimumFreeBytes)

@@ -1,3 +1,4 @@
+using System.Buffers;
 using Microsoft.Extensions.Logging;
 using Yagu.Services.Logging;
 using Yagu.Services.Pdf;
@@ -26,10 +27,22 @@ internal enum IndexAutomaticCompactionOutcome
     Failed,
 }
 
+/// <summary>Why automatic compaction stopped. A self-correcting cause is re-evaluated on a short poll so
+/// recovery does not have to wait out the long generic backoff.</summary>
+public enum IndexAutomaticCompactionFailureCause
+{
+    /// <summary>Not self-correcting (or recorded before causes were tracked); only the backoff clears it.</summary>
+    Unknown,
+
+    /// <summary>The merge would have breached the configured free-space / disk-usage limits.</summary>
+    DiskHeadroom,
+}
+
 public readonly record struct IndexAutomaticCompactionFailure(
     DateTimeOffset FailedUtc,
     DateTimeOffset RetryAfterUtc,
-    string Reason);
+    string Reason,
+    IndexAutomaticCompactionFailureCause Cause = IndexAutomaticCompactionFailureCause.Unknown);
 
 /// <summary>Cheap manifest-only scope metadata. <see cref="Exists"/> means pointer/manifest presence;
 /// it deliberately does not claim that the full base and segments are structurally valid.</summary>
@@ -172,6 +185,8 @@ public sealed partial class ContentIndexManager
     private readonly Func<string, UsnJournalInfo?> _journalInfoReader;
     private readonly Func<string, string, int, ExtractorFingerprint?> _ocrFingerprintReader;
     private readonly Func<string, bool> _changeJournalSupportReader;
+    private readonly Func<string, FileAttributes, bool> _cloudFileCanHydrate;
+    private readonly Func<string, string, CancellationToken, bool> _cloudFileHydrator;
     private readonly IndexCrawlerFileSystem? _crawlerFileSystem;
     private readonly Func<string, ExtendedSourceStore> _extendedSourceStoreFactory;
     private readonly int _progressEveryFiles;
@@ -376,7 +391,9 @@ public sealed partial class ContentIndexManager
         IndexCrawlerFileSystem? crawlerFileSystem = null,
         Func<string, ExtendedSourceStore>? extendedSourceStoreFactory = null,
         int progressEveryFiles = 2000,
-        int diskCheckEveryFiles = 8192)
+        int diskCheckEveryFiles = 8192,
+        Func<string, FileAttributes, bool>? cloudFileCanHydrate = null,
+        Func<string, string, CancellationToken, bool>? cloudFileHydrator = null)
     {
         _paths = pathProvider ?? throw new ArgumentNullException(nameof(pathProvider));
         _retainedGenerations = Math.Max(1, retainedGenerations);
@@ -386,6 +403,10 @@ public sealed partial class ContentIndexManager
         _journalInfoReader = journalInfoReader ?? UsnJournalReader.TryQueryJournalInfo;
         _ocrFingerprintReader = ocrFingerprintReader ?? ImageOcrExtractorFingerprint.TryCompute;
         _changeJournalSupportReader = changeJournalSupportReader ?? VolumeSupportsChangeJournal;
+        _cloudFileCanHydrate = cloudFileCanHydrate
+            ?? (static (path, attributes) => !CloudFileHelper.ShouldSkipPlaceholder(
+                path, attributes, searchOnlineOnlyFiles: true));
+        _cloudFileHydrator = cloudFileHydrator ?? HydrateCloudFile;
         _crawlerFileSystem = crawlerFileSystem;
         _extendedSourceStoreFactory = extendedSourceStoreFactory
             ?? (scopeId => new ExtendedSourceStore(_paths, scopeId));
@@ -448,7 +469,9 @@ public sealed partial class ContentIndexManager
             _crawlerFileSystem,
             _extendedSourceStoreFactory,
             _progressEveryFiles,
-            _diskCheckEveryFiles)
+            _diskCheckEveryFiles,
+            _cloudFileCanHydrate,
+            _cloudFileHydrator)
         {
             ProduceV3QueryStructures = ProduceV3QueryStructures,
         };
@@ -489,6 +512,8 @@ public sealed partial class ContentIndexManager
         string volume = Path.GetPathRoot(normalizedRoot)!;
         string scopeId = IndexScopeIdentity.ComputeScopeId(volume, normalizedRoot);
         string indexRoot = IndexScopeIdentity.NormalizePath(_paths.IndexRoot);
+        if (policy.IncludeCloudOnlyFiles)
+            CloudFileHelper.ResetProviderCache();
 
         // Stop-when-full guard (plan §11.2): abort the build (keeping the partial index already on disk)
         // once the index drive reaches the configured used-space limit. 0 = disabled. The probe is
@@ -496,17 +521,34 @@ public sealed partial class ContentIndexManager
         int diskLimit = maxDiskUsagePercent;
         Func<string, double?> usedPercentProbe = diskUsedPercentProbe ?? RealDiskUsedPercent;
         string indexDriveName = Path.GetPathRoot(indexRoot)!.TrimEnd('\\', '/');
+
+        // Ingesting a cloud-only placeholder makes Windows Cloud Filter MATERIALIZE it, in place, on the
+        // CRAWL root's volume — which is not necessarily the index volume. Every other disk guard here
+        // probes the index root, so an opted-in cloud build could download an entire remote corpus onto an
+        // unwatched source drive. Guard both whenever hydration is possible and the volumes differ.
+        string sourceDriveName = Path.GetPathRoot(normalizedRoot)?.TrimEnd('\\', '/') ?? indexDriveName;
+        bool guardSourceDrive = policy.IncludeCloudOnlyFiles
+            && !string.Equals(sourceDriveName, indexDriveName, StringComparison.OrdinalIgnoreCase);
+
+        void CheckOneDrive(string probePath, string driveName)
+        {
+            if (usedPercentProbe(probePath) is double used && used >= diskLimit)
+            {
+                YaguLog.For("ContentIndex").LogWarning(
+                    "Build stopped: drive {IndexDrive} is {UsedPercent:F1}% full (>= {DiskLimitPercent}% limit) for scope {Scope}. Staged build discarded; prior index unchanged.",
+                    driveName, used, diskLimit, scopeId);
+                throw new IndexDiskFullException(driveName, used, diskLimit);
+            }
+        }
+
         void CheckDiskSpace()
         {
             if (diskLimit <= 0)
                 return;
-            if (usedPercentProbe(indexRoot) is double used && used >= diskLimit)
-            {
-                YaguLog.For("ContentIndex").LogWarning(
-                    "Build stopped: index drive {IndexDrive} is {UsedPercent:F1}% full (>= {DiskLimitPercent}% limit) for scope {Scope}. Staged build discarded; prior index unchanged.",
-                    indexDriveName, used, diskLimit, scopeId);
-                throw new IndexDiskFullException(indexDriveName, used, diskLimit);
-            }
+
+            CheckOneDrive(indexRoot, indexDriveName);
+            if (guardSourceDrive)
+                CheckOneDrive(normalizedRoot, sourceDriveName);
         }
 
         // Capture the freshness checkpoint BEFORE crawling so any change made during the build is replayed
@@ -597,6 +639,52 @@ public sealed partial class ContentIndexManager
         // Periodic disk check by crawl count catches a drive filling up between batch flushes (e.g. a root
         // of few large files that rarely flushes, or another process consuming space).
         long filesSinceDiskCheck = 0;
+
+        // A cloud build downloads each admitted placeholder in full, so thousands of files between probes
+        // can mean many GB of new local data. Check far more often when that is possible — the probe is a
+        // cheap volume query next to the hydration it is bounding.
+        int diskCheckInterval = policy.IncludeCloudOnlyFiles
+            ? Math.Min(_diskCheckEveryFiles, 64)
+            : _diskCheckEveryFiles;
+
+        // Even 64 files bounds nothing when the files are large: sixty-three 1 GB placeholders can be
+        // materialized between two probes. A used-percent probe also reports the state the download is
+        // about to invalidate, never the state it will leave behind. So track the bytes the build is ABOUT
+        // to pull down and probe on THAT, projecting the post-download usage before the file is opened.
+        const long HydrationProbeBytes = 256L * 1024 * 1024;
+        long pendingHydrationBytes = 0;
+        long hydrationVolumeBytes = policy.IncludeCloudOnlyFiles ? TryGetVolumeTotalBytes(normalizedRoot) : 0;
+
+        void ReserveHydration(long fileBytes)
+        {
+            if (diskLimit <= 0 || fileBytes <= 0)
+                return;
+
+            pendingHydrationBytes += fileBytes;
+            if (pendingHydrationBytes < HydrationProbeBytes)
+                return;
+
+            long projectedBytes = pendingHydrationBytes;
+            pendingHydrationBytes = 0;
+            filesSinceDiskCheck = 0;
+
+            // Current state first: this also covers the index volume when the two differ.
+            CheckDiskSpace();
+
+            if (hydrationVolumeBytes <= 0 || usedPercentProbe(normalizedRoot) is not double used)
+                return;
+
+            double projected = used + (projectedBytes * 100.0 / hydrationVolumeBytes);
+            if (projected < diskLimit)
+                return;
+
+            YaguLog.For("ContentIndex").LogWarning(
+                "Build stopped: downloading {ProjectedBytes:N0} cloud byte(s) would take drive {SourceDrive} from "
+                + "{UsedPercent:F1}% to {ProjectedPercent:F1}% (>= {DiskLimitPercent}% limit) for scope {Scope}. "
+                + "Staged build discarded; prior index unchanged.",
+                projectedBytes, sourceDriveName, used, projected, diskLimit, scopeId);
+            throw new IndexDiskFullException(sourceDriveName, projected, diskLimit);
+        }
 
         // Progress estimate inputs: the running sum of crawled file sizes + count. Reported to the optional
         // callback every few thousand files (and once at the end) so a UI can estimate percent complete
@@ -731,7 +819,7 @@ public sealed partial class ContentIndexManager
                normalizedRoot, policy, indexRoot, cancellationToken,
                fileSystem: _crawlerFileSystem, completion: crawlCompletion))
         {
-            if (diskLimit > 0 && ++filesSinceDiskCheck >= _diskCheckEveryFiles)
+            if (diskLimit > 0 && ++filesSinceDiskCheck >= diskCheckInterval)
             {
                 filesSinceDiskCheck = 0;
                 CheckDiskSpace();
@@ -756,15 +844,16 @@ public sealed partial class ContentIndexManager
                 progress(new IndexBuildProgress(bytesCrawled, filesCrawled));
             }
 
-            var candidate = new IngestionFileInfo(
-                normFile,
-                length,
-                DepthUnder(normalizedRoot, normFile),
-                attributes.HasFlag(FileAttributes.Hidden),
-                attributes.HasFlag(FileAttributes.ReparsePoint),
-                IsCloudOnly: false);
+            IndexSkipReason metadataVerdict = ClassifyCrawlEntry(
+                normalizedRoot, normFile, length, attributes, policy);
 
-            IndexSkipReason metadataVerdict = IndexIngestionClassifier.ClassifyFile(candidate, policy);
+            // Before the read window can open it: admitting a placeholder is what causes Windows to
+            // download it, so the headroom for that download has to be claimed here, not after.
+            if (metadataVerdict == IndexSkipReason.None
+                && policy.IncludeCloudOnlyFiles
+                && CloudFileHelper.IsCloudOnlyPlaceholder(attributes))
+                ReserveHydration(length);
+
             readWindow.Add((file, normFile, length, metadataVerdict));
             if (readWindow.Count >= readParallelism)
                 FlushReadWindow();
@@ -800,6 +889,38 @@ public sealed partial class ContentIndexManager
         {
             IoStats = new IndexBuildIoStats(contentBytesRead, prefixRejectedFiles, fullyReadFiles),
         };
+    }
+
+    private IndexSkipReason ClassifyCrawlEntry(
+        string normalizedRoot,
+        string normalizedPath,
+        long length,
+        FileAttributes attributes,
+        IndexIngestionPolicy policy)
+    {
+        bool isCloudOnly = CloudFileHelper.IsCloudOnlyPlaceholder(attributes);
+        var candidate = new IngestionFileInfo(
+            normalizedPath,
+            length,
+            DepthUnder(normalizedRoot, normalizedPath),
+            attributes.HasFlag(FileAttributes.Hidden),
+            attributes.HasFlag(FileAttributes.ReparsePoint),
+            isCloudOnly);
+
+        IndexSkipReason verdict = IndexIngestionClassifier.ClassifyFile(candidate, policy);
+        if (verdict != IndexSkipReason.None || !isCloudOnly)
+            return verdict;
+
+        try
+        {
+            return _cloudFileCanHydrate(normalizedPath, attributes)
+                ? IndexSkipReason.None
+                : IndexSkipReason.CloudOnly;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return IndexSkipReason.CloudOnly;
+        }
     }
 
     private void ValidateBuildCompletion(
@@ -842,11 +963,22 @@ public sealed partial class ContentIndexManager
         IndexIngestionPolicy policy,
         PdfTextExtractor extractor,
         CancellationToken cancellationToken = default,
-        Action<PdfBuildProgress>? progress = null)
+        Action<PdfBuildProgress>? progress = null,
+        TimeSpan? fileIoTimeout = null,
+        int maxDiskUsagePercent = 0,
+        int minimumFreeSpaceMB = 0)
     {
         using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
         return await BuildPdfExtendedSourceUnderLeaseAsync(
-            mutation, rootDirectory, policy, extractor, cancellationToken, progress).ConfigureAwait(false);
+            mutation,
+            rootDirectory,
+            policy,
+            extractor,
+            cancellationToken,
+            progress,
+            fileIoTimeout,
+            maxDiskUsagePercent,
+            minimumFreeSpaceMB).ConfigureAwait(false);
     }
 
     internal async Task<PdfExtendedSourceBuildResult> BuildPdfExtendedSourceUnderLeaseAsync(
@@ -855,7 +987,10 @@ public sealed partial class ContentIndexManager
         IndexIngestionPolicy policy,
         PdfTextExtractor extractor,
         CancellationToken cancellationToken = default,
-        Action<PdfBuildProgress>? progress = null)
+        Action<PdfBuildProgress>? progress = null,
+        TimeSpan? fileIoTimeout = null,
+        int maxDiskUsagePercent = 0,
+        int minimumFreeSpaceMB = 0)
     {
         ArgumentNullException.ThrowIfNull(mutation);
         mutation.EnsureOwns(_paths);
@@ -886,18 +1021,39 @@ public sealed partial class ContentIndexManager
         // affected PDF live-extracted (never missed) at query time.
         UsnCheckpoint checkpoint = _checkpointReader(normalizedRoot) ?? UsnCheckpoint.None;
         string indexRoot = IndexScopeIdentity.NormalizePath(_paths.IndexRoot);
-        List<string> pdfPaths = CollectPdfPaths(normalizedRoot, indexRoot, policy, cancellationToken);
-        if (pdfPaths.Count == 0)
+        List<ExtendedSourceCandidate> pdfCandidates = CollectPdfCandidates(
+            normalizedRoot, indexRoot, policy, cancellationToken);
+        if (pdfCandidates.Count == 0)
         {
             // No PDFs → an existing namespace would only mislead the gate into pruning known-old keys; drop it.
             store.DeleteUnderLease(mutation, SpecialSourceKind.PdfText);
             return new PdfExtendedSourceBuildResult(scopeId, PdfExtendedSourceBuildStatus.NoPdfs, 0, 0, PdfDeterminismVerdict.NotProven);
         }
 
-        var populator = new PdfExtendedSourcePopulator(extractor, fingerprint, p => FileIdentityReader.TryGetIdentity(p)?.FileId);
-        PdfPopulationResult population = await populator
-            .PopulateAsync(pdfPaths, normalizedRoot, checkpoint, cancellationToken: cancellationToken, progress: progress)
-            .ConfigureAwait(false);
+        string hydrationDirectory = Path.Combine(
+            _paths.GetScopeDirectory(scopeId),
+            ".pdf-hydration-" + Guid.NewGuid().ToString("N"));
+        TimeSpan effectiveFileIoTimeout = NormalizeExtendedSourceFileIoTimeout(fileIoTimeout);
+        using var hydration = new CloudExtendedSourceHydrationSession(
+            pdfCandidates,
+            hydrationDirectory,
+            effectiveFileIoTimeout,
+            maxDiskUsagePercent,
+            minimumFreeSpaceMB,
+            _cloudFileHydrator);
+        PdfTextExtractor buildExtractor = hydration.HasCloudSources
+            ? new HydratingPdfTextExtractor(extractor, hydration)
+            : extractor;
+        var populator = new PdfExtendedSourcePopulator(
+            buildExtractor,
+            fingerprint,
+            hydration.GetSourceIdentity);
+        PdfPopulationResult population = await populator.PopulateAsync(
+            pdfCandidates.Select(candidate => candidate.Path).ToArray(),
+            normalizedRoot,
+            checkpoint,
+            cancellationToken: cancellationToken,
+            progress: progress).ConfigureAwait(false);
 
         if (!population.IsPrunable)
         {
@@ -920,9 +1076,15 @@ public sealed partial class ContentIndexManager
     }
 
     /// <summary>Enumerates PDF files under a root that pass the ingestion metadata gate (size/exclusion/hidden).</summary>
-    private List<string> CollectPdfPaths(string normalizedRoot, string indexRoot, IndexIngestionPolicy policy, CancellationToken cancellationToken)
+    private List<ExtendedSourceCandidate> CollectPdfCandidates(
+        string normalizedRoot,
+        string indexRoot,
+        IndexIngestionPolicy policy,
+        CancellationToken cancellationToken)
     {
-        var pdfPaths = new List<string>();
+        if (policy.IncludeCloudOnlyFiles)
+            CloudFileHelper.ResetProviderCache();
+        var candidates = new List<ExtendedSourceCandidate>();
         foreach (IndexCrawlEntry entry in IndexFileCrawler.EnumerateFiles(
                      normalizedRoot, policy, indexRoot, cancellationToken, _crawlerFileSystem))
         {
@@ -933,19 +1095,16 @@ public sealed partial class ContentIndexManager
             string normFile = IndexScopeIdentity.NormalizePath(file);
 
             // Length + attributes come from the crawl record — no FileInfo restat (plan §5.4).
-            var candidate = new IngestionFileInfo(
-                normFile,
-                entry.Length,
-                DepthUnder(normalizedRoot, normFile),
-                entry.Attributes.HasFlag(FileAttributes.Hidden),
-                entry.Attributes.HasFlag(FileAttributes.ReparsePoint),
-                IsCloudOnly: false);
-            if (IndexIngestionClassifier.ClassifyFile(candidate, policy) != IndexSkipReason.None)
+            if (ClassifyCrawlEntry(normalizedRoot, normFile, entry.Length, entry.Attributes, policy)
+                != IndexSkipReason.None)
                 continue; // excluded/over-cap PDFs are NOT in the namespace → the gate live-extracts them
 
-            pdfPaths.Add(normFile);
+            candidates.Add(new ExtendedSourceCandidate(
+                normFile,
+                entry.Length,
+                CloudFileHelper.IsCloudOnlyPlaceholder(entry.Attributes)));
         }
-        return pdfPaths;
+        return candidates;
     }
 
     /// <summary>Builds a positive-only image OCR namespace. It can prioritize prior positive candidates,
@@ -958,11 +1117,25 @@ public sealed partial class ContentIndexManager
         string model,
         int maxSide,
         CancellationToken cancellationToken = default,
-        Action<ImageOcrBuildProgress>? progress = null)
+        Action<ImageOcrBuildProgress>? progress = null,
+        TimeSpan? fileIoTimeout = null,
+        int maxDiskUsagePercent = 0,
+        int minimumFreeSpaceMB = 0)
     {
         using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
         return await BuildImageOcrExtendedSourceUnderLeaseAsync(
-            mutation, rootDirectory, policy, engine, extensions, model, maxSide, cancellationToken, progress)
+            mutation,
+            rootDirectory,
+            policy,
+            engine,
+            extensions,
+            model,
+            maxSide,
+            cancellationToken,
+            progress,
+            fileIoTimeout,
+            maxDiskUsagePercent,
+            minimumFreeSpaceMB)
             .ConfigureAwait(false);
     }
 
@@ -975,7 +1148,10 @@ public sealed partial class ContentIndexManager
         string model,
         int maxSide,
         CancellationToken cancellationToken = default,
-        Action<ImageOcrBuildProgress>? progress = null)
+        Action<ImageOcrBuildProgress>? progress = null,
+        TimeSpan? fileIoTimeout = null,
+        int maxDiskUsagePercent = 0,
+        int minimumFreeSpaceMB = 0)
     {
         ArgumentNullException.ThrowIfNull(mutation);
         mutation.EnsureOwns(_paths);
@@ -999,19 +1175,40 @@ public sealed partial class ContentIndexManager
 
         UsnCheckpoint checkpoint = _checkpointReader(normalizedRoot) ?? UsnCheckpoint.None;
         string indexRoot = IndexScopeIdentity.NormalizePath(_paths.IndexRoot);
-        List<string> imagePaths = CollectImagePaths(normalizedRoot, indexRoot, policy, extensions, cancellationToken);
-        if (imagePaths.Count == 0)
+        List<ExtendedSourceCandidate> imageCandidates = CollectImageCandidates(
+            normalizedRoot, indexRoot, policy, extensions, cancellationToken);
+        if (imageCandidates.Count == 0)
         {
             store.DeleteUnderLease(mutation, SpecialSourceKind.ImageOcr);
             return new ImageOcrExtendedSourceBuildResult(scopeId, ImageOcrExtendedSourceBuildStatus.NoImages, 0, 0, 0);
         }
 
+        string hydrationDirectory = Path.Combine(
+            _paths.GetScopeDirectory(scopeId),
+            ".ocr-hydration-" + Guid.NewGuid().ToString("N"));
+        TimeSpan effectiveFileIoTimeout = NormalizeExtendedSourceFileIoTimeout(fileIoTimeout);
+        using var hydration = new CloudExtendedSourceHydrationSession(
+            imageCandidates,
+            hydrationDirectory,
+            effectiveFileIoTimeout,
+            maxDiskUsagePercent,
+            minimumFreeSpaceMB,
+            _cloudFileHydrator);
+        IOcrEngine buildEngine = hydration.HasCloudSources
+            ? new HydratingOcrEngine(engine, hydration)
+            : engine;
         var populator = new ImageOcrExtendedSourcePopulator(
-            engine, fingerprint, path => FileIdentityReader.TryGetIdentity(path)?.FileId);
+            buildEngine,
+            fingerprint,
+            hydration.GetSourceIdentity);
         try
         {
             ImageOcrPopulationResult population = await populator.PopulateAsync(
-                imagePaths, normalizedRoot, checkpoint, cancellationToken, progress).ConfigureAwait(false);
+                imageCandidates.Select(candidate => candidate.Path).ToArray(),
+                normalizedRoot,
+                checkpoint,
+                cancellationToken,
+                progress).ConfigureAwait(false);
             if (!store.PublishUnderLease(mutation, population.Namespace))
                 throw new IOException("The image-text namespace failed validation or publication.");
             YaguLog.For("ContentIndex").LogInformation(
@@ -1027,18 +1224,21 @@ public sealed partial class ContentIndexManager
             YaguLog.For("ContentIndex").LogInformation(
                 "Image OCR extended-source skipped for '{Root}': {Reason}", normalizedRoot, ex.Message);
             return new ImageOcrExtendedSourceBuildResult(
-                scopeId, ImageOcrExtendedSourceBuildStatus.SkippedEngineUnavailable, imagePaths.Count, 0, imagePaths.Count);
+                scopeId, ImageOcrExtendedSourceBuildStatus.SkippedEngineUnavailable,
+                imageCandidates.Count, 0, imageCandidates.Count);
         }
     }
 
-    private List<string> CollectImagePaths(
+    private List<ExtendedSourceCandidate> CollectImageCandidates(
         string normalizedRoot,
         string indexRoot,
         IndexIngestionPolicy policy,
         IReadOnlySet<string> extensions,
         CancellationToken cancellationToken)
     {
-        var paths = new List<string>();
+        if (policy.IncludeCloudOnlyFiles)
+            CloudFileHelper.ResetProviderCache();
+        var candidates = new List<ExtendedSourceCandidate>();
         foreach (IndexCrawlEntry entry in IndexFileCrawler.EnumerateFiles(
                      normalizedRoot, policy, indexRoot, cancellationToken, _crawlerFileSystem))
         {
@@ -1047,17 +1247,291 @@ public sealed partial class ContentIndexManager
             if (!extensions.Contains(extension))
                 continue;
             string normalized = IndexScopeIdentity.NormalizePath(entry.Path);
-            var candidate = new IngestionFileInfo(
+            if (ClassifyCrawlEntry(normalizedRoot, normalized, entry.Length, entry.Attributes, policy)
+                != IndexSkipReason.None)
+                continue;
+            candidates.Add(new ExtendedSourceCandidate(
                 normalized,
                 entry.Length,
-                DepthUnder(normalizedRoot, normalized),
-                entry.Attributes.HasFlag(FileAttributes.Hidden),
-                entry.Attributes.HasFlag(FileAttributes.ReparsePoint),
-                IsCloudOnly: false);
-            if (IndexIngestionClassifier.ClassifyFile(candidate, policy) == IndexSkipReason.None)
-                paths.Add(normalized);
+                CloudFileHelper.IsCloudOnlyPlaceholder(entry.Attributes)));
         }
-        return paths;
+        return candidates;
+    }
+
+    private static bool HydrateCloudFile(
+        string sourcePath,
+        string hydratedPath,
+        CancellationToken cancellationToken)
+    {
+        bool complete = false;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(hydratedPath)!);
+            using var source = new FileStream(sourcePath, new FileStreamOptions
+            {
+                Mode = FileMode.Open,
+                Access = FileAccess.Read,
+                Share = FileShare.Read,
+                Options = FileOptions.SequentialScan,
+            });
+            using var destination = new FileStream(hydratedPath, new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                Options = FileOptions.SequentialScan,
+            });
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+            try
+            {
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int bytesRead = source.Read(buffer, 0, buffer.Length);
+                    if (bytesRead == 0)
+                        break;
+                    destination.Write(buffer, 0, bytesRead);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                destination.Flush();
+                complete = true;
+                return true;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+        finally
+        {
+            if (!complete)
+            {
+                DeleteHydratedFile(hydratedPath);
+                DeleteEmptyHydrationDirectory(Path.GetDirectoryName(hydratedPath)!);
+            }
+        }
+    }
+
+    private static TimeSpan NormalizeExtendedSourceFileIoTimeout(TimeSpan? fileIoTimeout)
+        => fileIoTimeout is { } configured && configured > TimeSpan.Zero
+            ? configured
+            : BoundedIncrementalFileClassifier.DefaultFileTimeout;
+
+    private static void DeleteHydratedFile(string path)
+    {
+        try { File.Delete(path); }
+        catch { }
+    }
+
+    private static void DeleteEmptyHydrationDirectory(string path)
+    {
+        try { Directory.Delete(path, recursive: false); }
+        catch { }
+    }
+
+    private static void DeleteHydrationDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, recursive: true);
+        }
+        catch { }
+    }
+
+    private readonly record struct ExtendedSourceCandidate(string Path, long Length, bool IsCloudOnly);
+
+    private readonly record struct CloudHydrationResult(
+        bool Success,
+        string HydratedPath,
+        UsnFileIdentity? SourceIdentity);
+
+    private sealed class CloudExtendedSourceHydrationSession : IDisposable
+    {
+        private readonly Dictionary<string, ExtendedSourceCandidate> _cloudSources;
+        private readonly Dictionary<string, UsnFileIdentity?> _sourceIdentities =
+            new(StringComparer.OrdinalIgnoreCase);
+        private readonly string _hydrationDirectory;
+        private readonly int _maxDiskUsagePercent;
+        private readonly int _minimumFreeSpaceMB;
+        private readonly Func<string, string, CancellationToken, bool> _hydrator;
+        private readonly BoundedSynchronousIo<CloudHydrationResult>? _boundedIo;
+
+        public CloudExtendedSourceHydrationSession(
+            IReadOnlyList<ExtendedSourceCandidate> candidates,
+            string hydrationDirectory,
+            TimeSpan fileIoTimeout,
+            int maxDiskUsagePercent,
+            int minimumFreeSpaceMB,
+            Func<string, string, CancellationToken, bool> hydrator)
+        {
+            _cloudSources = candidates
+                .Where(candidate => candidate.IsCloudOnly)
+                .ToDictionary(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase);
+            _hydrationDirectory = hydrationDirectory;
+            _maxDiskUsagePercent = Math.Clamp(maxDiskUsagePercent, 0, 99);
+            _minimumFreeSpaceMB = Math.Max(0, minimumFreeSpaceMB);
+            _hydrator = hydrator;
+            if (_cloudSources.Count > 0)
+                _boundedIo = new BoundedSynchronousIo<CloudHydrationResult>(fileIoTimeout);
+        }
+
+        public bool HasCloudSources => _cloudSources.Count > 0;
+
+        public bool IsCloudSource(string path) => _cloudSources.ContainsKey(path);
+
+        public UsnFileIdentity? GetSourceIdentity(string path)
+        {
+            if (!IsCloudSource(path))
+                return FileIdentityReader.TryGetIdentity(path)?.FileId;
+            return _sourceIdentities.TryGetValue(path, out UsnFileIdentity? identity)
+                ? identity
+                : null;
+        }
+
+        public bool TryHydrate(
+            string sourcePath,
+            CancellationToken cancellationToken,
+            out string hydratedPath)
+        {
+            ExtendedSourceCandidate candidate = _cloudSources[sourcePath];
+            string destinationPath = Path.Combine(
+                _hydrationDirectory,
+                Guid.NewGuid().ToString("N") + Path.GetExtension(sourcePath));
+            hydratedPath = destinationPath;
+            try
+            {
+                new IndexCompactionDiskGuard(
+                    _hydrationDirectory,
+                    _minimumFreeSpaceMB,
+                    _maxDiskUsagePercent).EnsureHeadroomFor(candidate.Length);
+            }
+            catch (IndexCompactionDiskGuardException)
+            {
+                return false;
+            }
+
+            bool completed = _boundedIo!.TryExecute(
+                token => Hydrate(sourcePath, destinationPath, token),
+                cancellationToken,
+                out CloudHydrationResult result);
+            if (!completed)
+            {
+                YaguLog.For("ContentIndex").LogWarning(
+                    "Cloud source hydration exceeded the configured file-I/O deadline for '{Path}'; it will remain outside the extended-source index.",
+                    sourcePath);
+            }
+            if (completed && result.Success)
+            {
+                hydratedPath = result.HydratedPath;
+                _sourceIdentities[sourcePath] = result.SourceIdentity;
+                return true;
+            }
+
+            DeleteHydratedFile(destinationPath);
+            return false;
+        }
+
+        private CloudHydrationResult Hydrate(
+            string sourcePath,
+            string hydratedPath,
+            CancellationToken cancellationToken)
+        {
+            bool keepHydratedFile = false;
+            try
+            {
+                if (!_hydrator(sourcePath, hydratedPath, cancellationToken))
+                    return default;
+                cancellationToken.ThrowIfCancellationRequested();
+                UsnFileIdentity? identity = null;
+                try { identity = FileIdentityReader.TryGetIdentity(sourcePath)?.FileId; }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    YaguLog.For("ContentIndex").LogDebug(
+                        ex,
+                        "Could not capture cloud source identity for '{Path}'.",
+                        sourcePath);
+                }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    keepHydratedFile = true;
+                return new CloudHydrationResult(true, hydratedPath, identity);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                YaguLog.For("ContentIndex").LogWarning(
+                    ex,
+                    "Cloud source hydration failed for '{Path}'; it will remain outside the extended-source index.",
+                    sourcePath);
+                return default;
+            }
+            finally
+            {
+                if (!keepHydratedFile)
+                    DeleteHydratedFile(hydratedPath);
+            }
+        }
+
+        public void Dispose()
+        {
+            _boundedIo?.Dispose();
+            DeleteHydrationDirectory(_hydrationDirectory);
+        }
+    }
+
+    private sealed class HydratingPdfTextExtractor(
+        PdfTextExtractor inner,
+        CloudExtendedSourceHydrationSession hydration) : PdfTextExtractor(toolPathOverride: null)
+    {
+        public override async Task<PdfTextResult> ExtractAsync(
+            string pdfPath,
+            CancellationToken cancellationToken)
+        {
+            if (!hydration.IsCloudSource(pdfPath))
+                return await inner.ExtractAsync(pdfPath, cancellationToken).ConfigureAwait(false);
+            if (!hydration.TryHydrate(pdfPath, cancellationToken, out string hydratedPath))
+                return PdfTextResult.Fail("cloud PDF hydration failed or timed out");
+            try
+            {
+                return await inner.ExtractAsync(hydratedPath, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                DeleteHydratedFile(hydratedPath);
+            }
+        }
+    }
+
+    private sealed class HydratingOcrEngine(
+        IOcrEngine inner,
+        CloudExtendedSourceHydrationSession hydration) : IOcrEngine
+    {
+        public string Id => inner.Id;
+        public string DisplayName => inner.DisplayName;
+
+        public Task<OcrResult> EnsureReadyAsync(CancellationToken cancellationToken)
+            => inner.EnsureReadyAsync(cancellationToken);
+
+        public async Task<OcrResult> RecognizeAsync(
+            string imagePath,
+            CancellationToken cancellationToken)
+        {
+            if (!hydration.IsCloudSource(imagePath))
+                return await inner.RecognizeAsync(imagePath, cancellationToken).ConfigureAwait(false);
+            if (!hydration.TryHydrate(imagePath, cancellationToken, out string hydratedPath))
+                return OcrResult.Fail("cloud image hydration failed or timed out");
+            try
+            {
+                return await inner.RecognizeAsync(hydratedPath, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                DeleteHydratedFile(hydratedPath);
+            }
+        }
     }
 
     /// <summary>Reports the status of a scope by id.</summary>
@@ -1405,6 +1879,26 @@ public sealed partial class ContentIndexManager
             return (drive.IsReady, drive.TotalSize, drive.AvailableFreeSpace);
         });
 
+    /// <summary>
+    /// Total capacity of the volume <paramref name="path"/> sits on, or 0 when it cannot be read.
+    /// </summary>
+    /// <remarks>
+    /// Needed to convert a byte count into the percentage the used-space limit is expressed in, so a
+    /// pending cloud download can be projected against that limit before it starts.
+    /// </remarks>
+    private static long TryGetVolumeTotalBytes(string path)
+    {
+        try
+        {
+            var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(path))!);
+            return drive.IsReady ? drive.TotalSize : 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return 0;
+        }
+    }
+
     internal static double? RealDiskUsedPercent(
         string path,
         Func<string, (bool IsReady, long TotalSize, long AvailableFreeSpace)> driveSpaceReader)
@@ -1615,8 +2109,8 @@ public sealed partial class ContentIndexManager
                     ? IndexAutomaticCompactionOutcome.Maintained
                     : IndexAutomaticCompactionOutcome.NotNeeded;
             }
-            if (TryReadAutomaticCompactionFailure(store, out IndexAutomaticCompactionFailure priorFailure)
-                && priorFailure.RetryAfterUtc > DateTimeOffset.UtcNow)
+            if (ShouldDeferAutomaticCompaction(
+                    store, settings, DateTimeOffset.UtcNow, out IndexAutomaticCompactionFailure priorFailure))
             {
                 YaguLog.For("ContentIndex").LogWarning(
                     "Deferring automatic compaction of scope {Scope} for '{Root}' until {RetryAfter:u} after the prior failure: {Reason}",
@@ -1654,18 +2148,61 @@ public sealed partial class ContentIndexManager
     internal const string AutomaticCompactionFailureFile = "automatic-compaction.failure";
     internal static readonly TimeSpan AutomaticCompactionRetryDelay = TimeSpan.FromHours(6);
 
+    /// <summary>How long a disk-headroom failure waits before re-checking the volume. Short because the
+    /// blocking condition is external and can clear at any moment.</summary>
+    internal static readonly TimeSpan AutomaticCompactionDiskRetryDelay = TimeSpan.FromMinutes(5);
+
+    private const string DiskHeadroomCauseLine = "cause=diskHeadroom";
+
+    /// <summary>The backoff a failure of <paramref name="cause"/> arms.</summary>
+    internal static TimeSpan RetryDelayFor(IndexAutomaticCompactionFailureCause cause)
+        => cause == IndexAutomaticCompactionFailureCause.DiskHeadroom
+            ? AutomaticCompactionDiskRetryDelay
+            : AutomaticCompactionRetryDelay;
+
+    internal static IndexAutomaticCompactionFailureCause ClassifyCompactionFailure(Exception error)
+        => error is IndexCompactionDiskGuardException
+            ? IndexAutomaticCompactionFailureCause.DiskHeadroom
+            : IndexAutomaticCompactionFailureCause.Unknown;
+
+    /// <summary>
+    /// True when a prior failure still blocks another automatic compaction attempt. A disk-headroom failure
+    /// stops blocking the moment the index volume is back inside the configured limits, so a freed drive
+    /// resumes compaction on the next pass instead of waiting out the remaining backoff.
+    /// </summary>
+    internal static bool ShouldDeferAutomaticCompaction(
+        ContentIndexStore store,
+        IndexMaintenanceSettings settings,
+        DateTimeOffset nowUtc,
+        out IndexAutomaticCompactionFailure failure)
+    {
+        if (!TryReadAutomaticCompactionFailure(store, out failure))
+            return false;
+        if (failure.RetryAfterUtc <= nowUtc)
+            return false;
+        if (failure.Cause != IndexAutomaticCompactionFailureCause.DiskHeadroom)
+            return true;
+
+        IndexMergeResourceBudget budget = IndexMergeResourceBudget.FromSettings(settings);
+        return !IndexCompactionDiskGuard.HasConfiguredHeadroom(
+            store.IndexRootDirectory, budget.MinimumFreeSpaceMB, budget.MaxDiskUsagePercent);
+    }
+
     internal static void RecordAutomaticCompactionFailure(
         ContentIndexStore store,
         Exception error,
         DateTimeOffset failedUtc)
     {
         string reason = $"{error.GetType().Name}: {error.Message}".Replace('\r', ' ').Replace('\n', ' ');
+        IndexAutomaticCompactionFailureCause cause = ClassifyCompactionFailure(error);
         string marker = Path.Combine(store.ScopeDirectory, AutomaticCompactionFailureFile);
         string temp = marker + ".tmp";
         try
         {
             Directory.CreateDirectory(store.ScopeDirectory);
-            File.WriteAllLines(temp, [failedUtc.ToUniversalTime().ToString("O"), reason]);
+            File.WriteAllLines(temp, cause == IndexAutomaticCompactionFailureCause.DiskHeadroom
+                ? [failedUtc.ToUniversalTime().ToString("O"), reason, DiskHeadroomCauseLine]
+                : [failedUtc.ToUniversalTime().ToString("O"), reason]);
             File.Move(temp, marker, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -1694,10 +2231,16 @@ public sealed partial class ContentIndexManager
                     System.Globalization.DateTimeStyles.RoundtripKind,
                     out DateTimeOffset failedUtc))
                 return false;
+            // Markers written before causes were tracked have no third line and stay Unknown.
+            IndexAutomaticCompactionFailureCause cause =
+                lines.Length > 2 && string.Equals(lines[2].Trim(), DiskHeadroomCauseLine, StringComparison.Ordinal)
+                    ? IndexAutomaticCompactionFailureCause.DiskHeadroom
+                    : IndexAutomaticCompactionFailureCause.Unknown;
             failure = new IndexAutomaticCompactionFailure(
                 failedUtc,
-                failedUtc.Add(AutomaticCompactionRetryDelay),
-                lines[1]);
+                failedUtc.Add(RetryDelayFor(cause)),
+                lines[1],
+                cause);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -1731,6 +2274,26 @@ public sealed partial class ContentIndexManager
             return null;
         }
     }
+
+    /// <summary>True when <paramref name="rootDirectory"/>'s automatic compaction is currently deferred
+    /// because the index volume was outside the configured disk limits.</summary>
+    internal bool IsAutomaticCompactionDeferredForDiskSpace(string rootDirectory)
+        => TryReadAutomaticCompactionFailureForRoot(rootDirectory)
+            is { Cause: IndexAutomaticCompactionFailureCause.DiskHeadroom };
+
+    /// <summary>
+    /// True when <paramref name="rootDirectory"/>'s automatic compaction stopped for disk headroom and the
+    /// index volume is now back inside the configured limits, so the deferral no longer applies and the
+    /// caller should start a maintenance pass rather than wait for the backoff to expire.
+    /// </summary>
+    internal bool CanResumeDiskDeferredCompaction(
+        string rootDirectory,
+        int minimumFreeSpaceMB,
+        int maxDiskUsagePercent,
+        Func<string, IndexVolumeSpace?>? probe = null)
+        => IsAutomaticCompactionDeferredForDiskSpace(rootDirectory)
+            && IndexCompactionDiskGuard.HasConfiguredHeadroom(
+                _paths.IndexRoot, minimumFreeSpaceMB, maxDiskUsagePercent, probe);
 
     /// <summary>
     /// Explicit, user-approved <b>Compact now</b>: folds every active layer into a fresh base by streaming,

@@ -93,7 +93,7 @@ internal static class IndexWorkerProtocol
     public const int RequiredIndexAbiVersion = 1;
 
     /// <summary>Managed control-protocol version, independent of the optional native query ABI.</summary>
-    public const int ControlProtocolVersion = 3;
+    public const int ControlProtocolVersion = 4;
 
     internal static class OutcomeKinds
     {

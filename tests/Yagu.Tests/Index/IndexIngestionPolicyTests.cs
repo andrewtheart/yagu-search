@@ -21,8 +21,11 @@ public sealed class IndexIngestionPolicyTests
         bool hidden = true,
         bool reparse = false,
         int maxDepth = 0,
-        bool indexBinary = false)
-        => new(maxBytes, globs, exts, hidden, reparse, maxDepth, indexBinaryAsciiContent: indexBinary);
+        bool indexBinary = false,
+        bool includeCloud = false)
+        => new(maxBytes, globs, exts, hidden, reparse, maxDepth,
+            indexBinaryAsciiContent: indexBinary,
+            includeCloudOnlyFiles: includeCloud);
 
     private static IngestionFileInfo File(
         string path = @"C:\src\file.txt",
@@ -53,9 +56,14 @@ public sealed class IndexIngestionPolicyTests
             IndexIngestionClassifier.ClassifyFile(File(isHidden: true), Policy(hidden: true)));
 
     [Fact]
-    public void ClassifyFile_CloudOnlyAlwaysSkipped()
+    public void ClassifyFile_CloudOnlySkippedByDefault()
         => Assert.Equal(IndexSkipReason.CloudOnly,
             IndexIngestionClassifier.ClassifyFile(File(isCloud: true), Policy()));
+
+    [Fact]
+    public void ClassifyFile_CloudOnlyAdmittedWhenEnabled()
+        => Assert.Equal(IndexSkipReason.None,
+            IndexIngestionClassifier.ClassifyFile(File(isCloud: true), Policy(includeCloud: true)));
 
     [Fact]
     public void ClassifyFile_ReparseSkippedUnlessFollowed()
@@ -240,6 +248,7 @@ public sealed class IndexIngestionPolicyTests
             IndexExcludedGlobs = "node_modules;bin",
             IndexExcludedExtensions = "log;*.tmp;.bak",
             IndexIncludeHiddenFiles = false,
+            IndexIncludeCloudOnlyFiles = true,
             IndexFollowReparsePoints = true,
         };
         var policy = IndexIngestionPolicy.FromSettings(settings);
@@ -249,6 +258,7 @@ public sealed class IndexIngestionPolicyTests
         Assert.Contains("tmp", policy.ExcludedExtensions); // "*.tmp" → "tmp"
         Assert.Contains("bak", policy.ExcludedExtensions); // ".bak" → "bak"
         Assert.False(policy.IncludeHiddenFiles);
+        Assert.True(policy.IncludeCloudOnlyFiles);
         Assert.True(policy.FollowReparsePoints);
     }
 

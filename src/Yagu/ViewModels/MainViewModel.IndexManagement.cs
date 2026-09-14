@@ -15,6 +15,48 @@ public sealed partial class MainViewModel
     public bool IsAutomaticCompactionBackoffActive(string root, DateTimeOffset nowUtc)
         => IndexAutomaticCompactionRetryState.IsActive(_settings, root, nowUtc);
 
+    /// <summary>True when a compaction deferral is recorded for the root, expired or not.</summary>
+    internal bool HasAutomaticCompactionBackoffRecorded(string root)
+        => IndexAutomaticCompactionRetryState.IsRecorded(_settings, root);
+
+    /// <summary>
+    /// Registered roots whose automatic compaction stopped because the index volume was outside the
+    /// configured disk limits and whose volume is now back inside them. The blocking condition is gone, so
+    /// the caller clears the backoff and starts a maintenance pass instead of waiting it out. Runs file and
+    /// volume I/O, so call it off the UI thread.
+    /// </summary>
+    internal IReadOnlyList<string> FindRootsWhoseDiskDeferredCompactionCanResume(DateTimeOffset nowUtc)
+    {
+        var resumable = new List<string>();
+        try
+        {
+            // Recorded, not merely still-waiting: a deferral that has timed out is still a deferral, and
+            // filtering on IsActive dropped exactly the roots whose wait had just ended.
+            string[] roots = IndexedRootsPolicy.Normalize(_settings.IndexedRoots)
+                .Where(HasAutomaticCompactionBackoffRecorded)
+                .ToArray();
+            if (roots.Length == 0)
+                return resumable;
+
+            var manager = new ContentIndexManager(
+                DefaultContentIndexPathProvider.Create(_settings.IndexStorageDirectory),
+                AppSettings.NormalizeIndexRetainedGenerationCount(_settings.IndexRetainedGenerationCount));
+            int minimumFreeSpaceMB = AppSettings.NormalizeIndexMinimumFreeSpaceMB(_settings.IndexMinimumFreeSpaceMB);
+            int maxDiskUsagePercent = _settings.EffectiveIndexMaxDiskUsagePercent;
+            foreach (string root in roots)
+            {
+                if (manager.CanResumeDiskDeferredCompaction(root, minimumFreeSpaceMB, maxDiskUsagePercent))
+                    resumable.Add(root);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            YaguLog.For("ContentIndex").LogDebug(
+                ex, "Could not evaluate disk-deferred compaction resumption.");
+        }
+        return resumable;
+    }
+
     internal async Task RecordAutomaticCompactionMaintenanceResultsAsync(
         IReadOnlyList<IndexMaintenanceRootResult> roots,
         DateTimeOffset nowUtc)
@@ -85,7 +127,8 @@ public sealed partial class MainViewModel
         string? updateMode = null,
         bool applyFirstRunDriveIndexingProfile = false,
         IReadOnlyList<string>? firstRunExcludedPaths = null,
-        int? maxFileSizeMB = null)
+        int? maxFileSizeMB = null,
+        bool? indexCloudOnlyFiles = null)
     {
         if (folders is null || folders.Count == 0)
             return;
@@ -94,6 +137,8 @@ public sealed partial class MainViewModel
             _settings.ApplyFirstRunDriveIndexingProfile();
         if (maxFileSizeMB.HasValue)
             _settings.IndexMaxFileSizeMB = AppSettings.NormalizeIndexMaxFileSizeMB(maxFileSizeMB.Value);
+        if (indexCloudOnlyFiles.HasValue)
+            _settings.IndexIncludeCloudOnlyFiles = indexCloudOnlyFiles.Value;
         _settings.EnableContentIndex = true;
         UseContentIndex = true;
         if (!string.IsNullOrWhiteSpace(buildTrigger))

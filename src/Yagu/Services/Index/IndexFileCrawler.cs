@@ -44,6 +44,13 @@ internal sealed class IndexCrawlerFileSystem
         return target?.FullName;
     };
 
+    /// <summary>
+    /// True when a directory carrying <see cref="FileAttributes.ReparsePoint"/> is really a cloud
+    /// sync directory rather than a junction/symlink. Injectable so crawler tests stay deterministic
+    /// without needing a real sync provider on the machine.
+    /// </summary>
+    public Func<string, bool> IsCloudSyncDirectory { get; init; } = CloudFileHelper.IsCloudSyncDirectory;
+
     private static IEnumerable<IndexCrawlEntry> DefaultEnumerate(string directory)
         => new FileSystemEnumerable<IndexCrawlEntry>(
             directory,
@@ -61,7 +68,10 @@ internal sealed class IndexCrawlerFileSystem
 /// or returns a transient I/O error is skipped without aborting the entire root. Directory reparse points
 /// obey the existing ingestion setting: they are skipped by default; when enabled, only targets on the same
 /// volume and under the indexed root are traversed, and a resolved-target visited set prevents junction
-/// cycles. The index storage subtree is pruned before enumeration rather than walked and filtered file by file.
+/// cycles. Cloud sync directories are exempt from that gate — they carry the reparse attribute but are not
+/// links — and are always traversed as ordinary directories; the per-file cloud gate decides whether any
+/// individual placeholder inside them may be opened. The index storage subtree is pruned before enumeration
+/// rather than walked and filtered file by file.
 /// Each yielded <see cref="IndexCrawlEntry"/> carries the length and attributes from the enumeration record.
 /// </summary>
 internal static class IndexFileCrawler
@@ -116,6 +126,21 @@ internal static class IndexFileCrawler
                         continue;
 
                     if (!attributes.HasFlag(FileAttributes.ReparsePoint))
+                    {
+                        pending.Push((normalizedEntry, normalizedEntry));
+                        continue;
+                    }
+
+                    // A cloud sync directory (OneDrive Files On-Demand, Google Drive, Dropbox) carries the
+                    // reparse-point attribute but is NOT a link: it has no link target, cannot form a cycle,
+                    // and never leaves the volume. Treating it as one pruned every cloud sync root from the
+                    // crawl — including files already materialized on local disk — so indexing a user profile
+                    // silently skipped the whole OneDrive tree and IndexIncludeCloudOnlyFiles could never
+                    // admit a single file. Note such a directory does NOT carry the RECALL_ON_* attributes
+                    // that mark placeholder FILES, so it cannot be recognized from attributes alone.
+                    // Enumerating it hydrates nothing; the per-file cloud gate in IndexIngestionClassifier
+                    // still decides whether any individual placeholder may be opened.
+                    if (fileSystem.IsCloudSyncDirectory(entry.Path))
                     {
                         pending.Push((normalizedEntry, normalizedEntry));
                         continue;

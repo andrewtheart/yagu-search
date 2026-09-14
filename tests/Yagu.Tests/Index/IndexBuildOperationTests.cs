@@ -27,7 +27,8 @@ public sealed class IndexBuildOperationTests : IDisposable
             includeHiddenFiles: true,
             followReparsePoints: true,
             maxDepth: 7,
-            reAdmitGlobs: new[] { "**/bin/keep/**" });
+            reAdmitGlobs: new[] { "**/bin/keep/**" },
+            includeCloudOnlyFiles: true);
 
         IndexIngestionPolicySnapshot snapshot = IndexIngestionPolicySnapshot.FromPolicy(policy);
         IndexIngestionPolicy restored = snapshot.ToPolicy();
@@ -36,6 +37,7 @@ public sealed class IndexBuildOperationTests : IDisposable
         Assert.Equal(policy.ExcludedGlobs, restored.ExcludedGlobs);
         Assert.True(policy.ExcludedExtensions.SetEquals(restored.ExcludedExtensions));
         Assert.Equal(policy.IncludeHiddenFiles, restored.IncludeHiddenFiles);
+        Assert.Equal(policy.IncludeCloudOnlyFiles, restored.IncludeCloudOnlyFiles);
         Assert.Equal(policy.FollowReparsePoints, restored.FollowReparsePoints);
         Assert.Equal(policy.MaxDepth, restored.MaxDepth);
         Assert.Equal(policy.ReAdmitGlobs, restored.ReAdmitGlobs);
@@ -67,6 +69,7 @@ public sealed class IndexBuildOperationTests : IDisposable
             IndexMaxDiskUsagePercent = 88,
             IndexBuildPdfTextExtendedSource = true,
             IndexBuildImageTextExtendedSource = true,
+            IndexIncludeCloudOnlyFiles = true,
             IndexPostBuildCatchUpThresholdChanges = 12_000,
             IndexMaxFileSizeMB = 12,
             IndexExcludedGlobs = "**/obj/**",
@@ -92,6 +95,7 @@ public sealed class IndexBuildOperationTests : IDisposable
         Assert.True(operation.ProduceV3QueryStructures);
         Assert.Equal(12_000, operation.PostBuildCatchUpSettings.PostBuildCatchUpThresholdChanges);
         Assert.True(operation.Policy.IndexBinaryAsciiContent);
+        Assert.True(operation.Policy.IncludeCloudOnlyFiles);
         Assert.Contains("**/obj/**", operation.Policy.ExcludedGlobs);
 
         IndexValidationOperation validation = IndexBuildOperationFactory.CreateValidation(settings, root);
@@ -185,6 +189,36 @@ public sealed class IndexBuildOperationTests : IDisposable
             }],
             nowUtc.AddMinutes(3));
         Assert.Empty(settings.IndexAutomaticCompactionRetryAfterUtcByRoot);
+    }
+
+    [Fact]
+    public void AutomaticCompactionRetryState_ReChecksADiskHeadroomStopOnTheShortPollInstead()
+    {
+        const string root = @"C:\data";
+        DateTimeOffset nowUtc = new(2026, 8, 18, 12, 0, 0, TimeSpan.Zero);
+        var settings = new AppSettings
+        {
+            IndexSizeManagementMode = IndexSizeManagementModes.CoalesceThenCompact,
+        };
+
+        IndexAutomaticCompactionRetryState.ApplyResults(
+            settings,
+            [new IndexMaintenanceRootResult
+            {
+                Root = root,
+                Action = IndexMaintenanceActions.Failed,
+                Outcome = IndexMaintenanceOutcomes.CompactionFailedDiskSpace,
+            }],
+            nowUtc);
+
+        Assert.Equal(
+            nowUtc.Add(ContentIndexManager.AutomaticCompactionDiskRetryDelay),
+            settings.IndexAutomaticCompactionRetryAfterUtcByRoot[root]);
+        Assert.True(IndexAutomaticCompactionRetryState.IsActive(settings, root, nowUtc));
+        Assert.False(IndexAutomaticCompactionRetryState.IsActive(
+            settings,
+            root,
+            nowUtc.Add(ContentIndexManager.AutomaticCompactionDiskRetryDelay).AddSeconds(1)));
     }
 
     [Fact]

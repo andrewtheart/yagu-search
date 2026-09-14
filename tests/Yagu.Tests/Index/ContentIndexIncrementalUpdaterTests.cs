@@ -611,6 +611,24 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
         Assert.Null(classify(Path.Combine(_sandbox, "does-not-exist.txt")));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CreateFileReadClassifier_CloudOnlyWithoutEligibleProvider_ReturnsTypedSkip(bool includeCloudOnlyFiles)
+    {
+        var policy = new IndexIngestionPolicy(
+            0, null, null, includeHiddenFiles: true, followReparsePoints: false, maxDepth: 0,
+            includeCloudOnlyFiles: includeCloudOnlyFiles);
+        var classify = ContentIndexIncrementalUpdater.CreateCancellableFileReadClassifier(
+            policy,
+            _ => (FileAttributes)0x00040000);
+
+        IncrementalFileRead? result = classify(@"C:\missing-cloud.txt", CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal(IndexSkipReason.CloudOnly, result.Value.Classification.Reason);
+    }
+
     [Fact]
     public void BoundedFileClassifier_UncooperativeReadTimesOut_ThenUsesReplacementLane()
     {

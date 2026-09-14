@@ -47,7 +47,7 @@ public sealed class IndexBuildExecutorTests : IDisposable
         operation.BuildPdfText = true;
         var runtime = new IndexBuildRuntime
         {
-            BuildPdf = (_, _, stagingPaths, root, _, _, progress) =>
+            BuildPdf = (_, _, stagingPaths, root, _, _, _, progress) =>
             {
                 string scopeId = ContentIndexManager.ScopeIdForRoot(root);
                 string stagedPdf = new ExtendedSourceStore(stagingPaths, scopeId).NamespaceDirectory(SpecialSourceKind.PdfText);
@@ -76,7 +76,7 @@ public sealed class IndexBuildExecutorTests : IDisposable
         using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
         var failing = new IndexBuildRuntime
         {
-            BuildPdf = static (_, _, _, _, _, _, _) => throw new IOException("pdf failed"),
+            BuildPdf = static (_, _, _, _, _, _, _, _) => throw new IOException("pdf failed"),
         };
 
         IndexBuildSuccess result = IndexBuildExecutor.BuildFullScopeUnderLease(
@@ -90,7 +90,7 @@ public sealed class IndexBuildExecutorTests : IDisposable
         operation.Root = secondRoot;
         var cancelling = new IndexBuildRuntime
         {
-            BuildPdf = static (_, _, _, _, _, _, _) => throw new OperationCanceledException(),
+            BuildPdf = static (_, _, _, _, _, _, _, _) => throw new OperationCanceledException(),
         };
         Assert.Throws<OperationCanceledException>(() => IndexBuildExecutor.BuildFullScopeUnderLease(
             mutation, operation, CancellationToken.None, null, null, cancelling));

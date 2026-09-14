@@ -106,15 +106,24 @@ public sealed partial class ContentIndexIncrementalUpdater
     /// every streamed chunk read; the lane additionally uses <c>CancelSynchronousIo</c> when the initial
     /// synchronous file open itself exceeds its deadline.</summary>
     internal static Func<string, CancellationToken, IncrementalFileRead?> CreateCancellableFileReadClassifier(
-        IndexIngestionPolicy policy)
+        IndexIngestionPolicy policy,
+        Func<string, FileAttributes>? attributeReader = null)
     {
         ArgumentNullException.ThrowIfNull(policy);
         var reader = new IndexFileContentReader();
+        attributeReader ??= File.GetAttributes;
         return (path, cancellationToken) =>
         {
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                FileAttributes attributes = attributeReader(path);
+                if (CloudFileHelper.ShouldSkipPlaceholder(path, attributes, policy.IncludeCloudOnlyFiles))
+                {
+                    return new IncrementalFileRead(
+                        new IndexContentClassification(IndexSkipReason.CloudOnly, Array.Empty<Trigram>()),
+                        Identity: null);
+                }
                 long expectedLength = 0;
                 try { expectedLength = new FileInfo(path).Length; }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* hint only */ }
@@ -256,10 +265,8 @@ public sealed partial class ContentIndexIncrementalUpdater
             long afterCoalesce = _store.TotalActiveIndexBytes();
             if (size.ExceedsBudget(afterCoalesce) && size.AllowsCompaction)
             {
-                if (ContentIndexManager.TryReadAutomaticCompactionFailure(
-                        _store,
-                        out IndexAutomaticCompactionFailure priorFailure)
-                    && priorFailure.RetryAfterUtc > DateTimeOffset.UtcNow)
+                if (ContentIndexManager.ShouldDeferAutomaticCompaction(
+                        _store, settings, DateTimeOffset.UtcNow, out _))
                 {
                     return IncrementalUpdateOutcome.CompactionFailed;
                 }
@@ -406,10 +413,8 @@ public sealed partial class ContentIndexIncrementalUpdater
             long afterBudgetCoalesce = _store.TotalActiveIndexBytes();
             if (size.ExceedsBudget(afterBudgetCoalesce) && size.AllowsCompaction)
             {
-                if (ContentIndexManager.TryReadAutomaticCompactionFailure(
-                        _store,
-                        out IndexAutomaticCompactionFailure priorFailure)
-                    && priorFailure.RetryAfterUtc > DateTimeOffset.UtcNow)
+                if (ContentIndexManager.ShouldDeferAutomaticCompaction(
+                        _store, settings, DateTimeOffset.UtcNow, out _))
                 {
                     return IncrementalUpdateOutcome.CompactionFailed;
                 }
@@ -525,10 +530,8 @@ public sealed partial class ContentIndexIncrementalUpdater
                     size.Mode);
             }
 
-            if (ContentIndexManager.TryReadAutomaticCompactionFailure(
-                    _store,
-                    out IndexAutomaticCompactionFailure priorFailure)
-                && priorFailure.RetryAfterUtc > DateTimeOffset.UtcNow)
+            if (ContentIndexManager.ShouldDeferAutomaticCompaction(
+                    _store, settings, DateTimeOffset.UtcNow, out IndexAutomaticCompactionFailure priorFailure))
             {
                 YaguLog.For("ContentIndex").LogWarning(
                     "Incremental update for scope {Scope}: automatic compaction is deferred until {RetryAfter:u} after the prior failure: {Reason}",

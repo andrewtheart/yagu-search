@@ -461,6 +461,94 @@ public sealed class ContentIndexManagerMaintenanceTests : IDisposable
     }
 
     [Fact]
+    public void DiskHeadroomFailure_RecordsItsCause_AndUsesTheShortRecheckBackoff()
+    {
+        PublishGeneration();
+        var store = new ContentIndexStore(_paths, ContentIndexManager.ScopeIdForRoot(_root));
+        DateTimeOffset failedUtc = new(2026, 8, 18, 12, 0, 0, TimeSpan.Zero);
+
+        ContentIndexManager.RecordAutomaticCompactionFailure(
+            store,
+            new IndexCompactionDiskGuardException("X:\\", "drive X:\\ would exceed the 90% full limit you set"),
+            failedUtc);
+
+        var manager = new ContentIndexManager(_paths);
+        IndexAutomaticCompactionFailure failure = Assert.IsType<IndexAutomaticCompactionFailure>(
+            manager.TryReadAutomaticCompactionFailureForRoot(_root));
+        Assert.Equal(IndexAutomaticCompactionFailureCause.DiskHeadroom, failure.Cause);
+        Assert.Equal(
+            failedUtc.Add(ContentIndexManager.AutomaticCompactionDiskRetryDelay),
+            failure.RetryAfterUtc);
+        Assert.True(
+            ContentIndexManager.AutomaticCompactionDiskRetryDelay
+                < ContentIndexManager.AutomaticCompactionRetryDelay,
+            "A self-correcting disk stop must be re-checked sooner than a generic failure.");
+        Assert.True(manager.IsAutomaticCompactionDeferredForDiskSpace(_root));
+    }
+
+    [Fact]
+    public void ShouldDeferAutomaticCompaction_StopsDeferring_OnceTheDriveIsBackInsideTheConfiguredLimits()
+    {
+        PublishGeneration();
+        var store = new ContentIndexStore(_paths, ContentIndexManager.ScopeIdForRoot(_root));
+        DateTimeOffset failedUtc = DateTimeOffset.UtcNow;
+        var settings = new IndexMaintenanceSettings { MinimumFreeSpaceMB = 1024, MaxDiskUsagePercent = 90 };
+
+        ContentIndexManager.RecordAutomaticCompactionFailure(
+            store,
+            new IndexCompactionDiskGuardException("X:\\", "not enough free space"),
+            failedUtc);
+
+        // The sandbox volume is a real drive with headroom, so the blocking condition has already cleared.
+        Assert.False(ContentIndexManager.ShouldDeferAutomaticCompaction(
+            store, settings, failedUtc.AddSeconds(1), out IndexAutomaticCompactionFailure cleared));
+        Assert.Equal(IndexAutomaticCompactionFailureCause.DiskHeadroom, cleared.Cause);
+
+        // A cause that is not self-correcting still waits out its full backoff.
+        ContentIndexManager.RecordAutomaticCompactionFailure(store, new IOException("scratch gone"), failedUtc);
+        Assert.True(ContentIndexManager.ShouldDeferAutomaticCompaction(
+            store, settings, failedUtc.AddSeconds(1), out IndexAutomaticCompactionFailure held));
+        Assert.Equal(IndexAutomaticCompactionFailureCause.Unknown, held.Cause);
+        Assert.False(ContentIndexManager.ShouldDeferAutomaticCompaction(
+            store,
+            settings,
+            failedUtc.Add(ContentIndexManager.AutomaticCompactionRetryDelay).AddSeconds(1),
+            out _));
+
+        // No marker at all never defers.
+        ContentIndexManager.ClearAutomaticCompactionFailure(store);
+        Assert.False(ContentIndexManager.ShouldDeferAutomaticCompaction(store, settings, failedUtc, out _));
+    }
+
+    [Fact]
+    public void CanResumeDiskDeferredCompaction_RequiresBothADiskCause_AndARestoredVolume()
+    {
+        PublishGeneration();
+        var store = new ContentIndexStore(_paths, ContentIndexManager.ScopeIdForRoot(_root));
+        var manager = new ContentIndexManager(_paths);
+        DateTimeOffset failedUtc = DateTimeOffset.UtcNow;
+
+        // A generic failure is never resumed by a disk probe.
+        ContentIndexManager.RecordAutomaticCompactionFailure(store, new IOException("scratch gone"), failedUtc);
+        Assert.False(manager.CanResumeDiskDeferredCompaction(
+            _root, 1024, 90, probe: _ => new IndexVolumeSpace("X:\\", 1000, 1000)));
+
+        ContentIndexManager.RecordAutomaticCompactionFailure(
+            store, new IndexCompactionDiskGuardException("X:\\", "not enough free space"), failedUtc);
+        Assert.False(manager.CanResumeDiskDeferredCompaction(
+            _root, 1024, 0, probe: _ => new IndexVolumeSpace("X:\\", 100L * 1024 * 1024 * 1024, 1024)));
+        Assert.True(manager.CanResumeDiskDeferredCompaction(
+            _root,
+            1024,
+            0,
+            probe: _ => new IndexVolumeSpace("X:\\", 100L * 1024 * 1024 * 1024, 50L * 1024 * 1024 * 1024)));
+
+        ContentIndexManager.ClearAutomaticCompactionFailure(store);
+        Assert.False(manager.CanResumeDiskDeferredCompaction(
+            _root, 1024, 0, probe: _ => new IndexVolumeSpace("X:\\", 1000, 1000)));
+    }
+
+    [Fact]
     public void CompactionDisabled_ClearsPriorAutomaticCompactionFailureMarker()
     {
         PublishGeneration();

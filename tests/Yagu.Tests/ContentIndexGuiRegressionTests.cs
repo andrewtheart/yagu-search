@@ -1154,6 +1154,61 @@ public sealed class ContentIndexGuiRegressionTests
     }
 
     [Fact]
+    public void IndexStatusHover_DrawsAFailedAutomaticCompactionInTheCriticalColour()
+    {
+        // The failure used to render as another dimmed detail line, so it read like routine status text.
+        string rows = ExtractFrom(IndexOnboardingSource, "private void RebuildIndexStatusHealthRows()", 6000);
+        Assert.Contains("details.Children.Add(CreateIndexStatusHealthStatusText(entry));", rows);
+
+        string status = ExtractFrom(
+            IndexOnboardingSource,
+            "private static TextBlock CreateIndexStatusHealthStatusText(IndexRootHealthEntry entry)",
+            1800);
+        Assert.Contains("entry.Status.IndexOf(alert, StringComparison.Ordinal)", status);
+        Assert.Contains("Application.Current.Resources[\"SystemFillColorCriticalBrush\"]", status);
+        Assert.Contains("Microsoft.UI.Text.FontWeights.SemiBold", status);
+        // Unflagged rows keep the plain single-run path, and the alert row still reads whole to a screen reader.
+        Assert.Contains("text.Text = entry.Status;", status);
+        Assert.Contains("AutomationProperties.SetName(text, entry.Status)", status);
+
+        // The view model, not the window, decides which phrase is the alert.
+        Assert.Contains(
+            "StatusAlertText: ContentIndexUiStatus.AutomaticCompactionFailedAlert",
+            MainViewModelSource);
+        Assert.Contains(
+            "public const string AutomaticCompactionFailedAlert = \"automatic compaction failed\";",
+            Read("src", "Yagu", "Services", "Index", "ContentIndexUiStatus.cs"));
+    }
+
+    [Fact]
+    public void DeferredCompaction_PollsTheIndexDrive_AndResumesAsSoonAsTheSpaceIsBack()
+    {
+        // A disk-headroom stop is external and self-correcting, so it must not sit out the long generic
+        // failure backoff: the drive is re-probed on a short poll and compaction restarts immediately.
+        Assert.Contains("_ = ResumeDiskDeferredCompactionIfFreedAsync();", StartupChecksSource);
+
+        string resume = ExtractFrom(
+            StartupChecksSource,
+            "private async Task ResumeDiskDeferredCompactionIfFreedAsync()",
+            1800);
+        Assert.Contains(
+            "nowUtc - _lastCompactionDiskProbeUtc < ContentIndexManager.AutomaticCompactionDiskRetryDelay",
+            resume);
+        Assert.Contains("ViewModel.FindRootsWhoseDiskDeferredCompactionCanResume(nowUtc)", resume);
+        Assert.Contains("await ViewModel.ClearAutomaticCompactionBackoffAsync(root)", resume);
+        Assert.Contains("await RunIndexBuildPassAsync(roots)", resume);
+        // The poll must respect the same pause gates as any other background pass.
+        Assert.Contains("ViewModel.IsIndexBuildActive", resume);
+        Assert.Contains("ViewModel.IsIndexingPaused", resume);
+
+        Assert.Contains("manager.CanResumeDiskDeferredCompaction(root, minimumFreeSpaceMB, maxDiskUsagePercent)",
+            MainViewModelSource);
+        Assert.Contains(
+            "AutomaticCompactionDiskRetryDelay = TimeSpan.FromMinutes(5)",
+            Read("src", "Yagu", "Services", "Index", "ContentIndexManager.cs"));
+    }
+
+    [Fact]
     public void IndexStatusHover_EligibleUnindexedDrive_OffersQuickAddThroughTheTriggerAwareDialog()
     {
         // An eligible-but-unindexed ready local drive used to be a dead end in the hover flyout: it
@@ -1365,6 +1420,30 @@ public sealed class ContentIndexGuiRegressionTests
     }
 
     [Fact]
+    public void IndexStatus_OpeningSettings_RevealsManageIndexes()
+    {
+        // Both index-status routes into Settings (the indicator itself and the hover overlay's button)
+        // land on Manage Indexes rather than the top of a long Indexing tab.
+        Assert.Contains("_settingsWindow?.ScrollToManageIndexes();", IndexOnboardingSource);
+        Assert.Equal(
+            2,
+            System.Text.RegularExpressions.Regex.Matches(
+                IndexOnboardingSource, @"_settingsWindow\?\.ScrollToManageIndexes\(\);").Count);
+
+        string indexing = Read("src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.Indexing.cs");
+        Assert.Contains("public void ScrollToManageIndexes()", indexing);
+        Assert.Contains("_manageIndexesSection = (manageGroup.Parent as FrameworkElement)?.Parent", indexing);
+
+        // Centered when it fits; anchored to the top when it is taller than the pane, so the heading stays visible.
+        Assert.Contains("VerticalAlignmentRatio = ratio,", indexing);
+        Assert.Contains("section.ActualHeight >= viewport ? 0 : 0.5", indexing);
+
+        // The tab content is built lazily, so an immediate reveal has to retry once layout gives it a size.
+        Assert.Contains("SettingsContentScrollViewer.LayoutUpdated += OnManageIndexesRevealLayoutUpdated;", indexing);
+        Assert.Contains("SettingsContentScrollViewer.LayoutUpdated -= OnManageIndexesRevealLayoutUpdated;", indexing);
+    }
+
+    [Fact]
     public void IndexOnboarding_AddFolderDialog_OffersSubpartChoicesAndWarnsForLargeRoot()
     {
         Assert.Contains("IndexOnboardingPlan.PathChoices(folder)", IndexOnboardingSource);
@@ -1383,7 +1462,7 @@ public sealed class ContentIndexGuiRegressionTests
         Assert.Contains("selectedSuggestedExclusions.Remove(path);", IndexOnboardingSource);
         Assert.Contains("IndexOnboardingPlan.SuggestedSystemExclusions(chosen, windowsDirectory)", IndexOnboardingSource);
         Assert.Contains("firstRunExcludedPaths,", IndexOnboardingSource);
-        Assert.Contains("maxFileSizeMB: maxFileSizeMB);", IndexOnboardingSource);
+        Assert.Contains("maxFileSizeMB: maxFileSizeMB,", IndexOnboardingSource);
 
         string addFolders = ExtractFrom(
             MainViewModelSource,
@@ -1399,6 +1478,38 @@ public sealed class ContentIndexGuiRegressionTests
 
         Assert.Contains("C:/Windows/System32", SettingsIndexingActionsSource);
         Assert.Contains("path matching ignores letter case", SettingsIndexingActionsSource);
+    }
+
+    [Fact]
+    public void IndexOnboarding_FirstRunCanOptIntoCloudOnlyFilesBeforeBuild()
+    {
+        Assert.Contains("bool indexCloudOnlyFiles = applyFirstRunDriveIndexingProfile", IndexOnboardingSource);
+        Assert.Contains("Index cloud-only files (downloads online-only content while indexing)", IndexOnboardingSource);
+        Assert.Contains("IsChecked = indexCloudOnlyFiles", IndexOnboardingSource);
+        Assert.Contains("indexCloudOnlyFiles = indexCloudOnlyFilesCheck.IsChecked == true;", IndexOnboardingSource);
+        Assert.Contains("indexCloudOnlyFiles: indexCloudOnlyFiles);", IndexOnboardingSource);
+
+        string addFolders = ExtractFrom(
+            MainViewModelSource,
+            "public async Task AddFoldersToIndexAndBuildAsync(",
+            4600);
+        Assert.Contains("bool? indexCloudOnlyFiles = null", addFolders);
+        int profile = addFolders.IndexOf("if (applyFirstRunDriveIndexingProfile)", StringComparison.Ordinal);
+        int applyProfile = addFolders.IndexOf("_settings.ApplyFirstRunDriveIndexingProfile();", StringComparison.Ordinal);
+        int cloudChoice = addFolders.IndexOf("if (indexCloudOnlyFiles.HasValue)", StringComparison.Ordinal);
+        int assignCloud = addFolders.IndexOf("_settings.IndexIncludeCloudOnlyFiles = indexCloudOnlyFiles.Value;", StringComparison.Ordinal);
+        int persist = addFolders.IndexOf("await PersistSettingsAsync()", StringComparison.Ordinal);
+        int startBuild = addFolders.IndexOf("StartBackgroundIndexBuild(effectiveRoot);", StringComparison.Ordinal);
+        Assert.True(profile >= 0 && profile < applyProfile && applyProfile < cloudChoice
+            && cloudChoice < assignCloud && assignCloud < persist && persist < startBuild);
+    }
+
+    [Fact]
+    public void SettingsIndexing_ExposesCloudOnlyIngestionToggle()
+    {
+        Assert.Contains("AddIndexToggle(scopeGroup, \"Index cloud-only files\"", SettingsIndexingSource);
+        Assert.Contains("s => s.IndexIncludeCloudOnlyFiles", SettingsIndexingSource);
+        Assert.Contains("only while their cloud sync provider is connected", SettingsIndexingSource);
     }
 
     [Fact]
@@ -2225,6 +2336,25 @@ public sealed class ContentIndexGuiRegressionTests
         // The immutable operation snapshot carries the disk limit into startup/watcher maintenance.
         Assert.Contains("IndexBuildOperationFactory.CreateMaintenance(", StartupChecksSource);
         Assert.Contains("MaxDiskUsagePercent = settings.EffectiveIndexMaxDiskUsagePercent", Read("src", "Yagu", "Services", "Index", "IndexBuildOperationFactory.cs"));
+    }
+
+    [Fact]
+    public void IndexDiskGuard_AlsoCoversTheCrawlVolumeWhenCloudIngestionIsOn()
+    {
+        // Ingesting a cloud-only placeholder makes Cloud Filter materialize it IN PLACE, on the crawl
+        // root's volume. Every probe here targeted indexRoot, so a OneDrive folder on D: indexed to an
+        // index on C: could download the whole remote corpus onto D: with nothing watching it.
+        string manager = Read("src", "Yagu", "Services", "Index", "ContentIndexManager.cs");
+
+        Assert.Contains("bool guardSourceDrive = policy.IncludeCloudOnlyFiles", manager);
+        Assert.Contains("!string.Equals(sourceDriveName, indexDriveName, StringComparison.OrdinalIgnoreCase)", manager);
+        Assert.Contains("CheckOneDrive(indexRoot, indexDriveName);", manager);
+        Assert.Contains("CheckOneDrive(normalizedRoot, sourceDriveName);", manager);
+
+        // A hydrating build downloads each admitted file in full, so the default 8192-file cadence can
+        // pull down many GB between probes.
+        Assert.Contains("? Math.Min(_diskCheckEveryFiles, 64)", manager);
+        Assert.Contains("++filesSinceDiskCheck >= diskCheckInterval", manager);
     }
 
     private static string FindRepoRoot()

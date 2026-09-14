@@ -246,6 +246,37 @@ public sealed class IndexExternalMergeSorterTests : IDisposable
     }
 
     [Fact]
+    public void HasConfiguredHeadroom_TracksTheVolumeSoADeferredCompactionCanResume()
+    {
+        Assert.False(IndexCompactionDiskGuard.HasConfiguredHeadroom(
+            _sandbox,
+            minimumFreeSpaceMB: 1024,
+            maxDiskUsagePercent: 0,
+            probe: _ => new IndexVolumeSpace("X:\\", 100L * 1024 * 1024 * 1024, 1L * 1024 * 1024)));
+
+        Assert.True(IndexCompactionDiskGuard.HasConfiguredHeadroom(
+            _sandbox,
+            minimumFreeSpaceMB: 1024,
+            maxDiskUsagePercent: 0,
+            probe: _ => new IndexVolumeSpace("X:\\", 100L * 1024 * 1024 * 1024, 50L * 1024 * 1024 * 1024)));
+
+        // Over the percent ceiling, then back under it.
+        Assert.False(IndexCompactionDiskGuard.HasConfiguredHeadroom(
+            _sandbox, 0, 50, probe: _ => new IndexVolumeSpace("X:\\", 1000, 400)));
+        Assert.True(IndexCompactionDiskGuard.HasConfiguredHeadroom(
+            _sandbox, 0, 50, probe: _ => new IndexVolumeSpace("X:\\", 1000, 600)));
+    }
+
+    [Fact]
+    public void HasConfiguredHeadroom_FailsOpen_ForAnUnreadableOrUnconfiguredVolume()
+    {
+        Assert.True(IndexCompactionDiskGuard.HasConfiguredHeadroom(_sandbox, 1024, 50, probe: _ => null));
+        Assert.True(IndexCompactionDiskGuard.HasConfiguredHeadroom(_sandbox, 0, 0));
+        Assert.True(IndexCompactionDiskGuard.HasConfiguredHeadroom(
+            _sandbox, 1024, 50, probe: _ => throw new IOException("volume vanished")));
+    }
+
+    [Fact]
     public void DiskGuard_ReprobesBeforeAbort_AndFailsOpenWhenTheVolumeChangesOrBecomesUnreadable()
     {
         int recoveredProbeCalls = 0;

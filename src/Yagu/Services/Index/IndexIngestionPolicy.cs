@@ -45,6 +45,9 @@ public sealed partial class IndexIngestionPolicy
     /// <summary>Whether hidden files are ingested.</summary>
     public bool IncludeHiddenFiles { get; }
 
+    /// <summary>Whether cloud-only placeholders may be hydrated and ingested when their provider is live.</summary>
+    public bool IncludeCloudOnlyFiles { get; }
+
     /// <summary>Whether same-volume/in-root reparse targets are ingested.</summary>
     public bool FollowReparsePoints { get; }
 
@@ -72,7 +75,8 @@ public sealed partial class IndexIngestionPolicy
         bool followReparsePoints,
         int maxDepth,
         IReadOnlyList<string>? reAdmitGlobs = null,
-        bool indexBinaryAsciiContent = false)
+        bool indexBinaryAsciiContent = false,
+        bool includeCloudOnlyFiles = false)
     {
         MaxFileSizeBytes = Math.Max(0, maxFileSizeBytes);
         ExcludedGlobs = excludedGlobs ?? Array.Empty<string>();
@@ -82,6 +86,7 @@ public sealed partial class IndexIngestionPolicy
         MaxDepth = Math.Max(0, maxDepth);
         ReAdmitGlobs = reAdmitGlobs ?? Array.Empty<string>();
         IndexBinaryAsciiContent = indexBinaryAsciiContent;
+        IncludeCloudOnlyFiles = includeCloudOnlyFiles;
         _excludeMatcher = new GlobMatcher(Array.Empty<string>(), ExcludedGlobs);
         // A GlobMatcher with the re-admit patterns as INCLUDES returns true iff a path matches one of them.
         _reAdmitMatcher = ReAdmitGlobs.Count > 0 ? new GlobMatcher(ReAdmitGlobs, Array.Empty<string>()) : null;
@@ -139,9 +144,14 @@ public static class IndexIngestionClassifier
             return IndexSkipReason.OverDepth;
         if (!policy.IncludeHiddenFiles && file.IsHidden)
             return IndexSkipReason.Hidden;
-        if (file.IsCloudOnly)
-            return IndexSkipReason.CloudOnly; // v1 never hydrates online-only files (plan §6.1)
-        if (file.IsReparsePoint && !policy.FollowReparsePoints)
+        if (file.IsCloudOnly && !policy.IncludeCloudOnlyFiles)
+            return IndexSkipReason.CloudOnly;
+
+        // A cloud placeholder IS a reparse point — that is how OneDrive/Files-On-Demand represents one.
+        // Testing the reparse flag without excusing it therefore rejected every placeholder even when the
+        // user explicitly turned cloud ingestion on, so the gate above could never admit anything and the
+        // setting appeared to do nothing. The cloud gate directly above already ruled on these files.
+        if (file.IsReparsePoint && !file.IsCloudOnly && !policy.FollowReparsePoints)
             return IndexSkipReason.ReparsePointSkipped;
         if (policy.MaxFileSizeBytes > 0 && file.SizeBytes > policy.MaxFileSizeBytes)
             return IndexSkipReason.OverSizeCap;

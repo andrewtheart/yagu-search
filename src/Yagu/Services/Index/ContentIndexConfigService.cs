@@ -178,6 +178,7 @@ public static class ContentIndexConfigService
         AddInt("IndexQueryWorkerParallelism", s => s.IndexQueryWorkerParallelism, (s, v) => s.IndexQueryWorkerParallelism = AppSettings.NormalizeIndexQueryWorkerParallelism(v));
         AddString("IndexStorageDirectory", s => s.IndexStorageDirectory, (s, v) => s.IndexStorageDirectory = AppSettings.NormalizeIndexStorageDirectory(v));
         AddInt("IndexMaxFileSizeMB", s => s.IndexMaxFileSizeMB, (s, v) => s.IndexMaxFileSizeMB = AppSettings.NormalizeIndexMaxFileSizeMB(v));
+        AddBool("IndexIncludeCloudOnlyFiles", s => s.IndexIncludeCloudOnlyFiles, (s, v) => s.IndexIncludeCloudOnlyFiles = v);
         AddInt("IndexMaxDiskSizeMB", s => s.IndexMaxDiskSizeMB, (s, v) => s.IndexMaxDiskSizeMB = AppSettings.NormalizeIndexMaxDiskSizeMB(v));
         AddInt("IndexMinimumFreeSpaceMB", s => s.IndexMinimumFreeSpaceMB, (s, v) => s.IndexMinimumFreeSpaceMB = AppSettings.NormalizeIndexMinimumFreeSpaceMB(v));
         AddInt("IndexMaxDiskUsagePercent", s => s.IndexMaxDiskUsagePercent, (s, v) => s.IndexMaxDiskUsagePercent = AppSettings.NormalizeIndexMaxDiskUsagePercent(v));

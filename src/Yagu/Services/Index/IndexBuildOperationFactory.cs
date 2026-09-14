@@ -158,22 +158,42 @@ internal static class IndexAutomaticCompactionRetryState
             && retryAfterUtc > nowUtc.ToUniversalTime();
     }
 
+    /// <summary>
+    /// True when a deferral is RECORDED for the root, whether or not its wait has already elapsed.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="IsActive"/> answers "must we keep waiting", so an entry silently drops out of it the
+    /// moment its delay expires. The disk-deferred recovery poll filtered on that, which removed a root
+    /// from the candidate set exactly when the wait ended — the window in which the user frees space and
+    /// expects maintenance to pick up. Expiry is not clearance: only a successful compaction or an
+    /// explicit clear removes the entry.
+    /// </remarks>
+    public static bool IsRecorded(AppSettings settings, string root)
+    {
+        string normalized = IndexScopeIdentity.NormalizePath(root);
+        return IndexSizeManagementPolicy.Resolve(settings, normalized).AllowsCompaction
+            && settings.IndexAutomaticCompactionRetryAfterUtcByRoot.ContainsKey(normalized);
+    }
+
     public static void ApplyResults(
         AppSettings settings,
         IReadOnlyList<IndexMaintenanceRootResult> roots,
         DateTimeOffset nowUtc)
     {
-        DateTimeOffset retryAfterUtc = nowUtc.ToUniversalTime().Add(
-            ContentIndexManager.AutomaticCompactionRetryDelay);
         foreach (IndexMaintenanceRootResult result in roots)
         {
             string root = IndexScopeIdentity.NormalizePath(result.Root);
             bool compactCapable = IndexSizeManagementPolicy.Resolve(settings, root).AllowsCompaction;
+            bool diskDeferred = result.Outcome == IndexMaintenanceOutcomes.CompactionFailedDiskSpace;
             if (compactCapable
-                && (result.Outcome == "compactionFailed"
+                && (diskDeferred
+                    || result.Outcome == IndexMaintenanceOutcomes.CompactionFailed
                     || result.Action == IndexMaintenanceActions.SizeBudgetReached))
             {
-                settings.IndexAutomaticCompactionRetryAfterUtcByRoot[root] = retryAfterUtc;
+                settings.IndexAutomaticCompactionRetryAfterUtcByRoot[root] = nowUtc.ToUniversalTime().Add(
+                    diskDeferred
+                        ? ContentIndexManager.AutomaticCompactionDiskRetryDelay
+                        : ContentIndexManager.AutomaticCompactionRetryDelay);
             }
             else if (result.Action is IndexMaintenanceActions.Compacted or IndexMaintenanceActions.Built)
             {

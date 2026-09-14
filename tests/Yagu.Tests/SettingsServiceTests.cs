@@ -117,6 +117,7 @@ public class SettingsServiceTests
         Assert.Equal(AppSettings.DefaultIndexRemovableDrivePolicy, settings.IndexRemovableDrivePolicy);
         Assert.False(settings.IndexFollowReparsePoints);
         Assert.True(settings.IndexIncludeHiddenFiles);
+        Assert.False(settings.IndexIncludeCloudOnlyFiles);
         Assert.Equal(AppSettings.DefaultIndexMaxJournalCatchupMB, settings.IndexMaxJournalCatchupMB);
         Assert.Equal(8_000_000, AppSettings.FirstRunDriveIndexMaxJournalCatchupRecords);
         Assert.Equal(AppSettings.FirstRunDriveIndexMaxJournalCatchupRecords, settings.IndexMaxJournalCatchupRecords);
@@ -293,6 +294,41 @@ public class SettingsServiceTests
 
             Assert.Equal(8192, loaded.IndexMaxDiskSizeMB);
             Assert.Equal(64, loaded.IndexCoalesceMaxSegmentMB);
+        }
+        finally { File.Delete(temp); }
+    }
+
+    [Fact]
+    public void Load_NewProfile_SuppressesTheLegacyIndexFilterNotice()
+    {
+        // No file on disk, so this is a first-ever launch on a machine that has never run Yagu.
+        AppSettings fresh = new SettingsService(
+            Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json")).Load();
+
+        // First-run onboarding registers a drive and writes its preselected system exclusions, which are
+        // literal absolute paths, so the "filters changed meaning" detector matches on a brand-new profile.
+        fresh.IndexedRoots = Yagu.Services.Index.IndexedRootsPolicy.Add(fresh.IndexedRoots, @"C:\");
+        fresh.IndexedRootFilters = Yagu.Services.Index.IndexedRootFilterPolicy.AddExcludedPaths(
+            fresh.IndexedRootFilters, @"C:\", [@"C:\Windows", @"C:\Program Files"]);
+        Assert.NotEmpty(
+            Yagu.Services.Index.IndexedRootFilterPolicy.FindRootsAffectedByLiteralPathFilters(fresh));
+
+        // The notice reports an index built before the change, which a new profile cannot have.
+        Assert.True(fresh.HasPromptedIndexLiteralPathFilters);
+    }
+
+    [Fact]
+    public void Load_ExistingProfile_StillArmsTheLegacyIndexFilterNotice()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "qg-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            // An upgraded profile predates the flag, so a genuinely legacy index still gets the notice.
+            File.WriteAllText(temp, """{ "IndexedRoots": [ "C:\\" ] }""");
+
+            AppSettings loaded = new SettingsService(temp).Load();
+
+            Assert.False(loaded.HasPromptedIndexLiteralPathFilters);
         }
         finally { File.Delete(temp); }
     }

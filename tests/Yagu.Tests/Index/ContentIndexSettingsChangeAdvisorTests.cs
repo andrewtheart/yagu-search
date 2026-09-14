@@ -61,6 +61,7 @@ public sealed class ContentIndexSettingsChangeAdvisorTests
     [InlineData("IndexMaxFileSizeMB", "222")]
     [InlineData("IndexFollowReparsePoints", "true")]
     [InlineData("IndexIncludeHiddenFiles", "false")]
+    [InlineData("IndexIncludeCloudOnlyFiles", "true")]
     [InlineData("IndexExcludedGlobs", "**/obj/**")]
     [InlineData("IndexExcludedExtensions", ".map;.min.js")]
     public void BuildOutputSettingChange_RecommendsEveryMaintainedRoot(string key, string value)

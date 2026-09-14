@@ -47,8 +47,12 @@ public sealed class ContentIndexManagerTests : IDisposable
         File.WriteAllBytes(path, bytes);
     }
 
-    private static IndexIngestionPolicy Policy(long maxBytes = 0, bool includeHidden = true)
-        => new(maxBytes, null, null, includeHidden, followReparsePoints: false, maxDepth: 0);
+    private static IndexIngestionPolicy Policy(long maxBytes = 0, bool includeHidden = true, bool includeCloudOnly = false)
+        => new(maxBytes, null, null, includeHidden, followReparsePoints: false, maxDepth: 0,
+               includeCloudOnlyFiles: includeCloudOnly);
+
+    private static readonly FileAttributes CloudOnlyAttributes =
+        (FileAttributes)0x00040000;
 
     [Theory]
     [InlineData(IndexStorageHealth.Healthy, true, "root", true, false, false)]
@@ -177,6 +181,40 @@ public sealed class ContentIndexManagerTests : IDisposable
             Assert.True(reports[i].BytesCrawled >= reports[i - 1].BytesCrawled, "BytesCrawled must be non-decreasing.");
             Assert.True(reports[i].FilesCrawled >= reports[i - 1].FilesCrawled, "FilesCrawled must be non-decreasing.");
         }
+    }
+
+    [Theory]
+    [InlineData(false, true, 0, 1)]
+    [InlineData(true, false, 0, 1)]
+    [InlineData(true, true, 1, 0)]
+    public void BuildScope_CloudOnlyFileRequiresOptInAndLiveProvider(
+        bool includeCloudOnlyFiles,
+        bool providerLive,
+        int expectedIndexed,
+        int expectedSkipped)
+    {
+        Write("cloud.txt", "cloud planner content");
+        string cloudPath = Path.Combine(_corpus, "cloud.txt");
+        var crawler = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = directory => string.Equals(directory, _corpus, StringComparison.OrdinalIgnoreCase)
+                ? new[] { new IndexCrawlEntry(cloudPath, new FileInfo(cloudPath).Length, CloudOnlyAttributes) }
+                : Array.Empty<IndexCrawlEntry>(),
+        };
+        var manager = new ContentIndexManager(
+            _paths,
+            retainedGenerations: 2,
+            contentReader: null,
+            crawlerFileSystem: crawler,
+            cloudFileCanHydrate: (_, _) => providerLive);
+        var policy = new IndexIngestionPolicy(
+            0, null, null, includeHiddenFiles: true, followReparsePoints: false, maxDepth: 0,
+            includeCloudOnlyFiles: includeCloudOnlyFiles);
+
+        BuildScopeResult result = manager.BuildScope(_corpus, policy);
+
+        Assert.Equal(expectedIndexed, result.Report.IndexedCount);
+        Assert.Equal(expectedSkipped, result.Report.SkipCount(IndexSkipReason.CloudOnly));
     }
 
     [Fact]
@@ -680,6 +718,33 @@ public sealed class ContentIndexManagerTests : IDisposable
         var result = manager.BuildScope(_corpus, Policy(), maxDiskUsagePercent: 0, diskUsedPercentProbe: _ => { probed = true; return 100.0; });
         Assert.False(probed);
         Assert.Equal(1, result.Report.IndexedCount);
+    }
+
+    [Fact]
+    public void BuildScope_CloudIngestion_ProbesTheDiskFarMoreOftenThanALocalBuild()
+    {
+        // A hydrating build DOWNLOADS each admitted placeholder in full, so the default 8192-file
+        // cadence could pull down many GB between probes and blow straight past the limit.
+        for (int i = 0; i < 200; i++)
+            Write($"f{i}.txt", "the planner produces trigram queries");
+
+        int Probes(bool cloud)
+        {
+            int count = 0;
+            new ContentIndexManager(_paths).BuildScope(
+                _corpus,
+                Policy(includeCloudOnly: cloud),
+                maxDiskUsagePercent: 90,
+                diskUsedPercentProbe: _ => { Interlocked.Increment(ref count); return 10.0; });
+            return count;
+        }
+
+        int local = Probes(cloud: false);
+        int hydrating = Probes(cloud: true);
+
+        Assert.True(
+            hydrating > local,
+            $"a hydrating build probed the disk {hydrating} times against {local} for the same local corpus.");
     }
 
     [Fact]

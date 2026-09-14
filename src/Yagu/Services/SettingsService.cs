@@ -4,8 +4,10 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Yagu.Models;
+using Yagu.Services.Cli.MachineOutput;
 using Yagu.Services.Index;
 using Yagu.Services.Logging;
+using Yagu.Services.Mcp;
 using Yagu.Services.Ocr;
 using System.Runtime.InteropServices;
 
@@ -979,6 +981,9 @@ public sealed class AppSettings
     public bool IndexFollowReparsePoints { get; set; }
     /// <summary>Whether index builds ingest hidden files. Default aligned with the search setting.</summary>
     public bool IndexIncludeHiddenFiles { get; set; } = true;
+    /// <summary>Whether index builds may hydrate and ingest cloud-only placeholder files when their
+    /// sync provider is connected. Default false so indexing never downloads cloud content unexpectedly.</summary>
+    public bool IndexIncludeCloudOnlyFiles { get; set; }
     /// <summary>Foreground journal catch-up budget (MB). Default 64. Exceeding it bypasses the search
     /// while low-priority catch-up continues (plan §6.1).</summary>
     public int IndexMaxJournalCatchupMB { get; set; } = DefaultIndexMaxJournalCatchupMB;
@@ -1158,6 +1163,7 @@ public sealed class AppSettings
         IndexRemovableDrivePolicy = DefaultIndexRemovableDrivePolicy;
         IndexFollowReparsePoints = false;
         IndexIncludeHiddenFiles = true;
+        IndexIncludeCloudOnlyFiles = false;
         IndexMaxJournalCatchupMB = DefaultIndexMaxJournalCatchupMB;
         IndexMaxJournalCatchupRecords = FirstRunDriveIndexMaxJournalCatchupRecords;
         IndexPostBuildCatchUpThresholdChanges = DefaultIndexPostBuildCatchUpThresholdChanges;
@@ -1177,6 +1183,239 @@ public sealed class AppSettings
         ShowIndexProvenanceInResults = true;
         IndexExcludedGlobs = string.Empty;
         IndexExcludedExtensions = string.Empty;
+    }
+
+    // ── MCP server ───────────────────────────────────────────────────────────────────────────────
+    // What an MCP client is allowed to reach, and how large a single machine-mode response may get.
+    // The server itself is configured from its own command line (the MCP Server settings tab writes
+    // these values into the client's config), so this is the one place the user's intent is stored.
+
+    public const int DefaultMcpMaxConcurrentCalls = 4;
+    public const int MinimumMcpMaxConcurrentCalls = 1;
+    public const int MaximumMcpMaxConcurrentCalls = 32;
+
+    /// <summary>
+    /// What a fresh install grants: read and search. Everything with a wider blast radius — writing
+    /// exports, replacing text, index maintenance, deleting indexes, hydrating cloud placeholders — is
+    /// opted into deliberately.
+    /// </summary>
+    public static List<string> CreateDefaultMcpCapabilities() =>
+        [nameof(McpCapability.Read), nameof(McpCapability.Search)];
+
+    /// <summary>Folders an MCP client may search, read, and write inside. Empty by default, and the
+    /// server refuses to start without at least one — an omitted root must never fall through to the
+    /// CLI's "search every drive" behavior.</summary>
+    public List<string> McpAllowedRoots { get; set; } = [];
+
+    /// <summary>True once the first-run "grant some folders" prompt has been answered or dismissed, so
+    /// it is offered once rather than on every launch that still has no folder.</summary>
+    public bool McpAllowedRootsPromptShown { get; set; }
+
+    /// <summary><see cref="McpCapability"/> names granted to MCP clients. Normalized on load; an
+    /// unrecognized name is dropped rather than being treated as a broader grant.</summary>
+    public List<string> McpCapabilities { get; set; } = CreateDefaultMcpCapabilities();
+
+    /// <summary>How many bridged <c>Yagu.exe</c> calls one server process runs at once. Range 1–32;
+    /// default 4. Several bounded calls in parallel can still exceed the process memory budget.</summary>
+    public int McpMaxConcurrentCalls { get; set; } = DefaultMcpMaxConcurrentCalls;
+
+    /// <summary>Largest single match line in a machine-mode response, in UTF-8 bytes.</summary>
+    public int McpMaxLineBytes { get; set; } = MachineOutputBudget.Default.MaxLineBytes;
+    /// <summary>Largest single context line in a machine-mode response, in UTF-8 bytes.</summary>
+    public int McpMaxContextLineBytes { get; set; } = MachineOutputBudget.Default.MaxContextLineBytes;
+    /// <summary>Largest single path in a machine-mode response, in UTF-8 bytes.</summary>
+    public int McpMaxPathBytes { get; set; } = MachineOutputBudget.Default.MaxPathBytes;
+    /// <summary>Most context lines carried with one match.</summary>
+    public int McpMaxContextLines { get; set; } = MachineOutputBudget.Default.MaxContextLines;
+    /// <summary>Most records in one machine-mode response.</summary>
+    public int McpMaxRecords { get; set; } = MachineOutputBudget.Default.MaxRecords;
+    /// <summary>Whole-response ceiling in UTF-8 bytes, enforced incrementally as records are written.</summary>
+    public long McpMaxResponseBytes { get; set; } = MachineOutputBudget.Default.MaxResponseBytes;
+
+    /// <summary>
+    /// Largest number of matches an MCP client may have collected into an export, a saved session, or a
+    /// session reload.
+    /// </summary>
+    /// <remarks>
+    /// Unlike a search, these commands hold every match in memory in the child process before writing.
+    /// The client asks for a count, and without a ceiling a client that asks for a very large one turns
+    /// a bounded tool into an unbounded one.
+    /// </remarks>
+    public int McpMaxExportResults { get; set; } = DefaultMcpMaxExportResults;
+
+    public const int DefaultMcpMaxExportResults = 50_000;
+    public const int MinimumMcpMaxExportResults = 1;
+    public const int MaximumMcpMaxExportResults = 1_000_000;
+
+    public static int NormalizeMcpMaxExportResults(int value) =>
+        value <= 0 ? DefaultMcpMaxExportResults
+        : Math.Clamp(value, MinimumMcpMaxExportResults, MaximumMcpMaxExportResults);
+
+    // ── Background jobs and timeouts ──
+    // Index builds and natural-language searches outlive a single tool call, so the server hands back a
+    // job id and the client polls it. Everything that bounds that machinery lives here rather than as a
+    // constant in the server: a 4-hour maintenance ceiling is right for a spinning disk and absurd for
+    // an NVMe dev box, and the user is the only one who knows which they have.
+
+    /// <summary>Finished jobs kept for polling before the oldest are dropped.</summary>
+    public int McpMaxRetainedJobs { get; set; } = DefaultMcpMaxRetainedJobs;
+
+    public const int DefaultMcpMaxRetainedJobs = 64;
+    public const int MinimumMcpMaxRetainedJobs = 4;
+    public const int MaximumMcpMaxRetainedJobs = 1_000;
+
+    public static int NormalizeMcpMaxRetainedJobs(int value) =>
+        value <= 0 ? DefaultMcpMaxRetainedJobs
+        : Math.Clamp(value, MinimumMcpMaxRetainedJobs, MaximumMcpMaxRetainedJobs);
+
+    /// <summary>Jobs allowed to run at once before further starts are refused.</summary>
+    public int McpMaxRunningJobs { get; set; } = DefaultMcpMaxRunningJobs;
+
+    public const int DefaultMcpMaxRunningJobs = 8;
+    public const int MinimumMcpMaxRunningJobs = 1;
+    public const int MaximumMcpMaxRunningJobs = 64;
+
+    public static int NormalizeMcpMaxRunningJobs(int value) =>
+        value <= 0 ? DefaultMcpMaxRunningJobs
+        : Math.Clamp(value, MinimumMcpMaxRunningJobs, MaximumMcpMaxRunningJobs);
+
+    /// <summary>Characters of a job's result retained for polling; longer results are truncated.</summary>
+    public int McpMaxJobResultChars { get; set; } = DefaultMcpMaxJobResultChars;
+
+    public const int DefaultMcpMaxJobResultChars = 256 * 1024;
+    public const int MinimumMcpMaxJobResultChars = 4 * 1024;
+    public const int MaximumMcpMaxJobResultChars = 8 * 1024 * 1024;
+
+    public static int NormalizeMcpMaxJobResultChars(int value) =>
+        value <= 0 ? DefaultMcpMaxJobResultChars
+        : Math.Clamp(value, MinimumMcpMaxJobResultChars, MaximumMcpMaxJobResultChars);
+
+    /// <summary>How long an ordinary bridged call may run before it is cancelled, in seconds.</summary>
+    public int McpCallTimeoutSeconds { get; set; } = DefaultMcpCallTimeoutSeconds;
+
+    public const int DefaultMcpCallTimeoutSeconds = 120;
+    public const int MinimumMcpCallTimeoutSeconds = 5;
+    public const int MaximumMcpCallTimeoutSeconds = 3_600;
+
+    public static int NormalizeMcpCallTimeoutSeconds(int value) =>
+        value <= 0 ? DefaultMcpCallTimeoutSeconds
+        : Math.Clamp(value, MinimumMcpCallTimeoutSeconds, MaximumMcpCallTimeoutSeconds);
+
+    /// <summary>How long index maintenance may run before it is cancelled, in minutes.</summary>
+    public int McpMaintenanceTimeoutMinutes { get; set; } = DefaultMcpMaintenanceTimeoutMinutes;
+
+    public const int DefaultMcpMaintenanceTimeoutMinutes = 240;
+    public const int MinimumMcpMaintenanceTimeoutMinutes = 1;
+    public const int MaximumMcpMaintenanceTimeoutMinutes = 1_440;
+
+    public static int NormalizeMcpMaintenanceTimeoutMinutes(int value) =>
+        value <= 0 ? DefaultMcpMaintenanceTimeoutMinutes
+        : Math.Clamp(value, MinimumMcpMaintenanceTimeoutMinutes, MaximumMcpMaintenanceTimeoutMinutes);
+
+    /// <summary>How long a model-backed call may run, and how long it may queue, in minutes.</summary>
+    public int McpModelTimeoutMinutes { get; set; } = DefaultMcpModelTimeoutMinutes;
+
+    public const int DefaultMcpModelTimeoutMinutes = 30;
+    public const int MinimumMcpModelTimeoutMinutes = 1;
+    public const int MaximumMcpModelTimeoutMinutes = 240;
+
+    public static int NormalizeMcpModelTimeoutMinutes(int value) =>
+        value <= 0 ? DefaultMcpModelTimeoutMinutes
+        : Math.Clamp(value, MinimumMcpModelTimeoutMinutes, MaximumMcpModelTimeoutMinutes);
+
+    /// <summary>Serve MCP over loopback HTTP in addition to stdio. Default false.</summary>
+    public bool McpHttpEnabled { get; set; }
+
+    /// <summary>Loopback port for the HTTP transport. Range 1024–65535; default 8377.</summary>
+    public int McpHttpPort { get; set; } = DefaultMcpHttpPort;
+
+    /// <summary>Start the HTTP server at sign-in via a per-user scheduled task. Default false.</summary>
+    public bool McpStartAtLogin { get; set; }
+
+    /// <summary>
+    /// Allow an MCP client to actually rewrite files, not just preview the change. Default <b>false</b>,
+    /// and turning it on is the human authorization step: a <c>confirm</c> flag set by the same model
+    /// that chose to call the tool defends against an accidental default, not against prompt injection or
+    /// a confidently wrong plan.
+    /// </summary>
+    public bool McpAllowReplaceWrites { get; set; }
+
+    public const int DefaultMcpHttpPort = 8377;
+    public const int MinimumMcpHttpPort = 1024;
+    public const int MaximumMcpHttpPort = 65535;
+
+    public static int NormalizeMcpHttpPort(int value) =>
+        value <= 0 ? DefaultMcpHttpPort : Math.Clamp(value, MinimumMcpHttpPort, MaximumMcpHttpPort);
+
+    /// <summary>The persisted response ceilings, clamped to their documented supported ranges.</summary>
+    [JsonIgnore]
+    internal MachineOutputBudget EffectiveMachineOutputBudget => MachineOutputBudget.Create(
+        McpMaxLineBytes,
+        McpMaxContextLineBytes,
+        McpMaxPathBytes,
+        McpMaxContextLines,
+        McpMaxRecords,
+        McpMaxResponseBytes);
+
+    public static int NormalizeMcpMaxConcurrentCalls(int value) =>
+        Math.Clamp(value, MinimumMcpMaxConcurrentCalls, MaximumMcpMaxConcurrentCalls);
+
+    /// <summary>
+    /// Drops unrecognized capability names, de-duplicates, and returns them in <see cref="McpCapability"/>
+    /// declaration order so the generated client config is stable across saves.
+    /// </summary>
+    public static List<string> NormalizeMcpCapabilities(IEnumerable<string>? values)
+    {
+        var granted = McpCapability.None;
+        foreach (string? value in values ?? [])
+        {
+            if (!string.IsNullOrWhiteSpace(value)
+                && Enum.TryParse(value.Trim(), ignoreCase: true, out McpCapability parsed))
+            {
+                granted |= parsed;
+            }
+        }
+
+        var normalized = new List<string>();
+        foreach (McpCapability capability in Enum.GetValues<McpCapability>())
+        {
+            if (capability != McpCapability.None && (granted & capability) == capability)
+                normalized.Add(capability.ToString());
+        }
+        return normalized;
+    }
+
+    /// <summary>
+    /// Canonicalizes the configured roots through the same validation the server applies, so a root the
+    /// server would silently drop can never sit in settings looking effective.
+    /// </summary>
+    public static List<string> NormalizeMcpAllowedRoots(IEnumerable<string>? roots) =>
+        [.. new McpAuthorizationPolicy(roots ?? [], McpCapability.None).AllowedRoots];
+
+    /// <summary>Restores every MCP setting to its shipped default. Allowed roots are cleared, which
+    /// leaves the server authorizing nothing until the user adds one back.</summary>
+    public void ResetMcpServerSettings()
+    {
+        McpAllowedRoots = [];
+        McpCapabilities = CreateDefaultMcpCapabilities();
+        McpMaxConcurrentCalls = DefaultMcpMaxConcurrentCalls;
+        McpMaxLineBytes = MachineOutputBudget.Default.MaxLineBytes;
+        McpMaxContextLineBytes = MachineOutputBudget.Default.MaxContextLineBytes;
+        McpMaxPathBytes = MachineOutputBudget.Default.MaxPathBytes;
+        McpMaxContextLines = MachineOutputBudget.Default.MaxContextLines;
+        McpMaxRecords = MachineOutputBudget.Default.MaxRecords;
+        McpMaxResponseBytes = MachineOutputBudget.Default.MaxResponseBytes;
+        McpHttpEnabled = false;
+        McpHttpPort = DefaultMcpHttpPort;
+        McpMaxExportResults = DefaultMcpMaxExportResults;
+        McpMaxRetainedJobs = DefaultMcpMaxRetainedJobs;
+        McpMaxRunningJobs = DefaultMcpMaxRunningJobs;
+        McpMaxJobResultChars = DefaultMcpMaxJobResultChars;
+        McpCallTimeoutSeconds = DefaultMcpCallTimeoutSeconds;
+        McpMaintenanceTimeoutMinutes = DefaultMcpMaintenanceTimeoutMinutes;
+        McpModelTimeoutMinutes = DefaultMcpModelTimeoutMinutes;
+        McpStartAtLogin = false;
+        McpAllowReplaceWrites = false;
     }
 
     /// <summary>True once the first-run telemetry/bug-reporting consent dialog has been shown. The
@@ -1300,6 +1539,9 @@ public sealed class AppSettings
     public bool ShowEditorSavedOverlay { get; set; } = true;
     /// <summary>When true (default), the built-in editor applies syntax coloring based on the file name/extension.</summary>
     public bool EditorSyntaxHighlightingEnabled { get; set; } = true;
+    /// <summary>When true (default), the preview pane colors code (keywords, strings, comments, …)
+    /// based on the previewed file's name/extension. Search-match highlighting always wins over it.</summary>
+    public bool PreviewSyntaxHighlightingEnabled { get; set; } = true;
     /// <summary>When true (default), Yagu starts in the compact launcher window (single search bar,
     /// no results pane). When false, Yagu starts in the traditional full window with title bar and
     /// results pane visible.</summary>
@@ -1539,6 +1781,10 @@ public sealed class SettingsService
         _writeGate = WriteGates.GetOrAdd(gateKey, static _ => new SemaphoreSlim(1, 1));
     }
 
+    /// <summary>The settings file this instance reads and writes. Machine-mode CLI runs report it so a
+    /// caller can tell a workspace <c>.yagu.json</c> apart from the global profile settings.</summary>
+    internal string SettingsPath => _path;
+
     public static string DefaultPath() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Yagu", "settings.json");
 
@@ -1597,6 +1843,9 @@ public sealed class SettingsService
             IndexSizeDefaultsMigrated = true,
             IndexStreamingMergeDefaultsMigrated = true,
             IndexAutomaticCompactionDefaultsMigrated = true,
+            // Reports that an OLDER build's index predates a filter-semantics change; a new profile has no
+            // such index, and first-run onboarding writes literal-path exclusions that would falsely trip it.
+            HasPromptedIndexLiteralPathFilters = true,
         };
 
     private static void NormalizeLoadedSettings(AppSettings settings, bool normalizeSyncOnlyValues)
@@ -1644,6 +1893,7 @@ public sealed class SettingsService
         settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(settings.ImageOcrMaxSide);
         settings.ImageOcrWorkerParallelism = AppSettings.NormalizeImageOcrWorkerParallelism(settings.ImageOcrWorkerParallelism);
         NormalizeIndexSettings(settings);
+        NormalizeMcpSettings(settings);
         if (normalizeSyncOnlyValues)
         {
             settings.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(
@@ -1827,6 +2077,36 @@ public sealed class SettingsService
             settings.IndexCoalesceMinRun = AppSettings.DefaultIndexCoalesceMinRun;
 
         settings.IndexAutomaticCompactionDefaultsMigrated = true;
+    }
+
+    /// <summary>
+    /// Normalizes the persisted MCP configuration. Roots are canonicalized through the server's own
+    /// validation and capabilities are coerced to known names, so what the settings tab shows is exactly
+    /// what a launched server would honor. Response ceilings are clamped to their documented ranges, so
+    /// an out-of-range stored value degrades to a usable ceiling rather than an unbounded or
+    /// zero-length response.
+    /// </summary>
+    private static void NormalizeMcpSettings(AppSettings settings)
+    {
+        settings.McpAllowedRoots = AppSettings.NormalizeMcpAllowedRoots(settings.McpAllowedRoots);
+        settings.McpCapabilities = AppSettings.NormalizeMcpCapabilities(settings.McpCapabilities);
+        settings.McpMaxConcurrentCalls = AppSettings.NormalizeMcpMaxConcurrentCalls(settings.McpMaxConcurrentCalls);
+        settings.McpHttpPort = AppSettings.NormalizeMcpHttpPort(settings.McpHttpPort);
+        settings.McpMaxExportResults = AppSettings.NormalizeMcpMaxExportResults(settings.McpMaxExportResults);
+        settings.McpMaxRetainedJobs = AppSettings.NormalizeMcpMaxRetainedJobs(settings.McpMaxRetainedJobs);
+        settings.McpMaxRunningJobs = AppSettings.NormalizeMcpMaxRunningJobs(settings.McpMaxRunningJobs);
+        settings.McpMaxJobResultChars = AppSettings.NormalizeMcpMaxJobResultChars(settings.McpMaxJobResultChars);
+        settings.McpCallTimeoutSeconds = AppSettings.NormalizeMcpCallTimeoutSeconds(settings.McpCallTimeoutSeconds);
+        settings.McpMaintenanceTimeoutMinutes = AppSettings.NormalizeMcpMaintenanceTimeoutMinutes(settings.McpMaintenanceTimeoutMinutes);
+        settings.McpModelTimeoutMinutes = AppSettings.NormalizeMcpModelTimeoutMinutes(settings.McpModelTimeoutMinutes);
+
+        MachineOutputBudget budget = settings.EffectiveMachineOutputBudget;
+        settings.McpMaxLineBytes = budget.MaxLineBytes;
+        settings.McpMaxContextLineBytes = budget.MaxContextLineBytes;
+        settings.McpMaxPathBytes = budget.MaxPathBytes;
+        settings.McpMaxContextLines = budget.MaxContextLines;
+        settings.McpMaxRecords = budget.MaxRecords;
+        settings.McpMaxResponseBytes = budget.MaxResponseBytes;
     }
 
     /// <summary>Normalizes/validates every persisted content-index setting (plan §6.1). Bounded numeric

@@ -18,6 +18,50 @@ public sealed class IndexFileCrawlerTests
         => new(path, 0, FileAttributes.Directory | FileAttributes.ReparsePoint);
 
     [Fact]
+    public void EnumerateFiles_TraversesCloudSyncDirectories_EvenThoughTheyAreReparsePoints()
+    {
+        // A OneDrive/Google Drive/Dropbox folder carries FileAttributes.ReparsePoint but is not a link:
+        // ResolveLinkTarget returns null for it, so the reparse gate pruned the entire cloud tree —
+        // including files already materialized locally — and IndexIncludeCloudOnlyFiles could never admit
+        // anything. Critically, such a directory does NOT carry the RECALL_ON_* attributes, so it can only
+        // be told apart from a junction through the Cloud Filter API.
+        string root = IndexScopeIdentity.NormalizePath(@"C:\root");
+        string cloud = IndexScopeIdentity.NormalizePath(@"C:\root\OneDrive");
+        string cloudSub = IndexScopeIdentity.NormalizePath(@"C:\root\OneDrive\Documents");
+        string junction = IndexScopeIdentity.NormalizePath(@"C:\root\junction");
+        string storage = IndexScopeIdentity.NormalizePath(@"C:\index");
+
+        var fs = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = directory => directory switch
+            {
+                var d when d == root => new[] { Reparse(@"C:\root\OneDrive"), Reparse(@"C:\root\junction") },
+                var d when d == cloud => new[] { File(@"C:\root\OneDrive\local.txt"), Reparse(@"C:\root\OneDrive\Documents") },
+                var d when d == cloudSub => new[] { File(@"C:\root\OneDrive\Documents\deep.txt") },
+                var d when d == junction => new[] { File(@"C:\root\junction\linked.txt") },
+                _ => Array.Empty<IndexCrawlEntry>(),
+            },
+            // A real cloud directory has no resolvable link target — this is what defeated the old gate.
+            ResolveDirectoryTarget = _ => null,
+            IsCloudSyncDirectory = path =>
+                IndexScopeIdentity.NormalizePath(path).StartsWith(cloud, StringComparison.OrdinalIgnoreCase),
+        };
+
+        // FollowReparsePoints stays OFF: a cloud directory must be traversed regardless of that setting,
+        // because it is not a link and enumerating it cannot hydrate or leave the volume.
+        string[] files = IndexFileCrawler
+            .EnumerateFiles(root, Policy(followReparse: false), storage, CancellationToken.None, fs)
+            .Select(e => e.Path)
+            .ToArray();
+
+        Assert.Contains(@"C:\root\OneDrive\local.txt", files);
+        Assert.Contains(@"C:\root\OneDrive\Documents\deep.txt", files);
+        // A genuine junction is still gated by FollowReparsePoints.
+        Assert.DoesNotContain(@"C:\root\junction\linked.txt", files);
+        Assert.Equal(2, files.Length);
+    }
+
+    [Fact]
     public void EnumerateFiles_TraversesNormalDirectories_PrunesStorage_AndIsolatesIoFailures()
     {
         string root = IndexScopeIdentity.NormalizePath(@"C:\root");

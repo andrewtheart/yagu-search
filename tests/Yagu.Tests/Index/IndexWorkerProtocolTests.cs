@@ -114,7 +114,7 @@ public sealed class IndexWorkerProtocolTests
         Assert.Equal("progress", IndexWorkerProtocol.MessageTypes.Progress);
         Assert.Equal("result", IndexWorkerProtocol.MessageTypes.Result);
         Assert.Equal("error", IndexWorkerProtocol.MessageTypes.Error);
-        Assert.Equal(3, IndexWorkerProtocol.ControlProtocolVersion);
+        Assert.Equal(4, IndexWorkerProtocol.ControlProtocolVersion);
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using Yagu.Services;
+using Yagu.Services.Mcp;
 
 namespace Yagu;
 
@@ -24,6 +25,7 @@ public sealed partial class MainWindow
         FontContrast,
         CpuSemanticWarning,
         SemanticQualification,
+        McpAllowedRoots,
         AppUpdateConsent,
     }
 
@@ -97,10 +99,29 @@ public sealed partial class MainWindow
             steps.Add(StartupDialogStep.CpuSemanticWarning);
         if (ViewModel.ShouldOfferSemanticModelQualification)
             steps.Add(StartupDialogStep.SemanticQualification);
+        if (WillShowMcpAllowedRootsPrompt())
+            steps.Add(StartupDialogStep.McpAllowedRoots);
         if (ViewModel.Settings.AppUpdateCheckMode == AppUpdateCheckMode.Prompt)
             steps.Add(StartupDialogStep.AppUpdateConsent);
 
         return new StartupDialogPlan(steps);
+    }
+
+    /// <summary>
+    /// Only when the optional MCP server was actually installed and nothing has been granted yet.
+    /// </summary>
+    /// <remarks>
+    /// Installing the server copies files but grants nothing, and a server with no folder refuses to
+    /// run — so without this prompt the feature looks installed but every client button stays disabled.
+    /// </remarks>
+    private bool WillShowMcpAllowedRootsPrompt()
+    {
+        if (ViewModel.Settings.McpAllowedRootsPromptShown)
+            return false;
+        if (ViewModel.Settings.McpAllowedRoots.Count > 0)
+            return false;
+
+        return File.Exists(McpConfigSnippetBuilder.ResolveServerExecutablePath());
     }
 
     private bool WillShowEverythingStartupPrompt(EverythingStartupDetection detection)

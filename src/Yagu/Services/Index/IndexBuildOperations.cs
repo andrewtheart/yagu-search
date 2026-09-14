@@ -24,6 +24,7 @@ internal sealed class IndexIngestionPolicySnapshot
     public string[] ExcludedGlobs { get; set; } = Array.Empty<string>();
     public string[] ExcludedExtensions { get; set; } = Array.Empty<string>();
     public bool IncludeHiddenFiles { get; set; }
+    public bool IncludeCloudOnlyFiles { get; set; }
     public bool FollowReparsePoints { get; set; }
     public int MaxDepth { get; set; }
     public string[] ReAdmitGlobs { get; set; } = Array.Empty<string>();
@@ -38,6 +39,7 @@ internal sealed class IndexIngestionPolicySnapshot
             ExcludedGlobs = policy.ExcludedGlobs.ToArray(),
             ExcludedExtensions = policy.ExcludedExtensions.OrderBy(static value => value, StringComparer.OrdinalIgnoreCase).ToArray(),
             IncludeHiddenFiles = policy.IncludeHiddenFiles,
+            IncludeCloudOnlyFiles = policy.IncludeCloudOnlyFiles,
             FollowReparsePoints = policy.FollowReparsePoints,
             MaxDepth = policy.MaxDepth,
             ReAdmitGlobs = policy.ReAdmitGlobs.ToArray(),
@@ -53,13 +55,14 @@ internal sealed class IndexIngestionPolicySnapshot
         FollowReparsePoints,
         Math.Max(0, MaxDepth),
         ReAdmitGlobs ?? Array.Empty<string>(),
-        IndexBinaryAsciiContent);
+        IndexBinaryAsciiContent,
+        IncludeCloudOnlyFiles);
 }
 
 /// <summary>Narrow, versioned snapshot for one explicit full build.</summary>
 internal sealed class IndexBuildOperation
 {
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
 
     public int Version { get; set; } = CurrentVersion;
     public string StorageDirectory { get; set; } = "";
@@ -192,7 +195,7 @@ internal sealed class IndexMaintenanceRootOperation
 /// <summary>Narrow, versioned snapshot for an ordered automatic maintenance pass.</summary>
 internal sealed class IndexMaintenanceOperation
 {
-    public const int CurrentVersion = 6;
+    public const int CurrentVersion = 7;
     public const string ModeBuildDue = "buildDue";
     public const string ModeIncremental = "incremental";
     /// <summary>A one-shot, user-approved compaction of the named roots. It folds every active layer into a
@@ -243,6 +246,18 @@ internal static class IndexMaintenanceActions
     /// <summary>Updates were paused because unreclaimable update history reached the clean-up thresholds.</summary>
     public const string ReclamationBlocked = "reclamationBlocked";
     public const string Failed = "failed";
+}
+
+/// <summary>The <see cref="IndexMaintenanceRootResult.Outcome"/> values the host reacts to. They cross the
+/// worker boundary as plain strings, so a cause the host must schedule around needs its own value.</summary>
+internal static class IndexMaintenanceOutcomes
+{
+    public const string CompactionFailed = "compactionFailed";
+
+    /// <summary>Compaction stopped because the index volume was outside the configured disk limits. The
+    /// condition is external and self-correcting, so it is re-checked on a short poll instead of the long
+    /// generic failure backoff.</summary>
+    public const string CompactionFailedDiskSpace = "compactionFailedDiskSpace";
 }
 
 /// <summary>Bounded result for one root in an automatic maintenance pass.</summary>

@@ -51,7 +51,7 @@ if (scenario == "hangBeforeReady")
     return;
 }
 
-int version = scenario == "mismatch" ? 4 : 3;
+int version = scenario == "mismatch" ? 3 : 4;
 Send($"{{\"type\":\"ready\",\"controlProtocolVersion\":{version},\"epoch\":7}}");
 if (scenario == "mismatch")
     return;

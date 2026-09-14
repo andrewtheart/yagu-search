@@ -30,7 +30,8 @@ public sealed partial class IndexIngestionPolicy
             settings.IndexFollowReparsePoints,
             maxDepth,
             reAdmit,
-            indexBinaryAsciiContent: true);
+            indexBinaryAsciiContent: true,
+            includeCloudOnlyFiles: settings.IndexIncludeCloudOnlyFiles);
     }
 
     private static List<string> SplitSettingsList(string? raw)

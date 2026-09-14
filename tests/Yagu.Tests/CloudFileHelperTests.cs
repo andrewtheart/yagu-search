@@ -31,6 +31,64 @@ public sealed class CloudFileHelperTests
         => Assert.True(CloudFileHelper.IsCloudOnlyPlaceholder(RecallOnDataAccess | FileAttributes.Archive));
 
     [Fact]
+    public void IsCloudSyncDirectory_FabricatedPath_IsNotASyncRoot()
+    {
+        // A path that cannot be under any sync root must answer false without throwing, so the index
+        // crawler falls back to the ordinary junction/symlink gate for it.
+        Assert.False(CloudFileHelper.IsCloudSyncDirectory(@"C:\definitely\not\a\sync\root\zzz"));
+        Assert.False(CloudFileHelper.IsCloudSyncDirectory(string.Empty));
+    }
+
+    [Fact]
+    public void IsCloudSyncDirectory_RealSyncRoot_IsDetected_WhenOneIsPresent()
+    {
+        // Regression guard for the buffer-sizing defect: CF_SYNC_ROOT_PROVIDER_INFO is 1028 bytes, so a
+        // hand-sized 1024-byte buffer made CfGetSyncRootInfoByPath always return ERROR_MORE_DATA. That was
+        // read as "not a sync root", which silently reduced provider liveness to a constant false and made
+        // every "search/index online-only files" opt-in a no-op. Only assert when this machine actually has
+        // a cloud sync root, so the test stays meaningful without becoming environment-dependent.
+        string? syncRoot = FindLocalSyncRoot();
+        if (syncRoot is null)
+            return; // No cloud provider configured on this machine; nothing to assert.
+
+        Assert.True(
+            CloudFileHelper.IsCloudSyncDirectory(syncRoot),
+            $"'{syncRoot}' is a registered cloud sync root but was not detected as one.");
+    }
+
+    private static string? FindLocalSyncRoot()
+    {
+        if (!OperatingSystem.IsWindows())
+            return null;
+        try
+        {
+            using var srm = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager");
+            if (srm is null)
+                return null;
+            foreach (string rootName in srm.GetSubKeyNames())
+            {
+                using var userRoots = srm.OpenSubKey($@"{rootName}\UserSyncRoots");
+                if (userRoots is null) continue;
+                foreach (string valueName in userRoots.GetValueNames())
+                {
+                    if (userRoots.GetValue(valueName) is string dir
+                        && dir.Length > 0
+                        && Directory.Exists(dir))
+                    {
+                        return dir;
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return null;
+        }
+        return null;
+    }
+
+    [Fact]
     public void ShouldSkipPlaceholder_NonPlaceholder_NeverSkips()
     {
         Assert.False(CloudFileHelper.ShouldSkipPlaceholder(@"C:\x\file.txt", FileAttributes.Archive, searchOnlineOnlyFiles: false));

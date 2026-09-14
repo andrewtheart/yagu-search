@@ -62,6 +62,7 @@ public sealed partial class MainWindow
             else
             {
                 OpenSettingsToIndexingTab();
+                _settingsWindow?.ScrollToManageIndexes();
             }
         }
         catch (Exception ex)
@@ -528,13 +529,7 @@ public sealed partial class MainWindow
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap,
             });
-            details.Children.Add(new TextBlock
-            {
-                Text = entry.Status,
-                FontSize = 11,
-                Opacity = 0.8,
-                TextWrapping = TextWrapping.Wrap,
-            });
+            details.Children.Add(CreateIndexStatusHealthStatusText(entry));
             if (entry.CompactionForecast is { } forecast)
             {
                 details.Children.Add(new TextBlock
@@ -646,6 +641,45 @@ public sealed partial class MainWindow
             }
             IndexStatusAllDriveHealthRows.Children.Add(row);
         }
+    }
+
+    /// <summary>
+    /// The health row's status line. Any phrase the row flagged as an alert (a failed automatic compaction)
+    /// is drawn in the critical colour so it reads as a problem instead of another dimmed detail line.
+    /// </summary>
+    private static TextBlock CreateIndexStatusHealthStatusText(IndexRootHealthEntry entry)
+    {
+        var text = new TextBlock
+        {
+            FontSize = 11,
+            Opacity = 0.8,
+            TextWrapping = TextWrapping.Wrap,
+        };
+
+        string alert = entry.StatusAlertText ?? string.Empty;
+        int alertStart = alert.Length == 0
+            ? -1
+            : entry.Status.IndexOf(alert, StringComparison.Ordinal);
+        if (alertStart < 0)
+        {
+            text.Text = entry.Status;
+            return text;
+        }
+
+        if (alertStart > 0)
+            text.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = entry.Status[..alertStart] });
+        text.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run
+        {
+            Text = alert,
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        });
+        text.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run
+        {
+            Text = entry.Status[(alertStart + alert.Length)..],
+        });
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(text, entry.Status);
+        return text;
     }
 
     private static Button CreateIndexStatusHealthActionButton(
@@ -808,6 +842,7 @@ public sealed partial class MainWindow
     {
         HideIndexStatusHoverOverlay();
         OpenSettingsToIndexingTab();
+        _settingsWindow?.ScrollToManageIndexes();
     }
 
     private void OnIndexStatusAutomaticIndexingDropDownOpened(object sender, object e)
@@ -1377,6 +1412,9 @@ public sealed partial class MainWindow
             string.Join(",", selectedTriggers), initialUpdateMode);
         bool updateModeOverridden = false;
         int maxFileSizeMB = AppSettings.NormalizeIndexMaxFileSizeMB(ViewModel.Settings.IndexMaxFileSizeMB);
+        bool indexCloudOnlyFiles = applyFirstRunDriveIndexingProfile
+            ? false
+            : ViewModel.Settings.IndexIncludeCloudOnlyFiles;
 
         List<string> chosen;
         while (true)
@@ -1601,6 +1639,30 @@ public sealed partial class MainWindow
                 TextWrapping = TextWrapping.Wrap,
             });
 
+            CheckBox? indexCloudOnlyFilesCheck = null;
+            if (applyFirstRunDriveIndexingProfile)
+            {
+                indexCloudOnlyFilesCheck = new CheckBox
+                {
+                    Content = new TextBlock
+                    {
+                        Text = "Index cloud-only files (downloads online-only content while indexing)",
+                        TextWrapping = TextWrapping.Wrap,
+                    },
+                    IsChecked = indexCloudOnlyFiles,
+                    MinWidth = 0,
+                    Margin = new Thickness(0, 6, 0, 0),
+                };
+                panel.Children.Add(indexCloudOnlyFilesCheck);
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "Off by default. When enabled, Yagu hydrates a cloud-only file only while its sync provider is connected. Unavailable or timed-out files remain unindexed and are searched live when possible. You can change this later in Settings \u25B8 Indexing.",
+                    Opacity = 0.75,
+                    FontSize = 12,
+                    TextWrapping = TextWrapping.Wrap,
+                });
+            }
+
             // "Included Locations" context (inspired by the Windows Indexing Options dialog).
             panel.Children.Add(new TextBlock
             {
@@ -1664,6 +1726,8 @@ public sealed partial class MainWindow
                 double.IsNaN(maxFileSizeBox.Value)
                     ? AppSettings.DefaultIndexMaxFileSizeMB
                     : (int)maxFileSizeBox.Value);
+            if (indexCloudOnlyFilesCheck is not null)
+                indexCloudOnlyFiles = indexCloudOnlyFilesCheck.IsChecked == true;
 
             if (result == YaguDialogResult.Secondary)
             {
@@ -1712,7 +1776,8 @@ public sealed partial class MainWindow
             updateMode,
             applyFirstRunDriveIndexingProfile,
             firstRunExcludedPaths,
-            maxFileSizeMB: maxFileSizeMB);
+            maxFileSizeMB: maxFileSizeMB,
+            indexCloudOnlyFiles: indexCloudOnlyFiles);
 
         string folderList = chosen.Count == 1
             ? chosen[0]

@@ -46,6 +46,7 @@
     <Compile Include="..\Yagu\Models\FilterPatternMode.cs" Link="Linked\Models\FilterPatternMode.cs" />
     <Compile Include="..\Yagu\Helpers\BinaryDetector.cs" Link="Linked\Helpers\BinaryDetector.cs" />
     <Compile Include="..\Yagu\Helpers\GlobMatcher.cs" Link="Linked\Helpers\GlobMatcher.cs" />
+    <Compile Include="..\Yagu\Services\CloudFileHelper.cs" Link="Linked\Services\CloudFileHelper.cs" />
     <Compile Include="..\Yagu\Services\LogService.cs" Link="Linked\Services\LogService.cs" />
     <Compile Include="..\Yagu\Services\Logging\LogServiceLogger.cs" Link="Linked\Services\Logging\LogServiceLogger.cs" />
     <Compile Include="..\Yagu\Services\Logging\YaguLog.cs" Link="Linked\Services\Logging\YaguLog.cs" />

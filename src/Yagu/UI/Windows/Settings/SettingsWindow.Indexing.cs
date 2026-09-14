@@ -24,6 +24,51 @@ public sealed partial class SettingsWindow
     private CancellationTokenSource? _indexBuildCts;
     private bool _indexActionInProgress;
     private TextBlock? _indexStatusText;
+    private FrameworkElement? _manageIndexesSection;
+    private bool _manageIndexesRevealPending;
+
+    /// <summary>
+    /// Scrolls the Indexing tab so Manage Indexes sits centered in the settings pane. Safe to call before
+    /// the deferred content build or before the tab is selected: the reveal retries on layout until the
+    /// section actually has a size.
+    /// </summary>
+    public void ScrollToManageIndexes()
+    {
+        if (TryRevealManageIndexes() || _manageIndexesRevealPending)
+            return;
+
+        _manageIndexesRevealPending = true;
+        SettingsContentScrollViewer.LayoutUpdated += OnManageIndexesRevealLayoutUpdated;
+    }
+
+    private void OnManageIndexesRevealLayoutUpdated(object? sender, object e)
+    {
+        if (!TryRevealManageIndexes())
+            return;
+
+        SettingsContentScrollViewer.LayoutUpdated -= OnManageIndexesRevealLayoutUpdated;
+        _manageIndexesRevealPending = false;
+    }
+
+    private bool TryRevealManageIndexes()
+    {
+        FrameworkElement? section = _manageIndexesSection;
+        // Zero height means the tab is not built or not the selected one, so there is nothing to scroll to yet.
+        if (section is null || section.XamlRoot is null || section.ActualHeight <= 0)
+            return false;
+
+        // Centering a section taller than the viewport would bury its heading above the fold, so anchor
+        // those to the top and let the user scroll through the rest.
+        double viewport = SettingsContentScrollViewer.ViewportHeight;
+        double ratio = viewport > 0 && section.ActualHeight >= viewport ? 0 : 0.5;
+
+        section.StartBringIntoView(new BringIntoViewOptions
+        {
+            AnimationDesired = true,
+            VerticalAlignmentRatio = ratio,
+        });
+        return true;
+    }
 
     private void BuildIndexingTab()
     {
@@ -31,6 +76,8 @@ public sealed partial class SettingsWindow
 
         var featureGroup = AddSettingsGroupBox(g, "Content Index");
         var manageGroup = AddSettingsGroupBox(g, "Manage Indexes");
+        // AddSettingsGroupBox hands back the body panel; the framed section is its grandparent.
+        _manageIndexesSection = (manageGroup.Parent as FrameworkElement)?.Parent as FrameworkElement;
         var accelerationGroup = AddSettingsGroupBox(g, "Query Acceleration");
         var scopeGroup = AddSettingsGroupBox(g, "Scope & Ingestion");
         var storageGroup = AddSettingsGroupBox(g, "Storage");
@@ -228,6 +275,9 @@ public sealed partial class SettingsWindow
         AddIndexToggle(scopeGroup, "Index hidden files",
             s => s.IndexIncludeHiddenFiles, (s, v) => s.IndexIncludeHiddenFiles = v,
             "Whether index builds ingest files with the Hidden attribute. A hidden file left unindexed is still live-scanned when a search includes it.");
+        AddIndexToggle(scopeGroup, "Index cloud-only files",
+            s => s.IndexIncludeCloudOnlyFiles, (s, v) => s.IndexIncludeCloudOnlyFiles = v,
+            "Off by default. When enabled, index builds may download and ingest online-only placeholders, but only while their cloud sync provider is connected. Unavailable or timed-out files remain unindexed and are searched live when possible.");
         AddIndexToggle(scopeGroup, "Follow reparse points (junctions / symlinks)",
             s => s.IndexFollowReparsePoints, (s, v) => s.IndexFollowReparsePoints = v,
             "Off by default. When on, a build indexes a reparse point only when its final target stays on the same local volume and inside the indexed folder; every other target is live-only.");
@@ -286,7 +336,7 @@ public sealed partial class SettingsWindow
             "Comma/semicolon-separated extensions excluded from ingestion. Empty by default.");
         scopeGroup.Children.Add(new TextBlock
         {
-            Text = "Fixed safety policies (not overridable in this release): case-sensitive directories are always live-scanned, and online-only cloud files are never indexed or hydrated. These are exposed as reasons, not switches, so an unsafe folder can't be forced onto the index.",
+            Text = "Fixed safety policy: case-sensitive directories are always live-scanned. They are exposed as a reason, not a switch, so an unsafe folder can't be forced onto the index.",
             FontSize = 11,
             Opacity = 0.55,
             TextWrapping = TextWrapping.Wrap,
