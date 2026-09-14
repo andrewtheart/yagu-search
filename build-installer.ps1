@@ -144,6 +144,12 @@ if (Test-Path -LiteralPath $everythingPrereqHelper) {
   . $everythingPrereqHelper
 }
 
+$payloadArchHelper = Join-Path $repoRoot 'scripts\staged-payload-arch.ps1'
+if (-not (Test-Path -LiteralPath $payloadArchHelper)) {
+  throw "Staged payload architecture helper not found: $payloadArchHelper"
+}
+. $payloadArchHelper
+
 # Opt-in Authenticode signing. Resolved BEFORE any build work so a missing token,
 # expired certificate, or missing signtool fails in seconds instead of after a
 # multi-minute Native AOT publish.
@@ -303,6 +309,15 @@ foreach ($arch in $architectures) {
   $version = Get-YaguBuildVersion
   Write-Host "Installer app version: $version"
   Write-Host "Staged $(( Get-ChildItem -LiteralPath $stagingDir -File -Recurse ).Count) files."
+
+  # An x64 executable cannot start on 32-bit Windows, and the MCP server is published per-RID into a
+  # RID-specific folder. If that ever regresses, the wrong architecture would ship and only fail on a
+  # user's machine, so assert it here rather than trusting the copy.
+  Assert-YaguStagedPayloadArchitecture -StagingDir $stagingDir -Architecture $arch
+
+  # The architecture check reads one PE header, so it passes for a complete-looking payload left by an
+  # earlier build. Assert the server is whole and no older than the app it ships beside.
+  Assert-YaguStagedMcpServerPayload -StagingDir $stagingDir
 
   # Step 2c: Sign every Yagu-authored staged binary (app, Rust core, all three workers)
   # BEFORE Inno compresses them into the setup EXE. Third-party payloads keep their

@@ -123,7 +123,7 @@ def parse_args() -> argparse.Namespace:
 def tracked_source_files(repo_root: Path) -> dict[str, str]:
     try:
         result = subprocess.run(
-            ["git", "-C", str(repo_root), "ls-files", "-z"],
+            ["git", "-C", str(repo_root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
             check=True,
             capture_output=True,
         )
@@ -136,7 +136,7 @@ def tracked_source_files(repo_root: Path) -> dict[str, str]:
         if not raw:
             continue
         path = raw.replace("\\", "/")
-        if is_excluded_source(path):
+        if is_excluded_source(path) or not (repo_root / path).is_file():
             continue
         if source_language(path) is not None:
             inventory[path.lower()] = path
@@ -470,7 +470,10 @@ def write_reports(
     write_file_csv(output_dir / "coverage-uninstrumented.csv", na_rows)
 
     languages = sorted({row.language for row in measured_rows})
-    totals = {language: total_row(language, measured_rows) for language in languages}
+    totals = {
+        language: total_row(language, (row for row in measured_rows if row.language == language))
+        for language in languages
+    }
     combined = total_row("Combined measured", measured_rows)
     fully_covered = [
         row

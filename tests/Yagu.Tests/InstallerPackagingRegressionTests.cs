@@ -1,9 +1,524 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Yagu.Tests;
 
 public sealed class InstallerPackagingRegressionTests
 {
+    [Theory]
+    [InlineData("x86", 0x014C, false)]
+    [InlineData("x86", 0x014C, true)]
+    [InlineData("x64", 0x8664, false)]
+    [InlineData("x64", 0x8664, true)]
+    [InlineData("arm64", 0xAA64, false)]
+    [InlineData("arm64", 0xAA64, true)]
+    public async Task StagedArchitecture_AcceptsMatchingPayloads(string architecture, int machine, bool includeIndexWorker)
+    {
+        using var fixture = new ArchitectureFixture();
+        fixture.WritePayload(machine, includeIndexWorker);
+
+        var result = await fixture.RunAsync("Assert-YaguStagedPayloadArchitecture -StagingDir $env:YAGU_TEST_STAGING -Architecture $env:YAGU_TEST_ARCH", architecture);
+
+        Assert.True(result.ExitCode == 0, result.Error);
+        Assert.Equal(string.Empty, result.Error);
+        Assert.Contains($"arch OK: Yagu.exe is {architecture}", result.Output);
+        Assert.Contains($"arch OK: mcp-server\\Yagu.McpServer.exe is {architecture}", result.Output);
+        Assert.Equal(includeIndexWorker, result.Output.Contains($"arch OK: index-worker\\Yagu.IndexWorker.exe is {architecture}", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Yagu.exe", "x86", 0x8664, "x64")]
+    [InlineData("mcp-server\\Yagu.McpServer.exe", "x64", 0xAA64, "arm64")]
+    [InlineData("index-worker\\Yagu.IndexWorker.exe", "arm64", 0x014C, "x86")]
+    public async Task StagedArchitecture_RejectsMismatchedPayload(string relativePath, string architecture, int wrongMachine, string actual)
+    {
+        using var fixture = new ArchitectureFixture();
+        fixture.WritePayload(architecture switch { "x86" => 0x014C, "x64" => 0x8664, _ => 0xAA64 });
+        fixture.WritePe(relativePath, wrongMachine);
+
+        var result = await fixture.RunAsync("Assert-YaguStagedPayloadArchitecture -StagingDir $env:YAGU_TEST_STAGING -Architecture $env:YAGU_TEST_ARCH", architecture);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains($"Staged {relativePath} is {actual} but this is the {architecture} installer.", result.Error);
+        Assert.Contains("It would fail to start on the target machine.", result.Error);
+        Assert.DoesNotContain($"arch OK: {relativePath}", result.Output);
+    }
+
+    [Theory]
+    [InlineData("Yagu.exe")]
+    [InlineData("mcp-server\\Yagu.McpServer.exe")]
+    public async Task StagedArchitecture_RejectsMissingRequiredPayload(string relativePath)
+    {
+        using var fixture = new ArchitectureFixture();
+        fixture.WritePayload(0x8664);
+        File.Delete(Path.Combine(fixture.StagingDir, relativePath));
+
+        var result = await fixture.RunAsync("Assert-YaguStagedPayloadArchitecture -StagingDir $env:YAGU_TEST_STAGING -Architecture $env:YAGU_TEST_ARCH", "x64");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains($"Staged payload missing: {relativePath}", result.Error);
+    }
+
+    [Theory]
+    [InlineData(0x014C, "x86", 0x40)]
+    [InlineData(0x8664, "x64", 0x100)]
+    [InlineData(0xAA64, "arm64", 0x200)]
+    [InlineData(0x0000, "unknown(0x0000)", 0x80)]
+    [InlineData(0x01C4, "unknown(0x01C4)", 0x80)]
+    [InlineData(0xFFFF, "unknown(0xFFFF)", 0x80)]
+    public async Task StagedArchitecture_ReadsMachineAtPeOffsetAndClosesImage(int machine, string expected, int peOffset)
+    {
+        using var fixture = new ArchitectureFixture();
+        string image = fixture.WritePe("header fixture.exe", machine, peOffset);
+
+        var result = await fixture.RunAsync(ArchitectureFixture.VerifyImageClosed("Get-YaguPeMachine -Path $env:YAGU_TEST_IMAGE"), imagePath: image);
+
+        Assert.True(result.ExitCode == 0, result.Error);
+        Assert.Equal(string.Empty, result.Error);
+        Assert.Equal(expected, result.Output.Trim());
+    }
+
+    [Theory]
+    [InlineData("Yagu.exe", 0x0000, "unknown(0x0000)")]
+    [InlineData("mcp-server\\Yagu.McpServer.exe", 0x01C4, "unknown(0x01C4)")]
+    [InlineData("index-worker\\Yagu.IndexWorker.exe", 0xFFFF, "unknown(0xFFFF)")]
+    public async Task StagedArchitecture_RejectsUnknownMachine(string relativePath, int machine, string actual)
+    {
+        using var fixture = new ArchitectureFixture();
+        fixture.WritePayload(0x8664);
+        fixture.WritePe(relativePath, machine);
+
+        var result = await fixture.RunAsync("Assert-YaguStagedPayloadArchitecture -StagingDir $env:YAGU_TEST_STAGING -Architecture x64");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains($"Staged {relativePath} is {actual} but this is the x64 installer.", result.Error);
+    }
+
+    [Theory]
+    [InlineData("empty", "EndOfStreamException")]
+    [InlineData("short-mz", "EndOfStreamException")]
+    [InlineData("bad-mz", "Not a PE image:")]
+    [InlineData("short-offset", "EndOfStreamException")]
+    [InlineData("offset-zero", "Missing PE signature:")]
+    [InlineData("offset-eof", "EndOfStreamException")]
+    [InlineData("offset-max", "EndOfStreamException")]
+    [InlineData("bad-pe", "Missing PE signature:")]
+    [InlineData("short-signature", "EndOfStreamException")]
+    [InlineData("short-machine", "EndOfStreamException")]
+    public async Task StagedArchitecture_RejectsMalformedHeaderAndClosesImage(string corruption, string expectedError)
+    {
+        using var fixture = new ArchitectureFixture();
+        fixture.WritePayload(0x8664);
+        string image = Path.Combine(fixture.StagingDir, "mcp-server", "Yagu.McpServer.exe");
+        using (var stream = File.Open(image, FileMode.Open, FileAccess.Write))
+        using (var writer = new BinaryWriter(stream))
+        {
+            switch (corruption)
+            {
+                case "empty": stream.SetLength(0); break;
+                case "short-mz": stream.SetLength(1); break;
+                case "bad-mz": writer.Write((ushort)0); break;
+                case "short-offset": stream.SetLength(0x3F); break;
+                case "offset-zero": stream.Position = 0x3C; writer.Write(0u); break;
+                case "offset-eof": stream.Position = 0x3C; writer.Write((uint)stream.Length); break;
+                case "offset-max": stream.Position = 0x3C; writer.Write(uint.MaxValue); break;
+                case "bad-pe": stream.Position = 0x80; writer.Write(0x00004551u); break;
+                case "short-signature": stream.SetLength(0x83); break;
+                case "short-machine": stream.SetLength(0x85); break;
+                default: throw new ArgumentOutOfRangeException(nameof(corruption));
+            }
+        }
+
+        var result = await fixture.RunAsync(ArchitectureFixture.VerifyImageClosed(
+            "Assert-YaguStagedPayloadArchitecture -StagingDir $env:YAGU_TEST_STAGING -Architecture x64"), imagePath: image);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains(expectedError, result.Error);
+        Assert.Contains("arch OK: Yagu.exe is x64", result.Output);
+        Assert.DoesNotContain("arch OK: mcp-server", result.Output);
+        Assert.DoesNotContain("arch OK: index-worker", result.Output);
+    }
+
+    [Fact]
+    public async Task StagedArchitecture_ReportsMissingImage()
+    {
+        using var fixture = new ArchitectureFixture();
+
+        var result = await fixture.RunAsync("Get-YaguPeMachine -Path $env:YAGU_TEST_IMAGE");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("FileNotFoundException", result.Error);
+        Assert.Contains("Yagu.exe", result.Error);
+    }
+
+    [Theory]
+    [InlineData("ia64")]
+    [InlineData("anycpu")]
+    public async Task StagedArchitecture_RejectsUnsupportedInstallerArchitecture(string architecture)
+    {
+        using var fixture = new ArchitectureFixture();
+        fixture.WritePayload(0x8664);
+
+        var result = await fixture.RunAsync("Assert-YaguStagedPayloadArchitecture -StagingDir $env:YAGU_TEST_STAGING -Architecture $env:YAGU_TEST_ARCH", architecture);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("ParameterBindingValidationException", result.Error);
+        Assert.Contains("Architecture", result.Error);
+        Assert.DoesNotContain("arch OK:", result.Output);
+    }
+
+    [Fact]
+    public async Task StagedArchitecture_IgnoresVendorAndOcrArchitectures()
+    {
+        using var fixture = new ArchitectureFixture();
+        fixture.WritePayload(0x014C);
+        fixture.WritePe("ocr-worker\\Yagu.OcrWorker.exe", 0x8664);
+        fixture.WritePe("vendor\\third-party.exe", 0xAA64);
+        File.WriteAllText(Path.Combine(fixture.StagingDir, "vendor", "not-a-pe.dll"), "not a PE");
+
+        var result = await fixture.RunAsync("Assert-YaguStagedPayloadArchitecture -StagingDir $env:YAGU_TEST_STAGING -Architecture x86");
+
+        Assert.True(result.ExitCode == 0, result.Error);
+        Assert.Equal(3, result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+        Assert.DoesNotContain("ocr-worker", result.Output);
+        Assert.DoesNotContain("vendor", result.Output);
+    }
+
+    [Fact]
+    public async Task StagedArchitecture_DotSourcingDoesNotEnableStrictMode()
+    {
+        using var fixture = new ArchitectureFixture();
+
+        var result = await fixture.RunAsync("Remove-Variable YaguUndefinedFixtureVariable -ErrorAction SilentlyContinue; $null = $YaguUndefinedFixtureVariable; [Console]::WriteLine('strict mode remains off')");
+
+        Assert.True(result.ExitCode == 0, result.Error);
+        Assert.Equal("strict mode remains off", result.Output.Trim());
+    }
+
+    private sealed class ArchitectureFixture : IDisposable
+    {
+        private readonly string _root = Path.Combine(Path.GetTempPath(), "yagu arch [fixture]'s " + Guid.NewGuid().ToString("N"));
+
+        public string StagingDir => Path.Combine(_root, "installer", "staging");
+
+        public static string VerifyImageClosed(string command)
+            => "try { " + command + " } finally { "
+                + "$exclusive = [System.IO.File]::Open($env:YAGU_TEST_IMAGE, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None); "
+                + "$exclusive.Dispose() }";
+
+        public void WritePayload(int machine, bool includeIndexWorker = true)
+        {
+            WritePe("Yagu.exe", machine);
+            WritePe("mcp-server\\Yagu.McpServer.exe", machine);
+            if (includeIndexWorker)
+                WritePe("index-worker\\Yagu.IndexWorker.exe", machine);
+        }
+
+        public string WritePe(string relativePath, int machine, int peOffset = 0x80)
+        {
+            string path = Path.Combine(StagingDir, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            using var stream = File.Create(path);
+            using var writer = new BinaryWriter(stream);
+            writer.Write((ushort)0x5A4D);
+            stream.Position = 0x3C;
+            writer.Write(peOffset);
+            stream.Position = peOffset;
+            writer.Write(0x00004550u);
+            writer.Write((ushort)machine);
+            return path;
+        }
+
+        public async Task<(int ExitCode, string Output, string Error)> RunAsync(string command, string architecture = "x64", string? imagePath = null)
+        {
+            Directory.CreateDirectory(StagingDir);
+            var startInfo = new ProcessStartInfo("powershell.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = _root,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            startInfo.Environment["YAGU_TEST_HELPER"] = Path.Combine(FindRepoRoot(), "scripts", "staged-payload-arch.ps1");
+            startInfo.Environment["YAGU_TEST_STAGING"] = StagingDir;
+            startInfo.Environment["YAGU_TEST_ARCH"] = architecture;
+            startInfo.Environment["YAGU_TEST_IMAGE"] = imagePath ?? Path.Combine(StagingDir, "Yagu.exe");
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-OutputFormat");
+            startInfo.ArgumentList.Add("Text");
+            startInfo.ArgumentList.Add("-Command");
+            string script = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+                + "$ErrorActionPreference = 'Stop'; "
+                + "if ($PSVersionTable.PSVersion.Major -le 5) { $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine') }; "
+                + "try { . $env:YAGU_TEST_HELPER; " + command + "; exit 0 } "
+                + "catch { [Console]::Error.WriteLine($_.Exception.ToString()); exit 1 }";
+            startInfo.ArgumentList.Add(script);
+
+            using var process = Process.Start(startInfo);
+            Assert.NotNull(process);
+            Task<string> output = process.StandardOutput.ReadToEndAsync();
+            Task<string> error = process.StandardError.ReadToEndAsync();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token);
+                return (process.ExitCode, await output, await error);
+            }
+            finally
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync();
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(_root))
+                Directory.Delete(_root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void McpServer_IsAnOptInTask_NotAnUnconditionalPayload()
+    {
+        // The self-contained MCP server is ~107 MB on disk and is useless to anyone who never wires up
+        // an AI client. It must reach disk only when its task is selected: the blanket staging line
+        // excludes it, and a second line installs it under the task.
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        Assert.Contains("Name: \"mcpserver\";", inno);
+        Assert.Contains("Flags: unchecked", inno);
+        Assert.Contains("Excludes: \"\\mcp-server\\*\"", inno);
+        Assert.Contains("Source: \"{#StagingDir}\\mcp-server\\*\"; DestDir: \"{app}\\mcp-server\"; Tasks: mcpserver", inno);
+
+        // A helper surviving uninstall would point at a deleted executable and take a port every logon.
+        Assert.Contains("[UninstallRun]", inno);
+        Assert.Contains("schtasks /Delete /TN \"\"Yagu MCP Server (%USERNAME%)\"\" /F", inno);
+    }
+
+    [Fact]
+    public void StagedMcpServerPayload_IsCheckedForCompletenessAndFreshness()
+    {
+        // Runs the REAL guard against real fixtures. Asserting that the script merely mentions these
+        // names would pass even if the comparison were inverted or never reached.
+        string root = FindRepoRoot();
+        string helper = Path.Combine(root, "scripts", "staged-payload-arch.ps1");
+
+        string fixture = Path.Combine(Path.GetTempPath(), "yagu-payload-" + Guid.NewGuid().ToString("N")[..8]);
+        string staging = Path.Combine(fixture, "staging");
+        string serverDir = Path.Combine(staging, "mcp-server");
+        string projectDir = Path.Combine(fixture, "Yagu.McpServer");
+        string projectFile = Path.Combine(projectDir, "Yagu.McpServer.csproj");
+        string source = Path.Combine(projectDir, "Program.cs");
+        string serverExe = Path.Combine(serverDir, "Yagu.McpServer.exe");
+        string runtimeConfig = Path.Combine(serverDir, "Yagu.McpServer.runtimeconfig.json");
+
+        static void Age(string path, double days)
+            => File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddDays(-days));
+
+        try
+        {
+            Directory.CreateDirectory(serverDir);
+            Directory.CreateDirectory(projectDir);
+            File.WriteAllText(Path.Combine(staging, "Yagu.exe"), "app");
+            File.WriteAllText(serverExe, "server");
+            File.WriteAllText(Path.Combine(serverDir, "Yagu.McpServer.dll"), "server");
+            File.WriteAllText(runtimeConfig, "{}");
+            File.WriteAllText(projectFile, "<Project />");
+            File.WriteAllText(source, "// server source");
+
+            Age(projectFile, 10);
+            Age(source, 10);
+            Assert.True(RunPayloadGuard(helper, staging, projectDir), "a complete, current payload was rejected.");
+
+            // Incremental build leaves an unchanged server alone while the app relinks every build, so
+            // trailing the app is NOT staleness. Comparing the two reported a current payload as stale.
+            Age(serverExe, 3);
+            Assert.True(
+                RunPayloadGuard(helper, staging, projectDir),
+                "a server older than the app but newer than its own sources was rejected.");
+
+            // Stale: a compile input changed after the server was written.
+            Age(source, 0);
+            Assert.False(RunPayloadGuard(helper, staging, projectDir), "a stale MCP server payload was accepted.");
+
+            Age(source, 10);
+            File.Delete(runtimeConfig);
+            Assert.False(
+                RunPayloadGuard(helper, staging, projectDir),
+                "an incomplete MCP server payload was accepted.");
+        }
+        finally
+        {
+            try { Directory.Delete(fixture, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>Dot-sources the packaging guard and reports whether it accepted the staging tree.</summary>
+    private static bool RunPayloadGuard(string helperPath, string stagingDir, string projectDir)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-NonInteractive");
+        psi.ArgumentList.Add("-Command");
+        psi.ArgumentList.Add(
+            $". '{helperPath}'; try {{ Assert-YaguStagedMcpServerPayload -StagingDir '{stagingDir}' "
+                + $"-ProjectDir '{projectDir}'; exit 0 }} catch {{ exit 1 }}");
+
+        using var process = System.Diagnostics.Process.Start(psi);
+        Assert.NotNull(process);
+        process!.WaitForExit(60_000);
+        return process.ExitCode == 0;
+    }
+
+    [Fact]
+    public void ShutdownRoutine_AlsoStopsTheMcpServerAndItsRestartingTask()
+    {
+        // The MCP server is NOT a child of Yagu.exe: a client launches it, or the per-user sign-in task
+        // does. "/T" therefore does not reach it, and the task restarts it on failure, so ending the task
+        // must come first or it races the taskkill and re-locks the files setup is about to overwrite.
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        int procedure = inno.IndexOf("procedure KillYaguProcesses();", StringComparison.Ordinal);
+        Assert.InRange(procedure, 0, int.MaxValue);
+
+        int end = inno.IndexOf("end;", procedure, StringComparison.Ordinal);
+        string body = inno[procedure..end];
+
+        // Setup runs ELEVATED, so an image-name kill would reach every session: another user's server,
+        // or a side-by-side installation's, terminated mid-request. Match on the executable path instead.
+        Assert.DoesNotContain("/IM Yagu.McpServer.exe", body);
+        Assert.Contains("Get-Process -Name Yagu.McpServer", body);
+        Assert.Contains(@"\mcp-server\*", body);
+        Assert.Contains("Stop-Process -Force", body);
+
+        Assert.Contains("schtasks /End /TN \"Yagu MCP Server (%USERNAME%)\"", body);
+        Assert.True(
+            body.IndexOf("schtasks /End", StringComparison.Ordinal)
+                < body.IndexOf("Get-Process -Name Yagu.McpServer", StringComparison.Ordinal),
+            "the sign-in task must be ended before the server is killed, or it restarts the process mid-install.");
+    }
+
+    [Fact]
+    public void PascalScriptStringChange_IsCalledAsAStatementOnAVariable()
+    {
+        // Inno has TWO StringChange functions. The preprocessor one, written {#StringChange(...)}, returns
+        // a string. The Pascal Script one is `function StringChange(var S: String; ...): Integer` -- it
+        // edits its first argument in place and returns a count, so using it inline is a hard compile
+        // error ("Variable Expected") that no other test in this file catches and that breaks the whole
+        // release build.
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        foreach (System.Text.RegularExpressions.Match match in
+                 System.Text.RegularExpressions.Regex.Matches(inno, @"(?m)^([^\r\n]*?)\bStringChange\s*\("))
+        {
+            string prefix = match.Groups[1].Value;
+
+            // The preprocessor form and { } comments are not Pascal Script calls.
+            if (prefix.Contains("{#", StringComparison.Ordinal) || prefix.TrimStart().StartsWith('{'))
+                continue;
+
+            Assert.True(
+                prefix.Trim().Length == 0,
+                $"Pascal Script StringChange must be its own statement on a variable, but found: {match.Value.Trim()}");
+        }
+
+        Assert.Contains("StringChange(AppDirLiteral,", inno);
+    }
+
+    [Fact]
+    public void McpServerPayload_IsRequiredRatherThanOptionalWhenPackaging()
+    {
+        // A publish that quietly failed must not be packaged: the app advertises MCP support in its UI,
+        // CLI and help, so shipping with no server (or an earlier run's stale one) is a broken release
+        // that a green build says nothing about.
+        string root = FindRepoRoot();
+        string helper = File.ReadAllText(Path.Combine(root, "scripts", "staged-payload-arch.ps1"));
+        string csproj = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Yagu.csproj"));
+
+        Assert.Contains("Path = 'mcp-server\\Yagu.McpServer.exe';         Required = $true", helper);
+
+        // A failed child publish must not leave the previous output behind for the copy step to stage.
+        Assert.Contains("PropertyName=\"_McpServerPublishExitCode\"", csproj);
+        Assert.Contains("<RemoveDir Condition=\"'$(_McpServerPublishExitCode)' != '0'\" Directories=\"$(McpServerOutDir)\" />", csproj);
+
+        // Fatal at publish time, where the payload is produced; a warning is enough for the dev loop.
+        int publishTarget = csproj.IndexOf("Name=\"CopyMcpServerToPublish\"", StringComparison.Ordinal);
+        Assert.InRange(publishTarget, 0, int.MaxValue);
+        Assert.Contains("<Error Condition=\"!Exists('$(McpServerOutDir)Yagu.McpServer.exe')\"", csproj[publishTarget..]);
+    }
+
+    [Fact]
+    public void InstallerBuild_AssertsStagedPayloadArchitecture()
+    {
+        // An x64 server staged into the x86 installer would compile, ship, and only fail on a 32-bit
+        // machine. Nothing in the compile chain compares the two, so the build script must.
+        string root = FindRepoRoot();
+        string build = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
+        string helper = File.ReadAllText(Path.Combine(root, "scripts", "staged-payload-arch.ps1"));
+
+        Assert.Contains("Assert-YaguStagedPayloadArchitecture -StagingDir $stagingDir -Architecture $arch", build);
+        Assert.Contains("staged-payload-arch.ps1", build);
+
+        Assert.Contains("mcp-server\\Yagu.McpServer.exe", helper);
+        Assert.Contains("0x8664", helper);
+        Assert.Contains("0x014C", helper);
+        Assert.Contains("0xAA64", helper);
+    }
+
+    [Fact]
+    public void DeselectingMcpTask_ClearsAnyPreviouslyInstalledServer()
+    {
+        // Inno only SKIPS unselected files; it never removes ones already on disk. Verified against a
+        // probe installer built from these same directives: upgrading an installation that HAD the
+        // server while unticking the task left the OLD binaries behind, so a client registered earlier
+        // kept launching a stale server that shells out to the newer Yagu.exe and never receives later
+        // fixes. The same pass also leaves a puzzling empty mcp-server folder, because
+        // "createallsubdirs" creates the directory even when every file under it is excluded.
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        Assert.Contains("procedure RemoveDeselectedMcpServer();", inno);
+        Assert.Contains("if WizardIsTaskSelected('mcpserver') then", inno);
+        Assert.Contains("DelTree(ServerDir, True, True, True);", inno);
+
+        // It has to actually run, and only after the payload has been laid down.
+        Match step = Regex.Match(inno, @"procedure CurStepChanged\(CurStep: TSetupStep\);.*?\bend;", RegexOptions.Singleline);
+        Assert.True(step.Success, "CurStepChanged should exist");
+        Assert.Contains("ssPostInstall", step.Value);
+        Assert.Contains("RemoveDeselectedMcpServer();", step.Value);
+    }
+
+    [Fact]
+    public void ArchitectureHelper_DoesNotImposeStrictModeOnTheBuildScript()
+    {
+        // The helper is dot-sourced into build-installer.ps1, so a Set-StrictMode there would apply to
+        // the rest of that script -- which was never written or tested under it, and could fail a
+        // release build on an unset variable in an unrelated code path.
+        string root = FindRepoRoot();
+        string helper = File.ReadAllText(Path.Combine(root, "scripts", "staged-payload-arch.ps1"));
+
+        // Match an actual invocation, not the comment that explains why there isn't one.
+        Assert.DoesNotMatch(new Regex(@"(?m)^\s*Set-StrictMode\b"), helper);
+    }
+
     [Fact]
     public void WindowsPlatformDependencies_AreCurrentAndAlignedAcrossProjects()
     {
@@ -149,7 +664,13 @@ public sealed class InstallerPackagingRegressionTests
 
         // The recursesubdirs [Files] entry ships every staged subfolder (incl. index-worker) as <app>\...,
         // so all four installer variants (x64/x86/arm64/offline) contain a runnable worker with no ISS change.
-        Assert.Contains("Source: \"{#StagingDir}\\*\"; DestDir: \"{app}\"; Flags: ignoreversion recursesubdirs createallsubdirs", inno);
+        // Only the opt-in MCP server is excluded; excluding anything else here would silently stop shipping
+        // a worker the app needs, and the app would fail at runtime rather than at build time.
+        Assert.Contains("Source: \"{#StagingDir}\\*\"; DestDir: \"{app}\"; Excludes: \"\\mcp-server\\*\"; Flags: ignoreversion recursesubdirs createallsubdirs", inno);
+
+        Match blanket = Regex.Match(inno, @"Source: ""\{#StagingDir\}\\\*"".*?Excludes: ""(?<excludes>[^""]*)""");
+        Assert.True(blanket.Success, "the blanket staging line was not found.");
+        Assert.Equal("\\mcp-server\\*", blanket.Groups["excludes"].Value);
     }
 
     [Fact]

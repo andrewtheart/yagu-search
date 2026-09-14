@@ -12,6 +12,10 @@ matters is deciding whether a field is **persisted** or **session-only**, and pr
 
 ## Session-only vs persisted (`[JsonIgnore]`)
 
+- **Advanced Options are active-search state only.** Changing any control in the Advanced Options
+  drawer must never mutate `AppSettings`, either in memory or on disk. `PersistSettingsAsync` must
+  write dedicated `Settings*` default properties, never the active drawer properties. Layout-only
+  preferences such as tab order and option placement are the deliberate exception.
 - The four inline search-box toggles are **`[JsonIgnore]` (session-only)** and reset to shipped
   defaults every launch: **CaseSensitive=false, UseRegex=false, ExactMatch=true, Multiline=false**.
   `MultilineSearchDefault` MUST stay `[JsonIgnore]` — persisting it made a multiline session stick

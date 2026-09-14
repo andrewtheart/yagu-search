@@ -110,10 +110,15 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "contextmenu"; Description: "Add 'Search with Yagu' to Explorer context menu"; GroupDescription: "Windows Explorer integration:"
 Name: "addtopath"; Description: "Add Yagu to the system PATH (run 'yagu' from any terminal)"; GroupDescription: "Command-line access:"
+; Opt-in: the self-contained MCP server adds ~107 MB to disk, and it is useless to anyone who does not
+; wire up an AI client. Unchecked by default so the majority who never touch MCP pay nothing for it.
+Name: "mcpserver"; Description: "Install the MCP server (lets AI assistants like VS Code, Visual Studio, Copilot CLI or Claude Desktop drive Yagu) - about 107 MB"; GroupDescription: "AI assistant integration:"; Flags: unchecked
 
 [Files]
 Source: "{#RepoRoot}\THIRD-PARTY-NOTICES.txt"; Flags: dontcopy noencryption
-Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Everything except the MCP server, which is installed only when its task is selected.
+Source: "{#StagingDir}\*"; DestDir: "{app}"; Excludes: "\mcp-server\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StagingDir}\mcp-server\*"; DestDir: "{app}\mcp-server"; Tasks: mcpserver; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -144,8 +149,23 @@ Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Yagu\command"; 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+; Take Yagu's entry back out of every MCP client BEFORE {app} is deleted. Without this the user's editor
+; keeps trying to launch an executable that no longer exists, and keeps prompting for a token, with no
+; obvious way to connect the failure to a Yagu they already removed. It merges, so other servers stay.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--mcp-remove all"; Flags: runhidden skipifdoesntexist; RunOnceId: "RemoveMcpClientEntries"
+
+; Remove the MCP sign-in task, or a helper would survive uninstall pointing at a deleted executable and
+; keep taking a port at every logon. The task name embeds the account that created it, so this clears it
+; for the account running the uninstaller -- the normal case, including UAC elevation of that same
+; account. An over-the-shoulder uninstall by a *different* administrator cannot clear another profile's
+; task; that user can remove it with "Yagu.exe --mcp-autostart off" or from Task Scheduler.
+Filename: "{cmd}"; Parameters: "/c schtasks /Delete /TN ""Yagu MCP Server (%USERNAME%)"" /F"; Flags: runhidden; RunOnceId: "RemoveMcpLoginTask"
+
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
+; The loopback bearer token. Leaving it behind orphans a credential for a server that no longer exists.
+Type: filesandordirs; Name: "{localappdata}\Yagu\mcp"
 
 [Code]
 { Yagu ships as a self-contained Native AOT build (one installer per CPU
@@ -374,12 +394,36 @@ end;
   BOTH install (PrepareToInstall, before any files are written) and uninstall (InitializeUninstall).
   Best-effort: taskkill returns a non-zero code when no matching process is running, which is expected
   and ignored. "/T" also terminates child processes (the workers); the workers are killed explicitly
-  too in case one was orphaned from its parent. }
+  too in case one was orphaned from its parent.
+
+  The MCP server needs BOTH steps and cannot rely on "/T": it is started either by an AI client (so it
+  is a child of VS Code / Claude, not of Yagu.exe) or by the per-user sign-in task, which restarts it
+  on failure. Ending the task first stops that restart from racing the kill and re-locking the files
+  setup is about to overwrite. The kill is matched by executable PATH, not image name: setup runs
+  elevated, and a name-wide taskkill would terminate another user's or a side-by-side installation's
+  server mid-request. }
 procedure KillYaguProcesses();
 var
   ResultCode: Integer;
+  KillMcpServer: String;
+  AppDirLiteral: String;
 begin
+  Exec(ExpandConstant('{cmd}'), '/c schtasks /End /TN "Yagu MCP Server (%USERNAME%)"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM Yagu.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { Pascal Script's StringChange edits its first argument in place and returns a replacement count, so
+    the path has to be a variable. The preprocessor has a same-named function that DOES return a string
+    (used for the LaunchProgram message above), which is easy to reach for here by mistake. Doubling the
+    quote escapes the directory for the single-quoted PowerShell literal below. }
+  AppDirLiteral := ExpandConstant('{app}');
+  StringChange(AppDirLiteral, '''', '''''');
+
+  KillMcpServer :=
+    '-NoProfile -NonInteractive -Command "Get-Process -Name Yagu.McpServer -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.Path -like ''' + AppDirLiteral + '\mcp-server\*'' } | ' +
+    'Stop-Process -Force -ErrorAction SilentlyContinue"';
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), KillMcpServer, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Yagu.SemanticWorker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Yagu.OcrWorker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
@@ -979,6 +1023,54 @@ begin
   Result := '';
 end;
 
+{ The MCP server is an opt-in payload, but Inno only *skips* unselected files -- it never removes ones
+  already on disk. Two things follow, both verified against a probe installer built from these same
+  directives. First, "createallsubdirs" still creates the mcp-server folder under the app directory
+  even when every file under it is excluded, leaving a puzzling empty folder. Second, and the real
+  problem: upgrading an installation that HAD the server while unticking the task leaves the OLD
+  server binaries in place. The user believes they removed it, but an already-registered client keeps
+  launching a stale server that now shells out to a newer Yagu.exe, and it never receives subsequent
+  fixes. So when the task is not selected, clear the directory explicitly.
+  Note: no curly braces in this comment -- they would close it early and break the compile. }
+procedure RemoveDeselectedMcpServer();
+var
+  ServerDir: String;
+  ResultCode: Integer;
+begin
+  if WizardIsTaskSelected('mcpserver') then
+    Exit;
+  ServerDir := ExpandConstant('{app}\mcp-server');
+  if DirExists(ServerDir) then
+    DelTree(ServerDir, True, True, True);
+  { The sign-in task points at the executable just deleted, so it must go too -- otherwise every
+    later logon relaunches a missing binary. }
+  Exec(ExpandConstant('{cmd}'), '/c schtasks /Delete /TN "Yagu MCP Server (%USERNAME%)" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+{ Restarts the per-user MCP sign-in task after an upgrade.
+
+  PrepareToInstall ends the task (via KillYaguProcesses) so its server cannot re-lock the files setup is
+  about to overwrite, and nothing ever started it again: the user's MCP clients then failed to reach the
+  server until the next sign-in, with no indication why. Only restarts a task that already exists and
+  only when MCP is still selected -- setup never registers the task itself, because the task's command
+  line carries the folder grant and only the Settings tab can produce that. }
+procedure RestartMcpServerTask();
+var
+  ResultCode: Integer;
+begin
+  if not WizardIsTaskSelected('mcpserver') then
+    Exit;
+  if not DirExists(ExpandConstant('{app}\mcp-server')) then
+    Exit;
+  { /Query first: /Run on a missing task returns an error and would be logged as a failure. }
+  if not Exec(ExpandConstant('{cmd}'), '/c schtasks /Query /TN "Yagu MCP Server (%USERNAME%)" >nul 2>&1',
+              '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Exit;
+  if ResultCode <> 0 then
+    Exit;
+  Exec(ExpandConstant('{cmd}'), '/c schtasks /Run /TN "Yagu MCP Server (%USERNAME%)"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
@@ -987,6 +1079,8 @@ begin
       Abort;
     ApplyLogLevelOverride();
     InstallWebView2Runtime();
+    RemoveDeselectedMcpServer();
+    RestartMcpServerTask();
   end;
 end;
 

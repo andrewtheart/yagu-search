@@ -60,9 +60,14 @@
     <Compile Include="..\..\src\Yagu\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />
     <Compile Include="..\..\src\Yagu\Services\SystemMemoryProvider.cs" Link="Source\Services\SystemMemoryProvider.cs" />
     <Compile Include="..\..\src\Yagu\Services\SearchService.cs" Link="Source\Services\SearchService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\FileNameGlobQuery.cs" Link="Source\Services\FileNameGlobQuery.cs" />
     <Compile Include="..\..\src\Yagu\Services\SearchRegexFactory.cs" Link="Source\Services\SearchRegexFactory.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\SemanticModelGenerationOverride.cs" Link="Source\Services\Ai\SemanticModelGenerationOverride.cs" />
     <Compile Include="..\..\src\Yagu\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
+    <!-- AppSettings (in SettingsService.cs) carries the MCP grant and the machine-output budget, so the
+         policy and protocol-budget types have to compile in with it. -->
+    <Compile Include="..\..\src\Yagu\Services\Cli\MachineOutput\*.cs" Link="Source\Services\Cli\MachineOutput\%(Filename)%(Extension)" />
+    <Compile Include="..\..\src\Yagu\Services\Mcp\*.cs" Link="Source\Services\Mcp\%(Filename)%(Extension)" />
     <Compile Include="..\..\src\Yagu\Services\AppUpdateChecker.cs" Link="Source\Services\AppUpdateChecker.cs" />
     <Compile Include="..\..\src\Yagu\Services\CloudFileHelper.cs" Link="Source\Services\CloudFileHelper.cs" />
     <Compile Include="..\..\src\Yagu\Services\TerminalShellKind.cs" Link="Source\Services\TerminalShellKind.cs" />

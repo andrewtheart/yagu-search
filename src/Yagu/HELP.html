@@ -484,6 +484,8 @@ Files</a></li>
 </ul></li>
 <li><a href="#preview-pane-right-panel" id="toc-preview-pane-right-panel">Preview Pane (Right Panel)</a>
 <ul>
+<li><a href="#syntax-coloring-in-the-preview" id="toc-syntax-coloring-in-the-preview">Syntax Coloring in the
+Preview</a></li>
 <li><a href="#preview-toolbar" id="toc-preview-toolbar">Preview
 Toolbar</a></li>
 <li><a href="#view-options" id="toc-view-options">View Options</a></li>
@@ -538,6 +540,8 @@ interruption, and recovery</a></li>
 <li><a href="#index-management-actions" id="toc-index-management-actions">Index management actions</a></li>
 <li><a href="#indexing-troubleshooting" id="toc-indexing-troubleshooting">Indexing troubleshooting</a></li>
 </ul></li>
+<li><a href="#mcp-server-tab" id="toc-mcp-server-tab">MCP Server
+Tab</a></li>
 <li><a href="#performance-tab" id="toc-performance-tab">Performance
 Tab</a></li>
 <li><a href="#display-tab" id="toc-display-tab">Display Tab</a></li>
@@ -641,6 +645,13 @@ Mode)</a>
 <ul>
 <li><a href="#first-run-prompts-cli" id="toc-first-run-prompts-cli">First-run prompts (CLI)</a></li>
 <li><a href="#required" id="toc-required">Required</a></li>
+<li><a href="#machine-and-automation-options" id="toc-machine-and-automation-options">Machine and Automation
+Options</a>
+<ul>
+<li><a href="#json-output-format" id="toc-json-output-format">JSON
+output format</a></li>
+<li><a href="#exit-codes" id="toc-exit-codes">Exit codes</a></li>
+</ul></li>
 <li><a href="#matching-options" id="toc-matching-options">Matching
 Options</a></li>
 <li><a href="#semantic-search-local-ai-1" id="toc-semantic-search-local-ai-1">Semantic Search (local AI)</a></li>
@@ -660,9 +671,31 @@ Index (CLI)</a></li>
 <li><a href="#sort-cli" id="toc-sort-cli">Sort (CLI)</a></li>
 <li><a href="#group-cli" id="toc-group-cli">Group (CLI)</a></li>
 <li><a href="#help" id="toc-help">Help</a></li>
-<li><a href="#exit-codes" id="toc-exit-codes">Exit Codes</a></li>
+<li><a href="#exit-codes-1" id="toc-exit-codes-1">Exit Codes</a></li>
 <li><a href="#local-settings-file" id="toc-local-settings-file">Local
 Settings File</a></li>
+</ul></li>
+<li><a href="#mcp-server-ai-client-integration" id="toc-mcp-server-ai-client-integration">MCP Server (AI Client
+Integration)</a>
+<ul>
+<li><a href="#how-an-assistant-chooses-yagu" id="toc-how-an-assistant-chooses-yagu">How an assistant chooses
+Yagu</a></li>
+<li><a href="#setting-it-up" id="toc-setting-it-up">Setting it
+up</a></li>
+<li><a href="#loopback-http-optional" id="toc-loopback-http-optional">Loopback HTTP (optional)</a></li>
+<li><a href="#from-the-command-line" id="toc-from-the-command-line">From
+the command line</a></li>
+<li><a href="#what-the-assistant-can-do" id="toc-what-the-assistant-can-do">What the assistant can do</a></li>
+<li><a href="#what-it-cannot-reach" id="toc-what-it-cannot-reach">What
+it cannot reach</a></li>
+<li><a href="#letting-an-assistant-edit-files" id="toc-letting-an-assistant-edit-files">Letting an assistant edit
+files</a></li>
+<li><a href="#response-limits" id="toc-response-limits">Response
+limits</a></li>
+<li><a href="#background-jobs" id="toc-background-jobs">Background
+jobs</a></li>
+<li><a href="#current-limits" id="toc-current-limits">Current
+limits</a></li>
 </ul></li>
 <li><a href="#gui-command-line-arguments" id="toc-gui-command-line-arguments">GUI Command-Line Arguments</a></li>
 <li><a href="#practical-defaults" id="toc-practical-defaults">Practical
@@ -973,6 +1006,28 @@ row.</td>
 <p>Literal searches are faster than regex. Use regex when you need
 pattern matching, anchors, alternation, groups, or character
 classes.</p>
+<blockquote>
+<p><strong>Tip — file globs in File names mode.</strong> A query that is
+<em>only</em> a glob (<code>*.ps1</code>, <code>report*</code>, or
+several such as <code>*.ps1 *.psm1</code>) is applied as an
+<strong>Include</strong> file filter instead of being matched against
+the name as text. Windows file names cannot contain <code>*</code> or
+<code>?</code>, so matching such a query literally could only ever
+return nothing. The status bar says which globs were applied. This is
+skipped when <strong>Regex</strong> is on — there <code>*</code> is your
+own syntax — and when you already have an Include filter set, so your
+filter stays the single source of truth. A mixed query like
+<code>report *.pdf</code> is left alone, because “named report
+<strong>and</strong> a PDF” is not something an Include list can
+express. The CLI behaves identically.</p>
+<p>In any other mode a glob is left exactly as typed, because file
+<em>contents</em> legitimately contain text like <code>*.ps1</code> and
+reinterpreting it would make that search impossible to express. If the
+query then fails as an invalid regular expression, Yagu says so and
+offers a <strong>Search file names for …</strong> button that switches
+to File names mode with <strong>Regex</strong> off — the two changes
+that make it do what you meant.</p>
+</blockquote>
 <h3 id="match-across-lines-multiline">Match across lines
 (multiline)</h3>
 <p>By default a match must fit on one physical line. Turn on
@@ -1194,17 +1249,17 @@ rebuild required.</p>
 bar to reveal a tabbed panel. The left tabs group controls into
 <strong>Search</strong>, <strong>Quick searches</strong>,
 <strong>Filters</strong>, <strong>Size</strong>, <strong>Dates</strong>,
-and <strong>Advanced</strong>. Advanced Options are per-session and
-reset to defaults on next launch (defaults can be configured in
-Settings). Changes apply immediately; <strong>Apply</strong> closes the
-panel, and <strong>Reset</strong> restores the controls to the current
-settings defaults.</p>
+and <strong>Advanced</strong>. Advanced Options affect only active
+search state and are never written to Yagu settings. Changes apply
+immediately; <strong>Apply</strong> closes the panel, and
+<strong>Reset</strong> restores the controls to the current settings
+defaults.</p>
 <p><strong>Reordering the tabs.</strong> Drag any tab up or down the
 left column to put the ones you use most at the top. The new order is
-remembered across restarts (it is stored separately from your search
-defaults, so <strong>Reset</strong> and <strong>Save as
-Defaults</strong> leave it alone). The panel always reopens on the
-<strong>Search</strong> tab wherever you have moved it to.</p>
+remembered across restarts because layout preferences are stored
+separately from search options; <strong>Reset</strong> leaves it alone.
+The panel always reopens on the <strong>Search</strong> tab wherever you
+have moved it to.</p>
 <p><strong>Moving options between tabs.</strong> Use the small grip at
 the right of an option row to move that control and its label together.
 Drag the grip over a different tab and hold it there for a moment; the
@@ -1212,8 +1267,8 @@ tab opens after 650 ms, and dropping then asks you to confirm the move.
 Dragging the control or label itself does not start a move, a quick pass
 over a tab is ignored, and dropping on the current tab does nothing.
 Placements are remembered across restarts and stay separate from
-<strong>Reset</strong> and <strong>Save as Defaults</strong>. To restore
-one option to its shipped tab, drag it back there and confirm.</p>
+<strong>Reset</strong>. To restore one option to its shipped tab, drag
+it back there and confirm.</p>
 <figure>
 <img role="img" aria-label="Advanced Options drawer with search tabs, path filters, and command generation" src="data:image/png;base64,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F81ryscoDpquI48S0LYedht/79qCiXsqPakePzuo/cRlHkY7qzwfp+TrFY9TU1w3B0APodWk83A4zuc3a3it6Njit8Dm65z3KfG4dC3izytf67b6NPk50XjN8/nHbdt+Npq8fN7noI4tPvMJAAC2k+5/c2bs0ChopUrzjnYi9prM0jXEC9tl1e0v+9KXvlTdcsstjSDZl7ZVHblebI8c9ErEN9cCAADTPXDOjB0aBa2GvukHugzd/q6++urqwQcfrPbv398IlPNoG22rOnK92C7qCc3PqJZCPaD+Uyp5GQAA2D6EThRnHe3v05/+dPWVr3xloeCpdbWNts31AQAAAKUidKI462p/Co/qtewz1FbraN3bbrutUQ8AAABQMkInirPO9qdhsno+U18MpG+k1Z9C0d/gFM2rTMu0DkNqAQAAsI0InSjOJtqfvon2zjvvrP/25gMPPFDTvP4sSt9vqQUAAABKROhEcWh/AAAAwHgQOlEc2h8AAAAwHoROFIf2BwAAAIwHoRPFof0BAAAA40HoRHFofwAAAMB4EDpRHNofAAAAMB6EThSH9gcAAACMB6ETxaH9AQAAAONB6ERxaH8AAADAeBA6URzaHwAAADAehE4Uh/YHAAAAjAehE8Wh/QEAAADjQehEcWh/AAAAwHgQOlEc2h8AAAAwHoROFIf2BwAAAIwHoRPFof0BAAAA40HoRHFofwAAAMB4EDpRHNofAAAAMB6EThSnxPa3d+/e6v3vf3/1wQ9+sLruuutqmleZluX1AQAAgLEgdKI4JbW/Cy+8sPrABz5QXX311dW+ffuq9773vdX5559f07zKtEzraN28PQAAALBpkwmdhw4dqu69995WWpbXx/Yaov1twmWXXVZdf/31dbDMyzKto3W1TV4GAAAAbNIkQueJEydqx48fb+XlebtZnn/++SpOL730Ur39wYMHG+tielbd/jZB4fFDH/pQ3ZuZl82idbUNwXParr322urWW29tlAMAAEzV6EOnejH7BEqt07fHU6FTYdXvtd2zzz5bnTp1qncdDz/8cL1NLsfmrbL9bYKGyarXcpHAadpG227LUNvf/d3fbZRN0W233VbTvALnnXfe2VgHAABgqkYfOjV8Vj2RCopdtI7Wzdu3yaHTFCK1LJe30fZ918V6rbL9bYKez+wzpHYWbas6cvlUfOELX6g+/OEP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" alt="Advanced Options drawer with search tabs, path filters, and command generation" />
 <figcaption aria-hidden="true">Advanced Options drawer with search tabs,
@@ -1487,6 +1542,18 @@ without OCR; if the download fails you can still choose <strong>Search
 anyway</strong>, which searches everything except text inside images.
 The OCR-bundled edition of the installer already ships these components,
 so nothing is downloaded.</td>
+</tr>
+<tr>
+<td>Search PDF text</td>
+<td>When enabled, PDF files are converted to text (via the bundled Xpdf
+<code>pdftotext</code>) and the extracted text is searched like any
+other file’s contents. Off by default because extraction is slower than
+reading text files. It runs on a background queue that does not block or
+slow the normal file scan; matches appear in the results panel as each
+PDF is processed. Only the embedded text layer is read —
+scanned/image-only PDFs (pages that are just pictures) yield no text.
+The toggle’s default comes from <strong>Settings ▸ Path and File Type
+Filters ▸ Search PDF text</strong>.</td>
 </tr>
 <tr>
 <td>Use content index</td>
@@ -1779,19 +1846,27 @@ line.</td>
 </tr>
 <tr>
 <td>Copy Selected File Paths</td>
-<td>Copies paths of all checked files.</td>
+<td>Copies paths of all checked files. Hidden when nothing is checked,
+since <strong>Copy Full Path</strong> above already covers the
+right-clicked file.</td>
 </tr>
 <tr>
-<td>Copy Selected Files With Content</td>
-<td>Copies file paths and their matched content.</td>
+<td>Copy Files With Content</td>
+<td>Copies file paths and their matched content. Reads <em>Copy Selected
+Files With Content</em> when files are checked; otherwise it acts on the
+right-clicked file.</td>
 </tr>
 <tr>
-<td>Save Selected File Paths…</td>
-<td>Saves checked file paths to a text file.</td>
+<td>Save File Paths…</td>
+<td>Saves file paths to a text file. Reads <em>Save Selected File
+Paths…</em> when files are checked; otherwise it acts on the
+right-clicked file.</td>
 </tr>
 <tr>
-<td>Save Selected Files With Content…</td>
-<td>Saves checked files with matched content to a text file.</td>
+<td>Save Files With Content…</td>
+<td>Saves files with matched content to a text file. Reads <em>Save
+Selected Files With Content…</em> when files are checked; otherwise it
+acts on the right-clicked file.</td>
 </tr>
 <tr>
 <td>Open with default application</td>
@@ -1862,6 +1937,39 @@ overlay and continue pumping UI input/rendering.</li>
 <p>The preview pane displays file content with highlighted matches, line
 numbers, and an active match overlay band showing the current match
 position.</p>
+<p><strong>Archives that matched on their file name only are not
+previewed.</strong> A <code>.zip</code>, <code>.jar</code>,
+<code>.docx</code>, <code>.7z</code> (or any other archive extension)
+has no readable text, so rendering it would fill the pane with
+unreadable bytes; the pane shows a short note instead and the
+<strong>Full File</strong> button is disabled. This applies only when
+the file name was the sole match — an archive that also matched on its
+contents, or on contents only, previews its matches exactly as before,
+as do files found <em>inside</em> an archive with <strong>Search
+archives</strong> on.</p>
+<h3 id="syntax-coloring-in-the-preview">Syntax Coloring in the
+Preview</h3>
+<p>Preview text is colored by language — keywords, strings, comments,
+numbers, and preprocessor directives — using the same
+file-name/extension mapping as the built-in editor, so C/C++
+(<code>.c</code>, <code>.cpp</code>, <code>.h</code>, <code>.hpp</code>,
+<code>.cu</code>, …), C#, Java, JavaScript/TypeScript, Python, JSON,
+XML/XAML, HTML, CSS, SQL, Markdown, Lua, PHP, INI/TOML, batch and more
+are all covered. It is on by default; turn it off with <strong>Syntax
+coloring based on file type</strong> under Settings → Display → Preview
+Viewer.</p>
+<p>Two things to know:</p>
+<ul>
+<li><strong>Your matches always win.</strong> Match highlighting is
+drawn on top of syntax coloring, so a hit inside a string or comment
+still shows in the match color and stays navigable. Context lines are
+colored in a dimmed variant so matched lines remain the visual
+focus.</li>
+<li><strong>Coloring is line-local.</strong> The preview shows
+individual lines, not the whole file, so a block comment or multi-line
+string is only recognized where its delimiters appear on the rendered
+line. Open the file in the built-in editor for whole-file coloring.</li>
+</ul>
 <h3 id="preview-toolbar">Preview Toolbar</h3>
 <table>
 <colgroup>
@@ -2280,25 +2388,6 @@ are shown.</p>
 <td>Default match context lines shown in preview.</td>
 </tr>
 <tr>
-<td>Default include pattern mode</td>
-<td>Whether default include patterns are interpreted as Glob or
-Regex.</td>
-</tr>
-<tr>
-<td>Default include patterns</td>
-<td>Include filter applied by default on app start. Leave blank to
-include every eligible file.</td>
-</tr>
-<tr>
-<td>Default exclude pattern mode</td>
-<td>Whether default exclude patterns are interpreted as Glob or
-Regex.</td>
-</tr>
-<tr>
-<td>Default exclude patterns</td>
-<td>Exclude filter applied by default before content scanning.</td>
-</tr>
-<tr>
 <td>.gitignore vs Include filter precedence</td>
 <td>Which side wins when a file is both matched by your Include filter
 and excluded by .gitignore (only relevant when Obey .gitignore is on).
@@ -2365,11 +2454,6 @@ Blank = any date.</td>
 <tr>
 <td>Clear date defaults</td>
 <td>Clears all saved created/modified date defaults.</td>
-</tr>
-<tr>
-<td>Search binary files</td>
-<td>Includes files detected as binary by null bytes or magic bytes. Off
-by default.</td>
 </tr>
 <tr>
 <td>Search hidden files</td>
@@ -2771,7 +2855,10 @@ preselected per-root exclusions for <code>Windows</code>, both
 installed-application, recovery, or filesystem metadata rather than
 personal search content. You can clear any suggestion before building or
 edit it later under <strong>Settings ▸ Indexing ▸ Filters…</strong>; a
-narrow root receives only exclusions for paths it actually contains.</p>
+narrow root receives only exclusions for paths it actually contains. The
+same setup dialog includes <strong>Index cloud-only files</strong>,
+unchecked by default, so you can explicitly allow or prevent cloud
+downloads before the first build starts.</p>
 <p>During the first build, Yagu crawls the selected folder, reads
 eligible files, writes private staged index data, validates it, and then
 publishes the complete generation atomically. You can continue using
@@ -2980,13 +3067,17 @@ live-scan.</td>
 </tr>
 <tr>
 <td>Scope &amp; Ingestion</td>
-<td>What a build ingests: hidden files, reparse points, removable-drive
-policy, maximum file size, and build-time excluded globs/extensions.
-These are not per-search filters — an unindexed file simply live-scans.
-Case-sensitive directories and cloud-only files are fixed live-only
-policies. <strong>Build a PDF-text index</strong> can safely skip
-non-matching PDFs when extraction is repeatable and the PDF is
-unchanged. <strong>Build an image-text index to prioritize likely OCR
+<td>What a build ingests: hidden files, cloud-only files, reparse
+points, removable-drive policy, maximum file size, and build-time
+excluded globs/extensions. These are not per-search filters — an
+unindexed file simply live-scans. <strong>Index cloud-only
+files</strong> is off by default; enabling it may download online-only
+content during builds, but Yagu opens a placeholder only while its sync
+provider is connected and leaves unavailable or timed-out files
+unindexed. Case-sensitive directories remain a fixed live-only policy.
+<strong>Build a PDF-text index</strong> can safely skip non-matching
+PDFs when extraction is repeatable and the PDF is unchanged.
+<strong>Build an image-text index to prioritize likely OCR
 matches</strong> runs the selected OCR engine during a full build and
 stores only positive trigram postings—not recognized text. Because OCR
 is non-deterministic, the image-text index never skips OCR for a
@@ -3262,10 +3353,16 @@ threshold, projected index size, automatic-compaction decision, and any
 smaller coalescing pass expected first. The estimate assumes recent file
 churn continues and Yagu remains open; coalescing, pausing, closing
 Yagu, or a burst of file changes can move it. If automatic compaction
-fails, the existing index remains active, health shows the failure
-without opening the clean-up dialog, and Yagu waits six hours before
-attempting the expensive fold again; a successful compaction or rebuild
-clears that warning.</p>
+fails, the existing index remains active and health shows the failure —
+with <strong>automatic compaction failed</strong> highlighted in red in
+the <strong>Indexing overview</strong> — without opening the clean-up
+dialog. Yagu then waits six hours before attempting the expensive fold
+again, <em>unless</em> the failure was caused by a condition that can
+clear on its own: when compaction stopped to keep the index drive inside
+your configured free-space floor and stop-when-full limit, Yagu
+re-checks that drive every five minutes and restarts compaction as soon
+as the space is back, instead of waiting out the six-hour backoff. A
+successful compaction or rebuild clears the warning.</p>
 <p><strong>Index size history graph.</strong> The graph button at the
 top-right of the bottom status bar’s <strong>Indexing overview</strong>
 opens a line graph of physical index storage over time. <strong>All
@@ -3326,12 +3423,12 @@ rebuild</h4>
 settings change what a build stores, Yagu identifies the minimal
 maintained-folder set and offers an explicit staged rebuild. This
 applies to the index data location, maximum indexed file size,
-hidden-file and reparse-point policies, global build-time excluded
-globs/extensions, per-folder filters, newly added/broadened roots, and
-enabling PDF-text, image-text, or format-v3 build output. Enabling
-additive output recommends a rebuild; disabling it applies immediately
-and does not require one. Query-family switches, query
-budgets/parallelism, scheduling, build resources, journal limits,
+hidden-file, cloud-only-file, and reparse-point policies, global
+build-time excluded globs/extensions, per-folder filters, newly
+added/broadened roots, and enabling PDF-text, image-text, or format-v3
+build output. Enabling additive output recommends a rebuild; disabling
+it applies immediately and does not require one. Query-family switches,
+query budgets/parallelism, scheduling, build resources, journal limits,
 compaction thresholds, retention/cleanup, telemetry, and
 status/provenance settings do <strong>not</strong> trigger rebuild
 advice because they change how existing indexes are used or maintained,
@@ -3636,6 +3733,93 @@ accepting work is not automatically repeated inside the main app.</td>
 <code>--clear-indexes</code>, root/filter commands, and
 <code>--index-config</code>; see <strong>Content Index (CLI)</strong>
 below.</p>
+<h3 id="mcp-server-tab">MCP Server Tab</h3>
+<p>Configures the Model Context Protocol server that lets an AI
+assistant drive Yagu. In stdio mode the client starts the server; the
+optional HTTP sign-in task can start it independently. This tab controls
+<strong>what a connected assistant may reach</strong> and registers the
+configuration that grants it. See <a href="#mcp-server-ai-client-integration">MCP Server (AI Client
+Integration)</a> for the full walkthrough.</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Group</th>
+<th>What It Controls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Server</td>
+<td>Shows where the server is installed and a one-line summary of what
+is currently granted. Tells you if this copy of Yagu does not include
+the server.</td>
+</tr>
+<tr>
+<td>Allowed Folders</td>
+<td>The folders an assistant may search, read, and write inside. Empty
+by default, and there is deliberately no “all drives” option — a server
+started with no folder authorizes nothing and refuses to run.</td>
+</tr>
+<tr>
+<td>Capabilities</td>
+<td>One switch per power: read files, search, touch online-only cloud
+files, write reports and sessions, preview replacements, manage content
+indexes, rebuild or unregister indexes. Read and search are on by
+default; everything else is off. A separate <strong>Let it actually
+rewrite files</strong> switch, also off, is what allows a previewed edit
+to be applied.</td>
+</tr>
+<tr>
+<td>Response Limits</td>
+<td>Ceilings for a single response — largest match line, context line,
+and path (in UTF-8 bytes), context lines per match, records per
+response, whole response bytes, concurrent calls per server, and the
+matches collected for an export or saved session. Each field shows its
+supported range.</td>
+</tr>
+<tr>
+<td>Background Jobs</td>
+<td>Ceilings for work that outlives a single tool call: jobs running at
+once, finished jobs kept for polling, characters kept from a job result,
+and three timeouts — ordinary call, index maintenance, and model-backed
+call. Each field shows its supported range.</td>
+</tr>
+<tr>
+<td>Loopback HTTP</td>
+<td>For clients that connect to a URL instead of launching the server:
+enable, port, start-at-sign-in, and regenerate token. Bound to loopback
+only.</td>
+</tr>
+<tr>
+<td>Connect a Client</td>
+<td><strong>Install</strong> / <strong>Reinstall</strong> /
+<strong>Remove</strong> per client, which merge Yagu’s entry into that
+client’s configuration without disturbing anything else — plus the
+ready-made JSON and a <strong>Copy configuration</strong> button if you
+would rather do it yourself. A disabled button explains itself on hover:
+no allowed folder yet, no server installed, or no Yagu entry to
+remove.</td>
+</tr>
+<tr>
+<td>Restore MCP defaults</td>
+<td>Resets everything on the tab, including <strong>clearing the allowed
+folders</strong> — which leaves the server authorizing nothing until you
+add one back.</td>
+</tr>
+</tbody>
+</table>
+<p>Saving settings refreshes detected, already-installed client entries.
+<strong>Restart the client’s MCP server after saving</strong> so its
+folders, capabilities, concurrency, export ceiling, and job limits take
+effect. If you copied configuration manually to another location,
+re-copy or merge it yourself. An enabled HTTP sign-in task is also
+re-registered and its server restarted; check the displayed status for
+failures. Only the per-call byte, context-line, and record budgets are
+read afresh from saved settings on every call.</p>
 <h3 id="performance-tab">Performance Tab</h3>
 <table>
 <colgroup>
@@ -3762,6 +3946,13 @@ line.</td>
 <tr>
 <td>Word wrap</td>
 <td>Default word-wrap state in preview.</td>
+</tr>
+<tr>
+<td>Syntax coloring based on file type</td>
+<td>Colors preview text (keywords, strings, comments, etc.) based on the
+file’s name or extension, using the same language mapping as the
+built-in editor (on by default). Match highlighting always takes
+precedence.</td>
 </tr>
 <tr>
 <td>Preview text font family</td>
@@ -4936,7 +5127,7 @@ newlines. Better for tools that don’t handle multi-line CSV fields.</td>
 </tr>
 <tr>
 <td>Copy files with content</td>
-<td>Right-click → Copy Selected Files With Content</td>
+<td>Right-click → Copy Files With Content</td>
 <td>Clipboard: paths + matched lines</td>
 </tr>
 <tr>
@@ -5385,8 +5576,212 @@ needed.</td>
 conversion (<code>&quot;5 km to miles&quot;</code>, <code>&quot;72 f to c&quot;</code>),
 print the answer, and exit — no search is run.</td>
 </tr>
+<tr>
+<td><code>--read &lt;path&gt;</code></td>
+<td>Print a bounded window of one file and exit — the CLI counterpart of
+the GUI preview pane. Encoding is detected from the byte-order mark,
+falling back to UTF-8; bytes that are not valid in the detected encoding
+are rendered as <code>�</code> rather than failing the read. Refused
+when <code>--confine-to</code> is active and the path resolves outside
+the allowed folders.</td>
+</tr>
+<tr>
+<td><code>--lines &lt;first&gt;-&lt;last&gt;</code></td>
+<td>The 1-based inclusive window <code>--read</code> prints. Accepts
+<code>10-20</code>, <code>500-</code> (open-ended) and <code>7</code> (a
+single line). Omit it for the whole file, bounded by the output budget;
+a supplied value that does not parse is an error rather than a silent
+whole-file read.</td>
+</tr>
+<tr>
+<td><code>--replace-commit &lt;id&gt;</code></td>
+<td>Apply the edits a previous <code>--replace --dry-run</code>
+recorded, identified by the <code>commitId</code> that run printed.
+Never re-runs the pattern: it replays exactly the recorded spans, and
+only after proving each file is byte-for-byte what the preview saw, so a
+file changed in between is refused rather than rewritten. A file whose
+bytes would not survive a decode/encode round-trip in its own encoding
+is refused too. The batch is all-or-nothing and rolls back on any
+failure. Requires replacement writes to be enabled in <strong>Settings ▸
+MCP Server</strong>; the preview expires after 15 minutes.</td>
+</tr>
 </tbody>
 </table>
+<h3 id="machine-and-automation-options">Machine and Automation
+Options</h3>
+<p>These make a CLI run deterministic and safe to drive from a script,
+an editor task, or another program.</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--output &lt;grep\|json&gt;</code></td>
+<td>Output format (default <code>grep</code>). <code>json</code> emits
+one JSON envelope per line (NDJSON) on stdout for <strong>every</strong>
+command — search, <code>--read</code>, <code>--calc</code>,
+<code>--load-session</code> and the index commands. Implies
+<code>--non-interactive</code>.</td>
+</tr>
+<tr>
+<td><code>--request-id &lt;id&gt;</code></td>
+<td>Correlation id stamped on every record. Generated when omitted.</td>
+</tr>
+<tr>
+<td><code>--non-interactive</code></td>
+<td>Never prompt on the console. Suppresses the first-run setup prompts,
+the Everything offer, index-coverage prompts, the OCR download question
+and the AI model check, so an automated caller is never blocked waiting
+for an answer.</td>
+</tr>
+<tr>
+<td><code>--settings-source &lt;src&gt;</code></td>
+<td>Which settings file to use: <code>global</code> (the per-user
+profile settings) or <code>file:&lt;path&gt;</code>. Without this, Yagu
+resolves a <code>.yagu.json</code> from the <strong>current working
+directory</strong> first, so a tool-launched run can silently inherit
+workspace defaults.</td>
+</tr>
+<tr>
+<td><code>--mcp-config</code></td>
+<td>Print the client configuration for Yagu’s <a href="#mcp-server-ai-client-integration">MCP server</a> and exit. Needs
+no <code>--cli</code>. See <a href="#from-the-command-line">From the
+command line</a> below.</td>
+</tr>
+</tbody>
+</table>
+<h4 id="json-output-format">JSON output format</h4>
+<p>Every line is one self-describing record:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;schemaVersion&quot;</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">&quot;type&quot;</span><span class="fu">:</span><span class="st">&quot;match&quot;</span><span class="fu">,</span><span class="dt">&quot;sequence&quot;</span><span class="fu">:</span><span class="dv">2</span><span class="fu">,</span><span class="dt">&quot;requestId&quot;</span><span class="fu">:</span><span class="st">&quot;a10b…&quot;</span><span class="fu">,</span><span class="dt">&quot;data&quot;</span><span class="fu">:{</span><span class="dt">&quot;path&quot;</span><span class="fu">:</span><span class="st">&quot;C:</span><span class="ch">\\</span><span class="st">repo</span><span class="ch">\\</span><span class="st">a.cs&quot;</span><span class="fu">,</span><span class="dt">&quot;line&quot;</span><span class="fu">:</span><span class="dv">12</span><span class="fu">,</span><span class="dt">&quot;column&quot;</span><span class="fu">:</span><span class="dv">4</span><span class="fu">,</span><span class="dt">&quot;length&quot;</span><span class="fu">:</span><span class="dv">3</span><span class="fu">,</span><span class="dt">&quot;text&quot;</span><span class="fu">:</span><span class="st">&quot;…&quot;</span><span class="fu">}}</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;schemaVersion&quot;</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">&quot;type&quot;</span><span class="fu">:</span><span class="st">&quot;summary&quot;</span><span class="fu">,</span><span class="dt">&quot;sequence&quot;</span><span class="fu">:</span><span class="dv">3</span><span class="fu">,</span><span class="dt">&quot;requestId&quot;</span><span class="fu">:</span><span class="st">&quot;a10b…&quot;</span><span class="fu">,</span><span class="dt">&quot;data&quot;</span><span class="fu">:{</span><span class="dt">&quot;returnedRecords&quot;</span><span class="fu">:</span><span class="dv">1</span><span class="fu">,</span><span class="dt">&quot;truncated&quot;</span><span class="fu">:</span><span class="kw">false</span><span class="fu">,</span><span class="dt">&quot;totalKnown&quot;</span><span class="fu">:</span><span class="kw">false</span><span class="fu">,</span><span class="dt">&quot;exitCode&quot;</span><span class="fu">:</span><span class="dv">0</span><span class="fu">,</span><span class="dt">&quot;outcome&quot;</span><span class="fu">:</span><span class="st">&quot;success&quot;</span><span class="fu">}}</span></span></code></pre></div>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Record type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>match</code></td>
+<td>One search hit: path, line, column, length, matched text, optional
+context and cross-line span.</td>
+</tr>
+<tr>
+<td><code>result</code></td>
+<td>A non-search payload record — a <code>--read</code> line, a
+<code>--calc</code> answer, an index status or an indexed root.</td>
+</tr>
+<tr>
+<td><code>plan</code></td>
+<td>How a natural-language query was interpreted. Emitted
+<strong>before</strong> the results of the same run.</td>
+</tr>
+<tr>
+<td><code>progress</code></td>
+<td>A throttled scan heartbeat (files, bytes, matches, percent).</td>
+</tr>
+<tr>
+<td><code>warning</code></td>
+<td>A non-fatal condition: a file-lister fallback, memory pressure, a
+semantic-plan caveat.</td>
+</tr>
+<tr>
+<td><code>diagnostic</code></td>
+<td>Environment facts, including which settings file the run actually
+resolved.</td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td>The terminal failure, with a stable <code>code</code> and the exit
+code.</td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td>Always last: <code>returnedRecords</code>, <code>truncated</code>,
+<code>totalKnown</code>, <code>exitCode</code> and
+<code>outcome</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Each invocation returns <strong>one bounded page</strong>.
+<code>totalKnown</code> is always <code>false</code>: a fresh scan has
+no stable global total, so there is no cross-call offset paging to
+duplicate or skip results. Every variable-length field is bounded
+independently in UTF-8 bytes; when a value is shortened the record
+carries a <code>truncated</code> object naming the field and its
+original size, so complete text is always distinguishable from trimmed
+text.</p>
+<p>A match line can be shortened for a second, earlier reason: the
+search engine itself trims long lines to the <strong>Line truncation
+length</strong> setting before the record is built, marking the cut with
+an ellipsis. That happens before any byte budget applies, so those
+records carry <code>&quot;engineTruncatedText&quot;: true</code> instead of a
+<code>truncated</code> entry — the original length is not known at that
+point. Raise <strong>Settings ▸ Performance ▸ Line truncation
+length</strong> if you need more of a long line returned.</p>
+<h4 id="exit-codes">Exit codes</h4>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Success — results were produced.</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>No results. This is a <strong>success</strong> outcome: the command
+ran correctly and matched nothing.</td>
+</tr>
+<tr>
+<td><code>2</code></td>
+<td>Invalid input.</td>
+</tr>
+<tr>
+<td><code>3</code></td>
+<td>Partial failure — some work succeeded, output is incomplete.</td>
+</tr>
+<tr>
+<td><code>4</code></td>
+<td>Busy — a conflicting exclusive operation holds the resource.</td>
+</tr>
+<tr>
+<td><code>70</code></td>
+<td>Internal failure.</td>
+</tr>
+<tr>
+<td><code>130</code></td>
+<td>Cancelled.</td>
+</tr>
+</tbody>
+</table>
+<p>The index-management commands keep their own published exit codes
+(<code>2</code> invalid arguments, <code>3</code> unsupported scope,
+<code>4</code> cancelled, <code>5</code> build failure, <code>6</code>
+already running). Under <code>--output json</code> the summary record
+reports both that code (<code>indexExitCode</code>) and the mapped
+protocol <code>outcome</code>.</p>
 <h3 id="matching-options">Matching Options</h3>
 <table>
 <colgroup>
@@ -5447,6 +5842,10 @@ slower/heavier — pair with a narrow scope.</td>
 <td><code>--multiline-dotall</code></td>
 <td>With <code>--multiline</code>, the dot (<code>.</code>) also matches
 newlines (<code>(?s)</code>).</td>
+</tr>
+<tr>
+<td><code>--no-multiline-dotall</code></td>
+<td>The dot (<code>.</code>) stops at newlines (default).</td>
 </tr>
 <tr>
 <td><code>--max-multiline-bytes &lt;size&gt;</code></td>
@@ -5585,6 +5984,17 @@ generation parameters</a>.</p>
 <tr>
 <td><code>--exclude-glob &lt;glob&gt;</code></td>
 <td>Exclude files matching GLOB (repeatable).</td>
+</tr>
+<tr>
+<td><code>--confine-to &lt;path&gt;</code></td>
+<td>Only emit, export, save, read, or rewrite results that resolve
+inside PATH once links are followed (repeatable). A junction inside the
+searched folder can otherwise place a file that really lives elsewhere
+into a report, a saved session, or a replacement. Filtering of emitted
+matches applies to <code>--output json</code>; plain text output is not
+filtered. <code>--read</code> is refused outright when its target
+resolves outside PATH. The MCP server passes this for every allowed
+folder.</td>
 </tr>
 <tr>
 <td><code>--include-regex</code> / <code>--include-glob</code></td>
@@ -5739,6 +6149,20 @@ setting).</td>
 <code>--no-search-hidden</code>)</td>
 <td>Exclude hidden files/folders. System files are always skipped by the
 file walker regardless of this flag.</td>
+</tr>
+<tr>
+<td><code>--online-only</code> (aliases
+<code>--search-online-only</code>)</td>
+<td>Search cloud files that are online-only placeholders. The provider
+(OneDrive, Dropbox, …) downloads each one on access, so a wide scope can
+pull a lot of data. Falls back to the <strong>Search online-only cloud
+files</strong> setting.</td>
+</tr>
+<tr>
+<td><code>--no-online-only</code> (aliases
+<code>--no-search-online-only</code>)</td>
+<td>Skip online-only placeholders so a search never triggers a cloud
+download (default).</td>
 </tr>
 <tr>
 <td><code>--image-text</code> (aliases <code>--search-image-text</code>,
@@ -5941,7 +6365,8 @@ Validate</strong>.</td>
 Settings tab — unknown keys or invalid values fail without saving any
 change). Build-output changes print the affected roots and exact
 <code>--rebuild-index</code> commands. Examples:
-<code>--index-config IndexPostBuildCatchUpThresholdChanges=30000</code>
+<code>--index-config IndexIncludeCloudOnlyFiles=true</code>,
+<code>--index-config IndexPostBuildCatchUpThresholdChanges=30000</code>,
 and <code>--index-config IndexContinuousIntervalMinutes=1</code>.</td>
 </tr>
 <tr>
@@ -5964,14 +6389,6 @@ maintained root prints its build/rebuild command.</td>
 <tr>
 <td><code>--index-remove-root &lt;path&gt;</code></td>
 <td>Unregister a folder from content indexing.</td>
-</tr>
-<tr>
-<td><code>--index-set-root-filter &lt;path&gt; [--root-include &lt;globs&gt;] [--root-exclude &lt;globs&gt;]</code></td>
-<td>Set <strong>per-folder</strong> build-time globs for one root.
-Exclude globs add to the global excludes; include globs re-admit paths a
-broader exclude drops (e.g. index <code>node_modules</code> under just
-this folder while excluding it globally). Omit both globs to clear. A
-semantic change prints the affected root’s rebuild command.</td>
 </tr>
 <tr>
 <td><code>--index-set-root-size &lt;path&gt; [--root-size-mode &lt;mode&gt;] [--root-size-budget-mb &lt;n&gt;] [--root-auto-compaction-cap-mb &lt;n&gt;]</code></td>
@@ -6090,6 +6507,14 @@ replacing.</td>
 before writing (numbered backups if one already exists). The replacement
 respects the <code>--case-sensitive</code> / <code>--ignore-case</code>
 flag for matching.</p>
+<p><code>--replace</code> always rewrites <em>file contents</em>, so it
+cannot be combined with a file-name-only search. A bare wildcard query
+under <code>--search-mode filenames</code> (for example
+<code>--search-mode filenames &quot;*.txt&quot;</code>) selects files by name and
+carries no content pattern, so Yagu refuses the run instead of rewriting
+those files. Pass the content pattern you actually want to replace and
+narrow the file set with <code>--include</code> instead:</p>
+<pre><code>Yagu.exe --cli --directory src --include &quot;*.txt&quot; &quot;oldFunction&quot; --replace &quot;newFunction&quot; --dry-run</code></pre>
 <p><strong>Example — dry run:</strong></p>
 <pre><code>Yagu.exe --cli --directory src &quot;oldFunction&quot; --replace &quot;newFunction&quot; --dry-run</code></pre>
 <p><strong>Example — replace with backup:</strong></p>
@@ -6201,7 +6626,7 @@ first:</strong></p>
 </tr>
 </tbody>
 </table>
-<h3 id="exit-codes">Exit Codes</h3>
+<h3 id="exit-codes-1">Exit Codes</h3>
 <table>
 <thead>
 <tr>
@@ -6233,6 +6658,710 @@ first:</strong></p>
 it is used as the base configuration. If not, Yagu checks the running
 process launch directory next, then falls back to global AppData
 settings. CLI flags always override file settings.</p>
+<hr />
+<h2 id="mcp-server-ai-client-integration">MCP Server (AI Client
+Integration)</h2>
+<p>Yagu can act as a <strong>Model Context Protocol (MCP)
+server</strong>, so an AI assistant — VS Code, Visual Studio, GitHub
+Copilot CLI, or Claude Desktop — can run Yagu searches, read bounded
+windows of files, preview replacements, and manage content indexes for
+you, instead of you translating the request into Advanced Options by
+hand.</p>
+<p>By default, the client starts the server itself and talks to it over
+standard input and output (<strong>stdio</strong>), with no listening
+port or token. Optional <a href="#loopback-http-optional">loopback
+HTTP</a> serves clients on this PC using a bearer token; it does not
+expose Yagu to other machines. Search and file operations run
+<code>Yagu.exe --cli</code> in <a href="#machine-and-automation-options">machine mode</a>, using the same
+engine as the GUI and CLI within the MCP grant and response limits.</p>
+<h3 id="how-an-assistant-chooses-yagu">How an assistant chooses
+Yagu</h3>
+<p>MCP has no deterministic phrase-based trigger: the connected
+assistant decides whether to call a tool from the server instructions
+and tool descriptions it receives. Yagu identifies itself there as the
+Windows filesystem-search tool for explicit requests to find or list
+files by name, path, extension, or text inside files, especially across
+a broad root or outside the current workspace. Targeted code-symbol and
+implementation lookup stays with the client’s normal code-navigation
+tools.</p>
+<p>The guidance also maps intent to search options: <em>contains</em>,
+<em>in it</em>, <em>inside</em>, <em>mentions</em>, <em>text</em>, and
+<em>string</em> mean file-content search; <em>named</em>,
+<em>filename</em>, <em>extension</em>, paths, and globs mean filename
+search. A <em>string</em> or <em>substring</em> request disables
+whole-word matching. For requests such as <em>all files containing
+X</em>, the assistant sets <code>maxMatchesPerFile=1</code>, so repeated
+occurrences in one file cannot consume the bounded result page. These
+instructions strongly improve tool selection, but the client model still
+owns the final call; saying <em>use Yagu</em> remains an explicit
+override.</p>
+<blockquote>
+<p><strong>The MCP server is an optional install.</strong> It is
+unchecked in the installer, because it adds about 107 MB and is of no
+use unless you connect an AI client. If <strong>Settings ▸ MCP
+Server</strong> reports that this copy of Yagu does not include it,
+re-run the installer and tick <strong>Install the MCP
+server</strong>.</p>
+</blockquote>
+<h3 id="setting-it-up">Setting it up</h3>
+<blockquote>
+<p><strong>On first launch after installing it,</strong> Yagu offers a
+one-time <strong>Set up the MCP server</strong> prompt. It lists folders
+you already use so you can tick several at once (with
+<strong>Browse…</strong> for anything else), and carries the same
+per-client <strong>Install</strong> / <strong>Remove</strong> buttons as
+the settings tab — so a client can be connected without opening Settings
+at all. Choosing <strong>Not now</strong> dismisses it for good;
+everything remains available under <strong>Settings ▸ MCP
+Server</strong>.</p>
+</blockquote>
+<ol type="1">
+<li>Open <strong>Settings ▸ MCP Server</strong>.</li>
+<li>Under <strong>Allowed Folders</strong>, add at least one folder.
+Until you do, the server authorizes nothing and refuses to run — there
+is deliberately no “search everything” default. The per-client
+<strong>Install</strong> buttons stay disabled until then; hover one to
+see why.</li>
+<li>Under <strong>Capabilities</strong>, turn on only the powers you
+want to hand over. Read and search are on by default; everything else is
+off. <strong>Save</strong> your settings so per-call limits and the
+replacement-write switch are persisted.</li>
+<li>Under <strong>Connect a Client</strong>, press
+<strong>Install</strong> next to your client. Yagu merges its entry into
+that client’s configuration file — it never replaces the file, so other
+servers, comments, and settings Yagu does not recognize are kept.
+<strong>Remove</strong> takes out only Yagu’s entry. If the file cannot
+be parsed, Yagu leaves it untouched and says so rather than “repairing”
+it. (With <a href="#loopback-http-optional">loopback HTTP</a> enabled,
+VS Code and Visual Studio get a URL entry instead of a stdio one.)</li>
+<li>Restart the client. Yagu’s tools should appear in its tool
+list.</li>
+</ol>
+<p>Prefer to do it by hand? The same panel shows the exact JSON to
+merge, with a <strong>Copy configuration</strong> button, and the table
+below says where each client keeps it.</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Client</th>
+<th>Configuration file</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VS Code</td>
+<td><code>%APPDATA%\Code\User\mcp.json</code> (Insiders and non-default
+profiles are detected; when several exist Yagu uses the most recently
+changed one and says which)</td>
+</tr>
+<tr>
+<td>Visual Studio</td>
+<td><code>%USERPROFILE%\.mcp.json</code></td>
+</tr>
+<tr>
+<td>Copilot CLI</td>
+<td><code>%USERPROFILE%\.copilot\mcp-config.json</code></td>
+</tr>
+<tr>
+<td>Claude Desktop</td>
+<td><code>%APPDATA%\Claude\claude_desktop_config.json</code></td>
+</tr>
+</tbody>
+</table>
+<p>For stdio, the entry <strong>is</strong> the grant: the server takes
+its allowed folders, capabilities, concurrency, export ceiling, and job
+limits from the command line the client launches. Saving settings
+refreshes detected, already-installed entries; <strong>restart the
+client’s MCP server to use the updated grant</strong>. Manually copied
+entries elsewhere must be updated separately. For HTTP, the grant
+belongs to the running server’s startup command, not the client’s URL
+entry. Per-call byte, context-line, and record budgets, and the
+replacement-write switch, are read from saved settings on each CLI
+call.</p>
+<h3 id="loopback-http-optional">Loopback HTTP (optional)</h3>
+<p>Most clients start the server themselves and talk to it over standard
+input and output, which needs no port and no token. A client that
+instead connects to a URL needs <strong>Settings ▸ MCP Server ▸ Loopback
+HTTP</strong>.</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Serve over loopback HTTP</td>
+<td>Enables HTTP configuration and URL entries for supported clients. It
+does not start a listener by itself; enable the sign-in task below or
+start the server manually. The listener binds only to
+<code>127.0.0.1</code> <strong>and</strong> <code>::1</code>.</td>
+</tr>
+<tr>
+<td>Loopback port</td>
+<td>1024–65535; default 8377. If another program already holds the port,
+the server will not start — pick another.</td>
+</tr>
+<tr>
+<td>Start it when I sign in</td>
+<td>Registers a per-user scheduled task and starts or restarts the HTTP
+server now, then starts it at future sign-ins whether or not Yagu is
+open. It runs <strong>as you</strong>, never as SYSTEM. Check the
+displayed status if registration or restart fails. Uninstalling Yagu
+removes the task.</td>
+</tr>
+<tr>
+<td>Regenerate token</td>
+<td>Issues a new token. Clients holding the old one are refused once the
+server restarts.</td>
+</tr>
+</tbody>
+</table>
+<p>When HTTP and start-at-sign-in are enabled, saving changes
+re-registers the task and attempts to restart its server with the
+updated grant. If restart fails, the running server can retain its old
+folders and capabilities; check the displayed status before assuming
+access has been revoked. A manually started HTTP server must be
+restarted with updated arguments separately.</p>
+<p><strong>Connecting a client to the URL.</strong> With loopback HTTP
+enabled, <strong>Install</strong> writes an HTTP entry for <strong>VS
+Code and Visual Studio</strong> instead of a stdio one, pointing at
+<code>http://127.0.0.1:&lt;port&gt;</code>. The token is
+<em>referenced</em>, never written into the file:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;headers&quot;</span><span class="er">:</span> <span class="fu">{</span> <span class="dt">&quot;Authorization&quot;</span><span class="fu">:</span> <span class="st">&quot;Bearer ${input:yagu-mcp-token}&quot;</span> <span class="fu">}</span></span></code></pre></div>
+<p>Yagu also adds the matching <code>inputs</code> definition, so the
+client prompts you once and keeps the value in its own secret storage.
+Paste in the token from <code>%LOCALAPPDATA%\Yagu\mcp\http-token</code>
+when asked. <strong>Remove</strong> takes out the entry and that
+definition together, and leaves any other <code>inputs</code> you have
+alone.</p>
+<p>Two consequences worth knowing:</p>
+<ul>
+<li><strong>Copilot CLI and Claude Desktop stay on stdio even when HTTP
+is on.</strong> Copilot CLI’s file is read directly by the VS Code Agent
+Host, which does not expand <code>${input:...}</code> and would send
+that literal text as the token; Claude Desktop’s configuration file has
+no HTTP entry shape at all. Both work fine over stdio, which needs no
+token.</li>
+<li><strong>A VS Code HTTP entry is not forwarded to the Agent
+Host.</strong> VS Code does not forward servers that require interactive
+input, so an HTTP-configured Yagu is available in ordinary chat but not
+in Agent Host sessions. If you want Yagu everywhere, leave loopback HTTP
+off and use the stdio entry.</li>
+</ul>
+<p><strong>How the token is handled.</strong> It is stored in your
+profile at <code>%LOCALAPPDATA%\Yagu\mcp\http-token</code> and is never
+shown on screen, put on a command line, or written to a log — a command
+line is readable by every process on the machine, so a token there is a
+token you have published. Requests are authenticated with
+<code>Authorization: Bearer</code>, compared in constant time. A request
+that carries a browser <code>Origin</code> is refused unless that origin
+is itself loopback, which stops a web page you happen to be visiting
+from driving your local index.</p>
+<p>This protects the endpoint from <em>other user accounts</em> and from
+the browser. It does not isolate you from software already running as
+you — such a program could read the token file, and could equally read
+every file the server would read for it.</p>
+<h3 id="from-the-command-line">From the command line</h3>
+<p><code>--mcp-config</code> prints the same JSON as the <strong>Copy
+configuration</strong> button, so you can wire up a client from a
+script. It needs no <code>--cli</code>:</p>
+<pre><code>Yagu.exe --mcp-config [--mcp-client vscode|vs|copilot-cli|claude]</code></pre>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Behavior</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Client</td>
+<td><code>vscode</code> by default. <code>vs</code>,
+<code>copilot-cli</code>, and <code>claude</code> select the
+others.</td>
+</tr>
+<tr>
+<td>Output</td>
+<td>The JSON goes to <strong>stdout</strong> and all guidance to
+<strong>stderr</strong>, so
+<code>Yagu.exe --mcp-config &gt; mcp.json</code> writes a clean
+file.</td>
+</tr>
+<tr>
+<td>Settings</td>
+<td>Always the per-user profile settings, never a
+<code>.yagu.json</code> from the current folder — an MCP grant belongs
+to you, not to whichever workspace your shell happens to be in.</td>
+</tr>
+<tr>
+<td>Exit code</td>
+<td><code>0</code> normally; <code>2</code> when no allowed folder is
+configured or when <code>--mcp-client</code> names an unknown client.
+Both invalid-input cases leave stdout empty. A settings-read failure
+returns <code>70</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Add and save an allowed folder before running this command. A
+no-folder configuration is refused before any JSON is printed. Redirect
+to a new temporary file and check the exit code before merging it into
+an existing client configuration; shell redirection can create or
+truncate a file even when the command fails.</p>
+<p>The rest of the tab has command-line equivalents too:</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--mcp-install &lt;client\|all&gt;</code></td>
+<td>Merges Yagu’s entry into that client’s configuration. Never
+overwrites the file.</td>
+</tr>
+<tr>
+<td><code>--mcp-remove &lt;client\|all&gt;</code></td>
+<td>Removes Yagu’s entry, and only Yagu’s entry.</td>
+</tr>
+<tr>
+<td><code>--mcp-status</code></td>
+<td>Prints folders, capabilities, transport, sign-in task, and which
+clients have Yagu installed.</td>
+</tr>
+<tr>
+<td><code>--mcp-regenerate-token</code></td>
+<td>Issues a new loopback HTTP token. Never prints it.</td>
+</tr>
+<tr>
+<td><code>--mcp-autostart &lt;on\|off&gt;</code></td>
+<td>Registers or removes the sign-in task for the HTTP server, and saves
+the matching setting so the Settings tab and the scheduled task cannot
+disagree.</td>
+</tr>
+</tbody>
+</table>
+<p>For example, after saving your allowed folders:</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>Yagu<span class="op">.</span><span class="fu">exe</span> <span class="op">--</span>mcp-status</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>Yagu<span class="op">.</span><span class="fu">exe</span> <span class="op">--</span>mcp-install vscode</span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>Yagu<span class="op">.</span><span class="fu">exe</span> <span class="op">--</span>mcp-config <span class="op">--</span>mcp-client copilot-cli</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>Yagu<span class="op">.</span><span class="fu">exe</span> <span class="op">--</span>mcp-remove vscode</span></code></pre></div>
+<p>These commands also need no <code>--cli</code> and use profile
+settings. Installation requires the optional server component and at
+least one allowed folder; <code>all</code> targets every supported
+client.</p>
+<h3 id="what-the-assistant-can-do">What the assistant can do</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Tool</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>yagu_search</code></td>
+<td>Searches names, paths, or file contents inside one allowed folder.
+The folder is required on every call; <code>maxMatchesPerFile=1</code>
+returns at most one occurrence from each matching file.</td>
+</tr>
+<tr>
+<td><code>yagu_search_natural_language_start</code></td>
+<td>Starts a natural-language (<a href="#semantic-search-local-ai">AI</a>) search as a background job,
+because loading the local model can take from several seconds to a
+couple of minutes.</td>
+</tr>
+<tr>
+<td><code>yagu_read_file</code></td>
+<td>Returns a bounded window of lines from one file, with the encoding
+detected the same way the preview pane detects it.</td>
+</tr>
+<tr>
+<td><code>yagu_calc</code></td>
+<td>Evaluates a math expression or unit conversion. It touches no files,
+so it needs no folder and no capability.</td>
+</tr>
+<tr>
+<td><code>yagu_replace_preview</code></td>
+<td>Returns a bounded diff plus
+attempted/changed/unchanged/skipped/failed counts for a
+find-and-replace. <strong>It never writes.</strong></td>
+</tr>
+<tr>
+<td><code>yagu_replace_commit</code></td>
+<td>Applies the edits a preview recorded — only when you have enabled
+writes. See <a href="#letting-an-assistant-edit-files">Letting an
+assistant edit files</a>.</td>
+</tr>
+<tr>
+<td><code>yagu_export_report</code>, <code>yagu_save_session</code>,
+<code>yagu_load_session</code></td>
+<td>Writes an export report or a session file, or reopens one.</td>
+</tr>
+<tr>
+<td><code>yagu_index_status</code>, <code>yagu_index_roots</code></td>
+<td>Reports content-index health and which folders are indexed. Both
+need the index-maintenance capability.</td>
+</tr>
+<tr>
+<td><code>yagu_index_add_root</code>,
+<code>yagu_index_remove_root</code></td>
+<td>Enrolls a folder for indexing, or unregisters it. Removal
+additionally requires the destructive-index capability; it does not
+delete stored index data.</td>
+</tr>
+<tr>
+<td><code>yagu_index_build_start</code>,
+<code>yagu_index_compact_start</code>,
+<code>yagu_index_validate_start</code></td>
+<td>Starts a build, a compaction, or a validation as a background job.
+<code>yagu_index_build_start</code> with <code>rebuild=true</code>
+additionally requires the destructive-index capability.</td>
+</tr>
+<tr>
+<td><code>yagu_job_status</code>, <code>yagu_job_list</code>,
+<code>yagu_job_cancel</code></td>
+<td>Follows or cancels the background jobs above.</td>
+</tr>
+</tbody>
+</table>
+<p>Anything long-running is a <strong>job</strong> rather than a
+blocking call: the assistant starts it, polls its status, and can cancel
+it. If the client gave up waiting on a blocking call instead, a
+half-finished index build or a loaded AI model would be left with no way
+to observe or stop it.</p>
+<h3 id="what-it-cannot-reach">What it cannot reach</h3>
+<p>Every request passes through one authorization decision, and every
+check <strong>fails closed</strong> — if a path cannot be resolved, the
+answer is no.</p>
+<ul>
+<li><strong>An explicit folder is required for every search.</strong>
+Yagu’s CLI treats an omitted directory as “search every drive”, so a
+tool that simply forwarded its arguments would hand over the whole
+machine by omission.</li>
+<li><strong>Paths are checked on the way out, too.</strong> A result —
+or a session file stored inside an allowed folder — can reference
+matches from anywhere, so returned paths are re-checked and anything
+outside is withheld and counted.</li>
+<li><strong>Links are followed to their real target.</strong> A junction
+or symlink part-way through a path is resolved before the decision, so a
+link inside an allowed folder cannot be used to step outside it.</li>
+<li><strong>Device paths, alternate data streams, and relative paths are
+refused</strong>, as are sibling-prefix look-alikes
+(<code>C:\FooBar</code> is not inside <code>C:\Foo</code>).</li>
+<li><strong>A write destination is judged by the folder it would land
+in</strong>, not by the path text.</li>
+<li><strong>The server has no privileges of its own.</strong> It runs as
+you, so anything Windows will not let you read stays unreadable through
+it.</li>
+</ul>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Capability</th>
+<th>What granting it allows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Read files</td>
+<td>Return a window of a file inside an allowed folder.</td>
+</tr>
+<tr>
+<td>Search</td>
+<td>Search inside an allowed folder, including natural-language
+search.</td>
+</tr>
+<tr>
+<td>Touch online-only cloud files</td>
+<td>Let a search open cloud placeholders, which forces the provider to
+download them. Off by default — it can be slow and metered.</td>
+</tr>
+<tr>
+<td>Write reports and sessions</td>
+<td>Export a report or save a session into an allowed folder.</td>
+</tr>
+<tr>
+<td>Preview replacements</td>
+<td>Use <code>yagu_replace_preview</code>. On its own this grants a
+preview only; writing is a separate switch.</td>
+</tr>
+<tr>
+<td>Manage content indexes</td>
+<td>Report status and registered roots, build, validate, and compact an
+index, and enroll an allowed folder. Rebuild and unregister also need
+the destructive-index capability below.</td>
+</tr>
+<tr>
+<td>Rebuild or unregister indexes</td>
+<td>The UI label for <code>DestructiveIndexOps</code>. Alongside Manage
+content indexes, permits <code>rebuild=true</code> and unregistering a
+folder. Unregistering leaves stored index data intact. There is
+currently no MCP tool for <code>--delete-index</code> or
+<code>--clear-indexes</code>; those remain GUI/CLI operations.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="letting-an-assistant-edit-files">Letting an assistant edit
+files</h3>
+<p><strong>Off by default.</strong> Turning on <strong>Settings ▸ MCP
+Server ▸ Let it actually rewrite files</strong> is the decision, and it
+is yours. An assistant confirming its own request is not a safeguard:
+the same model that chose to edit your files would be setting the flag,
+which defends against an accidental default but not against a
+confidently wrong plan or a prompt-injection attack hidden in a file it
+just read.</p>
+<p>With it on, editing is two steps, and the second one cannot drift
+from the first:</p>
+<ol type="1">
+<li><code>yagu_replace_preview</code> shows the diff and records the
+<strong>exact edits</strong> — every offset, length, and replacement —
+together with a checksum of each file. It returns a
+<code>commitId</code>.</li>
+<li><code>yagu_replace_commit</code> replays precisely those edits.
+<strong>It never re-runs the search pattern</strong>, because a pattern
+re-applied at write time is a different operation from the one you
+reviewed: if a file changed in between, a broad pattern can rewrite
+lines nobody looked at.</li>
+</ol>
+<p>What that buys you:</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Guarantee</th>
+<th>How</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A file that changed is refused, not rewritten</td>
+<td>Each file’s checksum, size, and timestamp must still match the
+preview, and the content that gets edited is the same read that was
+verified.</td>
+</tr>
+<tr>
+<td>All of the batch, or none of it</td>
+<td>Every file is checked <strong>before the first one is
+written</strong>. If any has changed, nothing is written at all. If a
+write then fails, every file already written in that batch is rolled
+back from its backup.</td>
+</tr>
+<tr>
+<td>A copy of the original</td>
+<td>A <code>.yagubak</code> file is written beside each edited
+file.</td>
+</tr>
+<tr>
+<td>No stale approvals</td>
+<td>A <code>commitId</code> is single-use and expires after 15
+minutes.</td>
+</tr>
+<tr>
+<td>Nothing outside your folders</td>
+<td>The paths are re-checked against your allowed folders at commit
+time, not just at preview.</td>
+</tr>
+<tr>
+<td>Encoding preserved</td>
+<td>A UTF-16 file stays UTF-16; committing never quietly converts a
+file.</td>
+</tr>
+<tr>
+<td>The write is atomic</td>
+<td>The new content is written beside the file and swapped in, so a
+crash leaves either the old file or the new one — never a truncated
+one.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="response-limits">Response limits</h3>
+<p>Each call returns <strong>one bounded page</strong>, and there is no
+way to ask for “page 2”: every call is a fresh scan, so a numeric offset
+into a result set that no longer exists would silently duplicate or skip
+matches. The response reports how many records it returned and whether
+it was truncated.</p>
+<p>Sizes are bounded in <strong>UTF-8 bytes per field</strong> rather
+than by a match count, because one minified line, OCR block, or archive
+member name can be larger than a whole sensible response on its own.
+When a value is shortened the record says which field was cut and how
+large the original was, so an assistant can always tell trimmed text
+from complete text. All of these ceilings are configurable under
+<strong>Settings ▸ MCP Server ▸ Response Limits</strong>, and each shows
+its supported range.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Supported range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Match line</td>
+<td>8 KiB</td>
+<td>256 bytes to 1 MiB</td>
+</tr>
+<tr>
+<td>Context line</td>
+<td>4 KiB</td>
+<td>256 bytes to 1 MiB</td>
+</tr>
+<tr>
+<td>Path</td>
+<td>4 KiB</td>
+<td>260 bytes to 32 KiB</td>
+</tr>
+<tr>
+<td>Context lines per match</td>
+<td>20</td>
+<td>0 to 200</td>
+</tr>
+<tr>
+<td>Records per response</td>
+<td>500</td>
+<td>1 to 1,000,000</td>
+</tr>
+<tr>
+<td>Whole response</td>
+<td>4 MiB</td>
+<td>64 KiB to 256 MiB</td>
+</tr>
+<tr>
+<td>Concurrent calls per server</td>
+<td>4</td>
+<td>1 to 32</td>
+</tr>
+<tr>
+<td>Matches collected for an export or session</td>
+<td>50,000</td>
+<td>1 to 1,000,000</td>
+</tr>
+</tbody>
+</table>
+<p>The first six budgets are read on each CLI call. Concurrency and the
+export/session ceiling are server startup settings: restart after
+updating the installed configuration. Per-field budgets may be reduced
+further to fit the whole-response budget. Ordinary
+<code>yagu_search</code> defaults to whole-word matching; pass
+<code>wholeWord=false</code> for substring matching. For a list of files
+containing a query, pass <code>maxMatchesPerFile=1</code> so each file
+contributes at most one match. Its requested match count is also bounded
+by the export/session ceiling and the per-response budgets.</p>
+<p>Exporting a report and saving a session are the exception to “one
+bounded page”: they hold every match in memory before writing, so they
+have their own ceiling — <strong>Matches collected for an export or
+session</strong>, 50,000 by default. An assistant that asks for more is
+given the ceiling instead, and told that the file may be incomplete, so
+a partial export is never mistaken for a complete one.</p>
+<h3 id="background-jobs">Background jobs</h3>
+<p>Index maintenance and natural-language search outlive a single tool
+call, so the server hands back a <strong>job id</strong> and the
+assistant polls <code>yagu_job_status</code>. Everything bounding that
+machinery is configurable under <strong>Settings ▸ MCP Server ▸
+Background Jobs</strong>:</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>What it bounds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Jobs running at once</td>
+<td>8</td>
+<td>Further starts are <strong>refused rather than queued</strong>, so
+an assistant that keeps launching index builds cannot accumulate
+unbounded work.</td>
+</tr>
+<tr>
+<td>Finished jobs kept for polling</td>
+<td>64</td>
+<td>Oldest dropped first. A job whose result has been dropped reports
+that it is unknown rather than reporting success with nothing in
+it.</td>
+</tr>
+<tr>
+<td>Characters kept from a job result</td>
+<td>262,144</td>
+<td>A longer result is truncated and says so, because the whole result
+is held in memory until the job is dropped.</td>
+</tr>
+<tr>
+<td>Ordinary call timeout</td>
+<td>120 s</td>
+<td>Searches, reads and index status. On expiry the child process
+<strong>and its whole worker tree</strong> are killed, so nothing is
+left running.</td>
+</tr>
+<tr>
+<td>Index maintenance timeout</td>
+<td>240 min</td>
+<td>Building an index over a large tree on a spinning disk can
+legitimately take hours; on an NVMe drive the same work is minutes.</td>
+</tr>
+<tr>
+<td>Model-backed call timeout</td>
+<td>30 min</td>
+<td>Natural-language search loads the on-device model per call, and
+measured runs ranged from about nine seconds to many minutes on the same
+model. Also bounds how long one such call waits behind another.</td>
+</tr>
+</tbody>
+</table>
+<p>These are wall-clock ceilings, not expected durations. They are
+settings rather than fixed values because the right number depends on
+your disks and hardware, which the server cannot know. Like the folders
+and capabilities, they are server startup settings: save to refresh
+installed client entries, then restart the server. Re-copy manually
+maintained configurations separately.</p>
+<h3 id="current-limits">Current limits</h3>
+<ul>
+<li><strong>Loopback only.</strong> Even with HTTP enabled the endpoint
+is bound to this machine; there is no remote access, and no OAuth.</li>
+<li><strong>One bounded page per call</strong>, with no cross-call
+paging — see above.</li>
+<li><strong>Archives are read-only.</strong> A replacement never edits
+inside a ZIP, DOCX, or similar container.</li>
+</ul>
 <hr />
 <h2 id="gui-command-line-arguments">GUI Command-Line Arguments</h2>
 <p>When launching Yagu in GUI mode (without <code>--cli</code>):</p>
@@ -6470,40 +7599,32 @@ text inside files</h3>
 </table>
 <h3 id="content-with-exclusions-x-but-not-y">Content with exclusions →
 “X but not Y”</h3>
-<table>
-<colgroup>
-<col style="width: 50%" />
-<col style="width: 50%" />
-</colgroup>
-<thead>
-<tr>
-<th>Natural-language query</th>
-<th>What Yagu resolves it to</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>c# files that contain &#39;async&#39; but not &#39;Legacy&#39;</code></td>
-<td><code>*.cs</code>, content <code>async</code>, filtering out matches
-containing <code>Legacy</code>.</td>
-</tr>
-<tr>
-<td><code>python files containing import but not test</code></td>
-<td><code>*.py</code>, content <code>import</code>, excluding
-<code>test</code>.</td>
-</tr>
-<tr>
-<td><code>config files containing password but not example</code></td>
-<td>Config types, content <code>password</code>, excluding
-<code>example</code>.</td>
-</tr>
-<tr>
-<td><code>log files with error but without warning</code></td>
-<td><code>*.log</code>, content <code>error</code>, excluding
-<code>warning</code>.</td>
-</tr>
-</tbody>
-</table>
+<p>The precise forms
+<strong><code>files that mention X but not Y</code></strong> and
+<strong><code>files that contain X but not Y</code></strong> are
+resolved without model inference. X and Y are literal terms; quote
+either term if it contains spaces or punctuation. Optional
+<code>find</code>, <code>show</code>, or <code>list</code> prefixes are
+accepted.</p>
+<p><code>files that mention invoice but not refund</code> searches the
+current folder and rejects an entire file if <code>refund</code> appears
+anywhere, before or after <code>invoice</code>, including on a different
+line. It returns <strong>one whole-file match per accepted text
+file</strong>, not one match for every occurrence of
+<code>invoice</code>. Case sensitivity follows the search setting.</p>
+<p>This uses the existing <strong>Multiline</strong> search with a
+file-anchored .NET regex and its managed fallback. It reads each
+candidate file in full, respects the configured multiline file-size
+ceiling (50 MiB by default) and per-file regex timeout, and skips
+extracted PDF, OCR, and archive contents. Use a narrow folder and the
+normal include filters for large collections. The equivalent traditional
+CLI command is:</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>Yagu<span class="op">.</span><span class="fu">exe</span> <span class="op">--</span>cli <span class="op">--</span>directory <span class="st">&quot;C:\docs&quot;</span> <span class="op">--</span>regex <span class="op">--</span>multiline <span class="op">--</span>search-mode content <span class="op">--</span>pattern <span class="st">&#39;\A(?![\s\S]*refund)(?=[\s\S]*invoice)[\s\S]+\z&#39;</span></span></code></pre></div>
+<p>Other content-negation forms, including mixed file-type or
+filename-negation requests outside this grammar, still carry an
+unsupported-content-exclusion warning. A filename exclude glob is not a
+substitute for checking file contents; do not treat such a partial
+interpretation as satisfying the negation.</p>
 <h3 id="dates-recency">Dates &amp; recency</h3>
 <table>
 <colgroup>

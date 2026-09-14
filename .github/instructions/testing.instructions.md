@@ -1,5 +1,5 @@
 ---
-description: "Yagu test-authoring conventions — source-pin vs unit tests, compiling engine source into Yagu.Tests, coverage runsettings, and the iterative filter. Use when: adding a test, writing a test, source-pin test, CS0103 in tests, new .cs not found in tests, code coverage, IncludeTestAssembly, runsettings, Category!=Slow, Category=GPU, GPU test, Slow test, test trait, benchmark test, Yagu.Tests, Yagu.Benchmarks."
+description: "Yagu test-authoring conventions — source-pin vs unit tests, compiling engine source into Yagu.Tests, coverage runsettings, and the iterative filter. Use when: adding a test, writing a test, source-pin test, CS0103 in tests, new .cs not found in tests, code coverage, IncludeTestAssembly, runsettings, Category!=Slow, Category=GPU, GPU test, Slow test, test trait, benchmark test, Yagu.Tests, Yagu.Benchmarks, build-version.txt churn, AppInfo.g.cs, BaseIntermediateOutputPath, duplicate assembly attributes."
 applyTo: "tests/Yagu.Tests/**, tests/Yagu.Benchmarks/**"
 ---
 
@@ -110,3 +110,14 @@ Telemetry ships **offline by default**: `TelemetryConfigTests` / `TelemetryGateT
 `TelemetryConfig.IsConfigured == false`. If they fail, someone committed a real proxy URL/token into
 `src/Yagu/Services/Telemetry/TelemetryConfig.cs` — restore the placeholder; inject real values only at
 build/package time.
+
+## Leave no churn behind after a validation build
+
+A Yagu build auto-increments `Yagu/Properties/build-version.txt` and regenerates `AppInfo.g.cs`. A build
+run only to validate a change therefore dirties the working tree with a version bump nobody asked for.
+Revert that generated churn afterwards unless a version bump was the point of the change.
+
+Do not redirect test output with a **relative** `BaseIntermediateOutputPath` to isolate a run. A relative
+path resolves inside a referenced project, whose sources are then compiled back into it — the build fails
+with duplicate assembly attributes. Use an absolute path outside the repository, or leave it alone.
+

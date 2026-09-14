@@ -160,68 +160,68 @@ function Get-YaguWindowHandle {
 }
 
 function Take-Screenshot([string]$Name, [switch]$Fast) {
-    if (-not $Fast) {
-        Activate-YaguWindow
-        Start-Sleep -Milliseconds 200
-    }
-
     $path = Join-Path $ScreenshotDir "$Name.png"
-
-    # Capture the Yagu window itself, not the screen. SetForegroundWindow is blocked by the Windows
-    # foreground lock when the harness runs from a background process, so a CopyFromScreen grab silently
-    # captured whichever window was actually on top (VS Code) and the pixel assertions then measured the
-    # wrong app. PrintWindow with PW_RENDERFULLCONTENT reads the target window even when it is occluded.
-    $h = Get-YaguWindowHandle
-    if ($h -ne [IntPtr]::Zero) {
-        $rect = New-Object YaguInput+RECT
-        if ([YaguInput]::GetWindowRect($h, [ref]$rect)) {
-            $w = $rect.Right - $rect.Left
-            $ht = $rect.Bottom - $rect.Top
-            if ($w -gt 0 -and $ht -gt 0) {
-                $bmp = [System.Drawing.Bitmap]::new($w, $ht)
-                $graphics = [System.Drawing.Graphics]::FromImage($bmp)
-                $hdc = $graphics.GetHdc()
-                $ok = [YaguInput]::PrintWindow($h, $hdc, [YaguInput]::PW_RENDERFULLCONTENT)
-                $graphics.ReleaseHdc($hdc)
-                $graphics.Dispose()
-                if ($ok) {
-                    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-                    $bmp.Dispose()
-                    [YaguInput]::Progress()
-                    if (-not $Fast) { Write-Host "  Screenshot saved: $path" }
-                    return
-                }
-                $bmp.Dispose()
-            }
-        }
+    $windowHandle = Get-YaguWindowHandle
+    if ($windowHandle -eq [IntPtr]::Zero) {
+        throw "Cannot capture $Name because the Yagu window handle is unavailable."
     }
 
-    # Fallback: whole screen, only when the window handle or PrintWindow is unavailable.
-    $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    $bmp = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
-    $graphics = [System.Drawing.Graphics]::FromImage($bmp)
-    $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-    $graphics.Dispose()
-    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-    $bmp.Dispose()
-    [YaguInput]::Progress()
-    if (-not $Fast) { Write-Host "  Screenshot saved (screen fallback): $path" }
+    # CopyFromScreen only reads what is actually on screen, so Yagu must own the foreground or we
+    # would silently capture whichever window is on top and measure the wrong app. Activation can
+    # lose a race against the Windows foreground lock, so retry rather than failing the whole
+    # scenario on a single transient steal; the post-capture check below still guarantees we never
+    # keep a frame that was taken while another window was in front.
+    $lastFailure = $null
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        if (-not [YaguInput]::Activate($windowHandle)) {
+            $lastFailure = "Yagu could not be brought to the foreground."
+            Start-Sleep -Milliseconds (200 * $attempt)
+            continue
+        }
+
+        $rect = New-Object YaguInput+RECT
+        if (-not [YaguInput]::GetWindowRect($windowHandle, [ref]$rect)) {
+            throw "Cannot read Yagu's capture bounds."
+        }
+        $size = [System.Drawing.Size]::new($rect.Right - $rect.Left, $rect.Bottom - $rect.Top)
+        $bitmap = [System.Drawing.Bitmap]::new($size.Width, $size.Height)
+        try {
+            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+            try {
+                $graphics.CopyFromScreen([System.Drawing.Point]::new($rect.Left, $rect.Top), [System.Drawing.Point]::Empty, $size)
+            } finally { $graphics.Dispose() }
+            if ([YaguInput]::GetForegroundWindow() -ne $windowHandle) {
+                $lastFailure = "Yagu lost foreground focus during capture."
+                Start-Sleep -Milliseconds (200 * $attempt)
+                continue
+            }
+            $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+        } finally { $bitmap.Dispose() }
+
+        [YaguInput]::Progress()
+        if (-not $Fast) { Write-Host "  Screenshot saved: $path" }
+        return
+    }
+
+    throw "Cannot capture ${Name}: $lastFailure"
 }
 
 # --- UI Automation health watchdog ------------------------------------------
-# UIA queries (FindFirst/FindAll) can transiently throw a timeout (COMException
-# 0x80131505) when the result tree is large or the app is busy. A single timeout
-# should not crash the run, but if UIA is *persistently* unresponsive we fail fast
-# and loud rather than grind until the 15-minute harness timeout.
+# UIA queries (FindFirst/FindAll) can transiently fail when the result tree is large
+# or the app is busy: a timeout (COMException 0x80131505), or E_UNEXPECTED
+# (0x8000FFFF, surfaced as "Catastrophic failure") when a node the scan is walking
+# disappears mid-enumeration. Neither should crash the run, but if UIA is
+# *persistently* unresponsive we fail fast and loud rather than grind until the
+# 15-minute harness timeout.
 $script:UiaTimeoutStreak = 0
-$script:UiaTimeoutLimit  = 8   # consecutive timeouts before declaring UIA dead
+$script:UiaTimeoutLimit  = 8   # consecutive transient failures before declaring UIA dead
 
 function Test-IsUiaTimeout {
     param($ErrorRecord)
     $ex = $ErrorRecord.Exception
     while ($ex) {
         if ($ex -is [System.TimeoutException]) { return $true }
-        if ($ex.Message -match '0x80131505|timed out|timeout') { return $true }
+        if ($ex.Message -match '0x80131505|0x8000FFFF|Catastrophic failure|timed out|timeout') { return $true }
         $ex = $ex.InnerException
     }
     return $false
@@ -234,7 +234,7 @@ function Register-UiaTimeout {
     $script:UiaTimeoutStreak++
     if ($script:UiaTimeoutStreak -ge $script:UiaTimeoutLimit) {
         Write-Host ""
-        Write-Host "FATAL: UI Automation is unresponsive - $($script:UiaTimeoutStreak) consecutive timeouts (last at $Where)."
+        Write-Host "FATAL: UI Automation is unresponsive - $($script:UiaTimeoutStreak) consecutive failures (last at $Where)."
         Write-Host "       Aborting early instead of hanging until the harness timeout."
         Write-Host "       The result tree is likely too large/slow for UIA in this environment"
         Write-Host "       (this test searches an entire drive). Reduce the corpus or run unelevated."
@@ -249,6 +249,7 @@ function Find-Element {
         [string]$AutomationId = $null,
         [string]$ClassName = $null,
         [System.Windows.Automation.ControlType]$ControlType = $null,
+        [System.Windows.Automation.TreeScope]$Scope = [System.Windows.Automation.TreeScope]::Descendants,
         [int]$TimeoutSeconds = 10
     )
     
@@ -267,7 +268,7 @@ function Find-Element {
         # tree is large or the app is busy. Treat that like "not found yet" and keep retrying
         # until the deadline; the watchdog bails fast if UIA is persistently unresponsive.
         try {
-            $el = $Parent.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+            $el = $Parent.FindFirst($Scope, $condition)
             Reset-UiaTimeoutStreak
         } catch {
             if (-not (Test-IsUiaTimeout $_)) { throw }
@@ -328,7 +329,11 @@ function Find-YaguWindow {
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
-        $window = Find-Element -Parent $Root -Name "Yagu" -ControlType ([System.Windows.Automation.ControlType]::Window) -TimeoutSeconds 1
+        # A top-level window is always a direct child of the desktop root. Scanning
+        # Descendants here walks the entire UI tree of every running application, which is
+        # both needlessly slow and prone to throwing E_UNEXPECTED when any unrelated app
+        # closes a node mid-enumeration. Scope to Children.
+        $window = Find-Element -Parent $Root -Name "Yagu" -ControlType ([System.Windows.Automation.ControlType]::Window) -Scope ([System.Windows.Automation.TreeScope]::Children) -TimeoutSeconds 1
         if ($window) { return $window }
 
         $candidateProcessIds = @($LaunchedProcessId)
@@ -342,15 +347,27 @@ function Find-YaguWindow {
         foreach ($candidatePid in $candidateProcessIds) {
             $pidCondition = [System.Windows.Automation.PropertyCondition]::new(
                 [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$candidatePid)
-            $window = $Root.FindFirst([System.Windows.Automation.TreeScope]::Children, $pidCondition)
+            try {
+                $window = $Root.FindFirst([System.Windows.Automation.TreeScope]::Children, $pidCondition)
+            } catch {
+                if (-not (Test-IsUiaTimeout $_)) { throw }
+                Register-UiaTimeout "Find-YaguWindow(pid)"
+                $window = $null
+            }
             if ($window) { return $window }
         }
 
-        $windows = $Root.FindAll(
-            [System.Windows.Automation.TreeScope]::Children,
-            [System.Windows.Automation.PropertyCondition]::new(
-                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                [System.Windows.Automation.ControlType]::Window))
+        try {
+            $windows = $Root.FindAll(
+                [System.Windows.Automation.TreeScope]::Children,
+                [System.Windows.Automation.PropertyCondition]::new(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Window))
+        } catch {
+            if (-not (Test-IsUiaTimeout $_)) { throw }
+            Register-UiaTimeout "Find-YaguWindow(enumerate)"
+            $windows = @()
+        }
         foreach ($candidate in $windows) {
             try {
                 if ($candidate.Current.Name -like "Yagu*") {

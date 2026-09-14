@@ -79,6 +79,10 @@ For literal **Content + Names** and **File names only** searches, Yagu first que
 
 Literal searches are faster than regex. Use regex when you need pattern matching, anchors, alternation, groups, or character classes.
 
+> **Tip — file globs in File names mode.** A query that is *only* a glob (`*.ps1`, `report*`, or several such as `*.ps1 *.psm1`) is applied as an **Include** file filter instead of being matched against the name as text. Windows file names cannot contain `*` or `?`, so matching such a query literally could only ever return nothing. The status bar says which globs were applied. This is skipped when **Regex** is on — there `*` is your own syntax — and when you already have an Include filter set, so your filter stays the single source of truth. A mixed query like `report *.pdf` is left alone, because "named report **and** a PDF" is not something an Include list can express. The CLI behaves identically.
+>
+> In any other mode a glob is left exactly as typed, because file *contents* legitimately contain text like `*.ps1` and reinterpreting it would make that search impossible to express. If the query then fails as an invalid regular expression, Yagu says so and offers a **Search file names for …** button that switches to File names mode with **Regex** off — the two changes that make it do what you meant.
+
 ### Match across lines (multiline)
 
 By default a match must fit on one physical line. Turn on **Multiline** (the `\n` toggle in the
@@ -188,11 +192,11 @@ settings file), and take effect on the next search after the file is saved — n
 
 ## Advanced Options
 
-Click the **Advanced Options** expander below the search bar to reveal a tabbed panel. The left tabs group controls into **Search**, **Quick searches**, **Filters**, **Size**, **Dates**, and **Advanced**. Advanced Options are per-session and reset to defaults on next launch (defaults can be configured in Settings). Changes apply immediately; **Apply** closes the panel, and **Reset** restores the controls to the current settings defaults.
+Click the **Advanced Options** expander below the search bar to reveal a tabbed panel. The left tabs group controls into **Search**, **Quick searches**, **Filters**, **Size**, **Dates**, and **Advanced**. Advanced Options affect only active search state and are never written to Yagu settings. Changes apply immediately; **Apply** closes the panel, and **Reset** restores the controls to the current settings defaults.
 
-**Reordering the tabs.** Drag any tab up or down the left column to put the ones you use most at the top. The new order is remembered across restarts (it is stored separately from your search defaults, so **Reset** and **Save as Defaults** leave it alone). The panel always reopens on the **Search** tab wherever you have moved it to.
+**Reordering the tabs.** Drag any tab up or down the left column to put the ones you use most at the top. The new order is remembered across restarts because layout preferences are stored separately from search options; **Reset** leaves it alone. The panel always reopens on the **Search** tab wherever you have moved it to.
 
-**Moving options between tabs.** Use the small grip at the right of an option row to move that control and its label together. Drag the grip over a different tab and hold it there for a moment; the tab opens after 650 ms, and dropping then asks you to confirm the move. Dragging the control or label itself does not start a move, a quick pass over a tab is ignored, and dropping on the current tab does nothing. Placements are remembered across restarts and stay separate from **Reset** and **Save as Defaults**. To restore one option to its shipped tab, drag it back there and confirm.
+**Moving options between tabs.** Use the small grip at the right of an option row to move that control and its label together. Drag the grip over a different tab and hold it there for a moment; the tab opens after 650 ms, and dropping then asks you to confirm the move. Dragging the control or label itself does not start a move, a quick pass over a tab is ignored, and dropping on the current tab does nothing. Placements are remembered across restarts and stay separate from **Reset**. To restore one option to its shipped tab, drag it back there and confirm.
 
 ![Advanced Options drawer with search tabs, path filters, and command generation](docs/images/advanced-options.png)
 
@@ -262,7 +266,8 @@ The list is seeded on first run with these built-ins:
 | Archive Extensions | Visible when Search archives is on. Controls which extensions are treated as ZIP containers. |
 | Search online-only cloud files | When enabled, OneDrive/Google Drive online-only placeholder files are downloaded on demand and searched — but only while the sync provider is running to serve them. Off by default: cloud-only files are skipped so the scan can't hang on a download. Can be slow and use network/disk. |
 | Search hidden files | When enabled (default), files and folders carrying the Windows Hidden attribute are searched. When disabled, hidden items are excluded — the managed file walker skips them and the Everything backends filter them with `!attrib:h`. System files (e.g. `pagefile.sys`, `hiberfil.sys`) are always skipped by the file walker regardless of this setting. The default for this per-search toggle comes from **Settings ▸ Path and File Type Filters ▸ Search hidden files**. |
-| Search image text (OCR) | When enabled, image files (PNG, JPG, BMP, GIF, TIFF, WEBP) are run through OCR and the recognized text is searched like any other file's contents. Off by default because OCR is slower than reading text files. OCR runs on a background queue that does not block the normal file scan; matches appear as each image is processed. As discovery identifies image/PDF candidates, those documents are included once in the same overall progress denominator. Once extraction is the visible tail, the label combines both views — for example **95% [OCR: 11,113 / 104,000 images]** (then PDF text if needed) — and the tooltip/status show the same queue count, so a large OCR tail never looks frozen. The OCR engine, recognition quality, and this toggle's default come from the **Settings ▸ OCR** tab (see below). The first search that uses OCR checks for the engine's one-time components **before** the search starts: if they are missing, Yagu asks once, then downloads them while showing a progress dialog with elapsed time, and begins the search only when they are ready (confirmed by an **OCR components downloaded** message at the bottom of the window). Declining the download simply runs the search without OCR; if the download fails you can still choose **Search anyway**, which searches everything except text inside images. The OCR-bundled edition of the installer already ships these components, so nothing is downloaded. || Search PDF text | When enabled, PDF files are converted to text (via the bundled Xpdf `pdftotext`) and the extracted text is searched like any other file's contents. Off by default because extraction is slower than reading text files. It runs on a background queue that does not block or slow the normal file scan; matches appear in the results panel as each PDF is processed. Only the embedded text layer is read — scanned/image-only PDFs (pages that are just pictures) yield no text. The toggle's default comes from **Settings ▸ Path and File Type Filters ▸ Search PDF text**. |
+| Search image text (OCR) | When enabled, image files (PNG, JPG, BMP, GIF, TIFF, WEBP) are run through OCR and the recognized text is searched like any other file's contents. Off by default because OCR is slower than reading text files. OCR runs on a background queue that does not block the normal file scan; matches appear as each image is processed. As discovery identifies image/PDF candidates, those documents are included once in the same overall progress denominator. Once extraction is the visible tail, the label combines both views — for example **95% [OCR: 11,113 / 104,000 images]** (then PDF text if needed) — and the tooltip/status show the same queue count, so a large OCR tail never looks frozen. The OCR engine, recognition quality, and this toggle's default come from the **Settings ▸ OCR** tab (see below). The first search that uses OCR checks for the engine's one-time components **before** the search starts: if they are missing, Yagu asks once, then downloads them while showing a progress dialog with elapsed time, and begins the search only when they are ready (confirmed by an **OCR components downloaded** message at the bottom of the window). Declining the download simply runs the search without OCR; if the download fails you can still choose **Search anyway**, which searches everything except text inside images. The OCR-bundled edition of the installer already ships these components, so nothing is downloaded. |
+| Search PDF text | When enabled, PDF files are converted to text (via the bundled Xpdf `pdftotext`) and the extracted text is searched like any other file's contents. Off by default because extraction is slower than reading text files. It runs on a background queue that does not block or slow the normal file scan; matches appear in the results panel as each PDF is processed. Only the embedded text layer is read — scanned/image-only PDFs (pages that are just pictures) yield no text. The toggle's default comes from **Settings ▸ Path and File Type Filters ▸ Search PDF text**. |
 | Use content index | When enabled, this search uses the opt-in persistent content index to skip files that cannot contain a match, then verifies the rest live — an accelerator that never changes results. It mirrors **Settings ▸ Indexing ▸ Use the index for searches by default** and requires content indexing to be enabled there; it is independent of the image/PDF/archive toggles. Acceleration applies to raw text and, when **Search binary** is on, bounded printable-ASCII runs in binary files. Case-sensitive or ASCII case-insensitive queries can accelerate; non-ASCII case-insensitive, unsupported-regex, oversized/unsupported binary, and unindexed files transparently live-scan. Equivalent to the CLI `--use-index` / `--no-index` flags. |
 
 Before the first scan of each detected cloud-backed drive in an app session, Yagu warns that the provider may download files or metadata on demand, consuming network bandwidth and local disk. **Search cloud drive** continues; **Cancel** is the safe default. Known online-only placeholders remain skipped unless the corresponding toggle is enabled, but the provider ultimately controls hydration.
@@ -353,10 +358,10 @@ Below the toolbar is a filter bar:
 | Open in Editor | Opens the file in your configured external editor at the first match line. |
 | Open containing folder | Opens the directory in Windows Explorer. |
 | Copy Full Path | Copies the file's full path to clipboard. |
-| Copy Selected File Paths | Copies paths of all checked files. |
-| Copy Selected Files With Content | Copies file paths and their matched content. |
-| Save Selected File Paths… | Saves checked file paths to a text file. |
-| Save Selected Files With Content… | Saves checked files with matched content to a text file. |
+| Copy Selected File Paths | Copies paths of all checked files. Hidden when nothing is checked, since **Copy Full Path** above already covers the right-clicked file. |
+| Copy Files With Content | Copies file paths and their matched content. Reads *Copy Selected Files With Content* when files are checked; otherwise it acts on the right-clicked file. |
+| Save File Paths… | Saves file paths to a text file. Reads *Save Selected File Paths…* when files are checked; otherwise it acts on the right-clicked file. |
+| Save Files With Content… | Saves files with matched content to a text file. Reads *Save Selected Files With Content…* when files are checked; otherwise it acts on the right-clicked file. |
 | Open with default application | Opens the right-clicked file with its Windows default application. |
 | More options... | Opens the traditional Windows Explorer context menu for the right-clicked file. |
 
@@ -383,6 +388,17 @@ Right-clicking does not change the checked selection. The singular actions alway
 ## Preview Pane (Right Panel)
 
 The preview pane displays file content with highlighted matches, line numbers, and an active match overlay band showing the current match position.
+
+**Archives that matched on their file name only are not previewed.** A `.zip`, `.jar`, `.docx`, `.7z` (or any other archive extension) has no readable text, so rendering it would fill the pane with unreadable bytes; the pane shows a short note instead and the **Full File** button is disabled. This applies only when the file name was the sole match — an archive that also matched on its contents, or on contents only, previews its matches exactly as before, as do files found *inside* an archive with **Search archives** on.
+
+### Syntax Coloring in the Preview
+
+Preview text is colored by language — keywords, strings, comments, numbers, and preprocessor directives — using the same file-name/extension mapping as the built-in editor, so C/C++ (`.c`, `.cpp`, `.h`, `.hpp`, `.cu`, …), C#, Java, JavaScript/TypeScript, Python, JSON, XML/XAML, HTML, CSS, SQL, Markdown, Lua, PHP, INI/TOML, batch and more are all covered. It is on by default; turn it off with **Syntax coloring based on file type** under Settings → Display → Preview Viewer.
+
+Two things to know:
+
+- **Your matches always win.** Match highlighting is drawn on top of syntax coloring, so a hit inside a string or comment still shows in the match color and stays navigable. Context lines are colored in a dimmed variant so matched lines remain the visual focus.
+- **Coloring is line-local.** The preview shows individual lines, not the whole file, so a block comment or multi-line string is only recognized where its delimiters appear on the rendered line. Open the file in the built-in editor for whole-file coloring.
 
 ### Preview Toolbar
 
@@ -526,10 +542,6 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | --- | --- |
 | Context lines | Default match context lines stored in result rows. |
 | Preview context lines | Default match context lines shown in preview. |
-| Default include pattern mode | Whether default include patterns are interpreted as Glob or Regex. |
-| Default include patterns | Include filter applied by default on app start. Leave blank to include every eligible file. |
-| Default exclude pattern mode | Whether default exclude patterns are interpreted as Glob or Regex. |
-| Default exclude patterns | Exclude filter applied by default before content scanning. |
 | .gitignore vs Include filter precedence | Which side wins when a file is both matched by your Include filter and excluded by .gitignore (only relevant when Obey .gitignore is on). Choose **Ask me each time** (default), **.gitignore wins**, or **Include filter wins**. The precedence prompt's **Don't ask again** option also updates this setting. |
 | Default to Traditional search mode | Overrides the hardware-based startup mode. When your machine has a GPU/NPU that can run Semantic search, the search bar defaults to **Semantic**; check this to default to **Traditional** instead. Greyed out and unset on machines with no supported GPU/NPU (those always default to Traditional). You can still switch modes any time from the Search-button chevron. |
 
@@ -544,7 +556,6 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Default created date filter | Created-after and created-before defaults for Advanced Options. Blank = any date. |
 | Default modified date filter | Modified-after and modified-before defaults for Advanced Options. Blank = any date. |
 | Clear date defaults | Clears all saved created/modified date defaults. |
-| Search binary files | Includes files detected as binary by null bytes or magic bytes. Off by default. |
 | Search hidden files | Default for the Advanced Options ▸ Content options "Search hidden files" toggle. On by default — items with the Windows Hidden attribute are included. System files are always skipped by the file walker. |
 | Skip admin-protected paths | Excludes system directories that deny access when not elevated. |
 | Admin-protected path segments | Custom path segments to skip (semicolon-separated). |
@@ -651,7 +662,7 @@ Acceleration is deliberately conservative. Literal, whole-word/exact, and a safe
 5. Leave **Use the index for searches by default** on, or use Advanced Options ▸ **Use content index** per search. The CLI equivalents are `--use-index` and `--no-index`.
 6. Watch the status-bar indicator or **Manage Indexes** for health. After a search, the coverage summary and optional per-result **indexed** badge show whether acceleration was actually used.
 
-On the one-time first-run whole-drive setup, Yagu proposes editable, preselected per-root exclusions for `Windows`, both `Program Files` folders, `ProgramData\Package Cache`, `$Recycle.Bin`, `System Volume Information`, `Recovery`, and `PerfLogs`. These folders usually contain operating-system, installed-application, recovery, or filesystem metadata rather than personal search content. You can clear any suggestion before building or edit it later under **Settings ▸ Indexing ▸ Filters…**; a narrow root receives only exclusions for paths it actually contains.
+On the one-time first-run whole-drive setup, Yagu proposes editable, preselected per-root exclusions for `Windows`, both `Program Files` folders, `ProgramData\Package Cache`, `$Recycle.Bin`, `System Volume Information`, `Recovery`, and `PerfLogs`. These folders usually contain operating-system, installed-application, recovery, or filesystem metadata rather than personal search content. You can clear any suggestion before building or edit it later under **Settings ▸ Indexing ▸ Filters…**; a narrow root receives only exclusions for paths it actually contains. The same setup dialog includes **Index cloud-only files**, unchecked by default, so you can explicitly allow or prevent cloud downloads before the first build starts.
 
 During the first build, Yagu crawls the selected folder, reads eligible files, writes private staged index data, validates it, and then publishes the complete generation atomically. You can continue using Yagu; builds pause during searches by default. A first build has no resumable percentage checkpoint: cancelling or exiting discards that private partial build and the next full build starts over. Once a complete generation exists, it remains usable until a newer complete generation commits.
 
@@ -686,7 +697,7 @@ The completed-search summary is the authoritative answer for that run. A green o
 | --- | --- |
 | Content Index | The **master switch** (on by default; it never builds or deletes anything on its own — a folder is only indexed when you choose one) and whether searches **use the index by default**. The per-search Advanced Options ▸ Use content index toggle and the CLI `--use-index` / `--no-index` flags override the default only while the master is on. |
 | Query Acceleration | Per-family gates (literals, whole-word/exact, regex, multiline) can only narrow the safety gate. **Isolate index maintenance and candidate evaluation** (on by default) sends builds, refreshes, compaction, validation, PDF population, and legacy candidate-set evaluation to worker processes, but that legacy search path still opens/classifies the index inside Yagu and remains subject to the **in-process size limit** (default 2048 MB). **Use memory-mapped worker query sessions (format-v3)** is also on by default: it moves candidate/path classification and pruning into the long-lived worker, avoids opening the index in Yagu's process, and uses the **mapped worker query size limit** instead (default 30720 MB / 30 GB). It requires the complete set of format-v3 query files in every active layer; new builds create those additional files alongside each layer by default. If any required file is missing, or the worker/freshness check fails, Yagu safely reads files live. **Query worker parallelism** controls mapped candidate/path-classification lanes: 0 (default) selects a conservative logical-core-based degree, while 1–32 sets an explicit cap; the HDD safeguard overrides it to one lane for rotational roots. This group also includes query startup, candidate-percentage, and query-memory budgets. When the legacy path has a usable index within its in-process limit, Yagu warms it and shows **Indexing: preparing...**; starting a search can pause that warm-up. Case-insensitive searches accelerate when the query is ASCII; non-ASCII case-insensitive queries live-scan. |
-| Scope & Ingestion | What a build ingests: hidden files, reparse points, removable-drive policy, maximum file size, and build-time excluded globs/extensions. These are not per-search filters — an unindexed file simply live-scans. Case-sensitive directories and cloud-only files are fixed live-only policies. **Build a PDF-text index** can safely skip non-matching PDFs when extraction is repeatable and the PDF is unchanged. **Build an image-text index to prioritize likely OCR matches** runs the selected OCR engine during a full build and stores only positive trigram postings—not recognized text. Because OCR is non-deterministic, the image-text index never skips OCR for a nonmember, unknown, changed, or fingerprint-mismatched image; it only identifies prior positive candidates and can make large builds substantially longer. **Produce format-v3 query structures** writes additional memory-map-friendly query files for postings, paths/identities, and deletion markers alongside every raw-index layer. The optional **Use memory-mapped worker query sessions (format-v3)** mode reads those files in the isolated worker; the separate **Use format-v3 reader for in-process queries** switch controls only the in-process candidate reader. Benefits are bounded host memory, fewer large deserialization allocations, worker fault isolation, and efficient layered candidate/path classification. Costs are extra build time/I/O and disk space, cold mapped-page faults/IPC overhead, and an all-layers requirement: an older or missing-v3 layer causes safe fallback/live scan until rebuilt. Search results remain identical. |
+| Scope & Ingestion | What a build ingests: hidden files, cloud-only files, reparse points, removable-drive policy, maximum file size, and build-time excluded globs/extensions. These are not per-search filters — an unindexed file simply live-scans. **Index cloud-only files** is off by default; enabling it may download online-only content during builds, but Yagu opens a placeholder only while its sync provider is connected and leaves unavailable or timed-out files unindexed. Case-sensitive directories remain a fixed live-only policy. **Build a PDF-text index** can safely skip non-matching PDFs when extraction is repeatable and the PDF is unchanged. **Build an image-text index to prioritize likely OCR matches** runs the selected OCR engine during a full build and stores only positive trigram postings—not recognized text. Because OCR is non-deterministic, the image-text index never skips OCR for a nonmember, unknown, changed, or fingerprint-mismatched image; it only identifies prior positive candidates and can make large builds substantially longer. **Produce format-v3 query structures** writes additional memory-map-friendly query files for postings, paths/identities, and deletion markers alongside every raw-index layer. The optional **Use memory-mapped worker query sessions (format-v3)** mode reads those files in the isolated worker; the separate **Use format-v3 reader for in-process queries** switch controls only the in-process candidate reader. Benefits are bounded host memory, fewer large deserialization allocations, worker fault isolation, and efficient layered candidate/path classification. Costs are extra build time/I/O and disk space, cold mapped-page faults/IPC overhead, and an all-layers requirement: an older or missing-v3 layer causes safe fallback/live scan until rebuilt. Search results remain identical. |
 | Storage | The **Index data location** — where the indexes Yagu builds are saved on disk (this is not a folder whose contents get indexed; empty = `%LOCALAPPDATA%\Yagu\content-index`; custom folders must be a fixed local NTFS volume), disk quota, reserved free-space floor, **stop-when-full limit** (an index build in progress stops when the index drive reaches this used-space percentage — default 90%; staged full builds leave the previous complete index unchanged), retained generation count, and stale/quarantine cleanup ages. The bottom status bar's **Index:** value totals every file under this storage location, including all indexed folders, retained generations, PDF/v3 data, and temporary/recovery data. It refreshes off the UI thread at most once per minute and never remeasures during a search. Measurement honors the selected file-listing backend: **Everything SDK** uses one in-process size query, **es.exe** launches it with `-get-total-size`, **Managed** scans file metadata, and **Auto** tries SDK → es.exe → Managed. An unavailable/incomplete Everything result safely falls back to the managed scan. |
 | Build Scheduling | The build trigger(s), the **update mode**, and separate cadence controls. The trigger is a set of checkboxes — **When enabled**, **At startup**, **When the machine is idle**, **Continuously while Yagu is open**, and **On a schedule** — and you can turn on more than one at once. With none checked the trigger is **Manual**. **Idle delay** appears only when **When the machine is idle** is selected and controls how long Windows must report no keyboard or mouse input before maintenance runs. **Continuous interval** appears only when **Continuously while Yagu is open** is selected and controls the minimum time between maintenance passes; continuous maintenance evaluates immediately when Yagu opens. If both triggers are selected, both controls appear and whichever cadence becomes due first may start the next shared pass. Both paths still honor searches, battery policy, low disk space, and a user pause. Existing settings written before these controls were split keep their prior combined value for both controls. To keep existing indexes continuously current, select **Automatic incremental** (recommended) or **Automatic full rebuild when changed**; the default **Manual full rebuild** update mode only builds missing indexes, regardless of trigger. On a fresh first-launch drive opt-in, Yagu preselects **Continuously while Yagu is open**, a **five-minute continuous interval**, and **Automatic incremental**, while keeping the separate idle delay at its five-minute default and keeping pause-during-search and pause-on-battery enabled; the dialog still lets you override its trigger and update mode. On first load after this update, an existing one-minute continuous interval is migrated once to five minutes; selecting one minute afterward remains supported. The approved first-run profile also uses an 8,000,000-record foreground journal catch-up cap. This tab shows an inline warning if an automatic trigger is ever left on **Manual full rebuild**. **On a schedule** supports an interval (5–10080 minutes) or selected weekdays/time. Automatic incremental applies small append-only deltas and never silently escalates to an expensive full rebuild when journal continuity cannot be proven. The only compatibility exception is a one-time automatic rebuild of an older ReFS index whose stored file identities cannot match ReFS journal records; the old index remains active until the replacement commits, and searches safely live-scan changed content meanwhile. |
 | Build Resources | Build memory budget, **build worker parallelism**, serialized folder publication (fixed at one writer), pause-during-search, pause-on-battery, auto-repair, journal catch-up limits, and the incremental-maintenance controls. Build parallelism 0 (default) selects a conservative physical-core-based degree bounded by the memory budget; 1–32 sets an explicit cap. File reads/classification run concurrently, but outcomes are committed in crawl order so content IDs, spill boundaries, and transactional publication remain deterministic. The existing **Limit parallelism on HDDs** safeguard overrides it to one lane for rotational roots. The **post-build catch-up threshold** (default 30,000 journal changes; 0 = any non-empty interval) controls whether a full build immediately applies changes that arrived while its crawl was running. **Recover from a lost change journal by rescanning instead of rebuilding** (on by default) decides what happens when Windows' change journal can no longer prove what changed — its retention window is finite, so an index falls outside it if Yagu is closed for long enough, and a busy system drive can pass that point in only a few hours. Instead of rebuilding the whole folder, Yagu asks each file for its own last-change record and re-reads only the files that actually changed, which typically turns an hours-long rebuild into minutes. This is exact rather than a timestamp guess: the record is written by the file system on every change. A file whose record cannot be read is re-read or read live rather than trusted, and if any folder fails to enumerate the rescan is abandoned in favour of a full rebuild. An elevated session automatically uses a faster whole-volume sweep; Yagu never asks for elevation to do this. A rescan cannot help if the journal was reset or recreated, because that renumbers every record — only a rebuild is safe then. The remaining controls include **use file-system watcher hints** (off by default; a latency hint only — the change journal stays authoritative), the **maximum delta segments** (default 8), and the **compaction size threshold** (default 512 MB). (The opt-in **share aggregate content-index metrics** telemetry toggle lives on the **Privacy** tab.) |
@@ -694,7 +705,7 @@ The completed-search summary is the authoritative answer for that run. A green o
 | Status & Provenance | Whether the main window shows index coverage status, build notifications, and a per-result **indexed** badge on files the content index selected as candidates (files scanned live show no badge). At launch, the bottom status bar checks every ready local fixed drive plus every maintained index root, even when another folder is selected. Hovering opens an interactive status panel with one persistent row per drive/root. When automatic indexing is off, its status hover panel offers an inline schedule dropdown; choosing continuous, idle, startup, or the configured schedule saves immediately. If the update mode was still manual-only, Yagu also selects safe automatic incremental updates so existing indexes stay current. The compact label summarizes mixed health as an affected count (for example, **Index: 1 of 4 needs attention**) instead of making one unavailable drive sound like every index is unavailable; hover shows the exact root and reason. The lifecycle lines distinguish **Created**, **Active generation built**, and **Last incremental update**; paged full-build batches are never mislabeled as incremental updates. Journal-proven file changes that arrived after a recent update are shown as **healthy · recent changes pending** (with the exact count); those files safely scan live until the next incremental update and do not raise a health warning. Unprovable freshness, required rebuilds/builds, and storage problems do raise a warning. During a search, query planning also reports **Index: accelerating**, **partially accelerating**, or **available · not accelerated**. If another root needs attention while the active search is accelerated, both facts remain visible — for example, **Index: accelerating (1 of 4 needs attention)**. Each affected row has its own recovery buttons. A valid **leftover index** offers **Maintain** (register it without rebuilding, then let the next maintenance pass check or update it) and **Delete index**. A ready local fixed drive that is eligible but has no index offers **Add to index**, which opens the same add-folder dialog used by onboarding so you can choose the build trigger (manual, continuous, when idle, at startup, or on the configured schedule) and the update mode before the build starts; the trigger and update mode apply to every indexed folder, not only the one being added, and the row updates immediately once the drive is registered. A registered root whose index has never been built offers **Build now**. Irrecoverable freshness failures such as a change-journal gap/reset show **Rebuild** beside that root. A catch-up-limit stop shows the recommended **Increase limit & update** action plus **Rebuild** as an explicit fallback; the incremental action replays from the last committed checkpoint and does not imply that a full rebuild is required. **Indexing settings** is always available. Query-shape bypasses do not offer rebuild because rebuilding cannot make an ineligible or non-selective query acceleratable. The badge is candidacy provenance only — match content is always read live. |
 | Manage Indexes | There is **one list** of the **folders you index**. Add a folder, select it, and the **Build now** / **Rebuild** / **Validate** / **Repair index** / **Delete this index** buttons act on the selection — there is no second folder picker to confuse it with. Adding a folder also enrolls it in the automatic build schedule (Build Scheduling), so you don't manage a separate list. Select a folder and click **Filters…** to give it **per-folder build-time globs**: exclude globs add to the global excludes for that folder only, and include globs re-admit paths a broader exclude would drop (so you can, e.g., exclude `node_modules` globally but still index it under one specific folder). A folder with custom filters is marked in the list. Select a folder and click **Size…** to override how that one index manages its storage — its strategy (coalesce / compact / both / off), its size budget, and its auto-compaction cap — leaving any box at `-1` to inherit the global setting. This is how a whole-drive index can be limited to cheap coalescing while a small project folder still gets full compaction. A folder that has an index on disk but is **not** in your list — e.g. one you built, then removed with **Remove selected folder** (which unregisters it without deleting the index files) — still appears, marked **leftover index**: the index stays on disk and searches can still use it, but it won't be kept up to date automatically. An old-version, corrupt, or incomplete index shows its recovered folder and exact reason instead of the vague “unreadable or partial” label. The **Index storage** area is grouped into **Needs attention** and **Healthy indexes** cards: a green check means valid, a red X means broken/incompatible, and an orange warning identifies valid-but-unmaintained or redundant data. Counts are labeled **stored content records** because the cheap manifest-only total counts records in the base plus every active layer; replacements may temporarily exist in more than one layer until compaction, so this is not presented as a unique live-file count. Every card has direct action links beside its explanation — **Repair now**, **Delete stored index**, **Validate**, **Rebuild**, or **Add to maintained folders** as appropriate — so no distant-button hunt is required. Scope residue whose root cannot be recovered appears as **Unidentified index data** and can be deleted individually rather than requiring **Clear all indexes**. Also here: **Clear all indexes**, **Open storage folder**, **Remove selected folder** (unregister it), **Refresh stats**, and **Restore indexing defaults**. The health cards read manifests only, so they stay cheap even for a large index. Building runs in the background and can be cancelled; the previous index stays intact until a replacement is validated. |
 
-**Compaction estimates.** The bottom-right **Index** hover panel and each corresponding card under **Settings ▸ Indexing ▸ Index storage** show an estimated date/time for the next full automatic compaction. For compact-capable modes, an estimate above the routine size cap explains that streaming compaction becomes the automatic fallback if bounded coalescing cannot make progress. A clean-up-attention estimate is reserved for modes that forbid full compaction. Choose **More details** for the observed update-history size, layer count, recent growth rate, threshold, projected index size, automatic-compaction decision, and any smaller coalescing pass expected first. The estimate assumes recent file churn continues and Yagu remains open; coalescing, pausing, closing Yagu, or a burst of file changes can move it. If automatic compaction fails, the existing index remains active, health shows the failure without opening the clean-up dialog, and Yagu waits six hours before attempting the expensive fold again; a successful compaction or rebuild clears that warning.
+**Compaction estimates.** The bottom-right **Index** hover panel and each corresponding card under **Settings ▸ Indexing ▸ Index storage** show an estimated date/time for the next full automatic compaction. For compact-capable modes, an estimate above the routine size cap explains that streaming compaction becomes the automatic fallback if bounded coalescing cannot make progress. A clean-up-attention estimate is reserved for modes that forbid full compaction. Choose **More details** for the observed update-history size, layer count, recent growth rate, threshold, projected index size, automatic-compaction decision, and any smaller coalescing pass expected first. The estimate assumes recent file churn continues and Yagu remains open; coalescing, pausing, closing Yagu, or a burst of file changes can move it. If automatic compaction fails, the existing index remains active and health shows the failure — with **automatic compaction failed** highlighted in red in the **Indexing overview** — without opening the clean-up dialog. Yagu then waits six hours before attempting the expensive fold again, *unless* the failure was caused by a condition that can clear on its own: when compaction stopped to keep the index drive inside your configured free-space floor and stop-when-full limit, Yagu re-checks that drive every five minutes and restarts compaction as soon as the space is back, instead of waiting out the six-hour backoff. A successful compaction or rebuild clears the warning.
 
 **Index size history graph.** The graph button at the top-right of the bottom status bar's **Indexing overview** opens a line graph of physical index storage over time. **All disks** shows the collective size of every stored index; the filter can instead show the indexes whose source folders belong to one observed drive. Yagu records at most one snapshot per hour during its existing off-thread all-drive health refresh, so opening the graph never starts another index scan. **Settings ▸ Indexing ▸ Storage ▸ Index size history retention** controls the visible and retained window from 1–365 days (default 30). The bounded history is stored locally as `index-size-history.json` beside the index scopes and is never telemetry.
 
@@ -708,7 +719,7 @@ The completed-search summary is the authoritative answer for that run. A green o
 
 #### When settings require a rebuild
 
-**Rebuild advice after settings changes.** When saved settings change what a build stores, Yagu identifies the minimal maintained-folder set and offers an explicit staged rebuild. This applies to the index data location, maximum indexed file size, hidden-file and reparse-point policies, global build-time excluded globs/extensions, per-folder filters, newly added/broadened roots, and enabling PDF-text, image-text, or format-v3 build output. Enabling additive output recommends a rebuild; disabling it applies immediately and does not require one. Query-family switches, query budgets/parallelism, scheduling, build resources, journal limits, compaction thresholds, retention/cleanup, telemetry, and status/provenance settings do **not** trigger rebuild advice because they change how existing indexes are used or maintained, not their stored meaning. The prompt is advisory—search correctness is preserved by live-scan/fallback before rebuilding—and rebuilding several roots is always an explicit, cancellable choice.
+**Rebuild advice after settings changes.** When saved settings change what a build stores, Yagu identifies the minimal maintained-folder set and offers an explicit staged rebuild. This applies to the index data location, maximum indexed file size, hidden-file, cloud-only-file, and reparse-point policies, global build-time excluded globs/extensions, per-folder filters, newly added/broadened roots, and enabling PDF-text, image-text, or format-v3 build output. Enabling additive output recommends a rebuild; disabling it applies immediately and does not require one. Query-family switches, query budgets/parallelism, scheduling, build resources, journal limits, compaction thresholds, retention/cleanup, telemetry, and status/provenance settings do **not** trigger rebuild advice because they change how existing indexes are used or maintained, not their stored meaning. The prompt is advisory—search correctness is preserved by live-scan/fallback before rebuilding—and rebuilding several roots is always an explicit, cancellable choice.
 
 If indexing is already active when you accept that recommendation, the primary action says **Stop and rebuild now**. Yagu cancels and drains the current tracked operation first, discards its incomplete staged full-build data, obtains a fresh cancellation token, and then starts the replacement. The previous complete index remains active until the replacement commits. If the running operation does not stop within a minute, nothing is rebuilt and the tab says so, so a wedged operation can never leave the rebuild half-started.
 
@@ -770,6 +781,23 @@ Upgrade note: earlier versions ignored a literal absolute path in the build filt
 
 The CLI exposes the same lifecycle through `--build-index`, `--rebuild-index`, `--index-status`, `--compact-index`, `--validate-index`, `--delete-index`, `--clear-indexes`, root/filter commands, and `--index-config`; see **Content Index (CLI)** below.
 
+### MCP Server Tab
+
+Configures the Model Context Protocol server that lets an AI assistant drive Yagu. In stdio mode the client starts the server; the optional HTTP sign-in task can start it independently. This tab controls **what a connected assistant may reach** and registers the configuration that grants it. See [MCP Server (AI Client Integration)](#mcp-server-ai-client-integration) for the full walkthrough.
+
+| Group | What It Controls |
+| --- | --- |
+| Server | Shows where the server is installed and a one-line summary of what is currently granted. Tells you if this copy of Yagu does not include the server. |
+| Allowed Folders | The folders an assistant may search, read, and write inside. Empty by default, and there is deliberately no "all drives" option — a server started with no folder authorizes nothing and refuses to run. |
+| Capabilities | One switch per power: read files, search, touch online-only cloud files, write reports and sessions, preview replacements, manage content indexes, rebuild or unregister indexes. Read and search are on by default; everything else is off. A separate **Let it actually rewrite files** switch, also off, is what allows a previewed edit to be applied. |
+| Response Limits | Ceilings for a single response — largest match line, context line, and path (in UTF-8 bytes), context lines per match, records per response, whole response bytes, concurrent calls per server, and the matches collected for an export or saved session. Each field shows its supported range. |
+| Background Jobs | Ceilings for work that outlives a single tool call: jobs running at once, finished jobs kept for polling, characters kept from a job result, and three timeouts — ordinary call, index maintenance, and model-backed call. Each field shows its supported range. |
+| Loopback HTTP | For clients that connect to a URL instead of launching the server: enable, port, start-at-sign-in, and regenerate token. Bound to loopback only. |
+| Connect a Client | **Install** / **Reinstall** / **Remove** per client, which merge Yagu's entry into that client's configuration without disturbing anything else — plus the ready-made JSON and a **Copy configuration** button if you would rather do it yourself. A disabled button explains itself on hover: no allowed folder yet, no server installed, or no Yagu entry to remove. |
+| Restore MCP defaults | Resets everything on the tab, including **clearing the allowed folders** — which leaves the server authorizing nothing until you add one back. |
+
+Saving settings refreshes detected, already-installed client entries. **Restart the client's MCP server after saving** so its folders, capabilities, concurrency, export ceiling, and job limits take effect. If you copied configuration manually to another location, re-copy or merge it yourself. An enabled HTTP sign-in task is also re-registered and its server restarted; check the displayed status for failures. Only the per-call byte, context-line, and record budgets are read afresh from saved settings on every call.
+
 ### Performance Tab
 
 | Setting | What It Controls |
@@ -799,6 +827,7 @@ The CLI exposes the same lifecycle through `--build-index`, `--rebuild-index`, `
 | Highlighted match text | Color of the matched substring inside each result-list match line. |
 | Preview layout | Default layout: Concatenated or Multi-highlight. |
 | Word wrap | Default word-wrap state in preview. |
+| Syntax coloring based on file type | Colors preview text (keywords, strings, comments, etc.) based on the file's name or extension, using the same language mapping as the built-in editor (on by default). Match highlighting always takes precedence. |
 | Preview text font family | Typeface used by preview pane line text and line-number gutters. |
 | Preview text font size | Base size used by preview pane line text and line-number gutters. |
 | Selected preview content background | Background for the active preview section body. |
@@ -1200,7 +1229,7 @@ Access via the Preview toolbar's **Export Report** button, or right-click a file
 | Feature | How to Access | Output |
 | --- | --- | --- |
 | Copy selected file paths | Right-click file group → Copy Selected File Paths | Clipboard: one path per line |
-| Copy files with content | Right-click → Copy Selected Files With Content | Clipboard: paths + matched lines |
+| Copy files with content | Right-click → Copy Files With Content | Clipboard: paths + matched lines |
 | Save file paths to file | Right-click → Save Selected File Paths… | Text file |
 | Save files with content | Right-click → Save Selected Files With Content… | Text file |
 ---
@@ -1432,6 +1461,68 @@ These are skipped automatically when input is redirected (piped/automated runs),
 | `PATTERN` (positional) or `--pattern <pat>` | Search pattern (literal by default). |
 | `--todos` | Shorthand for a whole-word regex over `TODO`, `FIXME`, `HACK`, `BUG`, `XXX`, `NOTE`, `OPTIMIZE`, `REVIEW` (implies `--regex`, case-sensitive). Supplies the pattern, so no positional `PATTERN` is needed. |
 | `--calc "<expr>"` | Evaluate a math expression (`"2+2"`, `"sqrt(9)*4"`, `"15% of 340"`) or a unit conversion (`"5 km to miles"`, `"72 f to c"`), print the answer, and exit — no search is run. |
+| `--read <path>` | Print a bounded window of one file and exit — the CLI counterpart of the GUI preview pane. Encoding is detected from the byte-order mark, falling back to UTF-8; bytes that are not valid in the detected encoding are rendered as `�` rather than failing the read. Refused when `--confine-to` is active and the path resolves outside the allowed folders. |
+| `--lines <first>-<last>` | The 1-based inclusive window `--read` prints. Accepts `10-20`, `500-` (open-ended) and `7` (a single line). Omit it for the whole file, bounded by the output budget; a supplied value that does not parse is an error rather than a silent whole-file read. |
+| `--replace-commit <id>` | Apply the edits a previous `--replace --dry-run` recorded, identified by the `commitId` that run printed. Never re-runs the pattern: it replays exactly the recorded spans, and only after proving each file is byte-for-byte what the preview saw, so a file changed in between is refused rather than rewritten. A file whose bytes would not survive a decode/encode round-trip in its own encoding is refused too. The batch is all-or-nothing and rolls back on any failure. Requires replacement writes to be enabled in **Settings ▸ MCP Server**; the preview expires after 15 minutes. |
+
+### Machine and Automation Options
+
+These make a CLI run deterministic and safe to drive from a script, an editor task, or another program.
+
+| Flag | Description |
+| --- | --- |
+| `--output <grep\|json>` | Output format (default `grep`). `json` emits one JSON envelope per line (NDJSON) on stdout for **every** command — search, `--read`, `--calc`, `--load-session` and the index commands. Implies `--non-interactive`. |
+| `--request-id <id>` | Correlation id stamped on every record. Generated when omitted. |
+| `--non-interactive` | Never prompt on the console. Suppresses the first-run setup prompts, the Everything offer, index-coverage prompts, the OCR download question and the AI model check, so an automated caller is never blocked waiting for an answer. |
+| `--settings-source <src>` | Which settings file to use: `global` (the per-user profile settings) or `file:<path>`. Without this, Yagu resolves a `.yagu.json` from the **current working directory** first, so a tool-launched run can silently inherit workspace defaults. |
+| `--mcp-config` | Print the client configuration for Yagu's [MCP server](#mcp-server-ai-client-integration) and exit. Needs no `--cli`. See [From the command line](#from-the-command-line) below. |
+
+#### JSON output format
+
+Every line is one self-describing record:
+
+```json
+{"schemaVersion":1,"type":"match","sequence":2,"requestId":"a10b…","data":{"path":"C:\\repo\\a.cs","line":12,"column":4,"length":3,"text":"…"}}
+{"schemaVersion":1,"type":"summary","sequence":3,"requestId":"a10b…","data":{"returnedRecords":1,"truncated":false,"totalKnown":false,"exitCode":0,"outcome":"success"}}
+```
+
+| Record type | Meaning |
+| --- | --- |
+| `match` | One search hit: path, line, column, length, matched text, optional context and cross-line span. |
+| `result` | A non-search payload record — a `--read` line, a `--calc` answer, an index status or an indexed root. |
+| `plan` | How a natural-language query was interpreted. Emitted **before** the results of the same run. |
+| `progress` | A throttled scan heartbeat (files, bytes, matches, percent). |
+| `warning` | A non-fatal condition: a file-lister fallback, memory pressure, a semantic-plan caveat. |
+| `diagnostic` | Environment facts, including which settings file the run actually resolved. |
+| `error` | The terminal failure, with a stable `code` and the exit code. |
+| `summary` | Always last: `returnedRecords`, `truncated`, `totalKnown`, `exitCode` and `outcome`. |
+
+Each invocation returns **one bounded page**. `totalKnown` is always `false`: a fresh scan has no stable
+global total, so there is no cross-call offset paging to duplicate or skip results. Every variable-length
+field is bounded independently in UTF-8 bytes; when a value is shortened the record carries a `truncated`
+object naming the field and its original size, so complete text is always distinguishable from trimmed text.
+
+A match line can be shortened for a second, earlier reason: the search engine itself trims long lines to
+the **Line truncation length** setting before the record is built, marking the cut with an ellipsis. That
+happens before any byte budget applies, so those records carry `"engineTruncatedText": true` instead of a
+`truncated` entry — the original length is not known at that point. Raise **Settings ▸ Performance ▸ Line
+truncation length** if you need more of a long line returned.
+
+#### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success — results were produced. |
+| `1` | No results. This is a **success** outcome: the command ran correctly and matched nothing. |
+| `2` | Invalid input. |
+| `3` | Partial failure — some work succeeded, output is incomplete. |
+| `4` | Busy — a conflicting exclusive operation holds the resource. |
+| `70` | Internal failure. |
+| `130` | Cancelled. |
+
+The index-management commands keep their own published exit codes (`2` invalid arguments, `3` unsupported
+scope, `4` cancelled, `5` build failure, `6` already running). Under `--output json` the summary record
+reports both that code (`indexExitCode`) and the mapped protocol `outcome`.
 
 ### Matching Options
 
@@ -1448,6 +1539,7 @@ These are skipped automatically when input is redirected (piped/automated runs),
 | `-U`, `--multiline` | Match across lines: run the pattern over the whole file so a match can span line breaks (ripgrep `-U`). Reads whole files; slower/heavier — pair with a narrow scope. |
 | `--no-multiline` | Match within single lines (default). |
 | `--multiline-dotall` | With `--multiline`, the dot (`.`) also matches newlines (`(?s)`). |
+| `--no-multiline-dotall` | The dot (`.`) stops at newlines (default). |
 | `--max-multiline-bytes <size>` | Skip files larger than this in multiline mode (default: 50MB; accepts e.g. `20MB`, `1GB`). |
 | `--multiline-engine <e>` | Native multiline backend: `regex` (default) or `grep`. Both give identical results — a performance knob (implies `--multiline`). |
 
@@ -1504,6 +1596,7 @@ in `settings.json`. See [Advanced: per-model generation parameters](#advanced-pe
 | --- | --- |
 | `-g`, `--glob <glob>` | Include files matching GLOB (repeatable). |
 | `--exclude-glob <glob>` | Exclude files matching GLOB (repeatable). |
+| `--confine-to <path>` | Only emit, export, save, read, or rewrite results that resolve inside PATH once links are followed (repeatable). A junction inside the searched folder can otherwise place a file that really lives elsewhere into a report, a saved session, or a replacement. Filtering of emitted matches applies to `--output json`; plain text output is not filtered. `--read` is refused outright when its target resolves outside PATH. The MCP server passes this for every allowed folder. |
 | `--include-regex` / `--include-glob` | Interpret include patterns as regex or glob. |
 | `--exclude-regex` / `--exclude-glob-mode` | Interpret exclude patterns as regex or glob. |
 | `--min-filesize <size>` | Skip files smaller than SIZE (e.g. `1M`, `10K`). |
@@ -1547,6 +1640,8 @@ in `settings.json`. See [Advanced: per-model generation parameters](#advanced-pe
 | --- | --- |
 | `--hidden` (aliases `--search-hidden`) | Include files/folders carrying the Windows Hidden attribute (default; falls back to the **Search hidden files** setting). |
 | `--no-hidden` (aliases `--no-search-hidden`) | Exclude hidden files/folders. System files are always skipped by the file walker regardless of this flag. |
+| `--online-only` (aliases `--search-online-only`) | Search cloud files that are online-only placeholders. The provider (OneDrive, Dropbox, …) downloads each one on access, so a wide scope can pull a lot of data. Falls back to the **Search online-only cloud files** setting. |
+| `--no-online-only` (aliases `--no-search-online-only`) | Skip online-only placeholders so a search never triggers a cloud download (default). |
 | `--image-text` (aliases `--search-image-text`, `--ocr`) | OCR image files and search the recognized text. Off by default; falls back to the **Search image text (OCR)** setting. Images are processed on a background queue so the normal file scan is not blocked. |
 | `--no-image-text` (aliases `--no-search-image-text`, `--no-ocr`) | Do not OCR images (default). |
 | `--ocr-engine <name>` | OCR engine for `--image-text`: `paddle` (PaddleSharp) or `tesseract`. Default `paddle` on x64/Arm64, `tesseract` on x86 (PaddleOCR's runtime is x64-only). |
@@ -1581,12 +1676,11 @@ The content index is an **opt-in, offline accelerator** that prunes the candidat
 | `--delete-index <path>` | Delete the index for one scope. |
 | `--clear-indexes` | Delete all local content-index data. |
 | `--index-config` | Print every persisted Indexing setting and its value. |
-| `--index-config <key>=<value>` | Set an Indexing setting (repeatable; validated exactly like the Settings tab — unknown keys or invalid values fail without saving any change). Build-output changes print the affected roots and exact `--rebuild-index` commands. Examples: `--index-config IndexPostBuildCatchUpThresholdChanges=30000` and `--index-config IndexContinuousIntervalMinutes=1`. |
+| `--index-config <key>=<value>` | Set an Indexing setting (repeatable; validated exactly like the Settings tab — unknown keys or invalid values fail without saving any change). Build-output changes print the affected roots and exact `--rebuild-index` commands. Examples: `--index-config IndexIncludeCloudOnlyFiles=true`, `--index-config IndexPostBuildCatchUpThresholdChanges=30000`, and `--index-config IndexContinuousIntervalMinutes=1`. |
 | `--index-config reset` | Restore all Indexing settings to their defaults. If reset changes build output, prints rebuild recommendations without starting work automatically. |
 | `--index-list-roots` | List the folders registered for content indexing (your **Folders you index** list). |
 | `--index-add-root <path>` | Register a folder for content indexing. A covered child is not added; a broader new root consolidates narrower registrations. A newly maintained root prints its build/rebuild command. |
-| `--index-remove-root <path>` | Unregister a folder from content indexing. |
-| `--index-set-root-filter <path> [--root-include <globs>] [--root-exclude <globs>]` | Set **per-folder** build-time globs for one root. Exclude globs add to the global excludes; include globs re-admit paths a broader exclude drops (e.g. index `node_modules` under just this folder while excluding it globally). Omit both globs to clear. A semantic change prints the affected root's rebuild command. |
+| `--index-remove-root <path>` | Unregister a folder from content indexing. || `--index-set-root-filter <path> [--root-include <globs>] [--root-exclude <globs>]` | Set **per-folder** build-time globs for one root. Exclude globs add to the global excludes; include globs re-admit paths a broader exclude drops (e.g. index `node_modules` under just this folder while excluding it globally). Omit both globs to clear. A semantic change prints the affected root's rebuild command. |
 | `--index-set-root-size <path> [--root-size-mode <mode>] [--root-size-budget-mb <n>] [--root-auto-compaction-cap-mb <n>]` | Set **per-folder** size management for one index. `<path>` must already be a registered indexed folder (see `--index-list-roots`); anything else is rejected rather than saved where you could never see it again. `<mode>` is `Off`, `Coalesce`, `Compact`, or `CoalesceThenCompact` — an unrecognized mode or a non-numeric size is reported and ignored instead of quietly applying a different value. Use `-1` for either numeric value to inherit the global setting, `0` for "no limit"/"no cap". At its size budget Yagu reclaims what it safely can and then pauses that index's updates instead of letting it grow; searches still return every match, because files the index no longer covers are read live. |
 | `--index-clear-root-size <path>` | Remove one index's size override so it follows the global settings again. Says so plainly when there was no override to remove. |
 | `--index-clear-root-filter <path>` | Remove a folder's per-folder glob overrides and print its rebuild command when maintained. |
@@ -1617,6 +1711,12 @@ Search and replace text across all matched files directly from the command line.
 | `--replace-no-backup` | Do not create `.yagubak` backup files before replacing. |
 
 By default, each file is backed up to `{filename}.yagubak` before writing (numbered backups if one already exists). The replacement respects the `--case-sensitive` / `--ignore-case` flag for matching.
+
+`--replace` always rewrites *file contents*, so it cannot be combined with a file-name-only search. A bare wildcard query under `--search-mode filenames` (for example `--search-mode filenames "*.txt"`) selects files by name and carries no content pattern, so Yagu refuses the run instead of rewriting those files. Pass the content pattern you actually want to replace and narrow the file set with `--include` instead:
+
+```
+Yagu.exe --cli --directory src --include "*.txt" "oldFunction" --replace "newFunction" --dry-run
+```
 
 **Example — dry run:**
 
@@ -1713,6 +1813,213 @@ If `.yagu.json` exists in the current working directory, it is used as the base 
 
 ---
 
+## MCP Server (AI Client Integration)
+
+Yagu can act as a **Model Context Protocol (MCP) server**, so an AI assistant — VS Code, Visual Studio, GitHub Copilot CLI, or Claude Desktop — can run Yagu searches, read bounded windows of files, preview replacements, and manage content indexes for you, instead of you translating the request into Advanced Options by hand.
+
+By default, the client starts the server itself and talks to it over standard input and output (**stdio**), with no listening port or token. Optional [loopback HTTP](#loopback-http-optional) serves clients on this PC using a bearer token; it does not expose Yagu to other machines. Search and file operations run `Yagu.exe --cli` in [machine mode](#machine-and-automation-options), using the same engine as the GUI and CLI within the MCP grant and response limits.
+
+### How an assistant chooses Yagu
+
+MCP has no deterministic phrase-based trigger: the connected assistant decides whether to call a tool from the server instructions and tool descriptions it receives. Yagu identifies itself there as the Windows filesystem-search tool for explicit requests to find or list files by name, path, extension, or text inside files, especially across a broad root or outside the current workspace. Targeted code-symbol and implementation lookup stays with the client's normal code-navigation tools.
+
+The guidance also maps intent to search options: *contains*, *in it*, *inside*, *mentions*, *text*, and *string* mean file-content search; *named*, *filename*, *extension*, paths, and globs mean filename search. A *string* or *substring* request disables whole-word matching. For requests such as *all files containing X*, the assistant sets `maxMatchesPerFile=1`, so repeated occurrences in one file cannot consume the bounded result page. These instructions strongly improve tool selection, but the client model still owns the final call; saying *use Yagu* remains an explicit override.
+
+> **The MCP server is an optional install.** It is unchecked in the installer, because it adds about 107 MB and is of no use unless you connect an AI client. If **Settings ▸ MCP Server** reports that this copy of Yagu does not include it, re-run the installer and tick **Install the MCP server**.
+
+### Setting it up
+
+> **On first launch after installing it,** Yagu offers a one-time **Set up the MCP server** prompt. It lists folders you already use so you can tick several at once (with **Browse…** for anything else), and carries the same per-client **Install** / **Remove** buttons as the settings tab — so a client can be connected without opening Settings at all. Choosing **Not now** dismisses it for good; everything remains available under **Settings ▸ MCP Server**.
+
+1. Open **Settings ▸ MCP Server**.
+2. Under **Allowed Folders**, add at least one folder. Until you do, the server authorizes nothing and refuses to run — there is deliberately no "search everything" default. The per-client **Install** buttons stay disabled until then; hover one to see why.
+3. Under **Capabilities**, turn on only the powers you want to hand over. Read and search are on by default; everything else is off. **Save** your settings so per-call limits and the replacement-write switch are persisted.
+4. Under **Connect a Client**, press **Install** next to your client. Yagu merges its entry into that client's configuration file — it never replaces the file, so other servers, comments, and settings Yagu does not recognize are kept. **Remove** takes out only Yagu's entry. If the file cannot be parsed, Yagu leaves it untouched and says so rather than "repairing" it. (With [loopback HTTP](#loopback-http-optional) enabled, VS Code and Visual Studio get a URL entry instead of a stdio one.)
+5. Restart the client. Yagu's tools should appear in its tool list.
+
+Prefer to do it by hand? The same panel shows the exact JSON to merge, with a **Copy configuration** button, and the table below says where each client keeps it.
+
+| Client | Configuration file |
+| --- | --- |
+| VS Code | `%APPDATA%\Code\User\mcp.json` (Insiders and non-default profiles are detected; when several exist Yagu uses the most recently changed one and says which) |
+| Visual Studio | `%USERPROFILE%\.mcp.json` |
+| Copilot CLI | `%USERPROFILE%\.copilot\mcp-config.json` |
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` |
+
+For stdio, the entry **is** the grant: the server takes its allowed folders, capabilities, concurrency, export ceiling, and job limits from the command line the client launches. Saving settings refreshes detected, already-installed entries; **restart the client's MCP server to use the updated grant**. Manually copied entries elsewhere must be updated separately. For HTTP, the grant belongs to the running server's startup command, not the client's URL entry. Per-call byte, context-line, and record budgets, and the replacement-write switch, are read from saved settings on each CLI call.
+
+### Loopback HTTP (optional)
+
+Most clients start the server themselves and talk to it over standard input and output, which needs no port and no token. A client that instead connects to a URL needs **Settings ▸ MCP Server ▸ Loopback HTTP**.
+
+| Control | What it does |
+| --- | --- |
+| Serve over loopback HTTP | Enables HTTP configuration and URL entries for supported clients. It does not start a listener by itself; enable the sign-in task below or start the server manually. The listener binds only to `127.0.0.1` **and** `::1`. |
+| Loopback port | 1024–65535; default 8377. If another program already holds the port, the server will not start — pick another. |
+| Start it when I sign in | Registers a per-user scheduled task and starts or restarts the HTTP server now, then starts it at future sign-ins whether or not Yagu is open. It runs **as you**, never as SYSTEM. Check the displayed status if registration or restart fails. Uninstalling Yagu removes the task. |
+| Regenerate token | Issues a new token. Clients holding the old one are refused once the server restarts. |
+
+When HTTP and start-at-sign-in are enabled, saving changes re-registers the task and attempts to restart its server with the updated grant. If restart fails, the running server can retain its old folders and capabilities; check the displayed status before assuming access has been revoked. A manually started HTTP server must be restarted with updated arguments separately.
+
+**Connecting a client to the URL.** With loopback HTTP enabled, **Install** writes an HTTP entry for **VS Code and Visual Studio** instead of a stdio one, pointing at `http://127.0.0.1:<port>`. The token is *referenced*, never written into the file:
+
+```json
+"headers": { "Authorization": "Bearer ${input:yagu-mcp-token}" }
+```
+
+Yagu also adds the matching `inputs` definition, so the client prompts you once and keeps the value in its own secret storage. Paste in the token from `%LOCALAPPDATA%\Yagu\mcp\http-token` when asked. **Remove** takes out the entry and that definition together, and leaves any other `inputs` you have alone.
+
+Two consequences worth knowing:
+
+- **Copilot CLI and Claude Desktop stay on stdio even when HTTP is on.** Copilot CLI's file is read directly by the VS Code Agent Host, which does not expand `${input:...}` and would send that literal text as the token; Claude Desktop's configuration file has no HTTP entry shape at all. Both work fine over stdio, which needs no token.
+- **A VS Code HTTP entry is not forwarded to the Agent Host.** VS Code does not forward servers that require interactive input, so an HTTP-configured Yagu is available in ordinary chat but not in Agent Host sessions. If you want Yagu everywhere, leave loopback HTTP off and use the stdio entry.
+
+**How the token is handled.** It is stored in your profile at `%LOCALAPPDATA%\Yagu\mcp\http-token` and is never shown on screen, put on a command line, or written to a log — a command line is readable by every process on the machine, so a token there is a token you have published. Requests are authenticated with `Authorization: Bearer`, compared in constant time. A request that carries a browser `Origin` is refused unless that origin is itself loopback, which stops a web page you happen to be visiting from driving your local index.
+
+This protects the endpoint from *other user accounts* and from the browser. It does not isolate you from software already running as you — such a program could read the token file, and could equally read every file the server would read for it.
+
+### From the command line
+
+`--mcp-config` prints the same JSON as the **Copy configuration** button, so you can wire up a client from a script. It needs no `--cli`:
+
+```
+Yagu.exe --mcp-config [--mcp-client vscode|vs|copilot-cli|claude]
+```
+
+| Behavior | Detail |
+| --- | --- |
+| Client | `vscode` by default. `vs`, `copilot-cli`, and `claude` select the others. |
+| Output | The JSON goes to **stdout** and all guidance to **stderr**, so `Yagu.exe --mcp-config > mcp.json` writes a clean file. |
+| Settings | Always the per-user profile settings, never a `.yagu.json` from the current folder — an MCP grant belongs to you, not to whichever workspace your shell happens to be in. |
+| Exit code | `0` normally; `2` when no allowed folder is configured or when `--mcp-client` names an unknown client. Both invalid-input cases leave stdout empty. A settings-read failure returns `70`. |
+
+Add and save an allowed folder before running this command. A no-folder configuration is refused before any JSON is printed. Redirect to a new temporary file and check the exit code before merging it into an existing client configuration; shell redirection can create or truncate a file even when the command fails.
+
+The rest of the tab has command-line equivalents too:
+
+| Command | What it does |
+| --- | --- |
+| `--mcp-install <client\|all>` | Merges Yagu's entry into that client's configuration. Never overwrites the file. |
+| `--mcp-remove <client\|all>` | Removes Yagu's entry, and only Yagu's entry. |
+| `--mcp-status` | Prints folders, capabilities, transport, sign-in task, and which clients have Yagu installed. |
+| `--mcp-regenerate-token` | Issues a new loopback HTTP token. Never prints it. |
+| `--mcp-autostart <on\|off>` | Registers or removes the sign-in task for the HTTP server, and saves the matching setting so the Settings tab and the scheduled task cannot disagree. |
+
+For example, after saving your allowed folders:
+
+```powershell
+Yagu.exe --mcp-status
+Yagu.exe --mcp-install vscode
+Yagu.exe --mcp-config --mcp-client copilot-cli
+Yagu.exe --mcp-remove vscode
+```
+
+These commands also need no `--cli` and use profile settings. Installation requires the optional server component and at least one allowed folder; `all` targets every supported client.
+
+### What the assistant can do
+
+| Tool | What it does |
+| --- | --- |
+| `yagu_search` | Searches names, paths, or file contents inside one allowed folder. The folder is required on every call; `maxMatchesPerFile=1` returns at most one occurrence from each matching file. |
+| `yagu_search_natural_language_start` | Starts a natural-language ([AI](#semantic-search-local-ai)) search as a background job, because loading the local model can take from several seconds to a couple of minutes. |
+| `yagu_read_file` | Returns a bounded window of lines from one file, with the encoding detected the same way the preview pane detects it. |
+| `yagu_calc` | Evaluates a math expression or unit conversion. It touches no files, so it needs no folder and no capability. |
+| `yagu_replace_preview` | Returns a bounded diff plus attempted/changed/unchanged/skipped/failed counts for a find-and-replace. **It never writes.** |
+| `yagu_replace_commit` | Applies the edits a preview recorded — only when you have enabled writes. See [Letting an assistant edit files](#letting-an-assistant-edit-files). |
+| `yagu_export_report`, `yagu_save_session`, `yagu_load_session` | Writes an export report or a session file, or reopens one. |
+| `yagu_index_status`, `yagu_index_roots` | Reports content-index health and which folders are indexed. Both need the index-maintenance capability. |
+| `yagu_index_add_root`, `yagu_index_remove_root` | Enrolls a folder for indexing, or unregisters it. Removal additionally requires the destructive-index capability; it does not delete stored index data. |
+| `yagu_index_build_start`, `yagu_index_compact_start`, `yagu_index_validate_start` | Starts a build, a compaction, or a validation as a background job. `yagu_index_build_start` with `rebuild=true` additionally requires the destructive-index capability. |
+| `yagu_job_status`, `yagu_job_list`, `yagu_job_cancel` | Follows or cancels the background jobs above. |
+
+Anything long-running is a **job** rather than a blocking call: the assistant starts it, polls its status, and can cancel it. If the client gave up waiting on a blocking call instead, a half-finished index build or a loaded AI model would be left with no way to observe or stop it.
+
+### What it cannot reach
+
+Every request passes through one authorization decision, and every check **fails closed** — if a path cannot be resolved, the answer is no.
+
+- **An explicit folder is required for every search.** Yagu's CLI treats an omitted directory as "search every drive", so a tool that simply forwarded its arguments would hand over the whole machine by omission.
+- **Paths are checked on the way out, too.** A result — or a session file stored inside an allowed folder — can reference matches from anywhere, so returned paths are re-checked and anything outside is withheld and counted.
+- **Links are followed to their real target.** A junction or symlink part-way through a path is resolved before the decision, so a link inside an allowed folder cannot be used to step outside it.
+- **Device paths, alternate data streams, and relative paths are refused**, as are sibling-prefix look-alikes (`C:\FooBar` is not inside `C:\Foo`).
+- **A write destination is judged by the folder it would land in**, not by the path text.
+- **The server has no privileges of its own.** It runs as you, so anything Windows will not let you read stays unreadable through it.
+
+| Capability | What granting it allows |
+| --- | --- |
+| Read files | Return a window of a file inside an allowed folder. |
+| Search | Search inside an allowed folder, including natural-language search. |
+| Touch online-only cloud files | Let a search open cloud placeholders, which forces the provider to download them. Off by default — it can be slow and metered. |
+| Write reports and sessions | Export a report or save a session into an allowed folder. |
+| Preview replacements | Use `yagu_replace_preview`. On its own this grants a preview only; writing is a separate switch. |
+| Manage content indexes | Report status and registered roots, build, validate, and compact an index, and enroll an allowed folder. Rebuild and unregister also need the destructive-index capability below. |
+| Rebuild or unregister indexes | The UI label for `DestructiveIndexOps`. Alongside Manage content indexes, permits `rebuild=true` and unregistering a folder. Unregistering leaves stored index data intact. There is currently no MCP tool for `--delete-index` or `--clear-indexes`; those remain GUI/CLI operations. |
+
+### Letting an assistant edit files
+
+**Off by default.** Turning on **Settings ▸ MCP Server ▸ Let it actually rewrite files** is the decision, and it is yours. An assistant confirming its own request is not a safeguard: the same model that chose to edit your files would be setting the flag, which defends against an accidental default but not against a confidently wrong plan or a prompt-injection attack hidden in a file it just read.
+
+With it on, editing is two steps, and the second one cannot drift from the first:
+
+1. `yagu_replace_preview` shows the diff and records the **exact edits** — every offset, length, and replacement — together with a checksum of each file. It returns a `commitId`.
+2. `yagu_replace_commit` replays precisely those edits. **It never re-runs the search pattern**, because a pattern re-applied at write time is a different operation from the one you reviewed: if a file changed in between, a broad pattern can rewrite lines nobody looked at.
+
+What that buys you:
+
+| Guarantee | How |
+| --- | --- |
+| A file that changed is refused, not rewritten | Each file's checksum, size, and timestamp must still match the preview, and the content that gets edited is the same read that was verified. |
+| All of the batch, or none of it | Every file is checked **before the first one is written**. If any has changed, nothing is written at all. If a write then fails, every file already written in that batch is rolled back from its backup. |
+| A copy of the original | A `.yagubak` file is written beside each edited file. |
+| No stale approvals | A `commitId` is single-use and expires after 15 minutes. |
+| Nothing outside your folders | The paths are re-checked against your allowed folders at commit time, not just at preview. |
+| Encoding preserved | A UTF-16 file stays UTF-16; committing never quietly converts a file. |
+| The write is atomic | The new content is written beside the file and swapped in, so a crash leaves either the old file or the new one — never a truncated one. |
+
+### Response limits
+
+Each call returns **one bounded page**, and there is no way to ask for "page 2": every call is a fresh scan, so a numeric offset into a result set that no longer exists would silently duplicate or skip matches. The response reports how many records it returned and whether it was truncated.
+
+Sizes are bounded in **UTF-8 bytes per field** rather than by a match count, because one minified line, OCR block, or archive member name can be larger than a whole sensible response on its own. When a value is shortened the record says which field was cut and how large the original was, so an assistant can always tell trimmed text from complete text. All of these ceilings are configurable under **Settings ▸ MCP Server ▸ Response Limits**, and each shows its supported range.
+
+| Setting | Default | Supported range |
+| --- | --- | --- |
+| Match line | 8 KiB | 256 bytes to 1 MiB |
+| Context line | 4 KiB | 256 bytes to 1 MiB |
+| Path | 4 KiB | 260 bytes to 32 KiB |
+| Context lines per match | 20 | 0 to 200 |
+| Records per response | 500 | 1 to 1,000,000 |
+| Whole response | 4 MiB | 64 KiB to 256 MiB |
+| Concurrent calls per server | 4 | 1 to 32 |
+| Matches collected for an export or session | 50,000 | 1 to 1,000,000 |
+
+The first six budgets are read on each CLI call. Concurrency and the export/session ceiling are server startup settings: restart after updating the installed configuration. Per-field budgets may be reduced further to fit the whole-response budget. Ordinary `yagu_search` defaults to whole-word matching; pass `wholeWord=false` for substring matching. For a list of files containing a query, pass `maxMatchesPerFile=1` so each file contributes at most one match. Its requested match count is also bounded by the export/session ceiling and the per-response budgets.
+
+Exporting a report and saving a session are the exception to "one bounded page": they hold every match in memory before writing, so they have their own ceiling — **Matches collected for an export or session**, 50,000 by default. An assistant that asks for more is given the ceiling instead, and told that the file may be incomplete, so a partial export is never mistaken for a complete one.
+
+### Background jobs
+
+Index maintenance and natural-language search outlive a single tool call, so the server hands back a **job id** and the assistant polls `yagu_job_status`. Everything bounding that machinery is configurable under **Settings ▸ MCP Server ▸ Background Jobs**:
+
+| Setting | Default | What it bounds |
+| --- | --- | --- |
+| Jobs running at once | 8 | Further starts are **refused rather than queued**, so an assistant that keeps launching index builds cannot accumulate unbounded work. |
+| Finished jobs kept for polling | 64 | Oldest dropped first. A job whose result has been dropped reports that it is unknown rather than reporting success with nothing in it. |
+| Characters kept from a job result | 262,144 | A longer result is truncated and says so, because the whole result is held in memory until the job is dropped. |
+| Ordinary call timeout | 120 s | Searches, reads and index status. On expiry the child process **and its whole worker tree** are killed, so nothing is left running. |
+| Index maintenance timeout | 240 min | Building an index over a large tree on a spinning disk can legitimately take hours; on an NVMe drive the same work is minutes. |
+| Model-backed call timeout | 30 min | Natural-language search loads the on-device model per call, and measured runs ranged from about nine seconds to many minutes on the same model. Also bounds how long one such call waits behind another. |
+
+These are wall-clock ceilings, not expected durations. They are settings rather than fixed values because the right number depends on your disks and hardware, which the server cannot know. Like the folders and capabilities, they are server startup settings: save to refresh installed client entries, then restart the server. Re-copy manually maintained configurations separately.
+
+### Current limits
+
+- **Loopback only.** Even with HTTP enabled the endpoint is bound to this machine; there is no remote access, and no OAuth.
+- **One bounded page per call**, with no cross-call paging — see above.
+- **Archives are read-only.** A replacement never edits inside a ZIP, DOCX, or similar container.
+
+---
+
 ## GUI Command-Line Arguments
 
 When launching Yagu in GUI mode (without `--cli`):
@@ -1799,12 +2106,17 @@ without running the search.
 
 ### Content with exclusions → "X but not Y"
 
-| Natural-language query | What Yagu resolves it to |
-| --- | --- |
-| `c# files that contain 'async' but not 'Legacy'` | `*.cs`, content `async`, filtering out matches containing `Legacy`. |
-| `python files containing import but not test` | `*.py`, content `import`, excluding `test`. |
-| `config files containing password but not example` | Config types, content `password`, excluding `example`. |
-| `log files with error but without warning` | `*.log`, content `error`, excluding `warning`. |
+The precise forms **`files that mention X but not Y`** and **`files that contain X but not Y`** are resolved without model inference. X and Y are literal terms; quote either term if it contains spaces or punctuation. Optional `find`, `show`, or `list` prefixes are accepted.
+
+`files that mention invoice but not refund` searches the current folder and rejects an entire file if `refund` appears anywhere, before or after `invoice`, including on a different line. It returns **one whole-file match per accepted text file**, not one match for every occurrence of `invoice`. Case sensitivity follows the search setting.
+
+This uses the existing **Multiline** search with a file-anchored .NET regex and its managed fallback. It reads each candidate file in full, respects the configured multiline file-size ceiling (50 MiB by default) and per-file regex timeout, and skips extracted PDF, OCR, and archive contents. Use a narrow folder and the normal include filters for large collections. The equivalent traditional CLI command is:
+
+```powershell
+Yagu.exe --cli --directory "C:\docs" --regex --multiline --search-mode content --pattern '\A(?![\s\S]*refund)(?=[\s\S]*invoice)[\s\S]+\z'
+```
+
+Other content-negation forms, including mixed file-type or filename-negation requests outside this grammar, still carry an unsupported-content-exclusion warning. A filename exclude glob is not a substitute for checking file contents; do not treat such a partial interpretation as satisfying the negation.
 
 ### Dates & recency
 
