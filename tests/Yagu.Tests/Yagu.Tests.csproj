@@ -28,6 +28,23 @@
   </ItemGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Compile Include="..\..\src\Yagu.McpServer\HttpTransportSecurity.cs" Link="Source\McpServer\HttpTransportSecurity.cs" />
+  </ItemGroup>
+
+  <!--
+    Builds the MCP server so McpServerSmokeTests always has a binary to drive. ReferenceOutputAssembly
+    is false: the test assembly must not link it, only guarantee it exists. Without this the smoke gate
+    would silently skip on a machine that had not separately built the server, which defeats the point
+    of having it untagged and CI-gating.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Yagu.McpServer\Yagu.McpServer.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="10.0.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -62,6 +79,7 @@
     <Compile Include="..\..\src\Yagu\Models\ResultGroupHeaderRow.cs" Link="Source\Models\ResultGroupHeaderRow.cs" />
     <Compile Include="..\..\src\Yagu\Models\ResultRowProjection.cs" Link="Source\Models\ResultRowProjection.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\BinaryDetector.cs" Link="Source\Helpers\BinaryDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\ArchivePreviewSupport.cs" Link="Source\Helpers\ArchivePreviewSupport.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\ResultRowAccessibleName.cs" Link="Source\Helpers\ResultRowAccessibleName.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\AppUpdateModeChoices.cs" Link="Source\Helpers\AppUpdateModeChoices.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SearchActivityVisuals.cs" Link="Source\Helpers\SearchActivityVisuals.cs" />
@@ -96,6 +114,8 @@
     <Compile Include="..\..\src\vendor\TextControlBox-WinUI\TextControlBox\Core\ScrollOffsetMath.cs" Link="Source\Vendor\ScrollOffsetMath.cs" />
     <Compile Include="..\..\src\vendor\TextControlBox-WinUI\TextControlBox\Core\EditorZoomMath.cs" Link="Source\Vendor\EditorZoomMath.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SyntaxHighlighter.cs" Link="Source\Helpers\SyntaxHighlighter.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\PreviewSyntaxHighlighter.cs" Link="Source\Helpers\PreviewSyntaxHighlighter.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\PreviewSyntaxPalette.cs" Link="Source\Helpers\PreviewSyntaxPalette.cs" />
     <Compile Include="..\..\src\Yagu\Services\FileLister.cs" Link="Source\Services\FileLister.cs" />
     <Compile Include="..\..\src\Yagu\Services\EverythingAssetPaths.cs" Link="Source\Services\EverythingAssetPaths.cs" />
     <Compile Include="..\..\src\Yagu\Services\EverythingIndexCoverageDetector.cs" Link="Source\Services\EverythingIndexCoverageDetector.cs" />
@@ -108,6 +128,7 @@
     <Compile Include="..\..\src\Yagu\Services\ResourceUsageMonitor.cs" Link="Source\Services\ResourceUsageMonitor.cs" />
     <Compile Include="..\..\src\Yagu\Services\SearchRegexFactory.cs" Link="Source\Services\SearchRegexFactory.cs" />
     <Compile Include="..\..\src\Yagu\Services\SearchQueryParser.cs" Link="Source\Services\SearchQueryParser.cs" />
+    <Compile Include="..\..\src\Yagu\Services\FileNameGlobQuery.cs" Link="Source\Services\FileNameGlobQuery.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\Trigram.cs" Link="Source\Services\Index\Trigram.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\ContentRepresentation.cs" Link="Source\Services\Index\ContentRepresentation.cs" />
     <Compile Include="..\..\src\Yagu\Services\Index\TrigramExpression.cs" Link="Source\Services\Index\TrigramExpression.cs" />
@@ -276,6 +297,31 @@
     <Compile Include="..\..\src\Yagu\Services\ResultStoreTempLocationService.cs" Link="Source\Services\ResultStoreTempLocationService.cs" />
     <Compile Include="..\..\src\Yagu\Services\ResultStore.cs" Link="Source\Services\ResultStore.cs" />
     <Compile Include="..\..\src\Yagu\Services\SessionFileService.cs" Link="Source\Services\SessionFileService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Cli\CliLineRange.cs" Link="Source\Services\Cli\CliLineRange.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Cli\CliSettingsSource.cs" Link="Source\Services\Cli\CliSettingsSource.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Cli\MachineOutput\CliExitCode.cs" Link="Source\Services\Cli\MachineOutput\CliExitCode.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Cli\MachineOutput\MachineOutputMode.cs" Link="Source\Services\Cli\MachineOutput\MachineOutputMode.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Cli\MachineOutput\MachineProtocol.cs" Link="Source\Services\Cli\MachineOutput\MachineProtocol.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Cli\MachineOutput\MachineOutputReader.cs" Link="Source\Services\Cli\MachineOutput\MachineOutputReader.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Cli\MachineOutput\MachineOutputBudget.cs" Link="Source\Services\Cli\MachineOutput\MachineOutputBudget.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Cli\MachineOutput\MachineOutputWriter.cs" Link="Source\Services\Cli\MachineOutput\MachineOutputWriter.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Mcp\McpCapability.cs" Link="Source\Services\Mcp\McpCapability.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Mcp\McpAuthorizationPolicy.cs" Link="Source\Services\Mcp\McpAuthorizationPolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Mcp\McpConfigSnippetBuilder.cs" Link="Source\Services\Mcp\McpConfigSnippetBuilder.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Mcp\McpTokenStore.cs" Link="Source\Services\Mcp\McpTokenStore.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Mcp\McpLoopbackOrigin.cs" Link="Source\Services\Mcp\McpLoopbackOrigin.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Mcp\McpClientRegistrar.cs" Link="Source\Services\Mcp\McpClientRegistrar.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Mcp\McpClientSetup.cs" Link="Source\Services\Mcp\McpClientSetup.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Mcp\McpLoginHelper.cs" Link="Source\Services\Mcp\McpLoginHelper.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Mcp\McpReplaceCommitPlan.cs" Link="Source\Services\Mcp\McpReplaceCommitPlan.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Mcp\PathConfinement.cs" Link="Source\Services\Mcp\PathConfinement.cs" />
+    <Compile Include="..\..\src\Yagu.McpServer\BridgeConcurrency.cs" Link="Source\McpServer\BridgeConcurrency.cs" />
+    <Compile Include="..\..\src\Yagu.McpServer\BridgeJobRegistry.cs" Link="Source\McpServer\BridgeJobRegistry.cs" />
+    <Compile Include="..\..\src\Yagu.McpServer\YaguMcpServerOptions.cs" Link="Source\McpServer\YaguMcpServerOptions.cs" />
+    <!-- The bridge owns every child-process safety property of the server (pipe draining, kill-on-
+         timeout, inherited stdout handles, protocol decoding), so it is driven for real against
+         Yagu.FakeCli rather than being left to source pins. -->
+    <Compile Include="..\..\src\Yagu.McpServer\YaguCliBridge.cs" Link="Source\McpServer\YaguCliBridge.cs" />
     <Compile Include="..\..\src\Yagu\Services\SessionFileDiscoveryService.cs" Link="Source\Services\SessionFileDiscoveryService.cs" />
     <Compile Include="..\..\src\Yagu\Services\DirectOutputSink.cs" Link="Source\Services\DirectOutputSink.cs" />
     <Compile Include="..\..\src\Yagu\Services\FileWatchDiagnostics.cs" Link="Source\Services\FileWatchDiagnostics.cs" />
@@ -316,6 +362,9 @@
     <Compile Include="..\..\src\Yagu\Services\Ai\FoundryModelUpdateChecker.cs" Link="Source\Services\Ai\FoundryModelUpdateChecker.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\SlowSemanticModelAdvisor.cs" Link="Source\Services\Ai\SlowSemanticModelAdvisor.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\SemanticQuerySalvage.cs" Link="Source\Services\Ai\SemanticQuerySalvage.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticWholeFileExclusion.cs" Link="Source\Services\Ai\SemanticWholeFileExclusion.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticFileTypes.cs" Link="Source\Services\Ai\SemanticFileTypes.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticSimpleQuery.cs" Link="Source\Services\Ai\SemanticSimpleQuery.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\SemanticPlanApplier.cs" Link="Source\Services\Ai\SemanticPlanApplier.cs" />    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticPlanJsonExtractor.cs" Link="Source\Services\Ai\SemanticPlanJsonExtractor.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\SemanticCapabilityDetector.cs" Link="Source\Services\Ai\SemanticCapabilityDetector.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\SemanticPromptText.cs" Link="Source\Services\Ai\SemanticPromptText.cs" />
@@ -372,6 +421,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Yagu.FakeIndexWorker\Yagu.FakeIndexWorker.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Yagu.FakeCli\Yagu.FakeCli.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\Yagu.IndexWorker\Yagu.IndexWorker.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj" />
     <!-- SemanticPlanApplier (compiled into the test assembly) now uses vendored nChronic for

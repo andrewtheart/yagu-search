@@ -1,4 +1,6 @@
 using Yagu.Helpers;
+using Yagu.Models;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace Yagu.Tests;
@@ -9,6 +11,66 @@ namespace Yagu.Tests;
 /// </summary>
 public class MatchNavMathTests
 {
+    [Fact]
+    public void CountHighlightOccurrences_CountsEachSharedTextWindowOnce()
+    {
+        string text = string.Join(" ", Enumerable.Repeat("hit", 10_000));
+        var results = Enumerable.Range(0, 10_000).Select(index =>
+            new SearchResult("dense.txt", 1, text, index * 4, 3, [], [])).ToList();
+        int scans = 0;
+        var regex = new Regex("hit");
+
+        int count = MatchNavMath.CountHighlightOccurrencesCore(results, line => { scans++; return regex.Count(line); });
+
+        Assert.Equal(10_000, count);
+        Assert.Equal(1, scans);
+        Assert.Equal(count, MatchNavMath.CountHighlightOccurrences(results, regex));
+    }
+
+    [Fact]
+    public void CountHighlightOccurrences_PreservesEvictedAndTruncatedDenseMatches()
+    {
+        var results = Enumerable.Range(0, 8).Select(index =>
+            new SearchResult("dense.txt", 1, index == 0 ? "hit hit hit hit hit hit" : string.Empty,
+                0, 3, [], []) { SourceMatchStartColumn = index * 760 }).ToList();
+
+        Assert.Equal(8, MatchNavMath.CountHighlightOccurrences(results, new Regex("hit")));
+        results[0].MatchLine = string.Empty;
+        Assert.Equal(8, MatchNavMath.CountHighlightOccurrences(results, new Regex("hit")));
+        Assert.Equal(8, MatchNavMath.CountHighlightOccurrences(results, null));
+    }
+
+    [Fact]
+    public void CountHighlightOccurrences_DeduplicatesCoordinatesButNotFilesOrLines()
+    {
+        SearchResult result = new("file.txt", 1, "hit", 4, 3, [], []);
+        SearchResult[] results = [result, result with { FilePath = "FILE.TXT" },
+            result with { FilePath = "other.txt" }, result with { LineNumber = 2 },
+            result with { LineNumber = 0 }];
+
+        Assert.Equal(3, MatchNavMath.CountHighlightOccurrences(results, new Regex("hit")));
+        Assert.Equal(0, MatchNavMath.CountHighlightOccurrences([], new Regex("hit")));
+    }
+
+    [Fact]
+    public void CountHighlightOccurrences_IncludesAllVisibleMatchesWithoutCountingTheLineTwice()
+    {
+        SearchResult first = new("file.txt", 1, "hit hit hit", 0, 3, [], []);
+        SearchResult second = new("file.txt", 1, "hit hit hit", 4, 3, [], []);
+
+        Assert.Equal(3, MatchNavMath.CountHighlightOccurrences([first, second], new Regex("hit")));
+    }
+
+    [Fact]
+    public void CountHighlightOccurrences_PreservesCrossLineSpansWithTheSameStart()
+    {
+        SearchResult first = new("file.txt", 1, "start", 0, 5, [], [])
+            { MatchEndLineNumber = 2, MatchEndColumn = 5 };
+        SearchResult second = first with { MatchEndLineNumber = 3 };
+
+        Assert.Equal(2, MatchNavMath.CountHighlightOccurrences([first, second], new Regex("start\\nend")));
+    }
+
     // ── FormatOccurrenceLabel ────────────────────────────────────────────────────
 
     [Fact]

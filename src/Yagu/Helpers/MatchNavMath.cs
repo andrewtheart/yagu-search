@@ -1,4 +1,6 @@
 using System;
+using System.Text.RegularExpressions;
+using Yagu.Models;
 
 namespace Yagu.Helpers;
 
@@ -11,6 +13,34 @@ namespace Yagu.Helpers;
 /// </summary>
 internal static class MatchNavMath
 {
+    internal static int CountHighlightOccurrences(IEnumerable<SearchResult> results, Regex? regex)
+        => CountHighlightOccurrencesCore(results, regex is null ? null : regex.Count);
+
+    internal static int CountHighlightOccurrencesCore(IEnumerable<SearchResult> results, Func<string, int>? countMatches)
+    {
+        int total = 0;
+        foreach (var file in results.Where(result => result.LineNumber > 0)
+                     .GroupBy(result => result.FilePath, StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var line in file.GroupBy(result => result.LineNumber))
+            {
+                int known = line.Select(result => (
+                    result.SourceMatchStartColumn, result.MatchLength,
+                    result.MatchEndLineNumber, result.MatchEndColumn)).Distinct().Count();
+                int visible = 0;
+                var windows = new HashSet<(int SourceStart, int Length)>();
+                foreach (var result in line)
+                {
+                    if (countMatches is not null && !string.IsNullOrEmpty(result.MatchLine)
+                        && windows.Add((result.SourceMatchStartColumn - result.MatchStartColumn, result.MatchLine.Length)))
+                        visible = Math.Max(visible, countMatches(result.MatchLine));
+                }
+                total += Math.Max(known, visible);
+            }
+        }
+        return total;
+    }
+
     /// <summary>
     /// Formats the global match-navigation label
     /// <c>"Occurrence {index+1}/{totalMatches} ({fileCount} file[s])"</c>.

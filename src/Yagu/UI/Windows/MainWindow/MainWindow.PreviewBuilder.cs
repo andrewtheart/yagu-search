@@ -701,6 +701,18 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
+    /// True when every result for a section is a file-name match on an archive container. Such a section has
+    /// no readable text — rendering it would dump the archive's raw bytes into the preview pane, so a note is
+    /// shown instead. <see cref="GetPreviewableResults(IEnumerable{SearchResult})"/> drops file-name rows
+    /// whenever content matches exist for the same file, so an archive that matched on both its name and its
+    /// contents (or on contents only) still renders its matches normally.
+    /// </summary>
+    private static bool IsFileNameOnlyArchiveSection(List<SearchResult> results)
+        => results.Count > 0
+            && results.All(result => result.LineNumber <= 0)
+            && ArchivePreviewSupport.IsArchiveContainerPath(results[0].FilePath);
+
+    /// <summary>
     /// Batch-read all file contents off the UI thread so the per-file loop only does
     /// XAML element construction (which must be on the UI thread) without interleaving I/O waits.
     /// </summary>
@@ -710,9 +722,16 @@ public sealed partial class MainWindow
         return await Task.Run(() =>
         {
             var result = new Dictionary<string, string[]?>(orderedFiles.Count, StringComparer.OrdinalIgnoreCase);
-            foreach (var (filePath, _) in orderedFiles)
+            foreach (var (filePath, results) in orderedFiles)
             {
                 if (result.ContainsKey(filePath)) continue;
+                // A file-name-only archive section renders a note instead of text — don't pay to read and
+                // decode the whole container just to throw it away.
+                if (IsFileNameOnlyArchiveSection(results))
+                {
+                    result[filePath] = null;
+                    continue;
+                }
                 try
                 {
                     result[filePath] = ReadAllLinesWithEncodingSync(filePath);
@@ -837,7 +856,7 @@ public sealed partial class MainWindow
             {
                 // Collapse sections beyond the first BulkExpandLimit during bulk loads.
                 bool expanded = !loadingAll || totalSectionsAdded < BulkExpandLimit;
-                var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results,
+                var (section, expander) = AddPreviewSection(filePath, FormatSelectedContentMatchDetail(results), results,
                     isExpanded: expanded, addToPanel: false);
 
                 string[]? allLines = null;
@@ -942,6 +961,14 @@ public sealed partial class MainWindow
         string[]? allLines, int previewLines, Regex? rx)
     {
         ResetPreviewShowMoreDiagnostics();
+        if (IsFileNameOnlyArchiveSection(results))
+        {
+            AddPreviewPlainNote(section, ArchivePreviewSupport.BuildFileNameOnlyArchivePreviewMessage(results[0].FilePath));
+            SyncGutterSpacer(section, new Thickness(0));
+            YaguLog.For("Preview").LogInformation("BuildConcatenatedSection: file-name-only archive match for '{File}', raw-byte preview suppressed", results[0].FilePath);
+            return;
+        }
+
         var buildSw = Stopwatch.StartNew();
         bool truncatePreviewLines = ViewModel.IsSearching
             ? ShouldTruncateOverflowPreviewLines()
@@ -1461,16 +1488,7 @@ public sealed partial class MainWindow
         }
         else if (isHighlight)
         {
-            // Approximation when we haven't read the file yet: count matches
-            // across one MatchLine per unique line number. MatchLine may be
-            // truncated (ShortPreview), so this can undercount on very long
-            // lines, but it's recomputed exactly when the section materializes.
-            var seen = new HashSet<int>();
-            foreach (var r in results)
-            {
-                if (seen.Add(r.LineNumber))
-                    total += CountRegexMatches(r.MatchLine, rx);
-            }
+            total = MatchNavMath.CountHighlightOccurrences(results, rx);
         }
         else
         {
@@ -1495,7 +1513,7 @@ public sealed partial class MainWindow
         // Lazy file read: bulk inserts skip the upfront read for collapsed
         // sections. Read the single file now, on demand.
         string[]? allLines = lazy.AllLines;
-        if (allLines is null)
+        if (allLines is null && !IsFileNameOnlyArchiveSection(lazy.Results))
         {
             try { allLines = ReadAllLinesWithEncodingSync(lazy.FilePath); }
             catch (Exception ex)
@@ -1894,10 +1912,17 @@ public sealed partial class MainWindow
 
         bool isImagePreview = IsImagePreviewPath(r.FilePath);
         bool isExtractedTextPreview = isImagePreview || IsPdfPreviewPath(r.FilePath);
+        // An archive that matched on its file name only has no readable text: reading it would dump the
+        // container's raw bytes as mojibake. Archives that also matched on content still preview normally.
+        bool isFileNameOnlyArchivePreview = ArchivePreviewSupport.IsFileNameOnlyArchivePreview(r.FilePath, r.LineNumber);
         // Extracted-text previews (image OCR / PDF text) are read-only — disable the "full file" editor entry.
-        FullFileButton.IsEnabled = !isExtractedTextPreview;
+        FullFileButton.IsEnabled = !isExtractedTextPreview && !isFileNameOnlyArchivePreview;
         string[]? allLines = null;
-        if (isExtractedTextPreview)
+        if (isFileNameOnlyArchivePreview)
+        {
+            HidePreviewImageThumbnail();
+        }
+        else if (isExtractedTextPreview)
         {
             // Images/PDFs are not text files: render their extracted text (OCR / pdftotext) instead of
             // the raw binary bytes. Images additionally show a thumbnail above the text.
@@ -1936,7 +1961,13 @@ public sealed partial class MainWindow
             ? null
             : BuildSearchHighlightRegex();
 
-        if (isExtractedTextPreview && (allLines is null || allLines.Length == 0))
+        if (isFileNameOnlyArchivePreview)
+        {
+            AddPreviewPlainNote(PreviewBlock, ArchivePreviewSupport.BuildFileNameOnlyArchivePreviewMessage(r.FilePath));
+            singleSw.Stop();
+            YaguLog.For("Preview").LogInformation("ShowSingleFilePreviewAsync complete: file-name-only archive match, raw-byte preview suppressed, elapsed={Elapsed}ms", singleSw.ElapsedMilliseconds);
+        }
+        else if (isExtractedTextPreview && (allLines is null || allLines.Length == 0))
         {
             AddPreviewPlainNote(PreviewBlock, isImagePreview
                 ? "No recognized text for this image. Turn on \u201CSearch image text\u201D and run a search to extract text."
@@ -2651,6 +2682,17 @@ public sealed partial class MainWindow
     private static int CountContentMatchResults(IEnumerable<SearchResult> results)
         => results.Count(result => result.LineNumber > 0);
 
+    private static string? FormatSelectedContentMatchDetail(IEnumerable<SearchResult> results)
+    {
+        int count = CountContentMatchResults(results);
+        return count switch
+        {
+            0 => null,
+            1 => "1 selected match",
+            _ => $"{count:N0} selected matches",
+        };
+    }
+
     /// <summary>
     /// Resolves the foreground brush for a preview file-drawer header text run. When the configured
     /// color is the (uncustomized) default, returns the theme's foreground brush so the header text
@@ -2889,6 +2931,7 @@ public sealed partial class MainWindow
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
             Content = new FontIcon { Glyph = "\uE711", FontSize = 12 },
         };
+        ApplyPreviewHeaderActionButtonStyle(dismissBtn);
         ToolTipService.SetToolTip(dismissBtn, "Remove from preview");
         if (sectionBlock is not null)
         {
@@ -3545,6 +3588,8 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
 
     private void ResetPreviewShowMoreDiagnostics()
     {
+        // A new preview build gets a fresh syntax-coloring run budget.
+        ResetPreviewSyntaxBudget();
         _previewShowMoreWindowCount = 0;
         _previewShowMoreMarkerCount = 0;
         _previewShowMorePrefixMarkerCount = 0;
@@ -3877,11 +3922,18 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
                 continue;
             }
 
-            if (!TryResolveMatchInParaBySourceColumn(para, sourceColumn, out int matchInPara, out _, out _))
-                return false;
+            if (!TryResolveMatchInParaBySourceColumn(para, sourceColumn, out int matchInPara, out int sourceStart, out _))
+                continue;
+
+            var runs = GetMatchRunsForParagraph(para);
+            if (sourceStart + runs[matchInPara].column != sourceColumn)
+                continue;
 
             int previousEntryCount = _matchParagraphs.Count;
             EnsureNavEntryForParagraphMatch(section, para, matchInPara);
+            if (!_matchParagraphs.Any(entry => ReferenceEquals(entry.block, section)
+                && ReferenceEquals(entry.para, para) && entry.matchInPara == matchInPara))
+                continue;
             addedEntry = _matchParagraphs.Count > previousEntryCount;
             ApplyMatchColorToParagraphMatch(para, matchInPara);
             return true;
@@ -4654,12 +4706,12 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
         if (truncationState is not null)
             truncationState.ContentInlineStart = para.Inlines.Count;
 
-        AddPreviewTextRuns(para, line, isMatchLine, rx, truncationState, matchOrdinalsToColor, forcedSpan);
+        AddPreviewTextRuns(para, line, isMatchLine, rx, truncationState, matchOrdinalsToColor, forcedSpan, ResolvePreviewSyntaxLanguage(r?.FilePath));
 
         return para;
     }
 
-    private void AddPreviewTextRuns(Paragraph para, string line, bool isMatchLine, Regex? rx, PreviewTruncatedLineState? truncationState, HashSet<int>? matchOrdinalsToColor = null, (int start, int end)? forcedSpan = null)
+    private void AddPreviewTextRuns(Paragraph para, string line, bool isMatchLine, Regex? rx, PreviewTruncatedLineState? truncationState, HashSet<int>? matchOrdinalsToColor = null, (int start, int end)? forcedSpan = null, EditorSyntaxLanguage? syntaxLanguage = null)
     {
         bool hasPrefixEllipsis = truncationState is not null
             && truncationState.SourceStart > 0
@@ -4682,14 +4734,19 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
             : null;
 
         if (end > start)
-            AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx, matchOrdinalsToColor, spanForThisText);
+            AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx, matchOrdinalsToColor, spanForThisText, syntaxLanguage);
 
         if (hasSuffixEllipsis)
             para.Inlines.Add(CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Suffix));
     }
 
-    private void AddPreviewTextSpanRuns(Paragraph para, string text, bool isMatchLine, Regex? rx, HashSet<int>? matchOrdinalsToColor = null, (int start, int end)? forcedSpan = null)
+    private void AddPreviewTextSpanRuns(Paragraph para, string text, bool isMatchLine, Regex? rx, HashSet<int>? matchOrdinalsToColor = null, (int start, int end)? forcedSpan = null, EditorSyntaxLanguage? syntaxLanguage = null)
     {
+        // Syntax coloring is computed once for the whole rendered text so token offsets stay valid
+        // no matter how the search matches later split it into runs.
+        var syntaxTokens = BuildPreviewSyntaxTokens(text, syntaxLanguage);
+        var baseBrush = isMatchLine ? _matchLineBrush : s_contextTextBrush;
+
         // Full-span (Phase 3) multiline highlighting: a cross-line pattern never matches within a
         // single rendered line, so rx.Matches(text) below finds nothing on the start/body/end lines
         // of the span. When the caller has already computed the exact column range to highlight on
@@ -4700,23 +4757,13 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
             int fe = Math.Clamp(forcedEnd, fs, text.Length);
             if (fe > fs)
             {
-                if (fs > 0)
-                {
-                    var pre = new Run { Text = text[..fs] };
-                    pre.Foreground = isMatchLine ? _matchLineBrush : s_contextTextBrush;
-                    para.Inlines.Add(pre);
-                }
+                AddPreviewSyntaxRuns(para, text, 0, fs, baseBrush, isMatchLine, syntaxTokens);
                 var spanHit = new Run { Text = text[fs..fe] };
                 s_previewSearchMatchRuns.AddOrUpdate(spanHit, new object());
                 spanHit.FontWeight = Microsoft.UI.Text.FontWeights.Bold;
                 spanHit.Foreground = _matchTextBrush;
                 para.Inlines.Add(spanHit);
-                if (fe < text.Length)
-                {
-                    var post = new Run { Text = text[fe..] };
-                    post.Foreground = isMatchLine ? _matchLineBrush : s_contextTextBrush;
-                    para.Inlines.Add(post);
-                }
+                AddPreviewSyntaxRuns(para, text, fe, text.Length, baseBrush, isMatchLine, syntaxTokens);
                 return;
             }
             // Empty forced span (clamped away) — fall through to the normal rendering below.
@@ -4731,13 +4778,7 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
             int matchOrdinal = 0;
             foreach (Match m in rx.Matches(text))
             {
-                if (m.Index > lastIdx)
-                {
-                    var before = new Run { Text = text[lastIdx..m.Index] };
-                    if (!isMatchLine) before.Foreground = s_contextTextBrush;
-                    else before.Foreground = _matchLineBrush;
-                    para.Inlines.Add(before);
-                }
+                AddPreviewSyntaxRuns(para, text, lastIdx, m.Index, baseBrush, isMatchLine, syntaxTokens);
                 var hit = new Run { Text = m.Value };
                 s_previewSearchMatchRuns.AddOrUpdate(hit, new object());
                 bool useMatchColor = isMatchLine && (matchOrdinalsToColor is null || matchOrdinalsToColor.Contains(matchOrdinal));
@@ -4759,19 +4800,16 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
                 matchOrdinal++;
             }
             if (lastIdx < text.Length)
-            {
-                var tail = new Run { Text = text[lastIdx..] };
-                if (!isMatchLine) tail.Foreground = s_contextTextBrush;
-                else tail.Foreground = _matchLineBrush;
-                para.Inlines.Add(tail);
-            }
+                AddPreviewSyntaxRuns(para, text, lastIdx, text.Length, baseBrush, isMatchLine, syntaxTokens);
         }
         else
         {
-            var plain = new Run { Text = text };
-            if (!isMatchLine) plain.Foreground = s_contextTextBrush;
-            else plain.Foreground = _matchLineBrush;
-            para.Inlines.Add(plain);
+            // An empty rendered segment still contributes an (empty) content inline, which the
+            // "Show all" rebuild path relies on when a revealed window collapses to nothing.
+            if (text.Length == 0)
+                para.Inlines.Add(new Run { Text = string.Empty, Foreground = baseBrush });
+            else
+                AddPreviewSyntaxRuns(para, text, 0, text.Length, baseBrush, isMatchLine, syntaxTokens);
         }
     }
 
@@ -5419,7 +5457,7 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
 
         var window = CreatePreviewLineWindow(state.SourceLine, state.SourceStart, state.SourceEnd);
         var matchOrdinalsToColor = BuildTargetColorOrdinals(state, window, window.Text, segmentDisplayStart: 0);
-        AddPreviewTextRuns(paragraph, window.Text, state.IsMatchLine, state.Regex, state, matchOrdinalsToColor);
+        AddPreviewTextRuns(paragraph, window.Text, state.IsMatchLine, state.Regex, state, matchOrdinalsToColor, forcedSpan: null, ResolvePreviewSyntaxLanguage(state.Result?.FilePath));
     }
 
     private void AddPreviewFullLineSegmentRuns(Paragraph paragraph, PreviewTruncatedLineState state)
@@ -5435,6 +5473,7 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
             paragraph.Inlines.Add(CreatePreviewShowMoreInline(paragraph, state, PreviewShowMoreEdge.Prefix));
 
         bool firstSegment = true;
+        var segmentSyntaxLanguage = ResolvePreviewSyntaxLanguage(state.Result?.FilePath);
         for (int index = windowStart; index < windowEnd; index += segmentLength)
         {
             if (!firstSegment)
@@ -5443,12 +5482,12 @@ YaguLog.For("Preview").LogDebug("LoadPreviewDocumentAsync: start file='{File}'",
             int length = Math.Min(segmentLength, windowEnd - index);
             string segmentText = state.SourceLine.Substring(index, length);
             var matchOrdinalsToColor = BuildTargetColorOrdinals(state, fullWindow, segmentText, segmentDisplayStart: index);
-            AddPreviewTextSpanRuns(paragraph, segmentText, state.IsMatchLine, state.Regex, matchOrdinalsToColor);
+            AddPreviewTextSpanRuns(paragraph, segmentText, state.IsMatchLine, state.Regex, matchOrdinalsToColor, forcedSpan: null, segmentSyntaxLanguage);
             firstSegment = false;
         }
 
         if (windowEnd <= windowStart)
-            AddPreviewTextSpanRuns(paragraph, string.Empty, state.IsMatchLine, state.Regex, BuildTargetColorOrdinals(state, fullWindow, string.Empty, segmentDisplayStart: windowStart));
+            AddPreviewTextSpanRuns(paragraph, string.Empty, state.IsMatchLine, state.Regex, BuildTargetColorOrdinals(state, fullWindow, string.Empty, segmentDisplayStart: windowStart), forcedSpan: null, segmentSyntaxLanguage);
 
         if (windowEnd < state.SourceLine.Length)
             paragraph.Inlines.Add(CreatePreviewShowMoreInline(paragraph, state, PreviewShowMoreEdge.Suffix));

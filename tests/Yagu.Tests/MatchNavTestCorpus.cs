@@ -165,7 +165,7 @@ internal static class MatchNavTestCorpus
                 UseRegex: false, ExactMatch: true, Multiline: false,
                 MatchSamples: [denseLiteral], ExpectedHighlightLength: denseLiteral.Length),
             new("regex-random-alternation-dense", regexPattern, MatchNavCorpusShape.DenseSingleLines,
-                FileCount: 4, ExpectedMatches: 32, MatchIterations: 24, MinimumScreenshots: 20, SearchWaitSeconds: 5,
+                FileCount: 4, ExpectedMatches: 32, MatchIterations: 31, MinimumScreenshots: 31, SearchWaitSeconds: 5,
                 UseRegex: true, ExactMatch: false, Multiline: false,
                 MatchSamples: [regexSampleA, regexSampleB], ExpectedHighlightLength: regexSampleA.Length),
             new("regex-with-exact-toggle-on", regexExactPattern, MatchNavCorpusShape.MixedSmallFiles,

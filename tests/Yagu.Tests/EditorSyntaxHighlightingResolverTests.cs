@@ -79,6 +79,33 @@ public sealed class EditorSyntaxHighlightingResolverTests
     }
 
     [Theory]
+    [InlineData("main.c")]
+    [InlineData("main.cpp")]
+    [InlineData("main.cc")]
+    [InlineData("main.cxx")]
+    [InlineData("main.c++")]
+    [InlineData("main.cp")]
+    [InlineData("header.h")]
+    [InlineData("header.hpp")]
+    [InlineData("header.hh")]
+    [InlineData("header.hxx")]
+    [InlineData("header.h++")]
+    [InlineData("impl.ipp")]
+    [InlineData("impl.inl")]
+    [InlineData("impl.tcc")]
+    [InlineData("mod.ixx")]
+    [InlineData("mod.cppm")]
+    [InlineData("mod.ccm")]
+    [InlineData("mod.cxxm")]
+    [InlineData("kernel.cu")]
+    [InlineData("kernel.cuh")]
+    [InlineData("View.mm")]
+    public void ResolveFromFileName_CAndCppFamilyExtensions_ResolveToCpp(string fileName)
+    {
+        Assert.Equal(EditorSyntaxLanguage.Cpp, EditorSyntaxHighlightingResolver.ResolveFromFileName(fileName));
+    }
+
+    [Theory]
     [InlineData("archive.bin")]
     [InlineData("Compiled.class")]
     public void ResolveFromFileName_BinaryExtensions_ReturnNull(string fileName)

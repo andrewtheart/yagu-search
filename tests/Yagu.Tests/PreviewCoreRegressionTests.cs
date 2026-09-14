@@ -404,8 +404,9 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("SizeChanged=\"OnTopExpandedPreviewLayoutSourceSizeChanged\"", previewPanel);
 
         string apply = ExtractMethodWindow(MainWindowSource, "ApplyTopExpandedPreviewLayout", 1800);
-        Assert.Contains("SplitPaneGrid.Margin = new Thickness(16, 10, 16, 4);", apply);
-        Assert.DoesNotContain("SplitPaneGrid.Margin = new Thickness(16, 10, 20, 4);", apply);
+        Assert.Contains(
+            "SplitPaneGrid.Margin = new Thickness(StackedCardHorizontalInset, 10, StackedCardHorizontalInset, 4);",
+            apply);
         Assert.Contains("ListenForTopExpandedPreviewLayoutSync();", apply);
 
         string sync = ExtractMethodWindow(MainWindowSource, "ListenForTopExpandedPreviewLayoutSync", 2200);
@@ -431,6 +432,69 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void StackedLeftColumnCards_ShareOneHorizontalInset_SoTheirEdgesLineUp()
+    {
+        // The search card (row 2) and the results/split-pane card (row 4) sit directly above one another,
+        // so any difference in horizontal inset renders as visibly unaligned card edges. This regressed
+        // once because the code-behind that re-assigns SplitPaneGrid.Margin on every layout switch was
+        // changed to 16 while the XAML — and every other stacked element — stayed at 10.
+        (double Left, double Right) searchCard = HorizontalInset(
+            ExtractXamlWindow("x:Name=\"SearchControlsBorder\"", 300), "Margin");
+        (double Left, double Right) splitPane = HorizontalInset(
+            ExtractXamlWindow("x:Name=\"SplitPaneGrid\"", 300), "Margin");
+        (double Left, double Right) statusPanel = HorizontalInset(
+            ExtractXamlWindow("x:Name=\"SearchStatusPanel\"", 300), "Padding");
+        (double Left, double Right) progressOverlay = HorizontalInset(
+            ExtractXamlWindow("x:Name=\"SearchProgressOverlay\"", 400), "Margin");
+
+        Assert.Equal(searchCard.Left, searchCard.Right);
+        Assert.Equal(searchCard, splitPane);
+        Assert.Equal(searchCard, statusPanel);
+        Assert.Equal(searchCard, progressOverlay);
+
+        // Every runtime re-assignment must reuse the shared constant, and it must agree with the XAML:
+        // ApplySplitLayout resets the split pane's margin on every mode switch, so a hard-coded number
+        // there silently overrides the aligned XAML value for the rest of the session.
+        Assert.Contains(
+            $"private const double StackedCardHorizontalInset = {searchCard.Left:0};",
+            MainWindowSource);
+        var assignments = System.Text.RegularExpressions.Regex.Matches(
+            MainWindowSource,
+            @"SplitPaneGrid\.Margin\s*=\s*new Thickness\(([^)]*)\);");
+        Assert.Equal(2, assignments.Count);
+        foreach (System.Text.RegularExpressions.Match assignment in assignments)
+        {
+            string[] parts = assignment.Groups[1].Value.Split(',', StringSplitOptions.TrimEntries);
+            Assert.Equal(4, parts.Length);
+            Assert.Equal("StackedCardHorizontalInset", parts[0]);
+            Assert.Equal("StackedCardHorizontalInset", parts[2]);
+        }
+        Assert.Equal(
+            assignments.Count,
+            System.Text.RegularExpressions.Regex.Count(MainWindowSource, @"SplitPaneGrid\.Margin\s*="));
+
+        // In PreviewTopExpanded the search card is pinned to the results width, so an equal inset is what
+        // makes both right edges land on the splitter too.
+        string update = ExtractMethodWindow(MainWindowSource, "UpdateTopExpandedPreviewMeasurements", 2600);
+        Assert.Contains("SearchControlsBorder.Width = drawerWidth;", update);
+        Assert.Contains("Math.Max(240, leftWidth)", update);
+    }
+
+    /// <summary>Reads the left/right components of a XAML Thickness attribute (1-, 2- or 4-value form).</summary>
+    private static (double Left, double Right) HorizontalInset(string element, string attribute)
+    {
+        System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(
+            element, attribute + "=\"([^\"]+)\"");
+        Assert.True(match.Success, $"{attribute} not found on: {element[..Math.Min(120, element.Length)]}");
+        double[] parts = match.Groups[1].Value
+            .Split(',', StringSplitOptions.TrimEntries)
+            .Select(part => double.Parse(part, System.Globalization.CultureInfo.InvariantCulture))
+            .ToArray();
+        Assert.Contains(parts.Length, new[] { 1, 2, 4 });
+        return parts.Length == 4 ? (parts[0], parts[2]) : (parts[0], parts[0]);
+    }
+
+    [Fact]
     public void PreviewPanel_HidesEmptyStateBeforePreviewContentRenders()
     {
         Assert.Contains("private bool _previewContentPending;", MainWindowSource);
@@ -444,7 +508,7 @@ public sealed class PreviewCoreRegressionTests
             "EnsurePreviewPanelVisible();",
             "await ShowSingleFilePreviewAsync(r, fullFile: false);");
 
-        string singlePreview = ExtractMethodWindow(MainWindowSource, "ShowSingleFilePreviewAsync", 5600);
+        string singlePreview = ExtractMethodWindow(MainWindowSource, "ShowSingleFilePreviewAsync", 6400);
         AssertContainsInOrder(singlePreview,
             "BeginPreviewContentUpdate();",
             "ShowPreviewBlockSurface();",
@@ -873,9 +937,17 @@ public sealed class PreviewCoreRegressionTests
             "button.Resources[\"ButtonBackgroundDisabled\"] = transparent;");
 
         string header = ExtractMethodWindow(MainWindowSource, "BuildPreviewSectionHeader", 12000);
-        Assert.Equal(7, System.Text.RegularExpressions.Regex.Matches(
+
+        // Every button in the header is styled, dismiss included; an unstyled one renders with the
+        // default grey Button chrome next to its bare siblings. Bump this with the button count.
+        Assert.Equal(8, System.Text.RegularExpressions.Regex.Matches(
             header,
             "ApplyPreviewHeaderActionButtonStyle\\(").Count);
+
+        AssertContainsInOrder(header,
+            "var dismissBtn = new Button",
+            "ApplyPreviewHeaderActionButtonStyle(dismissBtn);",
+            "ToolTipService.SetToolTip(dismissBtn, \"Remove from preview\");");
     }
 
     [Fact]
@@ -2700,6 +2772,12 @@ public sealed class PreviewCoreRegressionTests
             "<local:ResultListItemTemplateSelector x:Key=\"ResultListItemTemplateSelector\"",
             "GroupHeaderTemplate=\"{StaticResource ResultGroupHeaderTemplate}\"",
             "FileGroupTemplate=\"{StaticResource FileGroupResultTemplate}\"");
+        string fileGroupTemplate = ExtractXamlWindow("x:Key=\"FileGroupResultTemplate\"", 1800);
+        AssertContainsInOrder(fileGroupTemplate,
+            "<Grid Margin=\"-29,0,0,0\">",
+            "<Border Width=\"{x:Bind ResultGroupIndent, Mode=OneWay}\" />",
+            "<ContentControl Grid.Column=\"1\"",
+            "<Expander Grid.Column=\"1\"");
         AssertContainsInOrder(MainWindowXaml,
             "ItemsSource=\"{x:Bind ViewModel.ResultRows, Mode=OneWay}\"",
             "ItemTemplateSelector=\"{StaticResource ResultListItemTemplateSelector}\"");
@@ -2769,10 +2847,12 @@ public sealed class PreviewCoreRegressionTests
         string fileGroupResultTemplate = ExtractXamlWindow("<DataTemplate x:Key=\"FileGroupResultTemplate\"", 11000);
         AssertContainsInOrder(fileGroupResultTemplate,
             "<Grid Margin=\"-29,0,0,0\">",
-            "<ContentControl Content=\"{Binding}\"",
+            "<ContentControl Grid.Column=\"1\"",
+            "Content=\"{Binding}\"",
             "ContentTemplate=\"{StaticResource FileGroupHeaderTemplate}\"",
             "Visibility=\"{x:Bind IsFileNameOnlyMatch, Mode=OneWay}\"",
-            "<Expander AutomationProperties.AutomationId=\"FileGroupResultExpander\"",
+            "<Expander Grid.Column=\"1\"",
+            "AutomationProperties.AutomationId=\"FileGroupResultExpander\"",
             "Visibility=\"{x:Bind HasContentMatches, Mode=OneWay}\"");
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(
             fileGroupResultTemplate,
@@ -3064,7 +3144,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("Click=\"OnPreviewSelectedFiles\"", headerFlyout);
         Assert.Contains("Tag=\"{x:Bind FilePath}\"", headerFlyout);
 
-        string opening = ExtractMethodWindow(MainWindowSource, "OnFileHeaderContextMenuOpening", window: 2200);
+        string opening = ExtractMethodWindow(MainWindowSource, "OnFileHeaderContextMenuOpening", window: 3200);
         AssertContainsInOrder(opening,
             "var contextGroup = GetFileHeaderContextGroup(flyout)",
             "flyout.Items.OfType<MenuFlyoutItem>()",
@@ -3072,7 +3152,8 @@ public sealed class PreviewCoreRegressionTests
             "previewAllItem.Text = $\"Preview all selected ({checkedCount})\";",
             "previewAllItem.Tag = contextGroup;",
             "previewAllItem.Visibility = checkedCount > 1",
-            "int count = checkedCount > 0 ? checkedCount : 1;");
+            // Falls back to the single right-clicked file when nothing is checked.
+            "int count = hasChecked ? checkedCount : 1;");
         // The long selected file name is truncated so the "Preview <name>" item can't stretch the menu.
         Assert.Contains("singleItem.Text = $\"Preview {TruncateFileNameForPreviewMenu(fileName)}\";", opening);
 
@@ -3597,7 +3678,7 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(textRuns,
             "line.StartsWith(LineTruncator.Ellipsis, StringComparison.Ordinal)",
             "CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Prefix)",
-            "AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx, matchOrdinalsToColor, spanForThisText)",
+            "AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx, matchOrdinalsToColor, spanForThisText, syntaxLanguage)",
             "CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Suffix)");
 
         string inline = ExtractMethodWindow(previewBuilder, "CreatePreviewShowMoreInline", window: 2600);
@@ -3752,7 +3833,7 @@ public sealed class PreviewCoreRegressionTests
         // occurrence's coloring restriction so newly revealed, unselected matches
         // stay context-colored instead of being painted as selected matches.
         Assert.Contains("BuildTargetColorOrdinals(state, window, window.Text, segmentDisplayStart: 0)", rebuild);
-        Assert.Contains("AddPreviewTextRuns(paragraph, window.Text, state.IsMatchLine, state.Regex, state, matchOrdinalsToColor)", rebuild);
+        Assert.Contains("AddPreviewTextRuns(paragraph, window.Text, state.IsMatchLine, state.Regex, state, matchOrdinalsToColor, forcedSpan: null, ResolvePreviewSyntaxLanguage(state.Result?.FilePath))", rebuild);
         string fullLine = ExtractMethodWindow(previewBuilder, "AddPreviewFullLineSegmentRuns", window: 2200);
         Assert.Contains("paragraph.Inlines.Add(new LineBreak())", fullLine);
         Assert.Contains("AddPreviewTextSpanRuns", fullLine);
@@ -3771,6 +3852,47 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("TryGetPreviewShowMoreAction(originalSource, out _)", selectionAutoScroll);
         Assert.Contains("s_previewShowMoreActions.TryGetValue(current, out var value)", selectionAutoScroll);
         Assert.Contains("catch (ArgumentException)", selectionAutoScroll);
+    }
+
+    [Fact]
+    public void PreviewSyntaxColoring_UsesEditorLanguageTableAndNeverOverridesMatchColor()
+    {
+        string previewSyntax = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewSyntax.cs"));
+
+        // Preview and editor must agree on which file types are colored.
+        Assert.Contains("EditorSyntaxHighlightingResolver.ResolveFromFileName(filePath)", previewSyntax);
+        Assert.Contains("if (!ViewModel.PreviewSyntaxHighlightingEnabled || string.IsNullOrEmpty(filePath))", previewSyntax);
+
+        // Bounded cost: long lines and a per-build run budget both fall back to plain runs, because a
+        // preview build can emit thousands of paragraphs and every extra Run costs XAML text layout.
+        Assert.Contains("text.Length > MaxPreviewSyntaxLineLength || _previewSyntaxRunsRemaining <= 0", previewSyntax);
+        Assert.Contains("private void ResetPreviewSyntaxBudget() => _previewSyntaxRunsRemaining = PreviewSyntaxRunBudget;", previewSyntax);
+        Assert.Contains("ResetPreviewSyntaxBudget();", ExtractMethodWindow(MainWindowSource, "ResetPreviewShowMoreDiagnostics", window: 900));
+
+        // Context lines stay visually subordinate to match lines.
+        Assert.Contains("ResolvePreviewSyntaxBrush(token.Kind, dimmed: !isMatchLine)", previewSyntax);
+        Assert.Contains("PreviewSyntaxPalette.GetContextColor(kind, isLight)", previewSyntax);
+
+        // Match highlighting always wins: syntax runs are only emitted for the text BETWEEN matches,
+        // and the registered match runs keep their bold match brush.
+        string textSpanRuns = ExtractMethodWindow(MainWindowSource, "AddPreviewTextSpanRuns", window: 4400);
+        Assert.Contains("var syntaxTokens = BuildPreviewSyntaxTokens(text, syntaxLanguage);", textSpanRuns);
+        Assert.Contains("AddPreviewSyntaxRuns(para, text, lastIdx, m.Index, baseBrush, isMatchLine, syntaxTokens);", textSpanRuns);
+        Assert.DoesNotContain("AddPreviewSyntaxRuns(para, m.Value", textSpanRuns);
+        Assert.Contains("hit.Foreground = _matchTextBrush;", textSpanRuns);
+
+        // The previewed file's language reaches the renderer from the result row.
+        Assert.Contains("ResolvePreviewSyntaxLanguage(r?.FilePath)", ExtractMethodWindow(MainWindowSource, "MakePreviewParagraph", window: 3200));
+        Assert.Contains("ResolvePreviewSyntaxLanguage(state.Result?.FilePath)", ExtractMethodWindow(MainWindowSource, "AddPreviewFullLineSegmentRuns", window: 2200));
+
+        // Toggling the setting must rebuild the preview (already-rendered runs keep their brushes).
+        string mainWindowXamlCs = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
+        Assert.Contains("nameof(ViewModel.PreviewSyntaxHighlightingEnabled)", mainWindowXamlCs);
+        Assert.Contains("InvalidatePreviewSyntaxState();", mainWindowXamlCs);
+
+        // Settings surface + persistence.
+        Assert.Contains("_viewModel.PreviewSyntaxHighlightingEnabled", SettingsWindowSource);
+        Assert.Contains("PreviewSyntaxHighlightingEnabled", MainViewModelSource);
     }
 
     [Fact]
@@ -4053,7 +4175,7 @@ public sealed class PreviewCoreRegressionTests
             "var selectedForFile = ViewModel.GetAllSelectedResults()",
             ".Where(result => string.Equals(result.FilePath, filePath, StringComparison.OrdinalIgnoreCase))",
             ".ToList();",
-            "string detail = $\"{selectedForFile.Count:N0} selected match(es)\";",
+            "string? detail = FormatSelectedContentMatchDetail(selectedForFile);",
             "expander.Header = BuildPreviewSectionHeader(filePath, detail, section, selectedForFile);",
             "_expanderHeaderArgs[expander] = (filePath, detail, section, selectedForFile);");
         AssertContainsInOrder(refreshHeader,
@@ -4075,6 +4197,25 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("var lines = GetPreviewLines(result, allLines, previewLines, fullFile: false);", appendContext);
         Assert.Contains("bool isMatchLine = lineNum == result.LineNumber;", appendContext);
         Assert.Contains("AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: truncatePreviewLines", appendContext);
+    }
+
+    [Fact]
+    public void PreviewSectionHeader_ShowsCountOnlyForSelectedContentMatches()
+    {
+        string formatter = ExtractMethodWindow(MainWindowSource, "FormatSelectedContentMatchDetail", window: 700);
+        AssertContainsInOrder(formatter,
+            "int count = CountContentMatchResults(results);",
+            "0 => null,",
+            "1 => \"1 selected match\",",
+            "_ => $\"{count:N0} selected matches\"");
+
+        string counter = ExtractMethodWindow(MainWindowSource, "CountContentMatchResults", window: 300);
+        Assert.Contains("results.Count(result => result.LineNumber > 0)", counter);
+        Assert.DoesNotContain("$\"{results.Count:N0} selected match(es)\"", MainWindowSource);
+        Assert.DoesNotContain("$\"{selectedForFile.Count:N0} selected match(es)\"", MainWindowSource);
+        Assert.True(System.Text.RegularExpressions.Regex.Matches(
+            MainWindowSource,
+            @"AddPreviewSection\(filePath, FormatSelectedContentMatchDetail\(results\), results").Count >= 4);
     }
 
     [Fact]
@@ -4196,7 +4337,7 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(single,
             "bool isImagePreview = IsImagePreviewPath(r.FilePath);",
             "bool isExtractedTextPreview = isImagePreview || IsPdfPreviewPath(r.FilePath);",
-            "FullFileButton.IsEnabled = !isExtractedTextPreview;",
+            "FullFileButton.IsEnabled = !isExtractedTextPreview && !isFileNameOnlyArchivePreview;",
             "allLines = GetPreviewExtractedTextLines(r.FilePath);");
 
         // Editing is blocked for PDFs too (extracted text is read-only).
@@ -4319,7 +4460,9 @@ public sealed class PreviewCoreRegressionTests
         string register = ExtractMethodWindow(MainWindowSource, "TryRegisterOccurrenceInRenderedWindow", window: 2600);
         AssertContainsInOrder(register,
             "TryResolveMatchInParaBySourceColumn(para, sourceColumn",
+            "if (sourceStart + runs[matchInPara].column != sourceColumn)",
             "EnsureNavEntryForParagraphMatch(section, para, matchInPara);",
+            "if (!_matchParagraphs.Any(entry => ReferenceEquals(entry.block, section)",
             "addedEntry = _matchParagraphs.Count > previousEntryCount;",
             "ApplyMatchColorToParagraphMatch(para, matchInPara);");
     }
@@ -5131,7 +5274,9 @@ public sealed class PreviewCoreRegressionTests
         string hitTest = ExtractMethodWindow(textRenderer, "GetWrappedLineHitTestYFromPointY", window: 1600);
         AssertContainsInOrder(hitTest,
             "if (IsVirtualizedWrappedLine && lineIndex == NumberOfStartLine)",
-            "y,",
+            // The virtualized branch hit-tests against a row-local origin (0), not the line's document
+            // top, and carries the sub-row scroll offset so a partially scrolled row still maps correctly.
+            "y + VerticalSubRowOffset,",
             "0,",
             "Math.Max(1, VirtualizedWrappedRowsToRender)");
 
@@ -5428,6 +5573,54 @@ public sealed class PreviewCoreRegressionTests
 
         Assert.Fail($"Expected TextControlBox source file under one of: {string.Join(", ", textControlBoxRoots)}");
         return string.Empty;
+    }
+
+    [Fact]
+    public void ResultsContextCommands_FallBackToTheRightClickedFileWhenNothingIsChecked()
+    {
+        // The menu is reachable with no checkboxes ticked, and every copy/save command bailed out on
+        // an empty checked set — so "Copy File Path" on a right-clicked row silently did nothing.
+        string target = ExtractMethodWindow(MainWindowSource, "GetCommandTargetFilePaths", 900);
+
+        Assert.Contains("var checkedPaths = GetSelectedFilePaths();", target);
+        Assert.Contains("if (checkedPaths.Count > 0)", target);
+        Assert.Contains("GetFileHeaderContextGroup(sender) ?? GetRecentResultsContextMenuGroup()", target);
+
+        foreach (string handler in new[]
+                 {
+                     "OnCopySelectedFilePaths",
+                     "OnCopySelectedFilesWithContent",
+                     "OnSaveSelectedFilePaths",
+                     "OnSaveSelectedFilesWithContent",
+                 })
+        {
+            string body = ExtractMethodWindow(MainWindowSource, handler, 900);
+            Assert.Contains("GetCommandTargetFilePaths(sender)", body);
+            Assert.DoesNotContain("var paths = GetSelectedFilePaths();", body);
+        }
+
+        // ...and the sender only resolves a target if the opening handler tagged it. Without these the
+        // four commands fell through to GetRecentResultsContextMenuGroup(), whose capture expires 2s
+        // after the right-click — so reading the menu before clicking made them do nothing at all.
+        string resultsOpening = ExtractMethodWindow(MainWindowSource, "OnResultsContextMenuOpening", 3600);
+        foreach (string item in new[] { "CtxCopyPaths", "CtxCopyWithContent", "CtxSavePaths", "CtxSaveWithContent" })
+            Assert.Contains($"{item}.Tag = contextGroup;", resultsOpening);
+    }
+
+    [Fact]
+    public void FileHeaderMenu_DropsSelectedWordingAndHidesTheDuplicateCopyPathWhenNothingIsChecked()
+    {
+        string opening = ExtractMethodWindow(MainWindowSource, "OnFileHeaderContextMenuOpening", 6000);
+
+        // "Copy Full Path" directly above already acts on the right-clicked file, so the selected-paths
+        // entry is a duplicate rather than a command when nothing is checked.
+        Assert.Contains("bool hasChecked = checkedCount > 0;", opening);
+        Assert.Contains("item.Visibility = hasChecked", opening);
+        Assert.Contains("string selected = hasChecked ? \"Selected \" : string.Empty;", opening);
+
+        // The loop rewrites Text, so matching the previous wording would only work on the first open.
+        Assert.Contains("bool withContent = item.Text.Contains(\"With Content\", StringComparison.Ordinal);", opening);
+        Assert.DoesNotContain("item.Text.StartsWith(\"Copy Selected File Path\", StringComparison.Ordinal)", opening);
     }
 
     private static string FindRepoRoot()

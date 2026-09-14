@@ -60,13 +60,28 @@ internal static class EditorSyntaxHighlightingResolver
             [".conf"] = EditorSyntaxLanguage.Inifile,
             [".toml"] = EditorSyntaxLanguage.Toml,
 
-            // C / C++
+            // C / C++ (C is lexically a subset of the C++ highlighter, so both share it)
+            [".c"] = EditorSyntaxLanguage.Cpp,
             [".cpp"] = EditorSyntaxLanguage.Cpp,
             [".cxx"] = EditorSyntaxLanguage.Cpp,
             [".cc"] = EditorSyntaxLanguage.Cpp,
-            [".hpp"] = EditorSyntaxLanguage.Cpp,
+            [".c++"] = EditorSyntaxLanguage.Cpp,
+            [".cp"] = EditorSyntaxLanguage.Cpp,
             [".h"] = EditorSyntaxLanguage.Cpp,
-            [".c"] = EditorSyntaxLanguage.Cpp,
+            [".hpp"] = EditorSyntaxLanguage.Cpp,
+            [".hh"] = EditorSyntaxLanguage.Cpp,
+            [".hxx"] = EditorSyntaxLanguage.Cpp,
+            [".h++"] = EditorSyntaxLanguage.Cpp,
+            [".ipp"] = EditorSyntaxLanguage.Cpp, // inline/template implementation headers
+            [".inl"] = EditorSyntaxLanguage.Cpp,
+            [".tcc"] = EditorSyntaxLanguage.Cpp,
+            [".ixx"] = EditorSyntaxLanguage.Cpp, // C++20 module interface units
+            [".cppm"] = EditorSyntaxLanguage.Cpp,
+            [".ccm"] = EditorSyntaxLanguage.Cpp,
+            [".cxxm"] = EditorSyntaxLanguage.Cpp,
+            [".cu"] = EditorSyntaxLanguage.Cpp, // CUDA C/C++
+            [".cuh"] = EditorSyntaxLanguage.Cpp,
+            [".mm"] = EditorSyntaxLanguage.Cpp, // Objective-C++
 
             // C#
             [".cs"] = EditorSyntaxLanguage.CSharp,

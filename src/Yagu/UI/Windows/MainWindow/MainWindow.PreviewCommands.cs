@@ -1687,8 +1687,10 @@ public sealed partial class MainWindow
                     : Microsoft.UI.Xaml.Visibility.Collapsed;
             }
 
-            // Update copy/save items: plural only when >1 file checked
-            int count = checkedCount > 0 ? checkedCount : 1; // at least the right-clicked file
+            // Update copy/save items: plural only when >1 file checked, and drop "Selected" entirely
+            // when nothing is checked, because the command then acts on the right-clicked file.
+            bool hasChecked = checkedCount > 0;
+            int count = hasChecked ? checkedCount : 1; // at least the right-clicked file
             bool plural = count > 1;
             // Items layout: [0]=Preview, [1]=PreviewAll, [2]=Sep, [3]=CopyPath, [4]=OpenFolder,
             // [5]=Sep, [6]=CopyPaths, [7]=CopyWithContent, [8]=Sep, [9]=SavePaths,
@@ -1696,14 +1698,34 @@ public sealed partial class MainWindow
             // [14]=MoreOptions
             foreach (var item in flyout.Items.OfType<MenuFlyoutItem>())
             {
-                if (item.Text.StartsWith("Copy Selected File Path", StringComparison.Ordinal))
+                // Matched on substrings that survive BOTH label forms: this loop rewrites Text, so
+                // re-matching the previous wording would only work on the menu's first open.
+                bool copy = item.Text.StartsWith("Copy", StringComparison.Ordinal);
+                bool save = item.Text.StartsWith("Save", StringComparison.Ordinal);
+                if (!copy && !save)
+                    continue;
+
+                bool withContent = item.Text.Contains("With Content", StringComparison.Ordinal);
+                if (!withContent && !item.Text.Contains("File Path", StringComparison.Ordinal))
+                    continue; // "Copy Full Path" acts on the right-clicked file already.
+
+                if (copy && !withContent)
+                {
+                    // "Copy Full Path" sits above this and already covers the right-clicked file, so
+                    // with nothing checked this is a duplicate entry rather than a useful command.
+                    item.Visibility = hasChecked
+                        ? Microsoft.UI.Xaml.Visibility.Visible
+                        : Microsoft.UI.Xaml.Visibility.Collapsed;
                     item.Text = plural ? "Copy Selected File Paths" : "Copy Selected File Path";
-                else if (item.Text.StartsWith("Copy Selected File", StringComparison.Ordinal))
-                    item.Text = plural ? "Copy Selected Files With Content" : "Copy Selected File With Content";
-                else if (item.Text.StartsWith("Save Selected File Path", StringComparison.Ordinal))
-                    item.Text = plural ? "Save Selected File Paths\u2026" : "Save Selected File Path\u2026";
-                else if (item.Text.StartsWith("Save Selected File", StringComparison.Ordinal))
-                    item.Text = plural ? "Save Selected Files With Content\u2026" : "Save Selected File With Content\u2026";
+                    continue;
+                }
+
+                item.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+                string noun = withContent
+                    ? (plural ? "Files With Content" : "File With Content")
+                    : (plural ? "File Paths" : "File Path");
+                string selected = hasChecked ? "Selected " : string.Empty;
+                item.Text = copy ? $"Copy {selected}{noun}" : $"Save {selected}{noun}\u2026";
             }
         }
     }
@@ -1758,6 +1780,15 @@ public sealed partial class MainWindow
         CtxCopyWithContent.Text = plural ? "Copy Files With Content" : "Copy File With Content";
         CtxSavePaths.Text = plural ? "Save File Paths\u2026" : "Save File Path\u2026";
         CtxSaveWithContent.Text = plural ? "Save Files With Content\u2026" : "Save File With Content\u2026";
+
+        // These four resolve their target through the sender's Tag. Without it they fell through to the
+        // right-click capture, which expires 2 seconds after the press — so reading the menu before
+        // clicking made them silently do nothing. Null while rows are checked, which is the case where
+        // the checked set is what the command acts on anyway.
+        CtxCopyPaths.Tag = contextGroup;
+        CtxCopyWithContent.Tag = contextGroup;
+        CtxSavePaths.Tag = contextGroup;
+        CtxSaveWithContent.Tag = contextGroup;
     }
 
     private void OnResultsListPointerPressed(object sender, PointerRoutedEventArgs e)
@@ -2105,32 +2136,32 @@ public sealed partial class MainWindow
 
     private void OnCopySelectedFilePaths(object sender, RoutedEventArgs e)
     {
-        var paths = GetSelectedFilePaths();
+        var paths = GetCommandTargetFilePaths(sender);
         if (paths.Count == 0) return;
-        SetClipboardText(SelectedFileExportService.BuildPathListText(paths), "selected file paths");
+        SetClipboardText(SelectedFileExportService.BuildPathListText(paths), "file paths");
     }
 
     private async void OnCopySelectedFilesWithContent(object sender, RoutedEventArgs e)
     {
-        var paths = GetSelectedFilePaths();
+        var paths = GetCommandTargetFilePaths(sender);
         if (paths.Count == 0) return;
 
         try
         {
             var text = await SelectedFileExportService.BuildFilesWithContentTextAsync(paths).ConfigureAwait(true);
-            SetClipboardText(text, "selected files with content");
-            ViewModel.StatusText = $"Copied {paths.Count:N0} selected file(s) with content.";
+            SetClipboardText(text, "files with content");
+            ViewModel.StatusText = $"Copied {paths.Count:N0} file(s) with content.";
         }
         catch (Exception ex)
         {
             YaguLog.For("MainWindow").LogWarning(ex, "Could not copy selected files with content");
-            ViewModel.StatusText = $"Could not copy selected files with content: {ex.Message}";
+            ViewModel.StatusText = $"Could not copy files with content: {ex.Message}";
         }
     }
 
     private async void OnSaveSelectedFilePaths(object sender, RoutedEventArgs e)
     {
-        var paths = GetSelectedFilePaths();
+        var paths = GetCommandTargetFilePaths(sender);
         if (paths.Count == 0) return;
 
         try
@@ -2141,18 +2172,18 @@ public sealed partial class MainWindow
             await using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 128 * 1024, useAsync: true);
             using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 128 * 1024, leaveOpen: false);
             await SelectedFileExportService.WritePathListAsync(paths, writer).ConfigureAwait(true);
-            ViewModel.StatusText = $"Saved {paths.Count:N0} selected file path(s) to {path}.";
+            ViewModel.StatusText = $"Saved {paths.Count:N0} file path(s) to {path}.";
         }
         catch (Exception ex)
         {
             YaguLog.For("MainWindow").LogWarning(ex, "Could not save selected file paths");
-            ViewModel.StatusText = $"Could not save selected file paths: {ex.Message}";
+            ViewModel.StatusText = $"Could not save file paths: {ex.Message}";
         }
     }
 
     private async void OnSaveSelectedFilesWithContent(object sender, RoutedEventArgs e)
     {
-        var paths = GetSelectedFilePaths();
+        var paths = GetCommandTargetFilePaths(sender);
         if (paths.Count == 0) return;
 
         try
@@ -2163,13 +2194,33 @@ public sealed partial class MainWindow
             await using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 128 * 1024, useAsync: true);
             using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 128 * 1024, leaveOpen: false);
             await SelectedFileExportService.WriteFilesWithContentAsync(paths, writer).ConfigureAwait(true);
-            ViewModel.StatusText = $"Saved {paths.Count:N0} selected file(s) with content to {path}.";
+            ViewModel.StatusText = $"Saved {paths.Count:N0} file(s) with content to {path}.";
         }
         catch (Exception ex)
         {
             YaguLog.For("MainWindow").LogWarning(ex, "Could not save selected files with content");
-            ViewModel.StatusText = $"Could not save selected files with content: {ex.Message}";
+            ViewModel.StatusText = $"Could not save files with content: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// The files a results context-menu command acts on: every checked file, or — when nothing is
+    /// checked — just the file that was right-clicked.
+    /// </summary>
+    /// <remarks>
+    /// Without the fallback these commands silently did nothing on a right-clicked row, because the
+    /// menu is reachable with no checkboxes ticked.
+    /// </remarks>
+    private List<string> GetCommandTargetFilePaths(object? sender)
+    {
+        var checkedPaths = GetSelectedFilePaths();
+        if (checkedPaths.Count > 0)
+            return checkedPaths;
+
+        FileGroup? target = GetFileHeaderContextGroup(sender) ?? GetRecentResultsContextMenuGroup();
+        return target is not null && !string.IsNullOrWhiteSpace(target.FilePath)
+            ? [target.FilePath]
+            : [];
     }
 
     private List<string> GetSelectedFilePaths()
@@ -3037,7 +3088,7 @@ public sealed partial class MainWindow
         foreach (var (filePath, results) in pageFiles)
         {
             var fileSw = Stopwatch.StartNew();
-            var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
+            var (section, _) = AddPreviewSection(filePath, FormatSelectedContentMatchDetail(results), results);
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
             bool truncatePreviewLines = ShouldTruncateInitialPreviewLines();
@@ -3200,7 +3251,7 @@ public sealed partial class MainWindow
         foreach (var (filePath, results) in pageFiles)
         {
             var fileSw = Stopwatch.StartNew();
-            var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
+            var (section, _) = AddPreviewSection(filePath, FormatSelectedContentMatchDetail(results), results);
             int sectionMatchStart = _matchParagraphs.Count;
             int startingBlocks = section.Blocks.Count;
 

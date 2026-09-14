@@ -267,7 +267,7 @@ public sealed partial class MainWindow
     {
         Grid.SetRow(SplitPaneGrid, 4);
         Grid.SetRowSpan(SplitPaneGrid, 1);
-        SplitPaneGrid.Margin = new Thickness(16, 2, 16, 4);
+        SplitPaneGrid.Margin = new Thickness(StackedCardHorizontalInset, 2, StackedCardHorizontalInset, 4);
         ResultsPanelBorder.Margin = new Thickness(0);
 
         SearchControlsBorder.Width = double.NaN;
@@ -297,7 +297,7 @@ public sealed partial class MainWindow
 
         Grid.SetRow(SplitPaneGrid, 2);
         Grid.SetRowSpan(SplitPaneGrid, 3);
-        SplitPaneGrid.Margin = new Thickness(16, 10, 16, 4);
+        SplitPaneGrid.Margin = new Thickness(StackedCardHorizontalInset, 10, StackedCardHorizontalInset, 4);
         Canvas.SetZIndex(SplitPaneGrid, 0);
         Canvas.SetZIndex(SearchControlsBorder, 10);
         Canvas.SetZIndex(SearchStatusPanel, 10);
@@ -693,7 +693,7 @@ public sealed partial class MainWindow
         if (selectedForFile.Count == 0)
             return;
 
-        string detail = $"{selectedForFile.Count:N0} selected match(es)";
+        string? detail = FormatSelectedContentMatchDetail(selectedForFile);
         expander.Header = BuildPreviewSectionHeader(filePath, detail, section, selectedForFile);
         _expanderHeaderArgs[expander] = (filePath, detail, section, selectedForFile);
 
@@ -2050,7 +2050,7 @@ public sealed partial class MainWindow
         {
             // While the editor hides the preview, never eager-expand (see above).
             bool expanded = !editorHidingPreview && (!bulkInsert || fileIndex < BulkExpandLimit);
-            var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results,
+            var (section, expander) = AddPreviewSection(filePath, FormatSelectedContentMatchDetail(results), results,
                 isExpanded: expanded, addToPanel: false);
 
             string[]? allLines = null;
