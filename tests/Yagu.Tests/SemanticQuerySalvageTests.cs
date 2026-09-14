@@ -22,11 +22,46 @@ public sealed class SemanticQuerySalvageTests
     [InlineData("c# files", "*.cs")]
     [InlineData("log files", "*.log")]
     [InlineData("text files", "*.txt")]
+    [InlineData("executable files", "*.exe")]
+    [InlineData("audio files", "*.mp3")]
+    [InlineData("logs that contain the word timeout", "*.log")]
     public void TryBuildPlan_TypeWord_RecoversGlob(string query, string expectedGlob)
     {
         Assert.True(SemanticQuerySalvage.TryBuildPlan(query, out var plan));
         Assert.NotNull(plan.IncludeGlobs);
         Assert.Contains(expectedGlob, plan.IncludeGlobs!);
+    }
+
+    [Fact]
+    public void TryBuildPlan_SpecificFileKindsDoNotAccumulateOverlappingTypes()
+    {
+        Assert.True(SemanticQuerySalvage.TryBuildPlan("word documents mentioning budget", out var plan));
+        Assert.Equal(new[] { "*.docx", "*.doc" }, plan.IncludeGlobs);
+        Assert.True(SemanticQuerySalvage.TryBuildPlan("objective-c files", out plan));
+        Assert.Equal(new[] { "*.m" }, plan.IncludeGlobs);
+        Assert.True(SemanticQuerySalvage.TryBuildPlan("yaml files", out plan));
+        Assert.Equal(new[] { "*.yaml" }, plan.IncludeGlobs);
+        Assert.True(SemanticQuerySalvage.TryBuildPlan("python files mentioning documents", out plan));
+        Assert.Equal(new[] { "*.py" }, plan.IncludeGlobs);
+    }
+
+    [Fact]
+    public void TryBuildPlan_SourceCodeFilesRecoversTheDocumentedGroup()
+    {
+        Assert.True(SemanticQuerySalvage.TryBuildPlan("source code files", out var plan));
+        Assert.Equal(new[] { "*.cs", "*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.c", "*.go", "*.rs" }, plan.IncludeGlobs);
+        Assert.Equal("filenames", plan.SearchMode);
+    }
+
+    [Fact]
+    public void TryBuildPlan_ContentWordsDoNotAddUnrequestedFileTypes()
+    {
+        Assert.True(SemanticQuerySalvage.TryBuildPlan("python files containing logs", out var plan));
+        Assert.Equal(new[] { "*.py" }, plan.IncludeGlobs);
+        Assert.Equal("logs", plan.Pattern);
+        Assert.True(SemanticQuerySalvage.TryBuildPlan("text files mentioning audio", out plan));
+        Assert.Equal(new[] { "*.txt" }, plan.IncludeGlobs);
+        Assert.Equal("audio", plan.Pattern);
     }
 
     [Fact]

@@ -224,6 +224,9 @@ public sealed class ScenarioBuilder
                 ExactMatch = exactMatch,
                 CaseSensitive = caseSensitive,
                 SearchMode = mode,
+                // The corpus is written microseconds before the search, so Everything has not journalled
+                // it yet; filename-only mode ends after that pass and would report zero matches.
+                SuppressNameFirstPass = true,
                 IncludeGlobs = include,
                 ExcludeGlobs = exclude,
                 IncludeFilterMode = includeMode,

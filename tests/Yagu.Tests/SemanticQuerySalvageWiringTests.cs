@@ -26,6 +26,30 @@ public sealed class SemanticQuerySalvageWiringTests
         File.ReadAllText(Path.Combine(RepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
     [Fact]
+    public void WholeFileExclusion_BypassesModelInferenceInBothTranslationPaths()
+    {
+        string source = File.ReadAllText(Path.Combine(RepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        foreach (string method in new[] { "TranslateAsync(", "TranslateStreamingAsync(" })
+        {
+            int start = source.IndexOf(method, StringComparison.Ordinal);
+            int guard = source.IndexOf("SemanticWholeFileExclusion.TryBuildPlan(naturalLanguageQuery", start, StringComparison.Ordinal);
+            int model = source.IndexOf("EnsureChatClientAsync(", start, StringComparison.Ordinal);
+            Assert.True(start >= 0 && guard > start && model > guard);
+            Assert.Contains("cancellationToken.ThrowIfCancellationRequested();", source[start..guard]);
+            Assert.Contains("return SemanticTranslationResult.Ok(wholeFilePlan!, string.Empty);", source[guard..model]);
+        }
+    }
+
+    [Fact]
+    public void CliSearchAndBatch_TrySalvageBeforeReportingModelFailure()
+    {
+        string source = CliRunner();
+        Assert.Contains("SemanticQuerySalvage.TryBuildPlan(semanticText, out var salvagePlan)", source);
+        Assert.Contains("SemanticQuerySalvage.TryBuildPlan(query, out var salvagePlan)", source);
+        Assert.Contains("SemanticTranslationResult.Ok(salvagePlan, result.RawModelOutput ?? string.Empty)", source);
+    }
+
+    [Fact]
     public void SingleTokenQuery_SkipsModelInGuiAndCli()
     {
         string viewModel = ViewModel();

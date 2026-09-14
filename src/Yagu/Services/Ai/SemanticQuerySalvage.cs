@@ -22,6 +22,8 @@ internal static class SemanticQuerySalvage
     private static Regex Cue(string alternation) =>
         new($@"\b(?:{alternation})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex WordDocumentCue = Cue(@"word\s+docs?|word\s+documents?|ms\s*word|winword");
+    private static readonly Regex DocumentCue = Cue(@"documents?");
     // Multi-extension GROUP words and OFFICE synonyms, mirroring the prompt's FILE GROUPS / OFFICE
     // SYNONYMS rules. Order matters: the specific office kinds precede the generic "documents" group so
     // "word documents" maps to Word formats rather than the broad document set.
@@ -29,10 +31,13 @@ internal static class SemanticQuerySalvage
     {
         (Cue(@"images?|photos?|pictures?|screenshots?"),            new[] { "*.jpg", "*.jpeg", "*.png", "*.gif", "*.bmp", "*.webp", "*.tiff" }),
         (Cue(@"videos?|movies?"),                                   new[] { "*.mp4", "*.mov", "*.avi", "*.mkv", "*.wmv" }),
-        (Cue(@"word\s+docs?|word\s+documents?|ms\s*word|winword"),  new[] { "*.docx", "*.doc" }),
+        (Cue(@"^(?:audio|music)"),                                  new[] { "*.mp3", "*.wav", "*.flac", "*.aac", "*.ogg", "*.m4a", "*.wma" }),
+        (Cue(@"^logs?"),                                            new[] { "*.log" }),
+        (WordDocumentCue,                                         new[] { "*.docx", "*.doc" }),
         (Cue(@"excel|spreadsheets?|workbooks?"),                    new[] { "*.xlsx", "*.xls" }),
         (Cue(@"powerpoints?|presentations?|slide\s*decks?"),        new[] { "*.pptx", "*.ppt" }),
-        (Cue(@"documents?"),                                        new[] { "*.doc", "*.docx", "*.pdf", "*.txt", "*.rtf", "*.odt" }),
+        (DocumentCue,                                             new[] { "*.doc", "*.docx", "*.pdf", "*.txt", "*.rtf", "*.odt" }),
+        (Cue(@"source\s+code\s+files?"),                            new[] { "*.cs", "*.py", "*.js", "*.ts", "*.java", "*.cpp", "*.c", "*.go", "*.rs" }),
     };
 
     // Single-extension TYPE words that are NOT literally the extension (the plain-word languages /
@@ -47,13 +52,14 @@ internal static class SemanticQuerySalvage
         ["rust"] = "rs",
         ["golang"] = "go",
         ["markdown"] = "md",
-        ["yaml"] = "yml",
+        ["yaml"] = "yaml",
         ["text"] = "txt",
+        ["executable"] = "exe",
     };
 
     // "<word> files/scripts/archives/..." — the general single-type filter. Captures the type word.
     private static readonly Regex TypeWordFiles = new(
-        @"\b([A-Za-z0-9+#]{1,12})\s+(?:files?|scripts?|documents?|archives?|programs?|sources?)\b",
+        @"(?<![\w-])([A-Za-z0-9+#]{1,12})\s+(?:files?|scripts?|documents?|archives?|programs?|sources?)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // Content term: "... containing/mentioning/with the word X (in them)".
@@ -90,21 +96,23 @@ internal static class SemanticQuerySalvage
         plan = new SemanticSearchPlan();
         if (string.IsNullOrWhiteSpace(query)) return false;
         string q = query.Trim();
+        var contentMatch = ContentTerm.Match(q);
+        string typeScope = contentMatch.Success ? q[..contentMatch.Index] : q;
 
         var globs = new List<string>();
         void Add(string g) { if (!globs.Contains(g, StringComparer.OrdinalIgnoreCase)) globs.Add(g); }
 
         // 1) Multi-extension groups + office synonyms.
         foreach (var (cue, gs) in GroupRules)
-            if (cue.IsMatch(q))
+            if (cue.IsMatch(typeScope) && !(ReferenceEquals(cue, DocumentCue) && WordDocumentCue.IsMatch(typeScope)))
                 foreach (var g in gs) Add(g);
 
         // 2) Symbol-bearing languages (c#, c++, f#, objective-c, js, ts, ruby) via the shared detector.
-        foreach (var hit in LanguageExtensionGlobs.FromQuery(q))
+        foreach (var hit in LanguageExtensionGlobs.FromQuery(typeScope))
             Add("*." + hit.Canonical);
 
         // 3) "<word> files/scripts/..." -> extension (a type-word synonym OR a known literal extension).
-        foreach (Match m in TypeWordFiles.Matches(q))
+        foreach (Match m in TypeWordFiles.Matches(typeScope))
         {
             string w = m.Groups[1].Value;
             if (TypeWordExtension.TryGetValue(w, out var mapped)) Add("*." + mapped);
@@ -112,7 +120,7 @@ internal static class SemanticQuerySalvage
         }
 
         // 4) Explicit ".ext files" (reuses the applier's dotted-extension rule).
-        SemanticPlanApplier.ApplyExplicitExtensionGlobs(globs, q);
+        SemanticPlanApplier.ApplyExplicitExtensionGlobs(globs, typeScope);
 
         // 5) Content term.
         string? term = ExtractContentTerm(q);

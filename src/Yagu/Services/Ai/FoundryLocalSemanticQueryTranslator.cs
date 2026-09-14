@@ -603,6 +603,12 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
         context ??= new SemanticTranslationContext();
 
+        cancellationToken.ThrowIfCancellationRequested();
+        if (SemanticWholeFileExclusion.TryBuildPlan(naturalLanguageQuery, out var wholeFilePlan))
+            return SemanticTranslationResult.Ok(wholeFilePlan!, string.Empty);
+        if (SemanticSimpleQuery.TryBuildPlan(naturalLanguageQuery, out var simplePlan))
+            return SemanticTranslationResult.Ok(simplePlan!, string.Empty);
+
         var log = YaguLog.For(LogSource);
         string trimmedQuery = naturalLanguageQuery.Trim();
         log.LogInformation("Translation requested (queryLength={QueryLength}).", trimmedQuery.Length);
@@ -742,6 +748,12 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             return SemanticTranslationResult.Fail("Enter a request to translate.");
 
         context ??= new SemanticTranslationContext();
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (SemanticWholeFileExclusion.TryBuildPlan(naturalLanguageQuery, out var wholeFilePlan))
+            return SemanticTranslationResult.Ok(wholeFilePlan!, string.Empty);
+        if (SemanticSimpleQuery.TryBuildPlan(naturalLanguageQuery, out var simplePlan))
+            return SemanticTranslationResult.Ok(simplePlan!, string.Empty);
 
         var log = YaguLog.For(LogSource);
         string trimmedQuery = naturalLanguageQuery.Trim();

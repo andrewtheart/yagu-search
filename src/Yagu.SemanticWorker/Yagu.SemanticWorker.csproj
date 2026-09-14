@@ -78,6 +78,9 @@
     <Compile Include="..\Yagu\Services\Ai\GenAiConfigReader.cs" Link="Linked\GenAiConfigReader.cs" />
     <Compile Include="..\Yagu\Services\Ai\SemanticPromptText.cs" Link="Linked\SemanticPromptText.cs" />
     <Compile Include="..\Yagu\Services\Ai\SemanticPlanJsonExtractor.cs" Link="Linked\SemanticPlanJsonExtractor.cs" />
+    <Compile Include="..\Yagu\Services\Ai\SemanticWholeFileExclusion.cs" Link="Linked\SemanticWholeFileExclusion.cs" />
+    <Compile Include="..\Yagu\Services\Ai\SemanticFileTypes.cs" Link="Linked\SemanticFileTypes.cs" />
+    <Compile Include="..\Yagu\Services\Ai\SemanticSimpleQuery.cs" Link="Linked\SemanticSimpleQuery.cs" />
     <Compile Include="..\Yagu\Services\Ai\FoundryModelSelector.cs" Link="Linked\FoundryModelSelector.cs" />
     <Compile Include="..\Yagu\Services\Ai\FoundryLocalSemanticQueryTranslator.cs" Link="Linked\FoundryLocalSemanticQueryTranslator.cs" />
     <!-- Shared wire protocol (also compiled into Yagu.dll for the proxy). -->

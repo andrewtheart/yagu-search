@@ -26,8 +26,8 @@ namespace Yagu.Tests;
 /// on-demand on a dev machine. The pure semantic-layer rules are separately covered offline by
 /// <see cref="SemanticPlanApplierTests"/> / <see cref="SemanticQuerySalvageTests"/>.
 ///
-/// If <c>expected-plans.json</c> does not exist, the first run auto-generates it from the current output.
-/// To force re-baseline after an intentional prompt/model change:
+/// Missing, empty, or failed-plan baselines are rejected before inference.
+/// To request re-baseline after an intentional prompt/model change:
 ///   <c>$env:YAGU_UPDATE_SEMANTIC_GOLDEN=1; dotnet test --filter "FullyQualifiedName~SemanticEvalGoldenTests"</c>
 /// which rewrites <c>expected-plans.json</c> from the current run instead of asserting.
 /// </summary>
@@ -43,68 +43,61 @@ public sealed class SemanticEvalGoldenTests
 
     /// <summary>Resolved fields compared per query — the concrete search parameters. Free-text
     /// (<c>model</c>, <c>summary</c>) and order-sensitive noise are intentionally excluded.</summary>
-    private static readonly string[] ComparedFields =
-    {
-        "directory", "pattern", "search-mode", "regex", "case-sensitive", "exact-match", "multiline",
-        "include", "exclude", "min-size", "max-size",
-        "created-after", "created-before", "modified-after", "modified-before",
-        "sort", "group", "hidden", "archives", "binary", "image-text", "obey-gitignore", "error",
-    };
+    private static readonly string[] ComparedFields = SemanticGoldenFixture.ComparedFields;
 
     [Fact]
     public void SemanticPlans_MatchGolden()
     {
         string root = RepoRoot();
-        string exe = FindYaguExe(root);
+        string? exe = FindYaguExe(root);
         string queriesFile = Path.Combine(root, "tests", "Yagu.Tests", "TestData", "SemanticEval", "queries.txt");
         string goldenFile = Path.Combine(root, "tests", "Yagu.Tests", "TestData", "SemanticEval", "expected-plans.json");
         Assert.True(File.Exists(queriesFile), $"query fixture not found: {queriesFile}");
-
-        if (exe is null)
+        bool updateGolden = string.Equals(Environment.GetEnvironmentVariable("YAGU_UPDATE_SEMANTIC_GOLDEN"), "1", StringComparison.Ordinal);
+        Dictionary<string, Dictionary<string, string>>? expected = null;
+        if (!updateGolden)
         {
-            _out.WriteLine("Yagu.exe not built — skipping the live golden run (build Yagu first).");
-            return;
+            Assert.True(File.Exists(goldenFile), $"golden fixture not found: {goldenFile}; create reviewed expectations before running live inference.");
+            expected = ReadGolden(goldenFile);
+            SemanticGoldenFixture.ValidateSuccessfulPlans(expected);
         }
 
-        string stdout = RunBatch(exe, queriesFile);
-        var actual = ParseBlocks(stdout);
+        Assert.NotNull(exe);
+        string runDirectory = Path.Combine(root, "TestResults", "SemanticGolden", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(runDirectory);
+        string scope = Path.Combine(runDirectory, "scope");
+        Directory.CreateDirectory(scope);
+        string settingsFile = Path.Combine(runDirectory, "settings.json");
+        File.WriteAllText(settingsFile, """{"SemanticSearchEnabled":true,"SemanticUnloadModelAfterUse":false}""");
+        if (!updateGolden)
+        {
+            var catalog = File.ReadLines(queriesFile).Select(line => line.Trim()).ToHashSet(StringComparer.Ordinal);
+            Assert.All(expected!.Keys, query => Assert.Contains(query, catalog));
+            queriesFile = Path.Combine(runDirectory, "queries.txt");
+            File.WriteAllLines(queriesFile, expected.Keys.Order(StringComparer.Ordinal), new System.Text.UTF8Encoding(false));
+        }
+        string stdout = RunBatch(exe!, queriesFile, scope, settingsFile);
+        string transcriptPath = Path.Combine(root, "TestResults", $"semantic-golden-actual-{DateTime.UtcNow:yyyyMMdd-HHmmss}.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(transcriptPath)!);
+        File.WriteAllText(transcriptPath, stdout);
+        _out.WriteLine($"Batch transcript: {transcriptPath}");
+        var actual = SemanticGoldenFixture.ParseTranscript(stdout);
         _out.WriteLine($"Parsed {actual.Count} plan blocks from the batch run.");
 
         // Environment without the pinned model (or semantic disabled): don't fail — this is an opt-in
         // Slow test that needs a specific local model. Detect the model-unavailable signal and skip.
-        if (actual.Count == 0 ||
-            actual.Values.All(f => f.TryGetValue("error", out var e) &&
-                (e.Contains("No compatible local model") || e.Contains("semantic search is disabled"))))
-        {
-            _out.WriteLine($"Model '{GoldenModel}' not available on this machine — skipping the golden assertion.");
-            return;
-        }
+        SemanticGoldenFixture.ValidateSuccessfulPlans(actual);
 
-        if (string.Equals(System.Environment.GetEnvironmentVariable("YAGU_UPDATE_SEMANTIC_GOLDEN"), "1") ||
-            !File.Exists(goldenFile))
+        if (updateGolden)
         {
+            foreach (var fields in actual.Values)
+                if (fields.TryGetValue("directory", out var directory) && directory == scope)
+                    fields["directory"] = SemanticGoldenFixture.DefaultDirectory;
             WriteGolden(goldenFile, actual);
             _out.WriteLine($"REBASELINED golden ({actual.Count} queries) -> {goldenFile}");
             return;
         }
-        var expected = ReadGolden(goldenFile);
-
-        var mismatches = new List<string>();
-        foreach (var (query, exp) in expected)
-        {
-            if (!actual.TryGetValue(query, out var act))
-            {
-                mismatches.Add($"[{query}] MISSING from this run's output");
-                continue;
-            }
-            foreach (var field in ComparedFields)
-            {
-                exp.TryGetValue(field, out var ev);
-                act.TryGetValue(field, out var av);
-                if (!string.Equals(ev ?? "", av ?? "", System.StringComparison.Ordinal))
-                    mismatches.Add($"[{query}] {field}: expected '{ev ?? "(unset)"}' but got '{av ?? "(unset)"}'");
-            }
-        }
+        var mismatches = SemanticGoldenFixture.Compare(expected!, actual, scope);
 
         Assert.True(mismatches.Count == 0,
             $"{mismatches.Count} golden mismatch(es) — the query→parameters mapping drifted. If this was an " +
@@ -133,7 +126,7 @@ public sealed class SemanticEvalGoldenTests
         return null;
     }
 
-    private static string RunBatch(string exe, string queriesFile)
+    private static string RunBatch(string exe, string queriesFile, string scope, string settingsFile)
     {
         // Allow feeding a PRE-GENERATED batch output (e.g. from the resilient run harness) instead of a
         // fresh single-shot run — used to (re)baseline the golden from a crash-resilient capture.
@@ -147,12 +140,20 @@ public sealed class SemanticEvalGoldenTests
             RedirectStandardError = false, // let per-query progress/stack traces inherit — avoids buffer deadlock
             UseShellExecute = false,
             CreateNoWindow = true,
+            WorkingDirectory = scope,
+            StandardOutputEncoding = new System.Text.UTF8Encoding(false),
         };
+        psi.Environment[Services.SettingsService.SettingsFileOverrideEnvVar] = settingsFile;
         psi.ArgumentList.Add("--cli");
         psi.ArgumentList.Add("--semantic-batch");
         psi.ArgumentList.Add(queriesFile);
         psi.ArgumentList.Add("--semantic-model");
         psi.ArgumentList.Add(GoldenModel);
+        psi.ArgumentList.Add("--directory");
+        psi.ArgumentList.Add(scope);
+        psi.ArgumentList.Add("--settings-source");
+        psi.ArgumentList.Add("file:" + settingsFile);
+        psi.ArgumentList.Add("--non-interactive");
 
         // The batch child loads a multi-GB Foundry Local model IN-PROCESS. If it were ever orphaned
         // (WaitForExit timeout, an exception here, or the TEST HOST being force-killed mid-run — e.g.
@@ -174,7 +175,11 @@ public sealed class SemanticEvalGoldenTests
             if (int.TryParse(System.Environment.GetEnvironmentVariable("YAGU_SEMANTIC_GOLDEN_TIMEOUT_MIN"), out int overrideMinutes) && overrideMinutes > 0)
                 timeoutMinutes = overrideMinutes;
             if (!p.WaitForExit(timeoutMinutes * 60 * 1000))
-                TryKillTree(p);                  // wedged past the cap — kill the tree (which closes stdout)
+            {
+                TryKillTree(p);
+                throw new TimeoutException("Semantic golden batch did not finish before its timeout.");
+            }
+            Assert.Equal(0, p.ExitCode);
             return readTask.GetAwaiter().GetResult();
         }
         finally
@@ -323,6 +328,7 @@ public sealed class SemanticEvalGoldenTests
 
     private static void WriteGolden(string path, Dictionary<string, Dictionary<string, string>> data)
     {
+        SemanticGoldenFixture.ValidateSuccessfulPlans(data);
         // Keep only the compared fields, sorted, for a stable diff-friendly golden.
         var trimmed = new SortedDictionary<string, SortedDictionary<string, string>>(System.StringComparer.Ordinal);
         foreach (var (q, fields) in data)

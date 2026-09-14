@@ -19,6 +19,153 @@ public sealed class SemanticPlanApplierTests
     private static SemanticTranslationContext Context(string? defaultDir = null) =>
         new() { Now = Now, DefaultDirectory = defaultDir };
 
+    [Theory]
+    [InlineData("invoice\npaid", true)]
+    [InlineData("refund\ninvoice", false)]
+    [InlineData("invoice\nrefund", false)]
+    [InlineData("invoice\r\nother\r\nREFUND", false)]
+    [InlineData("refunded\ninvoice", false)]
+    [InlineData("paid", false)]
+    [InlineData("", false)]
+    public void Resolve_WholeFileExclusionChecksBothBeforeAndAfterTheRequiredTerm(string content, bool expected)
+    {
+        var model = new SemanticSearchPlan { Pattern = "invoice", ExcludeGlobs = ["*invoice*"], Directory = @"C:\wrong" };
+        var context = new SemanticTranslationContext { OriginalQuery = "files that mention invoice but not refund", DefaultDirectory = @"C:\docs" };
+
+        var resolved = SemanticPlanApplier.Resolve(model, context);
+
+        Assert.True(resolved.Multiline);
+        Assert.True(resolved.UseRegex);
+        Assert.Equal(SearchMode.Content, resolved.SearchMode);
+        Assert.Equal(@"C:\docs", resolved.Directory);
+        Assert.True(resolved.ExcludeGlobs is null || resolved.ExcludeGlobs.Count == 0);
+        Assert.Equal(expected, System.Text.RegularExpressions.Regex.IsMatch(content, resolved.Pattern!, System.Text.RegularExpressions.RegexOptions.IgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("files named invoice but not refund")]
+    [InlineData("files that mention invoice but not refund in their name")]
+    public void TryBuildWholeFileExclusionPlan_DoesNotGuessOtherNegations(string? query)
+    {
+        Assert.False(SemanticPlanApplier.TryBuildWholeFileExclusionPlan(query, out var plan));
+        Assert.Null(plan);
+    }
+
+    [Fact]
+    public void TryBuildWholeFileExclusionPlan_EscapesQuotedLiteralTerms()
+    {
+        Assert.True(SemanticPlanApplier.TryBuildWholeFileExclusionPlan("find files that contain 'invoice.total' but not 'refund+fee'", out var plan));
+        var regex = new System.Text.RegularExpressions.Regex(plan!.Pattern!);
+        Assert.True(regex.IsMatch("invoice.total\npaid"));
+        Assert.False(regex.IsMatch("invoiceXtotal\npaid"));
+        Assert.False(regex.IsMatch("invoice.total\nrefund+fee"));
+    }
+
+    [Fact]
+    public void Resolve_WholeFileExclusionLiteralsCannotTriggerOtherIntentRewrites()
+    {
+        var context = new SemanticTranslationContext { OriginalQuery = "files that mention invoice but not phone" };
+        var resolved = SemanticPlanApplier.Resolve(new SemanticSearchPlan(), context);
+
+        Assert.True(resolved.Multiline);
+        Assert.Matches(resolved.Pattern!, "invoice\npaid");
+        Assert.DoesNotMatch(resolved.Pattern!, "invoice\nphone");
+        Assert.DoesNotMatch(resolved.Pattern!, "555-123-4567");
+    }
+
+    [Fact]
+    public void Resolve_ContentWordCannotBroadenTheRequestedFileType()
+    {
+        var model = new SemanticSearchPlan { Pattern = "logs", IncludeGlobs = ["*.py"] };
+        var context = new SemanticTranslationContext { OriginalQuery = "python files containing the word logs" };
+
+        var resolved = SemanticPlanApplier.Resolve(model, context);
+
+        Assert.Equal("logs", resolved.Pattern);
+        Assert.Equal(new[] { "*.py" }, resolved.IncludeGlobs);
+    }
+
+    [Fact]
+    public void Resolve_QuotedLiteralOverridesModelRegexAndRecoversTheScope()
+    {
+        var model = new SemanticSearchPlan { Pattern = "TODO", UseRegex = true };
+        var context = new SemanticTranslationContext { OriginalQuery = "log files containing 'TODO'" };
+
+        var resolved = SemanticPlanApplier.Resolve(model, context);
+
+        Assert.Equal("TODO", resolved.Pattern);
+        Assert.False(resolved.UseRegex);
+        Assert.Equal(new[] { "*.log" }, resolved.IncludeGlobs);
+    }
+
+    [Fact]
+    public void Resolve_QuotedPhoneIsLiteralNotAStructuredPhoneNumberRequest()
+    {
+        var context = new SemanticTranslationContext { OriginalQuery = "files containing 'phone'" };
+        var resolved = SemanticPlanApplier.Resolve(new SemanticSearchPlan(), context);
+        Assert.Equal("phone", resolved.Pattern);
+        Assert.False(resolved.UseRegex);
+    }
+
+    [Fact]
+    public void Resolve_ExplicitContentWordCorrectsModelPatternAndFileType()
+    {
+        var model = new SemanticSearchPlan { Pattern = "\bword timeout\b", UseRegex = true };
+        var context = new SemanticTranslationContext { OriginalQuery = "logs that contain the word timeout" };
+
+        var resolved = SemanticPlanApplier.Resolve(model, context);
+
+        Assert.Equal("timeout", resolved.Pattern);
+        Assert.False(resolved.UseRegex);
+        Assert.Contains("*.log", resolved.IncludeGlobs!);
+        Assert.Equal(SearchMode.Content, resolved.SearchMode);
+    }
+
+    [Fact]
+    public void Resolve_ModelJsonBackspaceEscapesBecomeRegexWordBoundaries()
+    {
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(
+            """{"pattern":"\btimeout\b","useRegex":true,"explanation":"a\bb"}""",
+            out var plan, out var error), error);
+
+        var resolved = SemanticPlanApplier.Resolve(plan!, Context());
+
+        Assert.Equal(@"\btimeout\b", resolved.Pattern);
+        Assert.True(resolved.UseRegex);
+        Assert.Matches(resolved.Pattern!, "a timeout occurred");
+        Assert.DoesNotMatch(resolved.Pattern!, "timeouts");
+        Assert.Equal("a\bb", plan!.Explanation);
+        Assert.Contains(resolved.Warnings, warning => warning.Contains("backspace", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(null)]
+    public void Resolve_LiteralBackspaceIsNotReinterpretedAsRegex(bool? useRegex)
+    {
+        var plan = new SemanticSearchPlan { Pattern = "a\bb", UseRegex = useRegex };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Equal("a\bb", resolved.Pattern);
+        Assert.Equal(useRegex, resolved.UseRegex);
+        Assert.Empty(resolved.Warnings);
+    }
+
+    [Fact]
+    public void Resolve_RegexCharacterClassStillMatchesBackspace()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "[\b]", UseRegex = true };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Equal(@"[\b]", resolved.Pattern);
+        Assert.Matches(resolved.Pattern!, "\b");
+        Assert.DoesNotMatch(resolved.Pattern!, "timeout");
+    }
+
     /// <summary>Minimal writable surface so we can assert what gets applied.</summary>
     private sealed class FakeTarget : ISemanticPlanTarget
     {
@@ -1271,14 +1418,29 @@ public sealed class SemanticPlanApplierTests
     // ---- Tier-3 J: warn on unsupported content exclusion ----
 
     [Fact]
-    public void Resolve_ContentNegationQuery_WarnsUnsupported()
+    public void Resolve_ContentNegationQuery_UsesWholeFileExclusion()
     {
         var plan = new SemanticSearchPlan { Pattern = "async", SearchMode = "content", IncludeGlobs = new() { "*.cs" } };
         var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "c# files that contain 'async' but not 'Legacy'" };
 
         var resolved = SemanticPlanApplier.Resolve(plan, ctx);
 
-        Assert.Contains(resolved.Warnings, w => w.Contains("Content exclusion"));
+        Assert.True(resolved.Multiline);
+        Assert.Equal(new[] { "*.cs" }, resolved.IncludeGlobs);
+        Assert.Matches(resolved.Pattern!, "async\nwork");
+        Assert.DoesNotMatch(resolved.Pattern!, "async\nLegacy");
+        Assert.Contains(resolved.Warnings, warning => warning.Contains("Whole-file content exclusion", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Resolve_ComplexContentNegationQuery_StillWarnsUnsupported()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "async", SearchMode = "content" };
+        var context = new SemanticTranslationContext { OriginalQuery = "files that contain async but not Legacy modified today" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, context);
+
+        Assert.Contains(resolved.Warnings, warning => warning.Contains("isn't supported", StringComparison.Ordinal));
     }
 
     [Fact]

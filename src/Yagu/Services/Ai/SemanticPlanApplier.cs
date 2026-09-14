@@ -164,6 +164,22 @@ public static class SemanticPlanApplier
     {
         ArgumentNullException.ThrowIfNull(plan);
         context ??= new SemanticTranslationContext();
+        if (TryBuildWholeFileExclusionPlan(context.OriginalQuery, out var wholeFilePlan))
+            return new ResolvedSearchPlan
+            {
+                Directory = NormalizeDirectory(context.DefaultDirectory),
+                Pattern = wholeFilePlan!.Pattern,
+                UseRegex = true,
+                ExactMatch = false,
+                Multiline = true,
+                SearchMode = Models.SearchMode.Content,
+                IncludeGlobs = wholeFilePlan.IncludeGlobs,
+                SearchInsideArchives = false,
+                SearchImageText = false,
+                SearchPdfText = false,
+                Warnings = ["Whole-file content exclusion returns one match per accepted text file and uses the multiline file-size and timeout limits. Extracted PDF, OCR, and archive contents are not searched."],
+            };
+        bool simpleQuery = SemanticSimpleQuery.TryBuildPlan(context.OriginalQuery, out _);
         var warnings = new List<string>();
 
         string? modelDirectory = ResolveDirectory(plan.Directory);
@@ -305,11 +321,34 @@ public static class SemanticPlanApplier
 
         string? pattern = string.IsNullOrWhiteSpace(plan.Pattern) ? null : plan.Pattern!.Trim();
         bool? useRegex = plan.UseRegex;
+        if (useRegex == true && pattern?.Contains('\b') == true)
+        {
+            pattern = pattern.Replace("\b", @"\b", StringComparison.Ordinal);
+            warnings.Add("Repaired JSON backspace escapes in the AI-generated regex pattern.");
+        }
+
+        string originalQuery = context.OriginalQuery ?? string.Empty;
+
+        // Only a single content clause may be corrected — see ExplicitContentWordCue for why.
+        Match literalWord = ExplicitContentWordCue.Matches(originalQuery).Count == 1
+            ? ExplicitContentWord.Match(originalQuery)
+            : Match.Empty;
+
+        if (literalWord.Success)
+        {
+            pattern = literalWord.Groups["word"].Value;
+            useRegex = false;
+            mode = Models.SearchMode.Content;
+            string scopeClause = originalQuery[..literalWord.Index];
+            if (SemanticQuerySalvage.TryBuildPlan(scopeClause, out var literalPlan)
+                && literalPlan.IncludeGlobs is { Count: > 0 })
+                include = NormalizeFilterTokens(literalPlan.IncludeGlobs);
+        }
 
         // A request for phone numbers has deterministic structured intent. Never trust a small model
         // to balance or escape that regex: use the same known-valid pattern on every model and surface.
         // File-type/directory constraints from the plan (for example C:\ + *.json) remain intact.
-        if (TryResolveKnownStructuredPattern(context.OriginalQuery, out string structuredPattern))
+        if (!simpleQuery && !literalWord.Success && TryResolveKnownStructuredPattern(context.OriginalQuery, out string structuredPattern))
         {
             pattern = structuredPattern;
             useRegex = true;
@@ -1497,6 +1536,27 @@ public static class SemanticPlanApplier
     private static readonly Regex ContentNegationCue = new(
         @"\bbut\s+(?:not|without|no)\b|\b(?:don'?t|doesn'?t|does\s+not)\s+contain",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex ExplicitContentWord = new(
+        """\b(?:contain|contains|containing|mention|mentions|mentioning|with|has)\s+(?:the\s+word\s+["']?(?<word>[\w+#@.-]+)["']?|'(?<word>[\w+#@.-]+)'|"(?<word>[\w+#@.-]+)")\s*$""",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// <see cref="ExplicitContentWord"/> without the end anchor and without captures, used only to COUNT
+    /// the content clauses in a query.
+    /// </summary>
+    /// <remarks>
+    /// The anchored form matches only the LAST clause, so on "files containing 'error' or containing
+    /// 'warning'" the correction would replace the model's combined pattern with just <c>warning</c> and
+    /// silently drop half the request. The correction exists to repair a model that paraphrased ONE
+    /// quoted word, so it is limited to queries that contain exactly one such clause.
+    /// </remarks>
+    private static readonly Regex ExplicitContentWordCue = new(
+        """\b(?:contain|contains|containing|mention|mentions|mentioning|with|has)\s+(?:the\s+word\s+["']?[\w+#@.-]+["']?|'[\w+#@.-]+'|"[\w+#@.-]+")""",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static bool TryBuildWholeFileExclusionPlan(string? query, out SemanticSearchPlan? plan)
+        => SemanticWholeFileExclusion.TryBuildPlan(query, out plan);
 
     private static readonly Regex DesktopFolderRef = new(
         @"\bon\s+(?:my\s+|the\s+)?desktop\b|\b(?:my|the)\s+desktop\b|\bdesktop\s+folder\b",

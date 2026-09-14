@@ -77,16 +77,17 @@ public sealed class SemanticResolutionVisibilityTests
         Assert.Contains("SettingsArchiveExtensions = s.SettingsArchiveExtensions;", restore);
         Assert.Contains("SearchImageText = s.SearchImageText;", restore);
 
-        // Persist guard: while a resolution is visible, the saved defaults (snapshot) reach disk, not
-        // the resolved values — for representative leak-prone fields.
+        // Active Advanced Options never enter AppSettings at all. The semantic snapshot still protects
+        // the persisted extension-list mirrors because the semantic flow can temporarily touch those.
         string persist = Method("PersistSettingsAsync", 16000);
         Assert.Contains("var d = _semanticResolutionVisible ? _semanticDefaultsSnapshot : null;", persist);
-        Assert.Contains("_settings.IncludeGlobs = d is null ? IncludeGlobs : d.IncludeGlobs;", persist);
+        Assert.DoesNotContain("_settings.IncludeGlobs =", persist);
+        Assert.DoesNotContain("_settings.ExcludeGlobs =", persist);
         // The extension lists (the historical leak path) are guarded by the same snapshot, not written raw.
         Assert.Contains("_settings.SkipExtensions = d is null ? SettingsSkipExtensions : d.SettingsSkipExtensions;", persist);
         Assert.Contains("_settings.BinaryExtensions = d is null ? SettingsBinaryExtensions : d.SettingsBinaryExtensions;", persist);
         Assert.Contains("_settings.ArchiveExtensions = d is null ? SettingsArchiveExtensions : d.SettingsArchiveExtensions;", persist);
-        Assert.Contains("_settings.SearchImageText = d is null ? SearchImageText : d.SearchImageText;", persist);
+        Assert.Contains("_settings.SearchImageText = SettingsSearchImageText;", persist);
         // The resolved directory is the deliberate exception that DOES persist.
         Assert.Contains("_settings.LastDirectory = Directory;", persist);
     }

@@ -122,7 +122,7 @@ public sealed partial class MainViewModel
                 if (SemanticQuerySalvage.TryBuildPlan(text, out var salvagePlan))
                 {
                     var salvaged = SemanticPlanApplier.ApplyToTarget(salvagePlan, context, this);
-                    EnableArchiveSearchForContainerGlobs(salvaged.IncludeGlobs);
+                    EnableArchiveSearchForContainerGlobsUnlessExcluded(salvaged);
                     EnableBinarySearchForBinaryGlobs(salvaged.IncludeGlobs);
                     SemanticStatusText = "AI couldn't interpret that — using our best guess: "
                         + SemanticPlanApplier.BuildExplanation(salvaged, Directory);
@@ -139,7 +139,7 @@ public sealed partial class MainViewModel
             // exactly as the user left it instead of clearing it — clearing would silently widen the search
             // to all drives. The HDD check still runs against whatever location is in the box, via the
             // post-translation gate in SubmitSearchAsync.
-            EnableArchiveSearchForContainerGlobs(resolved.IncludeGlobs);
+            EnableArchiveSearchForContainerGlobsUnlessExcluded(resolved);
             EnableBinarySearchForBinaryGlobs(resolved.IncludeGlobs);
             // Render the summary deterministically from the resolved plan rather than the model's
             // free-text explanation, which small on-device models often garble (e.g. "yagursd").
