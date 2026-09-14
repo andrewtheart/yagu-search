@@ -319,6 +319,24 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>
+    /// Applies <see cref="EnableArchiveSearchForContainerGlobs"/> unless the plan deliberately turned
+    /// archive search OFF.
+    /// </summary>
+    /// <remarks>
+    /// A whole-file content exclusion ("files that do NOT contain X") resolves with
+    /// <c>SearchInsideArchives = false</c> on purpose — its single-match-per-file regex cannot reason
+    /// about extracted archive members. Enabling archives from the include globs immediately afterwards
+    /// undid that, so a .docx exclusion silently searched the inner XML parts instead.
+    /// </remarks>
+    private void EnableArchiveSearchForContainerGlobsUnlessExcluded(ResolvedSearchPlan resolved)
+    {
+        if (resolved.SearchInsideArchives == false)
+            return;
+
+        EnableArchiveSearchForContainerGlobs(resolved.IncludeGlobs);
+    }
+
+    /// <summary>
     /// When a semantic plan filters to archive-container extensions (e.g. .docx/.xlsx/.pptx, which are
     /// ZIP files), turn on "Search archives" and select those extensions in the archive-extensions
     /// list so their inner text is actually searched. Asking to search a container format implies

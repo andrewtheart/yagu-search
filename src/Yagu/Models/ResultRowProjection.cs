@@ -2,6 +2,8 @@ namespace Yagu.Models;
 
 public static class ResultRowProjection
 {
+    public const double NestedFileGroupIndent = 24;
+
     public static List<object> BuildRows(
         IEnumerable<FileGroup> visibleGroups,
         GroupMode groupMode,
@@ -10,7 +12,11 @@ public static class ResultRowProjection
         var rows = new List<object>();
         if (groupMode == GroupMode.None)
         {
-            rows.AddRange(visibleGroups);
+            foreach (FileGroup group in visibleGroups)
+            {
+                group.ResultGroupIndent = 0;
+                rows.Add(group);
+            }
             return rows;
         }
 
@@ -47,9 +53,15 @@ public static class ResultRowProjection
             }
 
             if (headerText is null)
+            {
+                group.ResultGroupIndent = 0;
                 rows.Add(group);
+            }
             else
+            {
+                group.ResultGroupIndent = NestedFileGroupIndent;
                 headerGroups.Add(group);
+            }
         }
 
         FlushHeaderGroup();

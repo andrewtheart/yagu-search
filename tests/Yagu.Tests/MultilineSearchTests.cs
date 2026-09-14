@@ -78,6 +78,45 @@ public sealed class MultilineSearchTests : IDisposable
 
     // ── Native parity (Phase 2) ─────────────────────────────────────
 
+    [Theory]
+    [InlineData("invoice\npaid", true)]
+    [InlineData("refund\ninvoice", false)]
+    [InlineData("invoice\nrefund", false)]
+    [InlineData("invoice\r\npaid\r\nREFUND", false)]
+    [InlineData("paid", false)]
+    public async Task WholeFileExclusion_RejectsExcludedTextAnywhere(string content, bool accepted)
+    {
+        Assert.True(Services.Ai.SemanticPlanApplier.TryBuildWholeFileExclusionPlan(
+            "files that mention invoice but not refund", out var plan));
+        string path = Write("invoice.txt", content);
+        var options = MultilineOpt(plan!.Pattern!);
+
+        var preferredNative = await RunWithPreferNative(path, options, preferNative: true);
+        var managed = await RunWithPreferNative(path, options, preferNative: false);
+
+        Assert.Equal(accepted ? 1 : 0, managed.Count);
+        Assert.Equal(Project(managed), Project(preferredNative));
+        if (accepted)
+        {
+            var result = Assert.Single(managed);
+            Assert.Equal(1, result.LineNumber);
+            Assert.Equal(2, result.MatchEndLineNumber);
+        }
+    }
+
+    [Fact]
+    public async Task WholeFileExclusion_StillHonorsTheMultilineSizeCap()
+    {
+        Assert.True(Services.Ai.SemanticPlanApplier.TryBuildWholeFileExclusionPlan(
+            "files that mention invoice but not refund", out var plan));
+        string path = Write("large.txt", "invoice\n" + new string('a', 256));
+
+        var (outcome, results) = await RunMultiline(path, MultilineOpt(plan!.Pattern!, cap: 128));
+
+        Assert.Equal(ContentSearcher.SkipMultilineTooLarge, outcome.MatchCount);
+        Assert.Empty(results);
+    }
+
     private async Task<List<SearchResult>> RunWithPreferNative(string path, SearchOptions opts, bool preferNative)
     {
         bool prev = ContentSearcher.PreferNative;

@@ -18,21 +18,35 @@ public sealed partial class MainViewModel
     /// skipped so the scan never blocks on hydration.</summary>
     [ObservableProperty] public partial bool SearchOnlineOnlyFiles { get; set; }
 
+    /// <summary>Persisted default edited in Settings. Kept separate from the active Advanced Options
+    /// value so a one-search cloud-file choice cannot leak into settings.</summary>
+    [ObservableProperty] public partial bool SettingsSearchOnlineOnlyFiles { get; set; }
+
     /// <summary>When true (default), files and folders carrying the Windows Hidden
     /// attribute are included in the search; when false they are excluded. Seeded from
     /// the persisted <c>SearchHiddenFiles</c> setting and surfaced as the Advanced
     /// Options ▸ Content options toggle.</summary>
     [ObservableProperty] public partial bool SearchHiddenFiles { get; set; } = true;
 
+    /// <summary>Persisted default edited in Settings; Advanced Options changes only
+    /// <see cref="SearchHiddenFiles"/>.</summary>
+    [ObservableProperty] public partial bool SettingsSearchHiddenFiles { get; set; } = true;
+
     /// <summary>When true, raster image files (PNG/JPG/etc.) are OCR'd on a background queue and
     /// their recognized text is searched. Default false. Seeded from the persisted
     /// <c>SearchImageText</c> setting and surfaced as the Advanced Options ▸ Filters toggle.</summary>
     [ObservableProperty] public partial bool SearchImageText { get; set; }
 
+    /// <summary>Persisted OCR-search default edited in Settings.</summary>
+    [ObservableProperty] public partial bool SettingsSearchImageText { get; set; }
+
     /// <summary>When true, PDF files are converted to text (via the bundled Xpdf <c>pdftotext</c>) on a
     /// background queue and their extracted text is searched. Default false. Seeded from the persisted
     /// <c>SearchPdfText</c> setting and surfaced as the Advanced Options ▸ Filters toggle.</summary>
     [ObservableProperty] public partial bool SearchPdfText { get; set; }
+
+    /// <summary>Persisted PDF-search default. Kept separate from the active Advanced Options toggle.</summary>
+    [ObservableProperty] public partial bool SettingsSearchPdfText { get; set; }
 
     /// <summary>Session-only per-search opt-in to the persistent content index (plan §5/§6.1). Seeded
     /// from the effective default (<see cref="AppSettings.ContentIndexActiveByDefault"/>: master feature

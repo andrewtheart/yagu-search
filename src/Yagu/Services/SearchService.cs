@@ -486,7 +486,7 @@ public sealed class SearchService
         if (options.UseRegex)
         {
             try { regex = SearchRegexFactory.Build(options.Query, options); }
-            catch (ArgumentException ex) { regexError = $"Invalid regex: {ex.Message}"; YaguLog.For("SearchService").LogWarning("Invalid regex: {Error}", ex.Message); }
+            catch (ArgumentException ex) { regexError = FileNameGlobQuery.DescribeInvalidRegex(options.Query, ex.Message); YaguLog.For("SearchService").LogWarning("Invalid regex: {Error}", ex.Message); }
         }
         else
         {

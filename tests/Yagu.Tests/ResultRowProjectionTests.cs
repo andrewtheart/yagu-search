@@ -15,6 +15,7 @@ public sealed class ResultRowProjectionTests
 
         Assert.Single(rows);
         Assert.Same(group, rows[0]);
+        Assert.Equal(0, group.ResultGroupIndent);
     }
 
     [Fact]
@@ -55,6 +56,8 @@ public sealed class ResultRowProjectionTests
         Assert.Equal("src", header.Title);
         Assert.Equal(1, header.FileCount);
         Assert.True(header.IsExpanded);
+        Assert.Equal(ResultRowProjection.NestedFileGroupIndent, g1.ResultGroupIndent);
+        Assert.Equal(ResultRowProjection.NestedFileGroupIndent, g2.ResultGroupIndent);
     }
 
     [Fact]
@@ -103,6 +106,21 @@ public sealed class ResultRowProjectionTests
         Assert.Same(g1, rows[0]);
         Assert.IsType<ResultGroupHeaderRow>(rows[1]);
         Assert.Same(g2, rows[2]);
+        Assert.Equal(0, g1.ResultGroupIndent);
+        Assert.Equal(ResultRowProjection.NestedFileGroupIndent, g2.ResultGroupIndent);
+    }
+
+    [Fact]
+    public void BuildRows_SwitchingFromGroupedToNone_ClearsChildIndent()
+    {
+        var group = new FileGroup(@"C:\src\a.cs") { GroupHeaderText = "src" };
+        group.Add(new SearchResult(@"C:\src\a.cs", 1, "x", 0, 1, [], []));
+
+        ResultRowProjection.BuildRows([group], GroupMode.Folder, new Dictionary<string, bool>());
+        Assert.Equal(ResultRowProjection.NestedFileGroupIndent, group.ResultGroupIndent);
+
+        ResultRowProjection.BuildRows([group], GroupMode.None, new Dictionary<string, bool>());
+        Assert.Equal(0, group.ResultGroupIndent);
     }
 
     [Theory]

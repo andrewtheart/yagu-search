@@ -838,6 +838,22 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     }
     public bool HasGroupHeader => !string.IsNullOrEmpty(GroupHeaderText);
 
+    private double _resultGroupIndent;
+    /// <summary>Horizontal inset applied by the results template when this file is projected beneath
+    /// a synthetic group header. Zero keeps ungrouped rows at their existing position.</summary>
+    public double ResultGroupIndent
+    {
+        get => _resultGroupIndent;
+        set
+        {
+            if (_resultGroupIndent == value)
+                return;
+
+            _resultGroupIndent = value;
+            OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(ResultGroupIndent)));
+        }
+    }
+
     public void LoadMetadata()
     {
         // For archive entries, resolve to the outermost file on disk

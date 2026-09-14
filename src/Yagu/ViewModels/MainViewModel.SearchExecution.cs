@@ -138,21 +138,42 @@ public sealed partial class MainViewModel
             // only. Consume it now so it never leaks into a later search.
             int? hddParallelismOverride = _hddParallelismOverrideIndexForNextSearch;
             _hddParallelismOverrideIndexForNextSearch = null;
+
+            // "*.ps1" typed into the search box is a file filter, not a name to match against. Windows
+            // file names cannot contain * or ?, so matching it as text returns nothing (or an invalid
+            // regex error) — route it to the include filter the way the natural-language path does.
+            var effectiveIncludeGlobs = SplitFilterPatterns(IncludeGlobs, IncludeFilterMode);
+            string effectiveQuery = Query;
+            bool effectiveUseRegex = UseRegex;
+            bool effectiveQueryRouted = false;
+            FilterPatternMode effectiveIncludeFilterMode = IncludeFilterMode;
+            if (FileNameGlobQuery.TryRoute(
+                    (SearchMode)SearchModeIndex, UseRegex, Query, effectiveIncludeGlobs, out var routedGlobs))
+            {
+                effectiveIncludeGlobs = [.. routedGlobs];
+                effectiveQuery = FileNameGlobQuery.MatchAllPattern;
+                effectiveUseRegex = true;
+                effectiveQueryRouted = true;
+                effectiveIncludeFilterMode = FilterPatternMode.GlobPath;
+                StatusText = FileNameGlobQuery.DescribeRouting(routedGlobs);
+            }
+
             SearchOptions BuildOptionsForRoot(string dir, int parallelism, FileListerBackend? backendOverride, bool isHardDisk) => new SearchOptions
             {
                 Directory = dir,
-                Query = Query,
+                Query = effectiveQuery,
+                QueryRoutedToIncludeFilter = effectiveQueryRouted,
                 CaseSensitive = CaseSensitive,
-                UseRegex = UseRegex,
+                UseRegex = effectiveUseRegex,
                 ExactMatch = ExactMatch,
                 Multiline = Multiline,
                 MultilineDotAll = MultilineDotAll,
                 MultilineEngine = (MultilineEngineKind)_settings.MultilineEngine,
                 ContextLines = ContextLines,
                 SearchMode = (SearchMode)SearchModeIndex,
-                IncludeGlobs = SplitFilterPatterns(IncludeGlobs, IncludeFilterMode),
+                IncludeGlobs = effectiveIncludeGlobs,
                 ExcludeGlobs = SplitFilterPatterns(EffectiveExcludeGlobsText, ExcludeFilterMode),
-                IncludeFilterMode = IncludeFilterMode,
+                IncludeFilterMode = effectiveIncludeFilterMode,
                 ExcludeFilterMode = ExcludeFilterMode,
                 MinFileSizeBytes = effectiveMinFileSizeBytes,
                 MaxFileSizeBytes = effectiveMaxFileSizeBytes,
@@ -543,6 +564,7 @@ public sealed partial class MainViewModel
                         break;
                     case SearchEvent.SearchError e:
                         ErrorText = e.Message;
+                        UpdateGlobFileNameSuggestion(Query);
                         break;
                     case SearchEvent.MemoryPressure mp:
                         DegradedNoticeText = "Memory pressure — paging results to disk";
@@ -840,6 +862,7 @@ public sealed partial class MainViewModel
         });
 
         ErrorText = null;
+        GlobFileNameSuggestion = null;
         FallbackReason = null;
         _searchProgressPhaseLabel = string.Empty;
         _sourceBackedSearchProgress = null;

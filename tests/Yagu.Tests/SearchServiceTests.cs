@@ -2853,8 +2853,12 @@ public class GetMemoryDiagnosticsTests
 // ─── IsMemoryPressureRelieved additional branches ───────────────────────
 
 [Collection("SystemMemoryProvider")]
-public class IsMemoryPressureRelievedTests
+public class IsMemoryPressureRelievedTests : IDisposable
 {
+    private readonly ISystemMemoryProvider _originalProvider = SearchService.SystemMemoryProvider;
+
+    public void Dispose() => SearchService.SystemMemoryProvider = _originalProvider;
+
     [Fact]
     public void NoPressureConfig_ReturnsTrue()
     {
@@ -2864,12 +2868,60 @@ public class IsMemoryPressureRelievedTests
         Assert.True(relieved);
     }
 
-    [Fact]
-    public void WithPressureConfig_ReturnsBasedOnSystemMemory()
+    [Theory]
+    [InlineData(40u, true)]   // well under the 99 - 5 relief threshold
+    [InlineData(94u, true)]   // exactly at it
+    [InlineData(95u, false)]  // one point over
+    [InlineData(99u, false)]
+    public void WithPressureConfig_ReturnsBasedOnSystemMemory(uint systemLoadPercent, bool expectedRelieved)
     {
-        // Large cap, low pressure threshold — should be relieved on most machines
-        bool relieved = SearchService.IsMemoryPressureRelieved(long.MaxValue, 99);
-        Assert.True(relieved);
+        // Every input is explicit, INCLUDING the working set. Going through IsMemoryPressureRelieved
+        // reads the live Environment.WorkingSet, and the decision short-circuits to "relieved" whenever
+        // that happens to sit below the sheddable floor — so this same assertion passed or failed
+        // depending only on how much memory the test host was using at that moment.
+        const long cap = 4L * 1024 * 1024 * 1024;
+        long workingSet = SearchService.SheddableProcessMemoryFloor(cap) * 2;
+
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSet, cap, systemLoadPercent,
+            pressurePercent: 99,
+            recoveryMarginPercent: 5);
+
+        Assert.Equal(expectedRelieved, relieved);
+    }
+
+    [Fact]
+    public void BelowTheSheddableFloor_IsRelievedNoMatterHowBusyTheMachineIs()
+    {
+        // The short-circuit that made the theory above non-deterministic, pinned deliberately: once Yagu
+        // holds too little to be worth shedding, a busy MACHINE must not keep the search in memory-saving
+        // mode, because the pressure is coming from other processes.
+        const long cap = 4L * 1024 * 1024 * 1024;
+        long belowFloor = SearchService.SheddableProcessMemoryFloor(cap) / 2;
+
+        Assert.True(SearchService.IsMemoryPressureRelievedForSnapshot(
+            belowFloor, cap, systemMemoryLoadPercent: 99,
+            pressurePercent: 99, recoveryMarginPercent: 5));
+    }
+
+    [Fact]
+    public void AWorkingSetOverTheCap_IsNeverRelievedHoweverIdleTheMachineIs()
+    {
+        const long cap = 4L * 1024 * 1024 * 1024;
+
+        Assert.False(SearchService.IsMemoryPressureRelievedForSnapshot(
+            cap * 2, cap, systemMemoryLoadPercent: 0,
+            pressurePercent: 99, recoveryMarginPercent: 5));
+    }
+
+    [Fact]
+    public void TheStubbedProviderDrivesTheDecision()
+    {
+        // Keeps the provider plumbing covered. A load well under the relief threshold is the one answer
+        // that does not depend on this host's working set: below the floor and above it both say relieved.
+        SearchService.SystemMemoryProvider = new FixedLoadMemoryProvider(10);
+
+        Assert.True(SearchService.IsMemoryPressureRelieved(long.MaxValue, 99));
     }
 
     [Fact]
@@ -2886,6 +2938,19 @@ public class IsMemoryPressureRelievedTests
         // Working set is always > 1 byte, so this should trigger
         bool high = SearchService.IsMemoryPressureHigh(1, 0);
         Assert.True(high);
+    }
+
+    /// <summary>Reports a fixed system memory load so the decision under test is deterministic.</summary>
+    private sealed class FixedLoadMemoryProvider(uint loadPercent) : ISystemMemoryProvider
+    {
+        public bool TryGetSnapshot(out SystemMemorySnapshot snapshot)
+        {
+            snapshot = new SystemMemorySnapshot(
+                LoadPercent: loadPercent,
+                TotalPhysicalBytes: 16UL * 1024 * 1024 * 1024,
+                AvailablePhysicalBytes: 8UL * 1024 * 1024 * 1024);
+            return true;
+        }
     }
 }
 

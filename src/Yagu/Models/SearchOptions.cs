@@ -35,6 +35,17 @@ public sealed class SearchOptions
 {
     public required string Directory { get; init; }
     public required string Query { get; init; }
+
+    /// <summary>
+    /// True when <see cref="Query"/> is a synthetic match-all standing in for a file glob that was moved
+    /// into <see cref="IncludeGlobs"/> (see <see cref="Services.FileNameGlobQuery"/>).
+    /// </summary>
+    /// <remarks>
+    /// It is a DISCOVERY matcher only. Reusing it as a replacement matcher rewrites every character of
+    /// every discovered file, because the match-all pattern was never the user's search term.
+    /// </remarks>
+    public bool QueryRoutedToIncludeFilter { get; init; }
+
     public bool CaseSensitive { get; init; }
     public bool UseRegex { get; init; }
     public bool ExactMatch { get; init; } = true;

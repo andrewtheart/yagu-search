@@ -401,91 +401,43 @@ public sealed class AdvancedOptionsTests
     }
 
     // ══════════════════════════════════════════════════════════════════
-    // Save as Defaults
+    // Persistence boundary
     // ══════════════════════════════════════════════════════════════════
 
     [Fact]
-    public void SaveAsDefaultsButton_ExistsAndIsWiredInTheActionBar()
+    public void ActionBar_DoesNotOfferAdvancedOptionPersistence()
     {
-        Assert.Contains("Content=\"Save as Defaults\"", MainWindowXaml);
-        Assert.Contains("Click=\"OnAdvancedOptionsSaveDefaultsClick\"", MainWindowXaml);
+        Assert.DoesNotContain("Save as Defaults", MainWindowXaml);
+        Assert.DoesNotContain("OnAdvancedOptionsSaveDefaultsClick", AdvancedOptionsSource);
+        Assert.DoesNotContain("SaveAdvancedOptionsAsDefaultsAsync", MainViewModelSource);
     }
 
     [Fact]
-    public void SaveDefaultsClick_ShowsTitlelessConfirmThenDelegatesToViewModelOnlyOnConfirm()
+    public void Apply_OnlyClosesThePanel()
     {
-        string method = ExtractMethodWindow("OnAdvancedOptionsSaveDefaultsClick", 2400);
-        // Summary of exactly what will be saved.
-        Assert.Contains("ViewModel.DescribeAdvancedOptionDefaults()", method);
-        // Title-bar-less confirm/cancel modal (per the modal-no-title-bar rule).
-        Assert.Contains("ShowTitleBar = false", method);
-        Assert.Contains("PrimaryButtonText = \"Save as defaults\"", method);
-        Assert.Contains("CloseButtonText = \"Cancel\"", method);
-        // Persists ONLY when the user confirms.
-        AssertContainsInOrder(method,
-            "if (result != YaguDialogResult.Primary)",
-            "return;",
-            "await ViewModel.SaveAdvancedOptionsAsDefaultsAsync();");
+        string method = ExtractMethodWindow("OnAdvancedOptionsApplyClick", 220);
+        Assert.Contains("CollapseAdvancedOptionsForSearch();", method);
+        Assert.DoesNotContain("PersistSettingsAsync", method);
+        Assert.DoesNotContain("Save", method);
     }
 
     [Fact]
-    public void SaveAdvancedOptionsAsDefaults_ClearsTransientGuardsPromotesMirrorsAndPersists()
+    public void PersistSettings_DoesNotCopyActiveAdvancedOptionsIntoSettings()
     {
-        string method = ExtractViewModelMethod("public async Task SaveAdvancedOptionsAsDefaultsAsync()");
-        // The visible values become the real defaults: drop the snapshot/transient guards so the
-        // persisted value is what's shown and a later Reset won't undo it.
-        Assert.Contains("_semanticResolutionVisible = false;", method);
-        Assert.Contains("_advancedOptionsTransientlyChanged = false;", method);
-        // Promote the active filter values into the persisted-default mirrors Reset/launch read from.
-        Assert.Contains("SettingsSkipExtensions = SkipExtensions;", method);
-        // Binary is a SKIP list (empty when searching all types), so Save-as-Defaults preserves the
-        // universe of known binary types rather than overwrite it with the inverted active list.
-        Assert.Contains("SettingsBinaryExtensions = string.Join(';', ParseExtensionSet(SettingsBinaryExtensions)", method);
-        Assert.Contains("SettingsArchiveExtensions = ArchiveExtensions;", method);
-        Assert.Contains("DefaultMinFileSizeBytes = MinFileSizeBytes;", method);
-        Assert.Contains("DefaultModifiedBeforeDate = ModifiedBeforeDate;", method);
-        // Writes straight to disk via the canonical persist path.
-        Assert.Contains("await PersistSettingsAsync()", method);
-    }
+        string method = ExtractViewModelMethod("public async Task PersistSettingsAsync()", 26000);
 
-    [Fact]
-    public void DescribeAdvancedOptionDefaults_SummarizesKeyOptions()
-    {
-        string method = ExtractViewModelMethod("internal IReadOnlyList<string> DescribeAdvancedOptionDefaults()");
-        Assert.Contains("Match case:", method);
-        Assert.Contains("Respect .gitignore:", method);
-        Assert.Contains("Search hidden files:", method);
-        Assert.Contains("Search image text (OCR):", method);
-        Assert.Contains("Include filter:", method);
-        Assert.Contains("Exclude filter:", method);
-    }
-
-    [Fact]
-    public void DescribeAdvancedOptionDefaults_SizeDateAndByteHelpers_CoverEveryRangeShapeAndUnit()
-    {
-        // The size/date/byte formatting helpers back the confirmation summary lines. They live in the
-        // WinUI-coupled MainViewModel (not unit-instantiable), so pin each helper's branch structure so
-        // every range shape (two-sided, min-only, max-only, none) and byte unit (GB/MB/KB/bytes) stays.
-        string size = ExtractViewModelMethod("private static string DescribeSizeRange(long minBytes, long maxBytes)", 600);
-        AssertContainsInOrder(size,
-            "if (hasMin && hasMax) return $\"between {FormatBytes(minBytes)} and {FormatBytes(maxBytes)}\";",
-            "if (hasMin) return $\"at least {FormatBytes(minBytes)}\";",
-            "if (hasMax) return $\"at most {FormatBytes(maxBytes)}\";",
-            "return string.Empty;");
-
-        string date = ExtractViewModelMethod("private static string DescribeDateRange(DateTimeOffset? after, DateTimeOffset? before)", 700);
-        AssertContainsInOrder(date,
-            "if (after.HasValue && before.HasValue) return $\"between {D(after.Value)} and {D(before.Value)}\";",
-            "if (after.HasValue) return $\"after {D(after.Value)}\";",
-            "if (before.HasValue) return $\"before {D(before.Value)}\";",
-            "return string.Empty;");
-
-        string bytes = ExtractViewModelMethod("private static string FormatBytes(long bytes)", 500);
-        AssertContainsInOrder(bytes,
-            "if (bytes >= gb) return $\"{bytes / (double)gb:0.##} GB\";",
-            "if (bytes >= mb) return $\"{bytes / (double)mb:0.##} MB\";",
-            "if (bytes >= kb) return $\"{bytes / (double)kb:0.##} KB\";",
-            "return $\"{bytes} bytes\";");
+        Assert.DoesNotContain("_settings.IncludeGlobs =", method);
+        Assert.DoesNotContain("_settings.ExcludeGlobs =", method);
+        Assert.DoesNotContain("_settings.IncludeFilterModeIndex =", method);
+        Assert.DoesNotContain("_settings.ExcludeFilterModeIndex =", method);
+        Assert.DoesNotContain("_settings.SearchHiddenFiles = SearchHiddenFiles", method);
+        Assert.DoesNotContain("_settings.SearchImageText = SearchImageText", method);
+        Assert.DoesNotContain("_settings.SearchPdfText = SearchPdfText", method);
+        Assert.DoesNotContain("_settings.SearchOnlineOnlyFiles = SearchOnlineOnlyFiles", method);
+        Assert.Contains("_settings.SearchHiddenFiles = SettingsSearchHiddenFiles;", method);
+        Assert.Contains("_settings.SearchImageText = SettingsSearchImageText;", method);
+        Assert.Contains("_settings.SearchPdfText = SettingsSearchPdfText;", method);
+        Assert.Contains("_settings.SearchOnlineOnlyFiles = SettingsSearchOnlineOnlyFiles;", method);
     }
 
     // ── Image-text (OCR) option mapping ──
@@ -495,19 +447,22 @@ public sealed class AdvancedOptionsTests
     [Fact]
     public void Ctor_LoadsImageTextOptionsFromSettings()
     {
-        Assert.Contains("SearchImageText = _settings.SearchImageText;", MainViewModelSource);
+        Assert.Contains("SettingsSearchImageText = _settings.SearchImageText;", MainViewModelSource);
+        Assert.Contains("SearchImageText = SettingsSearchImageText;", MainViewModelSource);
         Assert.Contains("ImageOcrEngine = _settings.ImageOcrEngine;", MainViewModelSource);
     }
 
     [Fact]
     public void PdfText_FlowsViewModelSettingsAndSearchOptions()
     {
-        // Load from settings, build into SearchOptions, and persist back — the same bridge as image OCR.
-        Assert.Contains("SearchPdfText = _settings.SearchPdfText;", MainViewModelSource);
+        // Load the saved default separately, build the active value into SearchOptions, and persist only
+        // the saved default so an Advanced Options change cannot leak back into settings.
+        Assert.Contains("SettingsSearchPdfText = _settings.SearchPdfText;", MainViewModelSource);
+        Assert.Contains("SearchPdfText = SettingsSearchPdfText;", MainViewModelSource);
         AssertContainsInOrder(MainViewModelSource,
             "SearchPdfText = SearchPdfText,",
             "PdfTextExtensions = ParseExtensionSet(AppSettings.DefaultPdfTextExtensions),");
-        Assert.Contains("_settings.SearchPdfText = SearchPdfText;", MainViewModelSource);
+        Assert.Contains("_settings.SearchPdfText = SettingsSearchPdfText;", MainViewModelSource);
     }
 
     [Fact]
@@ -523,7 +478,7 @@ public sealed class AdvancedOptionsTests
     public void SaveSettings_PersistsImageTextAndNormalizesEngine()
     {
         AssertContainsInOrder(MainViewModelSource,
-            "_settings.SearchImageText = d is null ? SearchImageText : d.SearchImageText;",
+            "_settings.SearchImageText = SettingsSearchImageText;",
             "_settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine);");
     }
 
