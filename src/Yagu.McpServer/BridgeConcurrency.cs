@@ -43,6 +43,7 @@ internal sealed class BridgeConcurrency : IDisposable
     private readonly SemaphoreSlim _model = new(1, 1);
     private readonly Semaphore? _machineWideModelGate;
     private readonly TimeSpan _modelGateTimeout;
+    private readonly TimeSpan _leaseDrainTimeout;
     private readonly Action<BridgeWorkload>? _onBeforeGlobalWait;
     private readonly Action? _onAcquired;
 
@@ -72,6 +73,22 @@ internal sealed class BridgeConcurrency : IDisposable
         TimeSpan? modelGateTimeout = null,
         Action<BridgeWorkload>? onBeforeGlobalWait = null,
         Action? onAcquired = null)
+        : this(maxConcurrentCalls, gateName, modelGateTimeout, LeaseDrainTimeout, onBeforeGlobalWait, onAcquired)
+    {
+    }
+
+    /// <remarks>
+    /// Takes the lease-drain timeout so tests can cover shutdown races without sleeping for the
+    /// production five seconds. The race matters because a lingering model lease must have its named
+    /// semaphore returned during shutdown or every other server waits for the full model timeout.
+    /// </remarks>
+    internal BridgeConcurrency(
+        int maxConcurrentCalls,
+        string? gateName,
+        TimeSpan? modelGateTimeout,
+        TimeSpan leaseDrainTimeout,
+        Action<BridgeWorkload>? onBeforeGlobalWait = null,
+        Action? onAcquired = null)
     {
         int limit = Math.Max(1, maxConcurrentCalls);
         _global = new SemaphoreSlim(limit);
@@ -80,6 +97,7 @@ internal sealed class BridgeConcurrency : IDisposable
         // their own; the point of the per-workload gates is to stop expensive work from stacking.
         _search = new SemaphoreSlim(limit);
         _modelGateTimeout = modelGateTimeout ?? TimeSpan.FromMinutes(10);
+        _leaseDrainTimeout = leaseDrainTimeout;
         _machineWideModelGate = TryCreateMachineWideGate(gateName ?? ModelGateName);
         _onBeforeGlobalWait = onBeforeGlobalWait;
         _onAcquired = onAcquired;
@@ -184,14 +202,22 @@ internal sealed class BridgeConcurrency : IDisposable
         }
     }
 
-    private static void SafeRelease(SemaphoreSlim? semaphore)
+    /// <remarks>
+    /// Internal rather than private only so a test can drive the two swallowed races directly: by
+    /// construction neither is reachable through <see cref="AcquireAsync"/> or <see cref="Dispose"/> —
+    /// <see cref="ReleaseLease"/> skips releasing once <c>_disposed</c> is set, and <see cref="Lease"/>
+    /// interlocks against a double release. These are pure, behaviour-free guards; nothing here mutates
+    /// state, so widening the visibility cannot change how the gates behave in production.
+    /// </remarks>
+    internal static void SafeRelease(SemaphoreSlim? semaphore)
     {
         try { semaphore?.Release(); }
         catch (ObjectDisposedException) { }
         catch (SemaphoreFullException) { }
     }
 
-    private static void SafeRelease(Semaphore? semaphore)
+    /// <inheritdoc cref="SafeRelease(SemaphoreSlim?)"/>
+    internal static void SafeRelease(Semaphore? semaphore)
     {
         try { semaphore?.Release(); }
         catch (ObjectDisposedException) { }
@@ -270,7 +296,7 @@ internal sealed class BridgeConcurrency : IDisposable
             if (_disposed)
                 return;
 
-            DateTimeOffset deadline = DateTimeOffset.UtcNow + LeaseDrainTimeout;
+            DateTimeOffset deadline = DateTimeOffset.UtcNow + _leaseDrainTimeout;
             while (_outstandingLeases > 0)
             {
                 TimeSpan remaining = deadline - DateTimeOffset.UtcNow;

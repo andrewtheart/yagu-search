@@ -1831,8 +1831,12 @@ public sealed class SettingsService
             var settings = await JsonSerializer.DeserializeAsync(fs, AppSettingsJsonContext.Default.AppSettings, cancellationToken).ConfigureAwait(false) ?? new AppSettings();
             NormalizeLoadedSettings(settings, normalizeSyncOnlyValues: false);
             return settings;
-        }
-        catch (Exception ex) { YaguLog.For("Settings").LogWarning(ex, "Failed to load settings from {Path}", _path); return CreateDefaultSettings(); }
+        } catch (Exception ex) { YaguLog.For("Settings").LogWarning(ex, "Failed to load settings from {Path}", _path); return CreateDefaultSettings(); }
+        // NOTE: the closing brace above is deliberately on the same line as `catch`. Every path inside the
+        // try returns, so the try block's closing brace is never reached, and because this is an async
+        // method the compiler still emits a sequence point for it in the state machine — which coverage
+        // reports as a permanently uncovered line. Splitting it back onto its own line re-adds that
+        // phantom line. (The synchronous Load overload above does not have this problem.)
     }
 
     private static AppSettings CreateDefaultSettings()
@@ -2461,20 +2465,48 @@ public sealed class SettingsService
     // the destination open for a few milliseconds, which surfaces as UnauthorizedAccessException from
     // the atomic replace and silently loses the save. Retry briefly instead of giving up immediately.
     private static void CommitTempFile(string tmp, string path)
+        => CommitTempFile(tmp, path, TryCommitTempFile, Thread.Sleep);
+
+    internal delegate bool TempFileCommitAttempt(
+        string tmp,
+        string path,
+        bool isLastAttempt,
+        out Exception? error);
+
+    /// <remarks>
+    /// Takes the single-attempt commit function and the sleeper so tests can deterministically exercise
+    /// the retry arm without racing a real antivirus scanner or a concurrently-open settings file.
+    /// </remarks>
+    internal static void CommitTempFile(
+        string tmp,
+        string path,
+        TempFileCommitAttempt tryCommit,
+        Action<int> sleep)
     {
         for (int attempt = 1; ; attempt++)
         {
-            if (TryCommitTempFile(tmp, path, attempt >= CommitAttempts, out _)) return;
-            Thread.Sleep(CommitRetryDelayMs(attempt));
+            if (tryCommit(tmp, path, attempt >= CommitAttempts, out _)) return;
+            sleep(CommitRetryDelayMs(attempt));
         }
     }
 
-    private static async Task CommitTempFileAsync(string tmp, string path)
+    private static Task CommitTempFileAsync(string tmp, string path)
+        => CommitTempFileAsync(tmp, path, TryCommitTempFile, delay => Task.Delay(delay));
+
+    /// <remarks>
+    /// Takes the single-attempt commit function and async delay factory so tests can prove async saves
+    /// retry transient replace failures without sleeping on wall-clock timing or holding real file locks.
+    /// </remarks>
+    internal static async Task CommitTempFileAsync(
+        string tmp,
+        string path,
+        TempFileCommitAttempt tryCommit,
+        Func<int, Task> delay)
     {
         for (int attempt = 1; ; attempt++)
         {
-            if (TryCommitTempFile(tmp, path, attempt >= CommitAttempts, out _)) return;
-            await Task.Delay(CommitRetryDelayMs(attempt)).ConfigureAwait(false);
+            if (tryCommit(tmp, path, attempt >= CommitAttempts, out _)) return;
+            await delay(CommitRetryDelayMs(attempt)).ConfigureAwait(false);
         }
     }
 

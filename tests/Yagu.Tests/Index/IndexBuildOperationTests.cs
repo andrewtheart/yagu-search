@@ -222,6 +222,68 @@ public sealed class IndexBuildOperationTests : IDisposable
     }
 
     [Fact]
+    public async Task AutomaticCompactionRetryState_TracksRecordedDeferralsAndAsyncFallbacks()
+    {
+        const string root = @"C:\data";
+        string normalized = IndexScopeIdentity.NormalizePath(root);
+        DateTimeOffset nowUtc = new(2026, 8, 18, 12, 0, 0, TimeSpan.Zero);
+        var settings = new AppSettings
+        {
+            IndexSizeManagementMode = IndexSizeManagementModes.Off,
+            IndexAutomaticCompactionRetryAfterUtcByRoot =
+            {
+                [normalized] = nowUtc.AddMinutes(1),
+            },
+        };
+
+        // Retry state only applies to roots whose size policy can compact; an Off policy must ignore even a
+        // persisted marker so maintenance does not wait forever for a cleanup mode the user disabled.
+        Assert.False(IndexAutomaticCompactionRetryState.IsActive(settings, root, nowUtc));
+        Assert.False(IndexAutomaticCompactionRetryState.IsRecorded(settings, root));
+
+        settings.IndexSizeManagementMode = IndexSizeManagementModes.CoalesceThenCompact;
+        settings.IndexAutomaticCompactionRetryAfterUtcByRoot[normalized] = nowUtc.AddMinutes(-1);
+        Assert.False(IndexAutomaticCompactionRetryState.IsActive(settings, root, nowUtc));
+        Assert.True(IndexAutomaticCompactionRetryState.IsRecorded(settings, root));
+
+        string settingsPath = Path.Combine(_sandbox, "settings.json");
+        var service = new SettingsService(settingsPath);
+        var liveSettings = new AppSettings { IndexSizeManagementMode = IndexSizeManagementModes.CoalesceThenCompact };
+        var roots = new[]
+        {
+            new IndexMaintenanceRootResult
+            {
+                Root = root,
+                Action = IndexMaintenanceActions.Failed,
+                Outcome = IndexMaintenanceOutcomes.CompactionFailed,
+            },
+        };
+
+        // A successful settings update must apply the retry marker both on disk and to the live snapshot the
+        // scheduler is already using.
+        await IndexAutomaticCompactionRetryState.RecordAsync(service, liveSettings, roots, nowUtc);
+        Assert.True(liveSettings.IndexAutomaticCompactionRetryAfterUtcByRoot.ContainsKey(normalized));
+        Assert.True(service.Load().IndexAutomaticCompactionRetryAfterUtcByRoot.ContainsKey(normalized));
+
+        await IndexAutomaticCompactionRetryState.ClearAsync(service, liveSettings, root);
+        Assert.False(liveSettings.IndexAutomaticCompactionRetryAfterUtcByRoot.ContainsKey(normalized));
+        Assert.False(service.Load().IndexAutomaticCompactionRetryAfterUtcByRoot.ContainsKey(normalized));
+
+        var invalidService = new SettingsService(_sandbox);
+        var fallbackLiveSettings = new AppSettings { IndexSizeManagementMode = IndexSizeManagementModes.CoalesceThenCompact };
+        await IndexAutomaticCompactionRetryState.RecordAsync(invalidService, fallbackLiveSettings, [], nowUtc);
+        Assert.Empty(fallbackLiveSettings.IndexAutomaticCompactionRetryAfterUtcByRoot);
+
+        // If persistence fails, the live snapshot is still updated so the current process does not keep
+        // hammering the same failed compaction on every poll.
+        await IndexAutomaticCompactionRetryState.RecordAsync(invalidService, fallbackLiveSettings, roots, nowUtc);
+        Assert.True(fallbackLiveSettings.IndexAutomaticCompactionRetryAfterUtcByRoot.ContainsKey(normalized));
+
+        await IndexAutomaticCompactionRetryState.ClearAsync(invalidService, fallbackLiveSettings, root);
+        Assert.False(fallbackLiveSettings.IndexAutomaticCompactionRetryAfterUtcByRoot.ContainsKey(normalized));
+    }
+
+    [Fact]
     public void PostBuildCatchUpResult_DescribesEveryOutcome()
     {
         var cases = new (PostBuildCatchUpResult Result, bool NeedsAttention, string Description)[]

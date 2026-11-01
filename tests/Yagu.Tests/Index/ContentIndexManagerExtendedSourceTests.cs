@@ -167,6 +167,55 @@ public sealed class ContentIndexManagerExtendedSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task BuildPdfExtendedSourceAsync_MixedCloudAndLocalSourcesDelegateToTheSafePath()
+    {
+        string local = Path.Combine(_corpus, "local.pdf");
+        string cloud = Path.Combine(_corpus, "cloud.pdf");
+        Write("local.pdf", "local bytes");
+        Write("cloud.pdf", "cloud bytes");
+        var fileSystem = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = _ =>
+            [
+                new IndexCrawlEntry(local, new FileInfo(local).Length, FileAttributes.Normal),
+                new IndexCrawlEntry(cloud, new FileInfo(cloud).Length, FileAttributes.Normal | (FileAttributes)0x00400000),
+            ],
+        };
+        var extractedPaths = new List<string>();
+        var manager = new ContentIndexManager(
+            _paths,
+            2,
+            contentReader: null,
+            checkpointReader: _ => new UsnCheckpoint(7, 100),
+            crawlerFileSystem: fileSystem,
+            cloudFileCanHydrate: (_, _) => true,
+            cloudFileHydrator: (source, destination, _) =>
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(source, destination);
+                return true;
+            });
+
+        PdfExtendedSourceBuildResult result = await manager.BuildPdfExtendedSourceAsync(
+            _corpus,
+            Policy(includeCloudOnlyFiles: true),
+            new FakePdfExtractor(CreateTool(), (path, _) =>
+            {
+                extractedPaths.Add(path);
+                return PdfTextResult.Ok("stable extracted text");
+            }));
+
+        // A local PDF in the same batch as a cloud placeholder must still be extracted from its original
+        // path, while the cloud file is extracted from a bounded local copy.
+        Assert.Equal(PdfExtendedSourceBuildStatus.Published, result.Status);
+        Assert.Equal(2, result.PdfsSeen);
+        Assert.Contains(local, extractedPaths, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(extractedPaths, path =>
+            !string.Equals(path, cloud, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task BuildPdfExtendedSourceAsync_ConfiguredFreeSpaceReserveRejectsProjectedCloudCopy()
     {
         string pdf = Path.Combine(_corpus, "cloud.pdf");
@@ -402,6 +451,268 @@ public sealed class ContentIndexManagerExtendedSourceTests : IDisposable
         Assert.DoesNotContain(
             Directory.EnumerateDirectories(_paths.GetScopeDirectory(result.ScopeId)),
             path => Path.GetFileName(path).StartsWith(".ocr-hydration-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BuildImageOcrExtendedSourceAsync_MixedCloudAndLocalSourcesDelegateToTheSafePath()
+    {
+        string local = Path.Combine(_corpus, "local.png");
+        string cloud = Path.Combine(_corpus, "cloud.png");
+        Write("local.png", "local image");
+        Write("cloud.png", "cloud image");
+        var fileSystem = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = _ =>
+            [
+                new IndexCrawlEntry(local, new FileInfo(local).Length, FileAttributes.Normal),
+                new IndexCrawlEntry(cloud, new FileInfo(cloud).Length, FileAttributes.Normal | (FileAttributes)0x00400000),
+            ],
+        };
+        var recognizedPaths = new List<string>();
+        var manager = new ContentIndexManager(
+            _paths,
+            2,
+            contentReader: null,
+            checkpointReader: _ => new UsnCheckpoint(7, 100),
+            ocrFingerprintReader: (_, _, _) => OcrFingerprint(),
+            crawlerFileSystem: fileSystem,
+            cloudFileCanHydrate: (_, _) => true,
+            cloudFileHydrator: (source, destination, _) =>
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(source, destination);
+                return true;
+            });
+
+        ImageOcrExtendedSourceBuildResult result = await manager.BuildImageOcrExtendedSourceAsync(
+            _corpus,
+            Policy(includeCloudOnlyFiles: true),
+            new FakeOcrEngine(path =>
+            {
+                recognizedPaths.Add(path);
+                return OcrResult.Ok("recognized text");
+            }),
+            Extensions(),
+            "model",
+            960);
+
+        // Mixing local and cloud images must not make local OCR read a hydrated copy, and must not let a
+        // cloud placeholder be opened directly.
+        Assert.Equal(ImageOcrExtendedSourceBuildStatus.Published, result.Status);
+        Assert.Equal(2, result.ImagesSeen);
+        Assert.Contains(local, recognizedPaths, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(recognizedPaths, path =>
+            !string.Equals(path, cloud, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetExtension(path), ".png", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task BuildImageOcrExtendedSourceAsync_CloudHydratorExceptionMarksOnlyThatImageFailed()
+    {
+        string image = Path.Combine(_corpus, "cloud.png");
+        Write("cloud.png", "image");
+        var fileSystem = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = _ =>
+            [
+                new IndexCrawlEntry(image, new FileInfo(image).Length, FileAttributes.Normal | (FileAttributes)0x00400000),
+            ],
+        };
+        int recognized = 0;
+        var manager = new ContentIndexManager(
+            _paths,
+            2,
+            contentReader: null,
+            checkpointReader: _ => new UsnCheckpoint(7, 100),
+            ocrFingerprintReader: (_, _, _) => OcrFingerprint(),
+            crawlerFileSystem: fileSystem,
+            cloudFileCanHydrate: (_, _) => true,
+            cloudFileHydrator: (_, _, _) => throw new IOException("provider disappeared"));
+
+        ImageOcrExtendedSourceBuildResult result = await manager.BuildImageOcrExtendedSourceAsync(
+            _corpus,
+            Policy(includeCloudOnlyFiles: true),
+            new FakeOcrEngine(_ =>
+            {
+                recognized++;
+                return OcrResult.Ok("must not run");
+            }),
+            Extensions(),
+            "model",
+            960);
+
+        // A hydration exception means this placeholder cannot be indexed; it must not abort the whole
+        // OCR namespace or read the cloud file directly.
+        Assert.Equal(ImageOcrExtendedSourceBuildStatus.Published, result.Status);
+        Assert.Equal(1, result.ImagesSeen);
+        Assert.Equal(1, result.Failed);
+        Assert.Equal(0, recognized);
+    }
+
+    [Fact]
+    public async Task BuildImageOcrExtendedSourceAsync_CancellationDuringHydrationPropagates()
+    {
+        string image = Path.Combine(_corpus, "cloud.png");
+        Write("cloud.png", "image");
+        var fileSystem = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = _ =>
+            [
+                new IndexCrawlEntry(image, new FileInfo(image).Length, FileAttributes.Normal | (FileAttributes)0x00400000),
+            ],
+        };
+        using var cancellation = new CancellationTokenSource();
+        var manager = new ContentIndexManager(
+            _paths,
+            2,
+            contentReader: null,
+            checkpointReader: _ => new UsnCheckpoint(7, 100),
+            ocrFingerprintReader: (_, _, _) => OcrFingerprint(),
+            crawlerFileSystem: fileSystem,
+            cloudFileCanHydrate: (_, _) => true,
+            cloudFileHydrator: (_, destination, _) =>
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.WriteAllText(destination, "partial image");
+                cancellation.Cancel();
+                return true;
+            });
+
+        // A user cancellation raised after the cloud copy returns must stay a cancellation, not be
+        // downgraded to a per-file OCR failure.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.BuildImageOcrExtendedSourceAsync(
+            _corpus,
+            Policy(includeCloudOnlyFiles: true),
+            new FakeOcrEngine(_ => OcrResult.Ok("must not run")),
+            Extensions(),
+            "model",
+            960,
+            cancellationToken: cancellation.Token));
+        Assert.Null(new ExtendedSourceStore(_paths, ContentIndexManager.ScopeIdForRoot(_corpus))
+            .TryLoad(SpecialSourceKind.ImageOcr));
+    }
+
+    [Fact]
+    public async Task BuildImageOcrExtendedSourceAsync_LockedHydratedFileDoesNotBreakPublication()
+    {
+        string image = Path.Combine(_corpus, "cloud.png");
+        Write("cloud.png", "image");
+        var fileSystem = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = _ =>
+            [
+                new IndexCrawlEntry(image, new FileInfo(image).Length, FileAttributes.Normal | (FileAttributes)0x00400000),
+            ],
+        };
+        var heldHandles = new List<FileStream>();
+        var manager = new ContentIndexManager(
+            _paths,
+            2,
+            contentReader: null,
+            checkpointReader: _ => new UsnCheckpoint(7, 100),
+            ocrFingerprintReader: (_, _, _) => OcrFingerprint(),
+            crawlerFileSystem: fileSystem,
+            cloudFileCanHydrate: (_, _) => true);
+
+        ImageOcrExtendedSourceBuildResult result = await manager.BuildImageOcrExtendedSourceAsync(
+            _corpus,
+            Policy(includeCloudOnlyFiles: true),
+            new FakeOcrEngine(path =>
+            {
+                heldHandles.Add(new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None));
+                return OcrResult.Ok("recognized cloud image");
+            }),
+            Extensions(),
+            "model",
+            960);
+
+        try
+        {
+            // Cleanup of an already-open hydrated copy is best-effort; a scanner holding that file must
+            // not turn a successful OCR namespace into a failed build.
+            Assert.Equal(ImageOcrExtendedSourceBuildStatus.Published, result.Status);
+            Assert.Contains(
+                Directory.EnumerateDirectories(_paths.GetScopeDirectory(result.ScopeId)),
+                path => Path.GetFileName(path).StartsWith(".ocr-hydration-", StringComparison.Ordinal));
+        }
+        finally
+        {
+            foreach (FileStream handle in heldHandles)
+                handle.Dispose();
+        }
+    }
+
+    [Fact]
+    public void HydrateCloudFile_CancelledCopyDeletesPartialFileAndEmptyDirectory()
+    {
+        string source = Path.Combine(_corpus, "source.bin");
+        Write("source.bin", "source bytes");
+        string hydrationDir = Path.Combine(_sandbox, "hydrate-empty");
+        string destination = Path.Combine(hydrationDir, "copy.bin");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var error = Assert.Throws<System.Reflection.TargetInvocationException>(() =>
+            InvokeHydrateCloudFile(source, destination, cancellation.Token));
+
+        // A cancelled copy must not leave a partial hydrated cloud file that a later extractor could read
+        // as if it were complete.
+        Assert.IsAssignableFrom<OperationCanceledException>(error.InnerException);
+        Assert.False(File.Exists(destination));
+        Assert.False(Directory.Exists(hydrationDir));
+    }
+
+    [Fact]
+    public void HydrateCloudFile_CancelledCopyKeepsNonEmptyHydrationDirectory()
+    {
+        string source = Path.Combine(_corpus, "source.bin");
+        Write("source.bin", "source bytes");
+        string hydrationDir = Path.Combine(_sandbox, "hydrate-non-empty");
+        Directory.CreateDirectory(hydrationDir);
+        string sentinel = Path.Combine(hydrationDir, "other.tmp");
+        File.WriteAllText(sentinel, "another in-flight copy");
+        string destination = Path.Combine(hydrationDir, "copy.bin");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var error = Assert.Throws<System.Reflection.TargetInvocationException>(() =>
+            InvokeHydrateCloudFile(source, destination, cancellation.Token));
+
+        // Multiple cloud copies can share a hydration folder; cancelling one copy must remove only its
+        // partial file and tolerate a non-empty directory.
+        Assert.IsAssignableFrom<OperationCanceledException>(error.InnerException);
+        Assert.False(File.Exists(destination));
+        Assert.True(File.Exists(sentinel));
+    }
+
+    [Fact]
+    public async Task HydratingOcrEngine_ExposesIdentityAndDelegatesNonCloudImages()
+    {
+        string local = Path.Combine(_corpus, "local.png");
+        Write("local.png", "local image");
+        using IDisposable hydration = CreateHydrationSession(
+            Path.Combine(_corpus, "cloud.png"),
+            isCloudOnly: true,
+            (_, _, _) => true);
+        object wrapper = CreateHydratingOcrEngine(
+            new FakeOcrEngine(path =>
+            {
+                Assert.Equal(local, path);
+                return OcrResult.Ok("recognized local image");
+            }),
+            hydration);
+        Type wrapperType = wrapper.GetType();
+
+        var recognize = (Task<OcrResult>)wrapperType.GetMethod("RecognizeAsync")!
+            .Invoke(wrapper, [local, CancellationToken.None])!;
+        OcrResult result = await recognize;
+
+        // The hydration wrapper is transparent for diagnostics and for ordinary local images; only cloud
+        // placeholders are routed through the bounded-copy path.
+        Assert.Equal(OcrEngineFactory.PaddleId, wrapperType.GetProperty("Id")!.GetValue(wrapper));
+        Assert.Equal("Fake OCR", wrapperType.GetProperty("DisplayName")!.GetValue(wrapper));
+        Assert.True(result.Success);
+        Assert.Equal("recognized local image", result.Text);
     }
 
     [Fact]
@@ -743,6 +1054,65 @@ public sealed class ContentIndexManagerExtendedSourceTests : IDisposable
         "cpu",
         [new ExtractorFileHash("worker", "deadbeef")],
         [new("model", "model"), new("maxSide", "960")]);
+
+    private static void InvokeHydrateCloudFile(
+        string source,
+        string destination,
+        CancellationToken cancellationToken)
+    {
+        var method = typeof(ContentIndexManager).GetMethod(
+            "HydrateCloudFile",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        method!.Invoke(null, [source, destination, cancellationToken]);
+    }
+
+    private IDisposable CreateHydrationSession(
+        string source,
+        bool isCloudOnly,
+        Func<string, string, CancellationToken, bool> hydrator)
+    {
+        Type candidateType = typeof(ContentIndexManager).GetNestedType(
+            "ExtendedSourceCandidate",
+            System.Reflection.BindingFlags.NonPublic)!;
+        Array candidates = Array.CreateInstance(candidateType, 1);
+        candidates.SetValue(Activator.CreateInstance(
+            candidateType,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
+            binder: null,
+            args: [source, 1L, isCloudOnly],
+            culture: null), 0);
+
+        Type sessionType = typeof(ContentIndexManager).GetNestedType(
+            "CloudExtendedSourceHydrationSession",
+            System.Reflection.BindingFlags.NonPublic)!;
+        return (IDisposable)Activator.CreateInstance(
+            sessionType,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
+            binder: null,
+            args:
+            [
+                candidates,
+                Path.Combine(_paths.GetScopeDirectory(ContentIndexManager.ScopeIdForRoot(_corpus)), ".reflect-hydration"),
+                TimeSpan.FromSeconds(5),
+                0,
+                0,
+                hydrator,
+            ],
+            culture: null)!;
+    }
+
+    private static object CreateHydratingOcrEngine(IOcrEngine inner, IDisposable hydration)
+    {
+        Type wrapperType = typeof(ContentIndexManager).GetNestedType(
+            "HydratingOcrEngine",
+            System.Reflection.BindingFlags.NonPublic)!;
+        return Activator.CreateInstance(
+            wrapperType,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
+            binder: null,
+            args: [inner, hydration],
+            culture: null)!;
+    }
 
     private sealed class FakePdfExtractor(
         string toolPath,

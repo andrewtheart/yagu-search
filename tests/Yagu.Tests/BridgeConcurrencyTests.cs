@@ -377,4 +377,168 @@ public class BridgeConcurrencyTests
         first.Dispose();
         (await second.WaitAsync(TimeSpan.FromSeconds(5))).Dispose();
     }
+
+    [Fact]
+    public async Task Dispose_IsIdempotent()
+    {
+        // Shutdown paths can race through Dispose twice. The second pass must be a no-op: without the
+        // _disposed early return it would re-run the machine-wide hand-back loop and re-dispose gates
+        // underneath code that is still unwinding.
+        var concurrency = new BridgeConcurrency(1, GateName());
+
+        concurrency.Dispose();
+        Assert.Null(Record.Exception(concurrency.Dispose));
+
+        // Observable post-state: the gates really are torn down, so the second Dispose cannot have
+        // silently resurrected or re-permitted anything.
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => concurrency.AcquireAsync(BridgeWorkload.Light, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task DisposeReleasesTheMachineWideModelGate_WhenALeaseOutlivesShutdown()
+    {
+        // A shutdown that gives up waiting for a model call must still return the named semaphore;
+        // otherwise every other server on the machine waits for the full model-gate timeout.
+        string shared = GateName();
+        var concurrency = new BridgeConcurrency(
+            1,
+            shared,
+            modelGateTimeout: null,
+            leaseDrainTimeout: TimeSpan.Zero);
+        using var peer = new BridgeConcurrency(1, shared);
+
+        IDisposable lateLease = await concurrency.AcquireAsync(BridgeWorkload.Model, CancellationToken.None);
+
+        concurrency.Dispose();
+
+        IDisposable peerLease = await peer.AcquireAsync(BridgeWorkload.Model, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        peerLease.Dispose();
+
+        lateLease.Dispose();
+    }
+
+    [Fact]
+    public async Task DisposeWaitsForAnInFlightLeaseThatReturnsPromptly()
+    {
+        // If shutdown never waits for normal in-flight calls, it disposes gates underneath code that is
+        // already unwinding and turns ordinary cancellation into noisy ObjectDisposedException paths.
+        var concurrency = new BridgeConcurrency(
+            1,
+            GateName(),
+            modelGateTimeout: null,
+            leaseDrainTimeout: TimeSpan.FromSeconds(5));
+
+        IDisposable lease = await concurrency.AcquireAsync(BridgeWorkload.Light, CancellationToken.None);
+        Task disposing = Task.Run(concurrency.Dispose);
+
+        await Task.Delay(Settle);
+        Assert.False(disposing.IsCompleted, "Dispose returned before the outstanding lease was released.");
+
+        lease.Dispose();
+        await disposing.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task LeasesDisposedAfterShutdown_DoNotReleaseDisposedInProcessSemaphores()
+    {
+        // When two calls unwind after shutdown, neither may release semaphores Dispose already tore
+        // down (that would surface as ObjectDisposedException out of an ordinary `using` on a lease),
+        // and the machine-wide permit must be handed back exactly once. A second hand-back would raise
+        // the cross-process model limit and let two servers load a ~2.65 GB model at the same time.
+        string shared = GateName();
+        var concurrency = new BridgeConcurrency(
+            2,
+            shared,
+            modelGateTimeout: null,
+            leaseDrainTimeout: TimeSpan.Zero);
+
+        if (!concurrency.HasMachineWideModelGate)
+        {
+            concurrency.Dispose();
+            return; // This environment denies named semaphores; there is no cross-process claim to check.
+        }
+
+        // Two peers keep the named object alive past the shutdown below and act as the probe.
+        using var firstPeer = new BridgeConcurrency(1, shared, TimeSpan.FromMinutes(1));
+        using var secondPeer = new BridgeConcurrency(1, shared, TimeSpan.FromMinutes(1));
+
+        IDisposable model = await concurrency.AcquireAsync(BridgeWorkload.Model, CancellationToken.None);
+        IDisposable light = await concurrency.AcquireAsync(BridgeWorkload.Light, CancellationToken.None);
+
+        concurrency.Dispose();
+
+        Assert.Null(Record.Exception(model.Dispose));
+        Assert.Null(Record.Exception(light.Dispose));
+
+        // Shutdown returned the abandoned lease's model permit, so one peer gets in.
+        IDisposable firstPeerLease = await firstPeer
+            .AcquireAsync(BridgeWorkload.Model, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        // The lease's own Dispose must NOT have returned it a second time, so the other peer waits.
+        using var cts = new CancellationTokenSource();
+        Task<IDisposable> secondPeerWait = secondPeer.AcquireAsync(BridgeWorkload.Model, cts.Token);
+        await Task.Delay(Settle);
+        Assert.False(secondPeerWait.IsCompleted, "the machine-wide model permit was released twice.");
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => secondPeerWait);
+        firstPeerLease.Dispose();
+    }
+
+    [Fact]
+    public void SafeRelease_IgnoresDisposedSemaphoreSlim()
+    {
+        // A cancellation or shutdown race can dispose a gate before a cleanup path releases it. Cleanup
+        // must stay best-effort instead of crashing the server.
+        var semaphore = new SemaphoreSlim(0, 1);
+        semaphore.Dispose();
+
+        Assert.Null(Record.Exception(() => BridgeConcurrency.SafeRelease(semaphore)));
+
+        // Proves the swallowed arm really ran rather than the call quietly no-opping on a live object:
+        // an unguarded Release on this same instance still throws.
+        Assert.Throws<ObjectDisposedException>(() => semaphore.Release());
+    }
+
+    [Fact]
+    public void SafeRelease_DoesNotOverfillSemaphoreSlim()
+    {
+        // Releasing a semaphore that is already full must not raise the concurrency limit above the
+        // configured maximum.
+        var semaphore = new SemaphoreSlim(1, 1);
+
+        BridgeConcurrency.SafeRelease(semaphore);
+
+        Assert.Equal(1, semaphore.CurrentCount);
+        semaphore.Dispose();
+    }
+
+    [Fact]
+    public void SafeRelease_IgnoresDisposedNamedSemaphore()
+    {
+        // The machine-wide model gate may already be disposed during shutdown; cleanup should ignore
+        // that race rather than surfacing it to unrelated requests.
+        var semaphore = new Semaphore(0, 1);
+        semaphore.Dispose();
+
+        Assert.Null(Record.Exception(() => BridgeConcurrency.SafeRelease(semaphore)));
+
+        // Same proof as above: the object is genuinely disposed, so the guard swallowed a real throw.
+        Assert.Throws<ObjectDisposedException>(() => semaphore.Release());
+    }
+
+    [Fact]
+    public void SafeRelease_DoesNotOverfillNamedSemaphore()
+    {
+        // A double release of the named gate would let multiple MCP servers load models at once.
+        using var semaphore = new Semaphore(1, 1);
+
+        BridgeConcurrency.SafeRelease(semaphore);
+
+        Assert.True(semaphore.WaitOne(TimeSpan.Zero));
+        Assert.False(semaphore.WaitOne(TimeSpan.Zero));
+    }
 }

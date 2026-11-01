@@ -10,7 +10,9 @@ using System.Text;
 // here would fail the same tests it would fail in production.
 Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
-string scenario = ValueAfter("--fake-scenario") ?? "normal";
+string scenario = ValueAfter("--fake-scenario")
+    ?? Environment.GetEnvironmentVariable("YAGU_FAKE_SCENARIO")
+    ?? "normal";
 string requestId = ValueAfter("--request-id") ?? "unknown";
 
 switch (scenario)
@@ -103,6 +105,30 @@ switch (scenario)
         Emit("summary", requestId, 2, """{"returnedRecords":1,"truncated":false,"exitCode":0}""");
         Console.Out.WriteLine();
         return 0;
+
+    case "emit":
+    {
+        // The MCP tool classes are driven through this: a test writes the exact protocol frames the
+        // real CLI would produce for the case it wants to reach, and the tool renders them for real.
+        // Scripting it through the environment rather than the argument vector matters, because the
+        // tool under test OWNS its arguments — a test cannot append a scenario flag to them.
+        string? framesFile = Environment.GetEnvironmentVariable("YAGU_FAKE_FRAMES");
+        if (framesFile is { Length: > 0 } && File.Exists(framesFile))
+        {
+            foreach (string frame in File.ReadAllLines(framesFile))
+                Console.Out.WriteLine(frame.Replace("<REQUESTID>", requestId, StringComparison.Ordinal));
+            Console.Out.Flush();
+        }
+
+        if (Environment.GetEnvironmentVariable("YAGU_FAKE_STDERR") is { Length: > 0 } diagnostic)
+            Console.Error.WriteLine(diagnostic);
+
+        return int.TryParse(
+            Environment.GetEnvironmentVariable("YAGU_FAKE_EXIT"),
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out int exitCode) ? exitCode : 0;
+    }
 
     default:
         Console.Error.WriteLine($"unknown fake scenario '{scenario}'.");

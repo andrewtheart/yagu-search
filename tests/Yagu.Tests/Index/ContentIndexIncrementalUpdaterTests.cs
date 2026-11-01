@@ -56,6 +56,42 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
     private static AppSettings Settings(int maxSegments = 8, int thresholdMB = 256)
         => new() { IndexMaxDeltaSegments = maxSegments, IndexCompactionThresholdMB = thresholdMB };
 
+
+
+    private static VolumeBinding Binding(ulong serial) => new(
+        @"\\?\Volume{11111111-1111-1111-1111-111111111111}\",
+        serial,
+        "NTFS",
+        @"C:\",
+        "r");
+
+    private void PublishBoundBase(ContentIndexStore store, VolumeBinding binding, params (string Path, string Text)[] docs)
+    {
+        var b = new ContentIndexGenerationBuilder(OpenPolicy);
+        b.SeedVolumeBinding(binding);
+        foreach (var (p, t) in docs)
+            b.AddDocument(p, Encoding.UTF8.GetBytes(t));
+        store.Publish(b.Build(_scopeId, "vol", _root, new UsnCheckpoint(1, 100), DateTimeOffset.UtcNow));
+    }
+
+    private ContentIndexDeltaSegment BuildSegment(
+        long nextUsn,
+        string path,
+        string text,
+        VolumeBinding binding,
+        string? root = null)
+    {
+        var builder = new ContentIndexDeltaSegmentBuilder(OpenPolicy);
+        builder.SeedVolumeBinding(binding);
+        builder.AddChangedDocument(path, Encoding.UTF8.GetBytes(text));
+        return builder.Build(
+            ContentIndexManager.ScopeIdForRoot(root ?? _root),
+            "vol",
+            root ?? _root,
+            new UsnCheckpoint(1, nextUsn),
+            DateTimeOffset.UtcNow);
+    }
+
     [Fact]
     public void Apply_UnreclaimableHistory_HaltsOnlyWhenTheUserOptedIn()
     {
@@ -238,7 +274,7 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
             new[] { Change(@"C:\r\identity-unavailable.txt", "new planner text") },
             Array.Empty<string>(),
             new UsnCheckpoint(1, 200),
-            Settings(),
+            IndexBuildOperationFactory.CreateMaintenanceSettings(Settings()),
             DateTimeOffset.UtcNow);
 
         Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, outcome);
@@ -515,6 +551,165 @@ public sealed class ContentIndexIncrementalUpdaterTests : IDisposable
 
         Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, outcome);
         Assert.True(store.TryOpenLayered()!.Segments[0].IsRemoved(IndexScopeIdentity.NormalizePath(@"C:\r\a.txt")));
+    }
+
+    [Fact]
+    public void Apply_VolumeBindingMismatchRetainsExistingCheckpoint()
+    {
+        var store = NewStore();
+        VolumeBinding binding = Binding(serial: 123);
+        PublishBoundBase(store, binding, (@"C:\r\a.txt", "alpha"));
+        var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
+
+        // A remounted or unavailable source volume must fail closed; accepting the delta would advance the
+        // journal checkpoint for postings that may belong to a different disk.
+        IncrementalUpdateOutcome outcome = updater.Apply(
+            _scopeId,
+            "vol",
+            _root,
+            [Change(@"C:\r\b.txt", "beta")],
+            Array.Empty<string>(),
+            new UsnCheckpoint(1, 200),
+            IndexBuildOperationFactory.CreateMaintenanceSettings(Settings()),
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(IncrementalUpdateOutcome.NeedsFullRebuild, outcome);
+        Assert.Equal(0, store.ActiveSegmentCount());
+        Assert.Equal(new UsnCheckpoint(1, 100), store.TryReadCurrentIncrementalManifest()!.FreshnessCheckpoint);
+    }
+
+    [Fact]
+    public void Apply_MatchingVolumeBindingCarriesStrongIdentityIntoSegment()
+    {
+        var store = NewStore();
+        VolumeBinding binding = Binding(serial: 456);
+        PublishBoundBase(store, binding, (@"C:\r\a.txt", "alpha"));
+        var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
+        var runtime = new ContentIndexIncrementalUpdateRuntime
+        {
+            CaptureVolumeBinding = _ => binding,
+        };
+
+        // When the mounted volume proof still matches, the delta must keep the GUID/serial binding so a
+        // later drive-letter reuse cannot make stale postings appear fresh.
+        using IndexMutationContext mutation = store.AcquireMutationContext();
+        IncrementalUpdateOutcome outcome = updater.ApplyUnderLease(
+            mutation,
+            _scopeId,
+            "vol",
+            _root,
+            [Change(@"C:\r\b.txt", "beta")],
+            Array.Empty<string>(),
+            new UsnCheckpoint(1, 200),
+            IndexBuildOperationFactory.CreateMaintenanceSettings(Settings()),
+            DateTimeOffset.UtcNow,
+            CancellationToken.None,
+            commitCheckpointWhenUnchanged: false,
+            progress: null,
+            runtime);
+
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, outcome);
+        IndexManifest manifest = Assert.Single(store.TryOpenLayered()!.Segments).Added.Manifest;
+        Assert.True(string.Equals(
+            VolumeBindingReader.NormalizeGuidPath(binding.VolumeGuidPath),
+            manifest.VolumeGuidPath,
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(binding.VolumeSerialNumber, manifest.VolumeSerialNumber);
+    }
+
+    [Fact]
+    public void Apply_LostBaseBeforePublishRequestsRebuildWithoutAdvancingCheckpoint()
+    {
+        var store = NewStore();
+        PublishBase(store, (@"C:\r\a.txt", "alpha"));
+        var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
+        var runtime = new ContentIndexIncrementalUpdateRuntime
+        {
+            PublishSegment = static (_, _, _) => throw new InvalidOperationException("pointer disappeared"),
+        };
+
+        // If the active base disappears between validation and pointer extension, the pass must not pretend
+        // the journal range was represented by a durable delta.
+        using IndexMutationContext mutation = store.AcquireMutationContext();
+        IncrementalUpdateOutcome outcome = updater.ApplyUnderLease(
+            mutation,
+            _scopeId,
+            "vol",
+            _root,
+            [Change(@"C:\r\b.txt", "beta")],
+            Array.Empty<string>(),
+            new UsnCheckpoint(1, 200),
+            IndexBuildOperationFactory.CreateMaintenanceSettings(Settings()),
+            DateTimeOffset.UtcNow,
+            CancellationToken.None,
+            commitCheckpointWhenUnchanged: false,
+            progress: null,
+            runtime);
+
+        Assert.Equal(IncrementalUpdateOutcome.NeedsFullRebuild, outcome);
+        Assert.Equal(0, store.ActiveSegmentCount());
+        Assert.Equal(new UsnCheckpoint(1, 100), store.TryReadCurrentIncrementalManifest()!.FreshnessCheckpoint);
+    }
+
+    [Fact]
+    public void Apply_VerboseModeEmitsRootRelativeChurnSummary()
+    {
+        var store = NewStore();
+        PublishBase(store, (@"C:\r\a.txt", "alpha"));
+        string? churnSummary = null;
+        var runtime = new ContentIndexIncrementalUpdateRuntime
+        {
+            IsVerboseEnabled = static () => true,
+            LogChurnSummary = (_, churn) => churnSummary = churn,
+        };
+        var updater = new ContentIndexIncrementalUpdater(store, OpenPolicy);
+
+        // The diagnostic churn hint must stay local and root-relative; logging absolute source paths would
+        // turn a troubleshooting feature into needless path disclosure.
+        using IndexMutationContext mutation = store.AcquireMutationContext();
+        IncrementalUpdateOutcome outcome = updater.ApplyUnderLease(
+            mutation,
+            _scopeId,
+            "vol",
+            _root,
+            [Change(@"C:\r\src\obj\a.txt", "alpha replacement")],
+            [IndexScopeIdentity.NormalizePath(@"C:\r\src\bin\gone.txt")],
+            new UsnCheckpoint(1, 200),
+            IndexBuildOperationFactory.CreateMaintenanceSettings(Settings()),
+            DateTimeOffset.UtcNow,
+            CancellationToken.None,
+            commitCheckpointWhenUnchanged: false,
+            progress: null,
+            runtime);
+
+        Assert.Equal(IncrementalUpdateOutcome.SegmentAppended, outcome);
+        Assert.NotNull(churnSummary);
+        Assert.Contains(@"src\bin x1", churnSummary);
+        Assert.Contains(@"src\obj x1", churnSummary);
+        Assert.DoesNotContain(_root, churnSummary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void MergeSegmentRun_RejectsInvalidInputsAndPreservesMatchingVolumeBinding()
+    {
+        var updater = new ContentIndexIncrementalUpdater(NewStore(), OpenPolicy);
+        VolumeBinding binding = Binding(serial: 777);
+        ContentIndexDeltaSegment first = BuildSegment(100, @"C:\r\a.txt", "alpha", binding);
+        ContentIndexDeltaSegment second = BuildSegment(200, @"C:\r\b.txt", "beta", binding);
+        ContentIndexDeltaSegment wrongRoot = BuildSegment(300, @"C:\other\b.txt", "other", binding, root: @"C:\other");
+
+        // The reference merge is the oracle for streaming coalescing; it must reject discontinuous metadata
+        // and keep the strong volume proof when the run is valid.
+        Assert.Throws<ArgumentException>(() => updater.MergeSegmentRun([first], CancellationToken.None));
+        Assert.Throws<InvalidDataException>(() => updater.MergeSegmentRun([first, wrongRoot], CancellationToken.None));
+        ContentIndexDeltaSegment merged = updater.MergeSegmentRun([first, second], CancellationToken.None, _ => binding);
+
+        Assert.True(string.Equals(
+            VolumeBindingReader.NormalizeGuidPath(binding.VolumeGuidPath),
+            merged.Added.Manifest.VolumeGuidPath,
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(binding.VolumeSerialNumber, merged.Added.Manifest.VolumeSerialNumber);
+        Assert.True(merged.Added.TryGetAlias(IndexScopeIdentity.NormalizePath(@"C:\r\b.txt"), out _, out _));
     }
 
     [Fact]

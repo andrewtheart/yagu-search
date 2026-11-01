@@ -306,7 +306,19 @@ public class McpClientRegistrarTests : IDisposable
         string path = NewFile("""{ "servers": { "github": { "command": "gh-mcp" } } }""");
 
         var registrar = typeof(McpClientRegistrar);
-        var write = registrar.GetMethod("Write", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        var write = registrar.GetMethod(
+            "Write",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static,
+            binder: null,
+            types:
+            [
+                typeof(string),
+                typeof(string),
+                typeof(DateTime),
+                typeof(long),
+                typeof(McpRegistrationOutcome),
+            ],
+            modifiers: null);
         Assert.NotNull(write);
 
         // Simulate: we read the file a moment ago (stale stamp), then someone else saved it.
@@ -799,6 +811,25 @@ public class McpClientRegistrarTests : IDisposable
     }
 
     [Fact]
+    public void Install_IntoANewFile_RefusesWhenTheFreshDocumentCannotAcceptTheInput()
+    {
+        string path = NewFile();
+
+        McpRegistrationResult result = McpClientRegistrar.Install(
+            path,
+            "bad\"container",
+            ServerName,
+            Entry,
+            McpConfigSnippetBuilder.TokenInputId,
+            TokenInput());
+
+        // If a caller supplied a container name that makes the fresh JSON invalid, Yagu must refuse the
+        // combined server/input write instead of creating a broken first configuration.
+        Assert.Equal(McpRegistrationOutcome.Malformed, result.Outcome);
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
     public void Install_IntoAnExistingFile_RefusesAnUnparseableEntryAndChangesNothing()
     {
         string existing = """
@@ -914,6 +945,29 @@ public class McpClientRegistrarTests : IDisposable
         Assert.Contains("someone-elses-secret", ids, StringComparer.Ordinal);
     }
 
+    [Fact]
+    public void RemoveInput_WithAForcedMalformedSpliceKeepsTheOriginalFile()
+    {
+        string original = """{ "inputs": [ { "id": "yagu-token" } ] }""";
+        string path = NewFile(original);
+
+        McpRegistrationResult result = McpClientRegistrar.RemoveInput(
+            path,
+            "yagu-token",
+            (string text, string inputId, out string updated, out string? error) =>
+            {
+                updated = "{ broken";
+                error = null;
+                return true;
+            },
+            _ => false);
+
+        // Removing only an input definition still uses a raw text splice, so the same final parse guard
+        // must prevent an invalid array from reaching disk.
+        Assert.Equal(McpRegistrationOutcome.Malformed, result.Outcome);
+        Assert.Equal(original, File.ReadAllText(path));
+    }
+
     /// <summary>The ids declared in the file's <c>inputs</c> array.</summary>
     private static string[] InputIds(string path)
     {
@@ -940,6 +994,21 @@ public class McpClientRegistrarTests : IDisposable
     }
 
     [Fact]
+    public void Remove_WhenTheConfigIsLockedReportsFailureWithoutChangingIt()
+    {
+        string path = NewFile("""{ "servers": { "yagu": { "command": "Yagu.McpServer.exe" } } }""");
+
+        using var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        McpRegistrationResult result = McpClientRegistrar.Remove(path, Container, ServerName);
+
+        // A scanner or editor holding the file must produce a recoverable failure instead of truncating
+        // or reformatting the user's client configuration.
+        Assert.Equal(McpRegistrationOutcome.Failed, result.Outcome);
+        Assert.False(result.Succeeded);
+    }
+
+    [Fact]
     public void Remove_WithAMalformedInputsSection_RefusesAfterTheEntryWouldHaveGone()
     {
         // The server entry is removable and the inputs array is not, so this proves the entry removal is
@@ -959,6 +1028,56 @@ public class McpClientRegistrarTests : IDisposable
         Assert.Equal(original, File.ReadAllText(path));
     }
 
+    [Fact]
+    public void Remove_WithInputRemovalFailureKeepsTheOriginalFile()
+    {
+        string original = """{ "servers": { "yagu": { "command": "Yagu.McpServer.exe" } }, "inputs": [] }""";
+        string path = NewFile(original);
+
+        McpRegistrationResult result = McpClientRegistrar.Remove(
+            path,
+            Container,
+            ServerName,
+            "yagu-token",
+            (string text, string inputId, out string updated, out string? error) =>
+            {
+                updated = text;
+                error = "inputs could not be parsed";
+                return false;
+            },
+            _ => true);
+
+        // The server entry and token input are one logical install; a token-removal failure must roll the
+        // entry removal back rather than leave a half-uninstalled HTTP configuration.
+        Assert.Equal(McpRegistrationOutcome.Malformed, result.Outcome);
+        Assert.Equal(original, File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void Remove_WithAForcedMalformedSpliceKeepsTheOriginalFile()
+    {
+        string original = """{ "servers": { "yagu": { "command": "Yagu.McpServer.exe" } } }""";
+        string path = NewFile(original);
+
+        McpRegistrationResult result = McpClientRegistrar.Remove(
+            path,
+            Container,
+            ServerName,
+            inputId: null,
+            (string text, string inputId, out string updated, out string? error) =>
+            {
+                updated = text;
+                error = null;
+                return true;
+            },
+            _ => false);
+
+        // The final parse check is the backstop for text splicing: if a future edit bug would create
+        // invalid JSON, the user's file must stay byte-for-byte unchanged.
+        Assert.Equal(McpRegistrationOutcome.Malformed, result.Outcome);
+        Assert.Equal(original, File.ReadAllText(path));
+    }
+
     // ── IsInstalled ──
 
     [Fact]
@@ -974,6 +1093,28 @@ public class McpClientRegistrarTests : IDisposable
     public void IsInstalled_IsFalseWhenThePathIsADirectory()
     {
         Assert.False(McpClientRegistrar.IsInstalled(_directory, Container, ServerName));
+    }
+
+    [Fact]
+    public void IsInstalled_IsFalseWhenTheConfigIsLocked()
+    {
+        string path = NewFile("""{ "servers": { "yagu": { "command": "Yagu.McpServer.exe" } } }""");
+        using var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        // The Settings tab polls this while building UI; a transient file lock must not crash the window.
+        Assert.False(McpClientRegistrar.IsInstalled(path, Container, ServerName));
+    }
+
+    [Fact]
+    public void RemoveInput_WhenTheConfigIsLockedReportsFailureWithoutChangingIt()
+    {
+        string path = NewFile("""{ "inputs": [ { "id": "yagu-token" } ] }""");
+        using var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        McpRegistrationResult result = McpClientRegistrar.RemoveInput(path, "yagu-token");
+
+        // Removing a token input has the same read-safety contract as removing a server entry.
+        Assert.Equal(McpRegistrationOutcome.Failed, result.Outcome);
     }
 
     // ── The atomic write, and what it refuses ──
@@ -1037,6 +1178,84 @@ public class McpClientRegistrarTests : IDisposable
     }
 
     [Fact]
+    public void Write_RefusesWhenTheFileChangesAfterTheTempFileIsWritten()
+    {
+        string path = NewFile("""{ "servers": { "someone-else": {} } }""");
+        var info = new FileInfo(path);
+
+        McpRegistrationResult result = McpClientRegistrar.Write(
+            path,
+            "{}",
+            info.LastWriteTimeUtc,
+            info.Length,
+            McpRegistrationOutcome.Updated,
+            afterTempWritten: () => File.WriteAllText(path, """{ "servers": { "saved-by-editor": {} } }"""),
+            File.Replace,
+            File.Move,
+            _ => { });
+
+        // The second identity check is what catches an editor save that lands during our scratch write.
+        Assert.Equal(McpRegistrationOutcome.Failed, result.Outcome);
+        Assert.Contains("saved-by-editor", File.ReadAllText(path), StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(_directory, Path.GetFileName(path) + "*" + McpClientRegistrar.TempSuffix));
+    }
+
+    [Fact]
+    public void Write_RetriesAnInjectedReplaceIOExceptionBeforeSucceeding()
+    {
+        string path = NewFile("""{ "servers": { "someone-else": {} } }""");
+        var info = new FileInfo(path);
+        int attempts = 0;
+        var delays = new List<int>();
+
+        McpRegistrationResult result = McpClientRegistrar.Write(
+            path,
+            "{}",
+            info.LastWriteTimeUtc,
+            info.Length,
+            McpRegistrationOutcome.Updated,
+            afterTempWritten: null,
+            (source, destination, backup, ignoreMetadataErrors) =>
+            {
+                attempts++;
+                if (attempts == 1)
+                    throw new IOException("scanner still has the file");
+                File.Replace(source, destination, backup, ignoreMetadataErrors);
+            },
+            File.Move,
+            delays.Add);
+
+        // A transient replace failure from a scanner should delay and retry without widening the
+        // concurrent-edit race or losing the backup of the user's previous config.
+        Assert.Equal(McpRegistrationOutcome.Updated, result.Outcome);
+        Assert.Equal(2, attempts);
+        Assert.Equal([20], delays);
+        Assert.Equal("{}", File.ReadAllText(path));
+        Assert.True(File.Exists(path + McpClientRegistrar.BackupSuffix));
+    }
+
+    [Fact]
+    public void Write_CleansTheTempFileWhenTheInjectedCreateMoveFails()
+    {
+        string path = Path.Combine(_directory, "new-client.json");
+
+        Assert.Throws<IOException>(() => McpClientRegistrar.Write(
+            path,
+            "{}",
+            default,
+            -1,
+            McpRegistrationOutcome.Installed,
+            afterTempWritten: null,
+            File.Replace,
+            (source, destination, overwrite) => throw new IOException("destination vanished"),
+            _ => { }));
+
+        // A failed first install may bubble to the caller, but the unique scratch file must not be left
+        // beside the user's configuration directory.
+        Assert.Empty(Directory.GetFiles(_directory, Path.GetFileName(path) + "*" + McpClientRegistrar.TempSuffix));
+    }
+
+    [Fact]
     public void Install_ClearsAScratchFileLeftBehindByAKilledRun()
     {
         string path = NewFile("""{ "servers": {} }""");
@@ -1047,6 +1266,22 @@ public class McpClientRegistrarTests : IDisposable
 
         Assert.Equal(McpRegistrationOutcome.Installed, result.Outcome);
         Assert.False(File.Exists(stale), "the scratch file must not survive beside the user's configuration.");
+    }
+
+    [Fact]
+    public void Install_LeavesALiveScratchFileAloneWhenItCannotBeDeleted()
+    {
+        string path = NewFile("""{ "servers": {} }""");
+        string stale = path + ".live-writer" + McpClientRegistrar.TempSuffix;
+        File.WriteAllText(stale, "another registration is still writing this scratch file");
+        using var locked = new FileStream(stale, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        McpRegistrationResult result = McpClientRegistrar.Install(path, Container, ServerName, Entry);
+
+        // A scratch file that is still locked may belong to an active concurrent registration; sweeping
+        // must ignore it rather than breaking that writer.
+        Assert.Equal(McpRegistrationOutcome.Installed, result.Outcome);
+        Assert.True(File.Exists(stale));
     }
 
     [Fact]
@@ -1172,5 +1407,97 @@ public class McpClientRegistrarTests : IDisposable
         Assert.Contains("/* before */", text, StringComparison.Ordinal);
         Assert.Contains("/* after */", text, StringComparison.Ordinal);
         Assert.DoesNotContain("old.exe", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RemoveInput_WithNestedNonStringIdsLeavesTheFileByteIdentical()
+    {
+        string original = """
+            {
+              "inputs": [
+                { "id": [ "not-yagu" ], "metadata": [ { "keep": true } ] },
+                { "id": { "nested": "not-yagu" } }
+              ]
+            }
+            """;
+        string path = NewFile(original);
+
+        McpRegistrationResult result = McpClientRegistrar.RemoveInput(path, "yagu-token");
+
+        // JSONC clients allow arbitrary input metadata; nested arrays/objects around an id field must be
+        // skipped without corrupting unrelated input definitions.
+        Assert.Equal(McpRegistrationOutcome.NotPresent, result.Outcome);
+        Assert.Equal(original, File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void PrivateJsonHelpers_RefuseRootsThatAreNotObjects()
+    {
+        object?[] locateArgs = ["[1, 2, 3]", "yagu-token", null!, null!, null!];
+
+        bool located = (bool)InvokePrivate("TryLocateInputs", locateArgs)!;
+
+        // The splicer can only preserve comments by editing object properties; array roots are refused
+        // before any insertion point is considered.
+        Assert.False(located);
+        Assert.Contains("root is not a JSON object", Assert.IsType<string>(locateArgs[4]));
+    }
+
+    [Fact]
+    public void PrivateJsonHelpers_FallBackSafelyWhenTheRootBraceCannotBeFound()
+    {
+        string inserted = Assert.IsType<string>(InvokePrivate(
+            "InsertContainer",
+            ["[1, 2, 3]", Container, ServerName, Entry]));
+
+        bool merged = McpClientRegistrar.TryMergeInput(
+            "{}",
+            "yagu-token",
+            TokenInput(),
+            _ => -1,
+            out _,
+            out string? mergeError);
+
+        // These are defensive backstops for impossible public states; if a malformed caller reaches them,
+        // the registrar must either create a clean fresh document or refuse without writing.
+        using var document = System.Text.Json.JsonDocument.Parse(inserted);
+        Assert.True(document.RootElement.GetProperty(Container).TryGetProperty(ServerName, out _));
+        Assert.False(merged);
+        Assert.Contains("root is not a JSON object", mergeError);
+    }
+
+    [Fact]
+    public void PrivateTriviaHelpers_TolerateMalformedComments()
+    {
+        int rootBrace = Assert.IsType<int>(InvokePrivate("RootBraceIndex", ["/* unterminated"]));
+        object spans = InvokePrivate("CommentSpans", ["{ /* unterminated"])!;
+        int count = Assert.IsType<int>(spans.GetType().GetProperty("Count")!.GetValue(spans));
+        int skipped = Assert.IsType<int>(InvokePrivate("SkipTriviaForward", ["  /* unterminated", 0]));
+        int slashSkipped = Assert.IsType<int>(InvokePrivate("SkipTriviaForward", ["  /not-a-comment", 0]));
+
+        // Broken JSONC comments are common while a user is mid-edit; helper failures must degrade to
+        // "malformed/not found" rather than manufacturing splice offsets into comment text.
+        Assert.Equal(-1, rootBrace);
+        Assert.Equal(0, count);
+        Assert.Equal("  /* unterminated".Length, skipped);
+        Assert.Equal(2, slashSkipped);
+    }
+
+    [Fact]
+    public void RemoveAbandonedTempFiles_IgnoresPathsWithoutAUsableDirectory()
+    {
+        // Cleanup is tidiness only. A path shape Windows will not parse must never make registration fail
+        // before the real config edit has a chance to report its own result.
+        InvokePrivate("RemoveAbandonedTempFiles", ["C:\\bad\0\\settings.json"]);
+        InvokePrivate("RemoveAbandonedTempFiles", ["settings.json"]);
+    }
+
+    private static object? InvokePrivate(string name, object?[] args)
+    {
+        var method = typeof(McpClientRegistrar).GetMethod(
+            name,
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        return method!.Invoke(null, args);
     }
 }

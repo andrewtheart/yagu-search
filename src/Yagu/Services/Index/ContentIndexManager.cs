@@ -1443,17 +1443,9 @@ public sealed partial class ContentIndexManager
                 if (!_hydrator(sourcePath, hydratedPath, cancellationToken))
                     return default;
                 cancellationToken.ThrowIfCancellationRequested();
-                UsnFileIdentity? identity = null;
-                try { identity = FileIdentityReader.TryGetIdentity(sourcePath)?.FileId; }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    YaguLog.For("ContentIndex").LogDebug(
-                        ex,
-                        "Could not capture cloud source identity for '{Path}'.",
-                        sourcePath);
-                }
-                    cancellationToken.ThrowIfCancellationRequested();
-                    keepHydratedFile = true;
+                UsnFileIdentity? identity = FileIdentityReader.TryGetIdentity(sourcePath)?.FileId;
+                cancellationToken.ThrowIfCancellationRequested();
+                keepHydratedFile = true;
                 return new CloudHydrationResult(true, hydratedPath, identity);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

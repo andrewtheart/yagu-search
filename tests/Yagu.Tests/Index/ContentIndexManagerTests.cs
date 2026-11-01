@@ -118,6 +118,16 @@ public sealed class ContentIndexManagerTests : IDisposable
     }
 
     [Fact]
+    public void GetActiveIndexBytesForRoot_StorageFailureReturnsZero()
+    {
+        // A missing or temporarily unavailable storage root must disable only the size badge, not bubble
+        // an exception into search/startup.
+        var manager = new ContentIndexManager(new ThrowingIoScopePathProvider(_indexRoot));
+
+        Assert.Equal(0, manager.GetActiveIndexBytesForRoot(_corpus));
+    }
+
+    [Fact]
     public void BuildScope_WithV3Enabled_ProducesQueryStructuresInTheLiveGeneration()
     {
         Write("a.txt", "the planner produces trigram queries");
@@ -215,6 +225,32 @@ public sealed class ContentIndexManagerTests : IDisposable
 
         Assert.Equal(expectedIndexed, result.Report.IndexedCount);
         Assert.Equal(expectedSkipped, result.Report.SkipCount(IndexSkipReason.CloudOnly));
+    }
+
+    [Fact]
+    public void BuildScope_CloudProviderProbeFailureSkipsThePlaceholder()
+    {
+        // A Cloud Filter provider can disappear while a crawl is classifying placeholders; that must make
+        // the file live-scan later rather than aborting or trusting a stale placeholder.
+        Write("cloud.txt", "cloud planner content");
+        string cloudPath = Path.Combine(_corpus, "cloud.txt");
+        var crawler = new IndexCrawlerFileSystem
+        {
+            EnumerateEntries = directory => string.Equals(directory, _corpus, StringComparison.OrdinalIgnoreCase)
+                ? new[] { new IndexCrawlEntry(cloudPath, new FileInfo(cloudPath).Length, CloudOnlyAttributes) }
+                : Array.Empty<IndexCrawlEntry>(),
+        };
+        var manager = new ContentIndexManager(
+            _paths,
+            retainedGenerations: 2,
+            contentReader: null,
+            crawlerFileSystem: crawler,
+            cloudFileCanHydrate: (_, _) => throw new IOException("provider disconnected"));
+
+        BuildScopeResult result = manager.BuildScope(_corpus, Policy(includeCloudOnly: true));
+
+        Assert.Equal(0, result.Report.IndexedCount);
+        Assert.Equal(1, result.Report.SkipCount(IndexSkipReason.CloudOnly));
     }
 
     [Fact]
@@ -1007,5 +1043,11 @@ public sealed class ContentIndexManagerTests : IDisposable
     {
         public string IndexRoot { get; } = indexRoot;
         public string GetScopeDirectory(string scopeId) => throw new OutOfMemoryException("scope allocation failed");
+    }
+
+    private sealed class ThrowingIoScopePathProvider(string indexRoot) : IContentIndexPathProvider
+    {
+        public string IndexRoot { get; } = indexRoot;
+        public string GetScopeDirectory(string scopeId) => throw new IOException("scope storage unavailable");
     }
 }

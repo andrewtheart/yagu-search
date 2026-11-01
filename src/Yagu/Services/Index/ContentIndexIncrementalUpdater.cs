@@ -53,6 +53,50 @@ public readonly record struct IncrementalFileRead(
 public readonly record struct IncrementalChange(string Path, IndexContentClassification Classification, FileIdentity? Identity);
 
 /// <summary>
+/// The mutation-boundary calls one incremental pass makes, as injectable steps.
+/// </summary>
+/// <remarks>
+/// Mirrors the existing <c>IndexBuildRuntime</c>/<c>IndexMaintenanceRuntime</c> seam pattern: every member
+/// is <c>init</c>-only and defaults to the real implementation, so an instance is immutable and there is no
+/// mutable static for a parallel test class to race on. Production always uses the defaults; tests override
+/// individual steps to force the disk/pointer races that decide whether a checkpoint may advance.
+/// </remarks>
+internal sealed class ContentIndexIncrementalUpdateRuntime
+{
+    public Func<string, VolumeBinding?> CaptureVolumeBinding { get; init; } = VolumeBindingReader.TryCapture;
+
+    public Func<ContentIndexStore, IndexMaintenanceSettings, DateTimeOffset, IndexAutomaticCompactionFailure?> GetDeferredCompactionFailure { get; init; }
+        = static (store, settings, nowUtc) =>
+            ContentIndexManager.ShouldDeferAutomaticCompaction(store, settings, nowUtc, out IndexAutomaticCompactionFailure failure)
+                ? failure
+                : null;
+
+    public Func<ContentIndexIncrementalUpdater, IndexMutationContext, int, CancellationToken, EffectiveIndexSizePolicy, IndexMergeResourceBudget, int> CoalesceSmallSegments { get; init; }
+        = static (updater, mutation, maxSegments, cancellationToken, size, resources) =>
+            updater.CoalesceSmallSegmentsUnderLease(mutation, maxSegments, cancellationToken, size, resources);
+
+    public Func<ContentIndexStore, IndexMutationContext, ContentIndexDeltaSegment, PublishResult> PublishSegment { get; init; }
+        = static (store, mutation, segment) => store.PublishSegmentFastUnderLease(mutation, segment);
+
+    public Action<IndexMutationContext, ContentIndexStore, string, string, IndexMaintenanceSettings, DateTimeOffset, Action<int, string>?, CancellationToken> RunStreamingCompaction { get; init; }
+        = ContentIndexManager.RunStreamingCompactionUnderLease;
+
+    public Action<ContentIndexStore, Exception, DateTimeOffset> RecordAutomaticCompactionFailure { get; init; }
+        = ContentIndexManager.RecordAutomaticCompactionFailure;
+
+    public Action<ContentIndexStore> ClearAutomaticCompactionFailure { get; init; }
+        = ContentIndexManager.ClearAutomaticCompactionFailure;
+
+    public Func<DateTimeOffset> UtcNow { get; init; } = static () => DateTimeOffset.UtcNow;
+
+    public Func<bool> IsVerboseEnabled { get; init; } = static () => LogService.Instance.IsVerboseEnabled;
+
+    public Action<string, string> LogChurnSummary { get; init; }
+        = static (scopeId, churn) => YaguLog.For("ContentIndex").LogDebug(
+            "Incremental update for scope {Scope}: busiest folders this pass — {Churn}.", scopeId, churn);
+}
+
+/// <summary>
 /// Orchestrates one Phase 3 incremental-update pass (plan §11.4): it turns a resolved set of created/
 /// modified files and deleted paths into an immutable delta segment, appends it to the current base via the
 /// <see cref="ContentIndexStore"/>, and — when the segment/size bounds are exceeded — streams the whole layered
@@ -177,6 +221,40 @@ public sealed partial class ContentIndexIncrementalUpdater
         CancellationToken cancellationToken = default,
         bool commitCheckpointWhenUnchanged = false,
         Action<int, string>? progress = null)
+        => ApplyUnderLease(
+            mutation,
+            scopeId,
+            volumeIdentity,
+            normalizedRootPath,
+            changed,
+            deletedPaths,
+            checkpoint,
+            settings,
+            builtUtc,
+            cancellationToken,
+            commitCheckpointWhenUnchanged,
+            progress,
+            new ContentIndexIncrementalUpdateRuntime());
+
+    /// <remarks>
+    /// Takes the incremental-update runtime so tests can force otherwise-racy file-system failures at each
+    /// mutation boundary. Those arms are what keep checkpoints from advancing independently of the delta
+    /// segment and keep stale or mismatched volume data from being reported as fresh.
+    /// </remarks>
+    internal IncrementalUpdateOutcome ApplyUnderLease(
+        IndexMutationContext mutation,
+        string scopeId,
+        string volumeIdentity,
+        string normalizedRootPath,
+        IReadOnlyList<IncrementalChange> changed,
+        IReadOnlyList<string> deletedPaths,
+        UsnCheckpoint checkpoint,
+        IndexMaintenanceSettings settings,
+        DateTimeOffset builtUtc,
+        CancellationToken cancellationToken,
+        bool commitCheckpointWhenUnchanged,
+        Action<int, string>? progress,
+        ContentIndexIncrementalUpdateRuntime runtime)
     {
         ArgumentNullException.ThrowIfNull(mutation);
         ArgumentNullException.ThrowIfNull(changed);
@@ -202,7 +280,7 @@ public sealed partial class ContentIndexIncrementalUpdater
 
         VolumeBinding? mounted = string.IsNullOrWhiteSpace(baseManifest.VolumeGuidPath)
             ? null
-            : VolumeBindingReader.TryCapture(normalizedRootPath);
+            : runtime.CaptureVolumeBinding(normalizedRootPath);
         string volumeReason = "source volume unavailable";
         if (!string.IsNullOrWhiteSpace(baseManifest.VolumeGuidPath)
             && (mounted is not { } currentVolume
@@ -248,8 +326,8 @@ public sealed partial class ContentIndexIncrementalUpdater
             // background I/O and temporary disk consumption.
             try
             {
-                CoalesceSmallSegmentsUnderLease(
-                    mutation, budgetMaxSegments, cancellationToken, size,
+                runtime.CoalesceSmallSegments(
+                    this, mutation, budgetMaxSegments, cancellationToken, size,
                     IndexMergeResourceBudget.FromSettings(settings));
             }
             catch (OperationCanceledException)
@@ -265,8 +343,7 @@ public sealed partial class ContentIndexIncrementalUpdater
             long afterCoalesce = _store.TotalActiveIndexBytes();
             if (size.ExceedsBudget(afterCoalesce) && size.AllowsCompaction)
             {
-                if (ContentIndexManager.ShouldDeferAutomaticCompaction(
-                        _store, settings, DateTimeOffset.UtcNow, out _))
+                if (runtime.GetDeferredCompactionFailure(_store, settings, runtime.UtcNow()) is not null)
                 {
                     return IncrementalUpdateOutcome.CompactionFailed;
                 }
@@ -274,7 +351,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                 try
                 {
                     progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);
-                    ContentIndexManager.RunStreamingCompactionUnderLease(
+                    runtime.RunStreamingCompaction(
                         mutation,
                         _store,
                         scopeId,
@@ -285,7 +362,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                         cancellationToken);
                     afterCoalesce = _store.TotalActiveIndexBytes();
                     if (!size.ExceedsBudget(afterCoalesce))
-                        ContentIndexManager.ClearAutomaticCompactionFailure(_store);
+                        runtime.ClearAutomaticCompactionFailure(_store);
                 }
                 catch (OperationCanceledException)
                 {
@@ -293,7 +370,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    ContentIndexManager.RecordAutomaticCompactionFailure(_store, ex, DateTimeOffset.UtcNow);
+                    runtime.RecordAutomaticCompactionFailure(_store, ex, runtime.UtcNow());
                     return IncrementalUpdateOutcome.CompactionFailed;
                 }
             }
@@ -302,11 +379,11 @@ public sealed partial class ContentIndexIncrementalUpdater
             {
                 if (size.AllowsCompaction)
                 {
-                    ContentIndexManager.RecordAutomaticCompactionFailure(
+                    runtime.RecordAutomaticCompactionFailure(
                         _store,
                         new InvalidOperationException(
                             $"Streaming compaction completed, but the {afterCoalesce / (1024 * 1024):N0} MB index still exceeds its {size.SizeBudgetMB:N0} MB storage budget."),
-                        DateTimeOffset.UtcNow);
+                        runtime.UtcNow());
                 }
                 YaguLog.For("ContentIndex").LogWarning(
                     "Scope {Scope} for '{Root}' is {IndexMB} MB, at or over its {BudgetMB} MB size budget, and mode '{Mode}' cannot reclaim further — pausing index updates for this root. Searches still return every match (uncovered files are read live); rebuild this index to reclaim the space.",
@@ -350,7 +427,7 @@ public sealed partial class ContentIndexIncrementalUpdater
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _store.PublishSegmentFastUnderLease(mutation, segment);
+            runtime.PublishSegment(_store, mutation, segment);
         }
         catch (InvalidOperationException ex)
         {
@@ -366,7 +443,7 @@ public sealed partial class ContentIndexIncrementalUpdater
         // Verbose-only, bounded, root-relative churn hint so a user investigating an index that grows
         // faster than it can be cleaned up can see which folders to exclude. Never telemetry, never an
         // absolute path, and never an automatic filter change.
-        if (LogService.Instance.IsVerboseEnabled)
+        if (runtime.IsVerboseEnabled())
         {
             IReadOnlyList<IndexChurnEntry> busiest = IndexChurnSummary.TopRootRelativeDirectories(
                 changed.Select(change => change.Path).Concat(deletedPaths),
@@ -375,8 +452,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                 take: 5);
             if (IndexChurnSummary.Describe(busiest) is { } churn)
             {
-                YaguLog.For("ContentIndex").LogDebug(
-                    "Incremental update for scope {Scope}: busiest folders this pass — {Churn}.", scopeId, churn);
+                runtime.LogChurnSummary(scopeId, churn);
             }
         }
 
@@ -390,7 +466,8 @@ public sealed partial class ContentIndexIncrementalUpdater
             {
                 try
                 {
-                    CoalesceSmallSegmentsUnderLease(
+                    runtime.CoalesceSmallSegments(
+                        this,
                         mutation,
                         budgetMaxSegments,
                         cancellationToken,
@@ -413,8 +490,7 @@ public sealed partial class ContentIndexIncrementalUpdater
             long afterBudgetCoalesce = _store.TotalActiveIndexBytes();
             if (size.ExceedsBudget(afterBudgetCoalesce) && size.AllowsCompaction)
             {
-                if (ContentIndexManager.ShouldDeferAutomaticCompaction(
-                        _store, settings, DateTimeOffset.UtcNow, out _))
+                if (runtime.GetDeferredCompactionFailure(_store, settings, runtime.UtcNow()) is not null)
                 {
                     return IncrementalUpdateOutcome.CompactionFailed;
                 }
@@ -422,7 +498,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                 try
                 {
                     progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);
-                    ContentIndexManager.RunStreamingCompactionUnderLease(
+                    runtime.RunStreamingCompaction(
                         mutation,
                         _store,
                         scopeId,
@@ -434,15 +510,15 @@ public sealed partial class ContentIndexIncrementalUpdater
                     long compactedBytes = _store.TotalActiveIndexBytes();
                     if (!size.ExceedsBudget(compactedBytes))
                     {
-                        ContentIndexManager.ClearAutomaticCompactionFailure(_store);
+                        runtime.ClearAutomaticCompactionFailure(_store);
                         return IncrementalUpdateOutcome.Compacted;
                     }
 
-                    ContentIndexManager.RecordAutomaticCompactionFailure(
+                    runtime.RecordAutomaticCompactionFailure(
                         _store,
                         new InvalidOperationException(
                             $"Streaming compaction completed, but the {compactedBytes / (1024 * 1024):N0} MB index still exceeds its {size.SizeBudgetMB:N0} MB storage budget."),
-                        DateTimeOffset.UtcNow);
+                        runtime.UtcNow());
                 }
                 catch (OperationCanceledException)
                 {
@@ -450,7 +526,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    ContentIndexManager.RecordAutomaticCompactionFailure(_store, ex, DateTimeOffset.UtcNow);
+                    runtime.RecordAutomaticCompactionFailure(_store, ex, runtime.UtcNow());
                     return IncrementalUpdateOutcome.CompactionFailed;
                 }
             }
@@ -473,8 +549,8 @@ public sealed partial class ContentIndexIncrementalUpdater
             progress?.Invoke(IndexUpdateStages.CompactFloor, IndexUpdateStages.Compacting);
             try
             {
-                boundedMergeMadeProgress = CoalesceSmallSegmentsUnderLease(
-                    mutation, maxSegments, cancellationToken, size,
+                boundedMergeMadeProgress = runtime.CoalesceSmallSegments(
+                    this, mutation, maxSegments, cancellationToken, size,
                     IndexMergeResourceBudget.FromSettings(settings)) > 0;
             }
             catch (OperationCanceledException)
@@ -530,8 +606,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                     size.Mode);
             }
 
-            if (ContentIndexManager.ShouldDeferAutomaticCompaction(
-                    _store, settings, DateTimeOffset.UtcNow, out IndexAutomaticCompactionFailure priorFailure))
+            if (runtime.GetDeferredCompactionFailure(_store, settings, runtime.UtcNow()) is { } priorFailure)
             {
                 YaguLog.For("ContentIndex").LogWarning(
                     "Incremental update for scope {Scope}: automatic compaction is deferred until {RetryAfter:u} after the prior failure: {Reason}",
@@ -546,7 +621,7 @@ public sealed partial class ContentIndexIncrementalUpdater
             YaguLog.For("ContentIndex").LogInformation("Incremental update for scope {Scope}: compaction bounds exceeded (maxSegments={MaxSegments}, thresholdMB={ThresholdMB}) → streaming the layered index into a fresh base.", scopeId, maxSegments, thresholdMB);
             try
             {
-                ContentIndexManager.RunStreamingCompactionUnderLease(
+                runtime.RunStreamingCompaction(
                     mutation,
                     _store,
                     scopeId,
@@ -555,7 +630,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                     builtUtc,
                     progress is null ? null : ReportStreamingCompaction,
                     cancellationToken);
-                ContentIndexManager.ClearAutomaticCompactionFailure(_store);
+                runtime.ClearAutomaticCompactionFailure(_store);
                 YaguLog.For("ContentIndex").LogInformation("Incremental update for scope {Scope}: streaming compaction complete.", scopeId);
                 return IncrementalUpdateOutcome.Compacted;
             }
@@ -565,7 +640,7 @@ public sealed partial class ContentIndexIncrementalUpdater
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                ContentIndexManager.RecordAutomaticCompactionFailure(_store, ex, DateTimeOffset.UtcNow);
+                runtime.RecordAutomaticCompactionFailure(_store, ex, runtime.UtcNow());
                 // The delta was published before this optional reclamation step. A failed compaction leaves
                 // that complete layered pointer active. Report a typed maintenance failure rather than a
                 // successful append so the scheduler surfaces it and honors the retry backoff.
@@ -577,7 +652,7 @@ public sealed partial class ContentIndexIncrementalUpdater
         }
         else
         {
-            ContentIndexManager.ClearAutomaticCompactionFailure(_store);
+            runtime.ClearAutomaticCompactionFailure(_store);
         }
 
         return IncrementalUpdateOutcome.SegmentAppended;
@@ -609,6 +684,29 @@ public sealed partial class ContentIndexIncrementalUpdater
         CancellationToken cancellationToken,
         EffectiveIndexSizePolicy? sizePolicy = null,
         IndexMergeResourceBudget? resources = null)
+        => CoalesceSmallSegmentsUnderLease(
+            mutation,
+            maxSegments,
+            cancellationToken,
+            sizePolicy,
+            resources,
+            StreamingSegmentRunMerger.Merge,
+            static (store, heldMutation, run, preparedDirectory) =>
+                store.TryReplacePreparedSegmentRunUnderLease(heldMutation, run, preparedDirectory));
+
+    /// <remarks>
+    /// Takes the streaming merge and publication steps as parameters so tests can prove cancellation,
+    /// invalid prepared output, and lost-pointer failures leave the existing layered index unchanged. In
+    /// production those races happen between disk I/O and the pointer flip and are not reliably triggerable.
+    /// </remarks>
+    internal int CoalesceSmallSegmentsUnderLease(
+        IndexMutationContext mutation,
+        int maxSegments,
+        CancellationToken cancellationToken,
+        EffectiveIndexSizePolicy? sizePolicy,
+        IndexMergeResourceBudget? resources,
+        Func<IReadOnlyList<string>, IndexCompactionWorkspace, long, IndexCompactionDiskGuard?, bool, CancellationToken, PreparedIndexLayer> merge,
+        Func<ContentIndexStore, IndexMutationContext, ContentIndexStore.SegmentCoalesceRun, string, bool> publishPreparedRun)
     {
         EffectiveIndexSizePolicy size = sizePolicy ?? EffectiveIndexSizePolicy.Default;
         if (!size.AllowsCoalescing)
@@ -633,7 +731,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                 _store.IndexRootDirectory, budget.MinimumFreeSpaceMB, budget.MaxDiskUsagePercent);
             try
             {
-                StreamingSegmentRunMerger.Merge(
+                merge(
                     run.SegmentDirectories,
                     workspace,
                     budget.MemoryBudgetBytes,
@@ -653,7 +751,7 @@ public sealed partial class ContentIndexIncrementalUpdater
                 return removedLayers;
             }
 
-            if (!_store.TryReplacePreparedSegmentRunUnderLease(mutation, run, workspace.PreparedDirectory))
+            if (!publishPreparedRun(_store, mutation, run, workspace.PreparedDirectory))
                 return removedLayers;
 
             mergedRuns++;
@@ -680,6 +778,17 @@ public sealed partial class ContentIndexIncrementalUpdater
     internal ContentIndexDeltaSegment MergeSegmentRun(
         IReadOnlyList<ContentIndexDeltaSegment> segments,
         CancellationToken cancellationToken)
+        => MergeSegmentRun(segments, cancellationToken, VolumeBindingReader.TryCapture);
+
+    /// <remarks>
+    /// Takes the volume-binding reader so tests can reach the strong-binding preservation path without
+    /// depending on the host machine's mounted volumes. Losing this path would downgrade freshness safety
+    /// by stripping the GUID/serial proof from a coalesced segment.
+    /// </remarks>
+    internal ContentIndexDeltaSegment MergeSegmentRun(
+        IReadOnlyList<ContentIndexDeltaSegment> segments,
+        CancellationToken cancellationToken,
+        Func<string, VolumeBinding?> volumeBindingReader)
     {
         if (segments.Count < 2)
             throw new ArgumentException("At least two segments are required to coalesce a run.", nameof(segments));
@@ -704,7 +813,7 @@ public sealed partial class ContentIndexIncrementalUpdater
             priorCheckpoint = manifest.FreshnessCheckpoint;
         }
         if (!string.IsNullOrWhiteSpace(firstManifest.VolumeGuidPath)
-            && VolumeBindingReader.TryCapture(firstManifest.NormalizedRootPath) is { } volumeBinding
+            && volumeBindingReader(firstManifest.NormalizedRootPath) is { } volumeBinding
             && VolumeBindingReader.MatchesManifest(firstManifest, volumeBinding, out _))
         {
             builder.SeedVolumeBinding(volumeBinding);

@@ -86,16 +86,27 @@ internal static class CloudFileHelper
     /// treat as orphaned and skip). Result is cached per parent directory.
     /// </summary>
     public static bool IsProviderLive(string path)
+        => IsProviderLive(path, CloudFilterApiAvailable, Path.GetDirectoryName);
+
+    /// <remarks>
+    /// Takes the platform gate and the directory resolver so both refusal arms are reachable: the
+    /// Cloud Filter API does not exist before Windows 10 1709, and a path the platform refuses to
+    /// parse must answer "not hydratable" rather than propagating out of a scan.
+    /// </remarks>
+    internal static bool IsProviderLive(
+        string path, bool cloudFilterAvailable, Func<string, string?> getDirectoryName)
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 16299))
+        if (!cloudFilterAvailable)
             return false;
 
         string dir;
-        try { dir = Path.GetDirectoryName(path) ?? path; }
+        try { dir = getDirectoryName(path) ?? path; }
         catch { return false; }
 
         return s_providerLiveByDir.GetOrAdd(dir, static d => QueryProviderLive(d));
     }
+
+    private static bool CloudFilterApiAvailable => OperatingSystem.IsWindowsVersionAtLeast(10, 0, 16299);
 
     /// <summary>Clears cached liveness/sync-root state (call when a new search starts).</summary>
     public static void ResetProviderCache()
@@ -141,8 +152,15 @@ internal static class CloudFileHelper
     /// sync root cost only a prefix comparison (no syscall, no hydration).
     /// </summary>
     public static bool ShouldSkipDiscoveredPath(string path, bool searchOnlineOnlyFiles)
+        => ShouldSkipDiscoveredPath(path, searchOnlineOnlyFiles, SyncRootPrefixes);
+
+    /// <remarks>
+    /// Takes the sync-root prefixes so the gate can be exercised against a synthetic root. The real
+    /// list comes from the registry, so without this the "no cloud provider installed" arm is only
+    /// reachable on a machine that happens to have none.
+    /// </remarks>
+    internal static bool ShouldSkipDiscoveredPath(string path, bool searchOnlineOnlyFiles, string[] prefixes)
     {
-        string[] prefixes = SyncRootPrefixes;
         if (prefixes.Length == 0)
             return false;
 
@@ -161,14 +179,32 @@ internal static class CloudFileHelper
     }
 
     private static string[] LoadSyncRootPrefixes()
+        => LoadSyncRootPrefixes(OperatingSystem.IsWindows(), OpenSyncRootManagerKey);
+
+    /// <remarks>
+    /// Only ever invoked from the <c>isWindows</c> branch of <see cref="LoadSyncRootPrefixes(bool, Func{Microsoft.Win32.RegistryKey?})"/>,
+    /// so it carries the platform annotation instead of a runtime guard — a guard here would be an
+    /// arm that can never run on any platform the app actually ships to.
+    /// </remarks>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static Microsoft.Win32.RegistryKey? OpenSyncRootManagerKey()
+        => Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+            @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager");
+
+    /// <remarks>
+    /// Takes the platform gate and the registry accessor so the "no provider registered" and
+    /// "registry unreadable" arms are reachable. Both must yield an empty list rather than throwing:
+    /// this runs once per search, and a throw here would fail the whole scan over a cache warm-up.
+    /// </remarks>
+    internal static string[] LoadSyncRootPrefixes(
+        bool isWindows, Func<Microsoft.Win32.RegistryKey?> openSyncRootManager)
     {
-        if (!OperatingSystem.IsWindows())
-            return Array.Empty<string>();
+        if (!isWindows)
+            return [];
         var prefixes = new List<string>();
         try
         {
-            using var srm = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
-                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager");
+            using var srm = openSyncRootManager();
             if (srm is not null)
             {
                 foreach (string rootName in srm.GetSubKeyNames())
@@ -202,17 +238,27 @@ internal static class CloudFileHelper
     /// size the API reports rather than being misread as "not a sync root".
     /// </summary>
     private static bool TryQuerySyncRootProvider(string path, out uint providerStatus)
+        => TryQuerySyncRootProvider(path, out providerStatus, TryQuerySyncRootProviderOnce);
+
+    /// <remarks>
+    /// Takes the probe so the retry and both failure arms are reachable without a cloud provider.
+    /// The buffer retry is the defect this guards: <c>CF_SYNC_ROOT_PROVIDER_INFO</c> is larger than an
+    /// obvious round number, and treating <c>ERROR_MORE_DATA</c> as "not a sync root" silently reported
+    /// every provider as dead — which disabled every cloud opt-in in both search and indexing.
+    /// </remarks>
+    internal static bool TryQuerySyncRootProvider(
+        string path, out uint providerStatus, SyncRootProbe probe)
     {
         providerStatus = 0;
 
         try
         {
-            if (TryQuerySyncRootProviderOnce(path, SyncRootProviderInfoInitialBytes, out providerStatus, out int hr, out int required))
+            if (probe(path, SyncRootProviderInfoInitialBytes, out providerStatus, out int hr, out int required))
                 return true;
             if (hr != HresultMoreData || required <= SyncRootProviderInfoInitialBytes)
                 return false;
 
-            return TryQuerySyncRootProviderOnce(path, required, out providerStatus, out _, out _);
+            return probe(path, required, out providerStatus, out _, out _);
         }
         catch (DllNotFoundException)
         {
@@ -224,6 +270,10 @@ internal static class CloudFileHelper
             return false;
         }
     }
+
+    /// <summary>One attempt at reading the sync-root provider record into a buffer of a given size.</summary>
+    internal delegate bool SyncRootProbe(
+        string path, int bufferBytes, out uint providerStatus, out int hr, out int requiredBytes);
 
     private static bool TryQuerySyncRootProviderOnce(
         string path, int bufferBytes, out uint providerStatus, out int hr, out int requiredBytes)

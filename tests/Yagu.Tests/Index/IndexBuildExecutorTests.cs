@@ -1,4 +1,5 @@
 using Yagu.Services.Index;
+using Yagu.Services.Ocr;
 
 namespace Yagu.Tests.Index;
 
@@ -129,6 +130,85 @@ public sealed class IndexBuildExecutorTests : IDisposable
         Assert.NotNull(live);
         Assert.Equal(ImageOcrExtendedSourceBuildStatus.Published.ToString(), result.ImageOcrStatus);
         Assert.Equal(1, result.ImagesAdmitted);
+    }
+
+    [Fact]
+    public void BuildFullScope_ProductionImageOcrNoImagesDisposesWorkerAndCommitsRaw()
+    {
+        IndexBuildOperation operation = BuildOperation();
+        operation.BuildImageText = true;
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+
+        // The optional OCR namespace must not decide the raw build's atomicity; even when no image work is
+        // admitted, the production worker-backed engine is disposed and the raw generation commits.
+        IndexBuildSuccess result = IndexBuildExecutor.BuildFullScopeUnderLease(
+            mutation, operation, CancellationToken.None, null, null);
+
+        Assert.Equal(1, result.IndexedCount);
+        Assert.Contains(
+            result.ImageOcrStatus,
+            new[]
+            {
+                ImageOcrExtendedSourceBuildStatus.NoImages.ToString(),
+                ImageOcrExtendedSourceBuildStatus.SkippedEngineUnavailable.ToString(),
+            });
+        Assert.NotNull(new ContentIndexStore(_paths, result.ScopeId).TryOpenCurrent());
+    }
+
+    [Fact]
+    public void BuildProductionImageOcr_DisposesDisposableOnlyEngine()
+    {
+        var engine = new DisposableOnlyOcrEngine();
+        IndexBuildOperation operation = BuildOperation();
+        var manager = new ContentIndexManager(_paths, operation.RetainedGenerations);
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+
+        // The production helper accepts engines from several implementations; a disposable-only engine must
+        // be cleaned up too or repeated maintenance passes would leak worker handles.
+        ImageOcrExtendedSourceBuildResult result = IndexBuildRuntime.BuildProductionImageOcr(
+            mutation,
+            manager,
+            _paths,
+            _root,
+            operation.Policy.ToPolicy(),
+            operation,
+            CancellationToken.None,
+            progress: null,
+            (_, _, _, _) => engine);
+
+        Assert.True(engine.Disposed);
+        Assert.NotEqual(ImageOcrExtendedSourceBuildStatus.Published, result.Status);
+    }
+
+    [Fact]
+    public void BuildFullScope_UnexpectedImageOcrFailureCommitsRawButCancellationDoesNot()
+    {
+        IndexBuildOperation operation = BuildOperation();
+        operation.BuildImageText = true;
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+        var failing = new IndexBuildRuntime
+        {
+            BuildImageOcr = static (_, _, _, _, _, _, _, _) => throw new IOException("ocr failed"),
+        };
+
+        // OCR population is optional positive pruning: ordinary failure deletes that namespace and keeps the
+        // complete raw index, while cancellation must abandon the staged build before publication.
+        IndexBuildSuccess result = IndexBuildExecutor.BuildFullScopeUnderLease(
+            mutation, operation, CancellationToken.None, null, null, failing);
+        Assert.Contains("Failed: ocr failed", result.ImageOcrStatus);
+        Assert.NotNull(new ContentIndexStore(_paths, result.ScopeId).TryOpenCurrent());
+
+        string secondRoot = Path.Combine(_sandbox, "cancelled-ocr-root");
+        Directory.CreateDirectory(secondRoot);
+        File.WriteAllText(Path.Combine(secondRoot, "b.txt"), "cancelled ocr build");
+        operation.Root = secondRoot;
+        var cancelling = new IndexBuildRuntime
+        {
+            BuildImageOcr = static (_, _, _, _, _, _, _, _) => throw new OperationCanceledException(),
+        };
+        Assert.Throws<OperationCanceledException>(() => IndexBuildExecutor.BuildFullScopeUnderLease(
+            mutation, operation, CancellationToken.None, null, null, cancelling));
+        Assert.Null(new ContentIndexStore(_paths, ContentIndexManager.ScopeIdForRoot(secondRoot)).TryOpenCurrent());
     }
 
     [Fact]
@@ -627,6 +707,81 @@ public sealed class IndexBuildExecutorTests : IDisposable
     }
 
     [Fact]
+    public void Maintenance_FreshIndex_CompactionFailureReportsTypedBackoff()
+    {
+        BuildInitialIndex();
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+        var runtime = new IndexMaintenanceRuntime
+        {
+            CheckFreshness = static (_, _, _) => ContentIndexManager.ScopeFreshnessState.Fresh,
+            Compact = static (_, _, _, _, _) => IndexAutomaticCompactionOutcome.Failed,
+        };
+
+        // A fresh index can still need compaction cleanup; a failed cleanup must be a typed maintenance
+        // failure so the retry backoff is recorded without marking the index corrupt.
+        IndexMaintenanceSuccess result = IndexBuildExecutor.RunMaintenancePassUnderLease(
+            mutation,
+            Maintenance(IndexMaintenanceOperation.ModeIncremental, _root),
+            CancellationToken.None,
+            null,
+            runtime);
+
+        Assert.Equal(1, result.Failed);
+        IndexMaintenanceRootResult root = Assert.Single(result.Roots);
+        Assert.Equal(IndexMaintenanceActions.Failed, root.Action);
+        Assert.Equal(IndexMaintenanceOutcomes.CompactionFailed, root.Outcome);
+        Assert.Contains("Automatic compaction failed", root.Warning);
+    }
+
+    [Fact]
+    public void Maintenance_NoChangeRefresh_PerformsCleanupBeforeSkipping()
+    {
+        foreach (string path in new[] { "compact", "fail", "reanchor" })
+        {
+            BuildInitialIndex();
+            using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+            var runtime = new IndexMaintenanceRuntime
+            {
+                CheckFreshness = static (_, _, _) => ContentIndexManager.ScopeFreshnessState.Dirty,
+                Refresh = static (_, _, _, _, _, _, _, _) => IncrementalUpdateOutcome.NoChanges,
+                Compact = (_, _, _, _, _) => path == "compact"
+                    ? IndexAutomaticCompactionOutcome.Maintained
+                    : path == "fail"
+                        ? IndexAutomaticCompactionOutcome.Failed
+                        : IndexAutomaticCompactionOutcome.NotNeeded,
+                Reanchor = (_, _, _, _, _) => path == "reanchor",
+            };
+
+            // A no-change USN pass may still need to publish compaction or checkpoint re-anchoring work;
+            // treating it as a plain skip would strand cleanup until some unrelated file changes.
+            IndexMaintenanceSuccess result = IndexBuildExecutor.RunMaintenancePassUnderLease(
+                mutation,
+                Maintenance(IndexMaintenanceOperation.ModeIncremental, _root),
+                CancellationToken.None,
+                null,
+                runtime);
+
+            IndexMaintenanceRootResult root = Assert.Single(result.Roots);
+            if (path == "compact")
+            {
+                Assert.Equal(IndexMaintenanceActions.Compacted, root.Action);
+                Assert.Equal(1, result.Built);
+            }
+            else if (path == "fail")
+            {
+                Assert.Equal(IndexMaintenanceActions.Failed, root.Action);
+                Assert.Equal(IndexMaintenanceOutcomes.CompactionFailed, root.Outcome);
+                Assert.Equal(1, result.Failed);
+            }
+            else
+            {
+                Assert.Equal(IndexMaintenanceActions.Reanchored, root.Action);
+                Assert.Equal(1, result.Built);
+            }
+        }
+    }
+
+    [Fact]
     public void Maintenance_CancellationPropagates()
     {
         using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
@@ -772,6 +927,15 @@ public sealed class IndexBuildExecutorTests : IDisposable
             new IndexMaintenanceSettings(),
             CancellationToken.None,
             null));
+        Assert.Equal(IncrementalUpdateOutcome.NeedsFullRebuild, runtime.Refresh(
+            mutation,
+            _paths,
+            2,
+            _root,
+            new IndexIngestionPolicy(0, null, null, true, false, 0, includeCloudOnlyFiles: true),
+            new IndexMaintenanceSettings(),
+            CancellationToken.None,
+            null));
     }
 
     [Fact]
@@ -823,6 +987,16 @@ public sealed class IndexBuildExecutorTests : IDisposable
         var coordinator = new IndexBuildCoordinator();
         coordinator.BuildFullScopePreferWorkerAsync(
             BuildOperation(), useWorker: false, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    private sealed class DisposableOnlyOcrEngine : IOcrEngine, IDisposable
+    {
+        public string Id => "paddle";
+        public string DisplayName => "Disposable fake";
+        public bool Disposed { get; private set; }
+        public Task<OcrResult> EnsureReadyAsync(CancellationToken cancellationToken) => Task.FromResult(OcrResult.Ok(""));
+        public Task<OcrResult> RecognizeAsync(string imagePath, CancellationToken cancellationToken) => Task.FromResult(OcrResult.Ok(""));
+        public void Dispose() => Disposed = true;
     }
 
     private IndexBuildOperation BuildOperation() => new()

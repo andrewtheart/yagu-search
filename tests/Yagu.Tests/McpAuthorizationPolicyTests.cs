@@ -1,3 +1,4 @@
+using Microsoft.Win32.SafeHandles;
 using Yagu.Services.Mcp;
 
 namespace Yagu.Tests;
@@ -121,6 +122,18 @@ public class McpAuthorizationPolicyTests
         Assert.True(decision.Allowed);
     }
 
+    [Fact]
+    public void ReadPath_IsRequiredEvenWhenTheClientHasReadCapability()
+    {
+        // A read with an omitted path must fail closed rather than flowing into later normalization with
+        // an empty string and producing a confusing or over-broad authorization decision.
+        var decision = Policy().AuthorizeRead(null);
+
+        Assert.False(decision.Allowed);
+        Assert.Equal(McpDenialCode.RootRequired, decision.DenialCode);
+        Assert.Contains("path is required", decision.Reason, StringComparison.Ordinal);
+    }
+
     // ── Shapes that defeat normalization ─────────────────────────────────────
 
     [Theory]
@@ -148,6 +161,17 @@ public class McpAuthorizationPolicyTests
         Assert.Equal(McpDenialCode.AlternateDataStream, decision.DenialCode);
     }
 
+    [Fact]
+    public void UncPathWithAStreamName_IsDeniedAsAnAlternateDataStream()
+    {
+        // UNC paths normally have no drive-letter colon. A colon anywhere in one is a stream reference,
+        // and accepting it would let a client read data the normal file path checks never intended.
+        var decision = Policy().AuthorizeRead(@"\\server\share\file.txt:hidden");
+
+        Assert.False(decision.Allowed);
+        Assert.Equal(McpDenialCode.AlternateDataStream, decision.DenialCode);
+    }
+
     [Theory]
     [InlineData(@"relative\file.txt")]
     [InlineData(@"..\escape.txt")]
@@ -159,6 +183,17 @@ public class McpAuthorizationPolicyTests
 
         Assert.False(decision.Allowed);
         Assert.Equal(McpDenialCode.NotFullyQualified, decision.DenialCode);
+    }
+
+    [Fact]
+    public void MalformedFullyQualifiedPath_IsDeniedAsUnresolvable()
+    {
+        // A fully-qualified string can still be rejected by the platform normalizer. That must be a hard
+        // denial, not a fallback to the unnormalized text.
+        var decision = Policy().AuthorizeRead("C:\\allowed\\bad\0name.txt");
+
+        Assert.False(decision.Allowed);
+        Assert.Equal(McpDenialCode.UnresolvablePath, decision.DenialCode);
     }
 
     [Fact]
@@ -231,6 +266,338 @@ public class McpAuthorizationPolicyTests
         Assert.False(decision.Allowed);
         Assert.Equal(McpDenialCode.UnresolvablePath, decision.DenialCode);
     }
+
+    [Fact]
+    public void CanonicalizationFailsClosed_WhenThePlatformReturnsAnEmptyPath()
+    {
+        // The containment check is only meaningful after normalization. An empty result from the
+        // platform API must not be treated as a root-relative or otherwise authorized path.
+        bool ok = McpAuthorizationPolicy.TryCanonicalize("anything", _ => string.Empty, out string canonical);
+
+        Assert.False(ok);
+        Assert.Equal(string.Empty, canonical);
+    }
+
+    [Fact]
+    public void CanonicalizationFailsClosed_WhenThePlatformRejectsThePath()
+    {
+        // Malformed paths have to be denied, not allowed through with a stale or partially-computed
+        // canonical path.
+        bool ok = McpAuthorizationPolicy.TryCanonicalize(
+            "bad",
+            _ => throw new PathTooLongException("too long"),
+            out string canonical);
+
+        Assert.False(ok);
+        Assert.Equal(string.Empty, canonical);
+    }
+
+    [Fact]
+    public void LinkResolverFailsClosed_WhenAReparsePointCannotBeRead()
+    {
+        // A link whose target cannot be read is the dangerous case: falling back to the textually
+        // contained path would authorize an escape that the link reader was meant to catch.
+        string resolved = McpAuthorizationPolicy.ResolveByReadingLinkTargets(
+            @"C:\allowed\link\secret.txt",
+            (string _, out string rewritten) =>
+            {
+                rewritten = string.Empty;
+                return true;
+            });
+
+        Assert.Equal(string.Empty, resolved);
+    }
+
+    [Fact]
+    public void LinkResolverFailsClosed_WhenLinksCyclePastTheHopLimit()
+    {
+        // A junction cycle must not spin forever or eventually authorize the unresolved prefix; after
+        // the bounded attempts are exhausted, the caller receives an unresolvable-path denial.
+        int attempts = 0;
+        string resolved = McpAuthorizationPolicy.ResolveByReadingLinkTargets(
+            @"C:\allowed\a",
+            (string current, out string rewritten) =>
+            {
+                attempts++;
+                rewritten = current.EndsWith(@"\a", StringComparison.OrdinalIgnoreCase)
+                    ? @"C:\allowed\b"
+                    : @"C:\allowed\a";
+                return true;
+            });
+
+        Assert.Equal(64, attempts);
+        Assert.Equal(string.Empty, resolved);
+    }
+
+    [Fact]
+    public void LinkRewriteIgnoresRelativePaths()
+    {
+        // The public policy rejects relative paths before link resolution. If an internal caller ever
+        // reaches the rewriter anyway, it must not invent a root and widen the grant.
+        bool rewritten = McpAuthorizationPolicy.TryRewriteFirstLink(
+            "relative\\link.txt",
+            (string _, out bool isDirectory) =>
+            {
+                isDirectory = false;
+                return McpAuthorizationPolicy.SegmentKind.Link;
+            },
+            (_, _) => new FileInfo(@"C:\elsewhere\secret.txt").FullName,
+            out string result);
+
+        Assert.False(rewritten);
+        Assert.Equal(string.Empty, result);
+    }
+
+    [Fact]
+    public void LinkRewriteFailsClosed_WhenASegmentIsUnreadable()
+    {
+        // An access-denied segment may itself be a reparse point. Treating it as plain or missing would
+        // let a path continue through an unresolved junction escape.
+        bool rewritten = McpAuthorizationPolicy.TryRewriteFirstLink(
+            @"C:\allowed\blocked\secret.txt",
+            (string _, out bool isDirectory) =>
+            {
+                isDirectory = true;
+                return McpAuthorizationPolicy.SegmentKind.Unreadable;
+            },
+            (_, _) => throw new InvalidOperationException("should not read a target"),
+            out string result);
+
+        Assert.True(rewritten);
+        Assert.Equal(string.Empty, result);
+    }
+
+    [Fact]
+    public void LinkRewriteFailsClosed_WhenTheLinkTargetReaderReturnsNothing()
+    {
+        // A damaged link with no readable target must deny the whole path rather than keeping the
+        // unresolved, textually-contained request.
+        bool rewritten = McpAuthorizationPolicy.TryRewriteFirstLink(
+            @"C:\allowed\link\secret.txt",
+            (string path, out bool isDirectory) =>
+            {
+                isDirectory = true;
+                return path.EndsWith(@"\link", StringComparison.OrdinalIgnoreCase)
+                    ? McpAuthorizationPolicy.SegmentKind.Link
+                    : McpAuthorizationPolicy.SegmentKind.Plain;
+            },
+            (_, _) => null,
+            out string result);
+
+        Assert.True(rewritten);
+        Assert.Equal(string.Empty, result);
+    }
+
+    [Fact]
+    public void LinkRewriteReattachesTheTailAfterTheResolvedSegment()
+    {
+        // Rewriting only the link directory and dropping the suffix would authorize or deny the wrong
+        // file; the untouched tail must move with the target.
+        bool rewritten = McpAuthorizationPolicy.TryRewriteFirstLink(
+            @"C:\allowed\link\deep\secret.txt",
+            (string path, out bool isDirectory) =>
+            {
+                isDirectory = true;
+                return path.EndsWith(@"\link", StringComparison.OrdinalIgnoreCase)
+                    ? McpAuthorizationPolicy.SegmentKind.Link
+                    : McpAuthorizationPolicy.SegmentKind.Plain;
+            },
+            (path, isDirectory) =>
+            {
+                Assert.Equal(@"C:\allowed\link", path);
+                Assert.True(isDirectory);
+                return @"D:\real";
+            },
+            out string result);
+
+        Assert.True(rewritten);
+        Assert.Equal(@"D:\real\deep\secret.txt", result);
+    }
+
+    [Fact]
+    public void ClassifySegmentReportsUnreadableForAttributeFailures()
+    {
+        // File.GetAttributes reports on the segment itself without traversal. If that call fails, the
+        // resolver must stop and deny instead of pretending no link exists.
+        var kind = McpAuthorizationPolicy.ClassifySegment(
+            @"C:\allowed\blocked",
+            _ => throw new UnauthorizedAccessException("blocked"),
+            out bool isDirectory);
+
+        Assert.Equal(McpAuthorizationPolicy.SegmentKind.Unreadable, kind);
+        Assert.False(isDirectory);
+    }
+
+    [Fact]
+    public void ClassifySegmentDistinguishesDirectoryLinksFromPlainFiles()
+    {
+        // The target reader needs to know whether to use Directory.ResolveLinkTarget or File.ResolveLinkTarget;
+        // losing the directory bit makes junctions look unresolvable.
+        var link = McpAuthorizationPolicy.ClassifySegment(
+            @"C:\allowed\link",
+            _ => FileAttributes.Directory | FileAttributes.ReparsePoint,
+            out bool isDirectory);
+        var file = McpAuthorizationPolicy.ClassifySegment(
+            @"C:\allowed\file.txt",
+            _ => FileAttributes.Archive,
+            out bool fileIsDirectory);
+
+        Assert.Equal(McpAuthorizationPolicy.SegmentKind.Link, link);
+        Assert.True(isDirectory);
+        Assert.Equal(McpAuthorizationPolicy.SegmentKind.Plain, file);
+        Assert.False(fileIsDirectory);
+    }
+
+    [Fact]
+    public void TryReadLinkTargetReturnsNullWhenTheTargetCannotBeRead()
+    {
+        // A link read can fail because the target is malformed or access-denied. The caller must receive
+        // a null target so it denies the path rather than authorizing by string prefix.
+        string? target = McpAuthorizationPolicy.TryReadLinkTarget(
+            @"C:\allowed\link",
+            isDirectory: true,
+            (_, _) => throw new IOException("target unavailable"));
+
+        Assert.Null(target);
+    }
+
+    [Fact]
+    public void TryReadLinkTargetReturnsTheResolvedFullName()
+    {
+        // The resolver compares the final target, not the link name. Returning any shorter display name
+        // would make containment checks judge the wrong path.
+        string? target = McpAuthorizationPolicy.TryReadLinkTarget(
+            @"C:\allowed\link",
+            isDirectory: true,
+            (_, isDirectory) =>
+            {
+                Assert.True(isDirectory);
+                return new DirectoryInfo(@"C:\allowed\real");
+            });
+
+        Assert.Equal(@"C:\allowed\real", target);
+    }
+
+    [Fact]
+    public void FinalPathResolverIsDisabledOnNonWindowsPlatforms()
+    {
+        // Non-Windows test hosts cannot call the Win32 resolver. They must take the safe fallback path
+        // instead of throwing before containment can decide.
+        bool calledNative = false;
+        bool ok = McpAuthorizationPolicy.TryGetFinalPathName(
+            @"C:\allowed\file.txt",
+            isWindows: false,
+            _ =>
+            {
+                calledNative = true;
+                return ValidHandle();
+            },
+            (_, _, _, _) => 0,
+            out string finalPath);
+
+        Assert.False(ok);
+        Assert.False(calledNative);
+        Assert.Equal(string.Empty, finalPath);
+    }
+
+    [Fact]
+    public void FinalPathResolverFailsClosed_WhenCreateFileReturnsAnInvalidHandle()
+    {
+        // A path that cannot be opened for metadata is not canonicalized by this resolver; the caller
+        // must continue to the reparse-point reader rather than trusting a half-resolved result.
+        bool ok = McpAuthorizationPolicy.TryGetFinalPathName(
+            @"C:\allowed\file.txt",
+            isWindows: true,
+            _ => new SafeFileHandle(IntPtr.Zero, ownsHandle: false),
+            (_, _, _, _) => throw new InvalidOperationException("should not ask for a name"),
+            out string finalPath);
+
+        Assert.False(ok);
+        Assert.Equal(string.Empty, finalPath);
+    }
+
+    [Fact]
+    public void FinalPathResolverFailsClosed_WhenWindowsReturnsNoName()
+    {
+        // GetFinalPathNameByHandle returning zero means no trustworthy target was produced, so the
+        // decision must not proceed with an empty or stale canonical path.
+        bool ok = McpAuthorizationPolicy.TryGetFinalPathName(
+            @"C:\allowed\file.txt",
+            isWindows: true,
+            _ => ValidHandle(),
+            (_, _, _, _) => 0,
+            out string finalPath);
+
+        Assert.False(ok);
+        Assert.Equal(string.Empty, finalPath);
+    }
+
+    [Fact]
+    public void FinalPathResolverRetriesWithAGrownBufferAndStripsTheDevicePrefix()
+    {
+        // Long final paths are reported by first asking for a larger buffer. The retry must actually
+        // grow and then normalize the Win32 \\?\ prefix before containment compares it to allowed roots.
+        int calls = 0;
+        bool ok = McpAuthorizationPolicy.TryGetFinalPathName(
+            @"C:\allowed\file.txt",
+            isWindows: true,
+            _ => ValidHandle(),
+            (_, buffer, bufferLength, _) =>
+            {
+                calls++;
+                if (calls == 1)
+                    return bufferLength;
+
+                const string resolved = @"\\?\C:\allowed\resolved.txt";
+                resolved.CopyTo(0, buffer, 0, resolved.Length);
+                return (uint)resolved.Length;
+            },
+            out string finalPath);
+
+        Assert.True(ok);
+        Assert.Equal(2, calls);
+        Assert.Equal(@"C:\allowed\resolved.txt", finalPath);
+    }
+
+    [Fact]
+    public void FinalPathResolverFailsClosed_WhenTheRetryBufferIsStillTooSmall()
+    {
+        // Treating a second "buffer too small" result as success would compare truncated garbage against
+        // the allowed roots.
+        int calls = 0;
+        bool ok = McpAuthorizationPolicy.TryGetFinalPathName(
+            @"C:\allowed\file.txt",
+            isWindows: true,
+            _ => ValidHandle(),
+            (_, _, bufferLength, _) =>
+            {
+                calls++;
+                return bufferLength;
+            },
+            out string finalPath);
+
+        Assert.False(ok);
+        Assert.Equal(2, calls);
+        Assert.Equal(string.Empty, finalPath);
+    }
+
+    [Fact]
+    public void FinalPathResolverFallsBack_WhenTheNativeEntryPointIsUnavailable()
+    {
+        // Missing Win32 entry points should behave like an unavailable fast resolver, not crash the MCP
+        // server while it is deciding whether to deny a path.
+        bool ok = McpAuthorizationPolicy.TryGetFinalPathName(
+            @"C:\allowed\file.txt",
+            isWindows: true,
+            _ => throw new EntryPointNotFoundException("missing"),
+            (_, _, _, _) => 0,
+            out string finalPath);
+
+        Assert.False(ok);
+        Assert.Equal(string.Empty, finalPath);
+    }
+
+    private static SafeFileHandle ValidHandle() => new(new IntPtr(1234), ownsHandle: false);
 
     // ── The REAL resolver against REAL reparse points ────────────────────────
     //

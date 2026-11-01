@@ -3086,4 +3086,473 @@ public sealed class SemanticPlanApplierTests
             SemanticPlanApplier.BuildExplanation(resolved, effectiveDirectory: null),
             SemanticPlanApplier.BuildExplanation(resolved));
     }
+
+    [Fact]
+    public void Resolve_IdenticalCreatedTimestampBounds_DropsEmptyWindow()
+    {
+        // A model-padding timestamp copied to both created bounds must not create an always-empty
+        // search window, otherwise a valid text query returns no files.
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = "x",
+            CreatedAfter = "2024-06-21T10:00:00",
+            CreatedBefore = "2024-06-21T10:00:00",
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Null(resolved.CreatedAfterDate);
+        Assert.Null(resolved.CreatedBeforeDate);
+        Assert.Contains(resolved.Warnings, w => w.Contains("created-date range", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildExplanation_FileNameThenContent_NarratesTwoStageScope()
+    {
+        // The two-stage search mode must be distinguishable from a broad "both" search in user-facing
+        // prose, or users cannot tell that content is searched only after a filename hit.
+        string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan
+        {
+            SearchMode = SearchMode.FileNameThenContent,
+            Pattern = "invoice",
+        });
+
+        Assert.Contains("the contents of files whose names match", text);
+        Assert.Contains("invoice", text);
+    }
+
+    [Fact]
+    public void BuildExplanation_ObeyGitignoreFalse_IsStated()
+    {
+        // A semantic plan that deliberately includes gitignored files must say so, otherwise the
+        // summary looks identical to the safer default.
+        string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan
+        {
+            Pattern = "todo",
+            ObeyGitignore = false,
+        });
+
+        Assert.Contains("ignoring .gitignore", text);
+    }
+
+    [Fact]
+    public void BuildExplanation_MinAndMaxSize_UsesBetweenClause()
+    {
+        // When both size bounds are present the explanation must describe the closed range, not only
+        // one side of it, or a narrowed semantic search looks broader than it is.
+        string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan
+        {
+            MinFileSizeBytes = 2 * 1024,
+            MaxFileSizeBytes = 4 * 1024,
+        });
+
+        Assert.Contains("between 2 KB and 4 KB", text);
+    }
+
+    [Fact]
+    public void BuildExplanation_MaxOnlySize_UsesSmallerThanClause()
+    {
+        // A maximum-only file-size plan is a common "small files" request and must not be omitted
+        // from the generated summary.
+        string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan
+        {
+            MaxFileSizeBytes = 123,
+        });
+
+        Assert.Contains("smaller than 123 bytes", text);
+    }
+
+    [Fact]
+    public void BuildExplanation_DateRangesAndBeforeOnlyBounds_AreInclusiveInSummary()
+    {
+        // Date summaries must cover both bounded ranges and one-sided "before" filters so users can
+        // confirm the model did not silently drop a side of their time constraint.
+        string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan
+        {
+            ModifiedAfterDate = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            ModifiedBeforeDate = new DateTimeOffset(2024, 12, 31, 23, 59, 59, TimeSpan.Zero),
+            CreatedBeforeDate = new DateTimeOffset(2023, 5, 2, 23, 59, 59, TimeSpan.Zero),
+        });
+
+        Assert.Contains("modified between 2024-01-01 and 2024-12-31", text);
+        Assert.Contains("created before 2023-05-02", text);
+    }
+
+    [Theory]
+    [InlineData(1, 1, "match count (fewest first)")]
+    [InlineData(1, 0, "match count (most first)")]
+    [InlineData(2, 1, "modified date (oldest first)")]
+    [InlineData(3, 1, "size (smallest first)")]
+    [InlineData(3, 0, "size (largest first)")]
+    [InlineData(4, 1, "name (A\u2013Z)")]
+    [InlineData(5, 0, "folder (Z\u2013A)")]
+    public void BuildExplanation_SortFields_NarrateFieldSpecificDirection(int mode, int direction, string expected)
+    {
+        // Sort directions are field-specific ("oldest" for dates, "A-Z" for names), so the summary
+        // must not reuse one generic ascending/descending label for every column.
+        string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan
+        {
+            SortModeIndex = mode,
+            SortDirectionIndex = direction,
+        });
+
+        Assert.Contains("sorted by " + expected, text);
+    }
+
+    [Fact]
+    public void BuildExplanation_UnknownSortModeIsOmitted()
+    {
+        // An out-of-range sort index can only come from future UI/model drift; the explanation should
+        // omit it rather than showing a misleading or placeholder sort clause.
+        string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan
+        {
+            SortModeIndex = 99,
+            SortDirectionIndex = 1,
+        });
+
+        Assert.DoesNotContain("sorted by", text);
+    }
+
+    [Theory]
+    [InlineData(GroupMode.Extension, "file type")]
+    [InlineData(GroupMode.FileSize, "size")]
+    [InlineData(GroupMode.DateRangeModified, "modified date")]
+    [InlineData(GroupMode.DateRangeCreated, "created date")]
+    [InlineData(GroupMode.DateRangeModifiedCreated, "date")]
+    public void BuildExplanation_GroupModes_NarrateGroupingAndReversal(GroupMode mode, string label)
+    {
+        // Grouping changes the results-list shape, so every semantic grouping mode needs a readable
+        // explanation including the reversed-order toggle.
+        string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan
+        {
+            GroupMode = mode,
+            GroupSortDirectionIndex = 1,
+        });
+
+        Assert.Contains("grouped by " + label, text);
+        Assert.Contains("(reversed)", text);
+    }
+
+    [Theory]
+    [InlineData(1, "matches")]
+    [InlineData(2, "date")]
+    [InlineData(3, "size")]
+    [InlineData(4, "name")]
+    [InlineData(5, "directory")]
+    public void ToOverlay_MapsEverySortModeToCliKey(int mode, string expected)
+    {
+        // The CLI overlay must preserve the same sort intent as the GUI controls; otherwise generated
+        // semantic CLI commands drift from the applied UI search.
+        var overlay = SemanticPlanApplier.ToOverlay(new ResolvedSearchPlan
+        {
+            SortModeIndex = mode,
+            SortDirectionIndex = 1,
+        });
+
+        Assert.Equal(expected, overlay.SortBy);
+        Assert.False(overlay.SortDescending);
+    }
+
+    [Theory]
+    [InlineData(GroupMode.Extension, "extension")]
+    [InlineData(GroupMode.FileSize, "size")]
+    [InlineData(GroupMode.DateRangeModified, "modified")]
+    [InlineData(GroupMode.DateRangeCreated, "created")]
+    [InlineData(GroupMode.DateRangeModifiedCreated, "date")]
+    public void ToOverlay_MapsEveryGroupModeToCliKey(GroupMode mode, string expected)
+    {
+        // The CLI overlay must carry every GUI grouping choice so semantic search stays surface-parity
+        // between the app and the command line.
+        var overlay = SemanticPlanApplier.ToOverlay(new ResolvedSearchPlan
+        {
+            GroupMode = mode,
+            GroupSortDirectionIndex = 1,
+        });
+
+        Assert.Equal(expected, overlay.GroupBy);
+        Assert.True(overlay.GroupDescending);
+    }
+
+    [Fact]
+    public void Resolve_UnknownSortDirection_WarnsAndDefaultsDescending()
+    {
+        // If the model invents a sort direction, Yagu must keep a deterministic order and tell the
+        // user it ignored the bad token.
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "x", SortBy = "name", SortDirection = "sideways" },
+            Context());
+
+        Assert.Equal(4, resolved.SortModeIndex);
+        Assert.Equal(0, resolved.SortDirectionIndex);
+        Assert.Contains(resolved.Warnings, w => w.Contains("sortDirection", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Resolve_UnknownGroupDirection_WarnsAndDefaultsNaturalOrder()
+    {
+        // If the model invents a group direction, the grouping should still apply in the natural order
+        // instead of dropping the entire grouping request.
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "x", GroupBy = "extension", GroupDirection = "inside-out" },
+            Context());
+
+        Assert.Equal(GroupMode.Extension, resolved.GroupMode);
+        Assert.Equal(0, resolved.GroupSortDirectionIndex);
+        Assert.Contains(resolved.Warnings, w => w.Contains("groupDirection", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void TryResolveKnownFolder_DocumentsAndDownloadsUseInjectedProfileSeam()
+    {
+        // Known-folder detection must use the actual local profile paths, not model placeholders, and
+        // the seam keeps the Documents/Downloads arms deterministic on machines with redirected folders.
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            @"C:\Users\me\Documents",
+            @"C:\Users\me\Downloads",
+        };
+        string GetFolder(Environment.SpecialFolder folder) => folder switch
+        {
+            Environment.SpecialFolder.MyDocuments => @"C:\Users\me\Documents",
+            Environment.SpecialFolder.UserProfile => @"C:\Users\me",
+            _ => "",
+        };
+
+        Assert.True(SemanticPlanApplier.TryResolveKnownFolder(
+            "files in my documents", GetFolder, existing.Contains, out string documents));
+        Assert.Equal(@"C:\Users\me\Documents", documents);
+
+        Assert.True(SemanticPlanApplier.TryResolveKnownFolder(
+            "files in my downloads", GetFolder, existing.Contains, out string downloads));
+        Assert.Equal(@"C:\Users\me\Downloads", downloads);
+    }
+
+    [Fact]
+    public void TryResolveKnownFolder_MissingProfileOrFolder_ReturnsFalse()
+    {
+        // On a clean or locked-down profile, a known-folder phrase must be ignored rather than
+        // applying a path that does not exist.
+        Assert.False(SemanticPlanApplier.TryResolveKnownFolder(
+            "files in my downloads",
+            folder => folder == Environment.SpecialFolder.UserProfile ? "" : @"C:\Users\me\Documents",
+            _ => true,
+            out _));
+
+        Assert.False(SemanticPlanApplier.TryResolveKnownFolder(
+            "files in my documents",
+            _ => @"C:\Users\me\Documents",
+            _ => false,
+            out _));
+    }
+
+    [Fact]
+    public void TryExtractCrossLineAnchors_SkipsCueWordsAndKeepsLooking()
+    {
+        // Cue words such as "line" are not safe regex anchors; if the first cross-line phrasing yields
+        // one, extraction must skip it instead of building a near match-all expression.
+        Assert.True(SemanticPlanApplier.TryExtractCrossLineAnchors(
+            "line on one line then value on a later line; from alpha to omega",
+            out string first,
+            out string second));
+
+        Assert.Equal("alpha", first);
+        Assert.Equal("omega", second);
+    }
+
+    [Fact]
+    public void CleanAnchor_RejectsEmptyAndPunctuationOnlyAnchors()
+    {
+        // An empty cleaned anchor would produce a cross-line regex that effectively matches anything
+        // before the other term, so the sanitizer must collapse it to an empty string for rejection.
+        Assert.Equal("", SemanticPlanApplier.CleanAnchor(""));
+        Assert.Equal("", SemanticPlanApplier.CleanAnchor("..."));
+        Assert.Equal("needle", SemanticPlanApplier.CleanAnchor("\u201cneedle,\u201d"));
+    }
+
+    [Fact]
+    public void Resolve_MultilineAnchorQuerySynthesizesCrossLineRegex()
+    {
+        // A model may set only the multiline flag while leaving a plain pattern; when the user named
+        // two anchors, Yagu must synthesize the actual cross-line regex that finds the span.
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "ignored", Multiline = true },
+            new SemanticTranslationContext { Now = Now, OriginalQuery = "alpha then omega" });
+
+        Assert.True(resolved.Multiline);
+        Assert.True(resolved.UseRegex);
+        Assert.False(resolved.ExactMatch);
+        Assert.Equal(@"alpha[\s\S]*?omega", resolved.Pattern);
+        Assert.Matches(resolved.Pattern!, "alpha\nmiddle\nomega");
+    }
+
+    [Fact]
+    public void BuildExplanation_MultilineClausesDistinguishDotAll()
+    {
+        // Cross-line and dot-all searches have different regex semantics, so the summary must call out
+        // when dot also matches newlines.
+        string plain = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan { Multiline = true });
+        string dotAll = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan { Multiline = true, MultilineDotAll = true });
+
+        Assert.Contains("across lines.", plain);
+        Assert.Contains("across lines (the dot also matches newlines)", dotAll);
+    }
+
+    [Fact]
+    public void DetectMultilinePreference_LiteralNewlineEscapeEnablesMultiline()
+    {
+        // A user typing a literal \n in the natural-language query is a strong cross-line cue even if
+        // the wording lacks "across lines".
+        Assert.True(SemanticPlanApplier.DetectMultilinePreference(@"BEGIN\nEND"));
+    }
+
+    [Fact]
+    public void TryBuildCrossLinePattern_RejectsExistingCrossLineRegexAndMissingAnchors()
+    {
+        // If the model already emitted a cross-line construct, or the query has no usable anchors, the
+        // synthesizer must leave the pattern alone rather than double-wrapping or guessing.
+        Assert.False(SemanticPlanApplier.TryBuildCrossLinePattern("alpha then omega", @"alpha[\s\S]*?omega", out _));
+        Assert.False(SemanticPlanApplier.TryBuildCrossLinePattern("no anchors here", "alpha", out _));
+    }
+
+    [Fact]
+    public void TryExtractCrossLineAnchors_EmptyOrUnmatchedQueryReturnsFalse()
+    {
+        // Anchor extraction must fail closed for empty or unrelated text; otherwise a vague multiline
+        // request could become an overbroad regex.
+        Assert.False(SemanticPlanApplier.TryExtractCrossLineAnchors("", out _, out _));
+        Assert.False(SemanticPlanApplier.TryExtractCrossLineAnchors("search across several lines", out _, out _));
+    }
+
+    [Fact]
+    public void Resolve_NotHidden_DropsDoubleStarDotfileExclude()
+    {
+        // Models sometimes express "not hidden" as a **/.dotfile glob; once the hidden toggle carries
+        // the intent, that synthetic exclude must be removed without dropping real excludes.
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan
+            {
+                Pattern = "",
+                IncludeGlobs = new() { "*.txt" },
+                ExcludeGlobs = new() { "**/.hidden", "*.bak" },
+            },
+            new SemanticTranslationContext { Now = Now, OriginalQuery = "text files that are not hidden" });
+
+        Assert.False(resolved.SearchHiddenFiles);
+        Assert.Equal(new[] { "*.bak" }, resolved.ExcludeGlobs);
+    }
+
+    [Theory]
+    [InlineData("the day after tomorrow", 17)]
+    [InlineData("tomorrow", 16)]
+    public void Resolve_FutureRelativeDayPhrases_MapToNamedDay(string phrase, int expectedDay)
+    {
+        // Chronic does not reliably parse these everyday phrases, so Yagu handles them explicitly to
+        // avoid silently ignoring future-looking created/modified filters.
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "x", ModifiedAfter = phrase },
+            Context());
+
+        Assert.Equal(new DateTimeOffset(2025, 6, expectedDay, 0, 0, 0, TimeSpan.Zero), resolved.ModifiedAfterDate);
+    }
+
+    [Fact]
+    public void TryResolveWithChronic_ParserException_ReturnsFalse()
+    {
+        // Chronic is a best-effort fallback; if the parser throws, semantic search must drop that date
+        // rather than failing the entire translated search.
+        Assert.False(SemanticPlanApplier.TryResolveWithChronic(
+            "boom",
+            Now,
+            endOfDay: false,
+            (_, _) => throw new InvalidOperationException("parser failed"),
+            out var resolved));
+        Assert.Equal(default, resolved);
+    }
+
+    [Fact]
+    public void KnownFileExtensions_BuildKeepsCuratedBaselineWhenRegistryEnumerationFails()
+    {
+        // Locked-down registry enumeration must not break extension de-pluralization; the curated
+        // baseline is enough for common model repairs even when HKCR cannot be read.
+        var known = KnownFileExtensions.Build(() => throw new UnauthorizedAccessException("blocked"));
+
+        Assert.Contains("cs", known);
+        Assert.Contains("exe", known);
+        Assert.DoesNotContain("blocked", known);
+    }
+
+    [Fact]
+    public void DetectHiddenFilePreference_EveryRegexAlternativeContainsTheLiteralHiddenToken()
+    {
+        // Guards a DELETED defensive line. DetectHiddenFilePreference does:
+        //     int hiddenIndex = query.IndexOf("hidden", match.Index, OrdinalIgnoreCase);
+        //     string before = HiddenClauseBefore(query, hiddenIndex);   // slices query[start..index]
+        // and a `if (hiddenIndex < 0) hiddenIndex = match.Index;` fallback used to sit between them.
+        // Removing it is correct ONLY while every top-level alternative of HiddenFileMentionRegex
+        // contains the literal word "hidden" — that is what guarantees hiddenIndex >= 0. Add a branch
+        // that does not (a bare "dotfiles", say) and hiddenIndex becomes -1, at which point
+        // HiddenClauseBefore throws ArgumentOutOfRangeException out of LastIndexOf on a perfectly
+        // ordinary user query. Nothing else enforces that property, so this does.
+        var field = typeof(SemanticPlanApplier).GetField(
+            "HiddenFileMentionRegex",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(field);
+        var regex = Assert.IsType<System.Text.RegularExpressions.Regex>(field!.GetValue(null));
+
+        IReadOnlyList<string> alternatives = SplitTopLevelAlternatives(regex.ToString());
+        Assert.NotEmpty(alternatives);
+        Assert.All(alternatives, alternative => Assert.Contains(
+            "hidden",
+            alternative,
+            StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    // Alternative 1: the match STARTS at "hidden".
+    [InlineData("show me hidden files", true)]
+    [InlineData("no hidden folders please", false)]
+    // Alternative 2: the match starts at the verb and "hidden" sits inside it.
+    [InlineData("include hidden", true)]
+    [InlineData("exclude hidden", false)]
+    [InlineData("exclude tmp files, show hidden", true)]
+    public void DetectHiddenFilePreference_BothRegexAlternatives_ResolveWithoutAnIndexFallback(
+        string query,
+        bool expected)
+    {
+        // The behavioural half of the pin above: drive a match from each alternative and confirm the
+        // clause-scoped negation scan still produces the right answer with no negative-index guard.
+        // "exclude tmp files, show hidden" is the case the clause scoping exists for — the earlier
+        // "exclude" must not flip the later "show hidden".
+        Assert.Equal(expected, SemanticPlanApplier.DetectHiddenFilePreference(query));
+    }
+
+    /// <summary>Splits a regex pattern on its top-level <c>|</c>, ignoring escapes, groups and classes.</summary>
+    private static IReadOnlyList<string> SplitTopLevelAlternatives(string pattern)
+    {
+        var parts = new List<string>();
+        int depth = 0;
+        bool inClass = false;
+        int start = 0;
+
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            char c = pattern[i];
+            if (c == '\\') { i++; continue; }
+            if (inClass) { if (c == ']') inClass = false; continue; }
+
+            switch (c)
+            {
+                case '[': inClass = true; break;
+                case '(': depth++; break;
+                case ')': depth--; break;
+                case '|' when depth == 0:
+                    parts.Add(pattern[start..i]);
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        parts.Add(pattern[start..]);
+        return parts;
+    }
 }

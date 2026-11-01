@@ -428,17 +428,24 @@ public sealed class StreamingIndexCompactionTests : IDisposable
 
         using IndexCompactionWorkspace workspace = IndexCompactionWorkspace.Create(_sandbox);
         long before = GC.GetTotalAllocatedBytes(precise: false);
+        long liveBefore = GC.GetTotalMemory(forceFullCollection: true);
         StreamingSegmentRunMerger.MergeIntoBase(
             layers, workspace, memoryBudgetBytes: 64 * 1024, diskGuard: null,
             produceV3QueryStructures: true, Created.AddDays(1), CancellationToken.None);
         long allocated = GC.GetTotalAllocatedBytes(precise: false) - before;
 
+        // Allocation is dominated by transient buffers, never by holding the corpus: the retained set is
+        // bounded by the tiny chunk budget, so a run this size must not require anywhere near its own size.
+        // This is measured as a delta across the merge rather than as an absolute process heap. xUnit runs
+        // collections in this assembly in parallel, so an absolute bound actually reports whatever unrelated
+        // tests happen to be resident at the time, and moves with the size of the suite instead of with the
+        // behaviour under test. The delta also excludes the 4000-document builder still rooted by locals above.
+        long retained = GC.GetTotalMemory(forceFullCollection: true) - liveBefore;
+        Assert.True(retained < 64L * 1024 * 1024,
+            $"Compaction must not retain the corpus (retained {retained / (1024 * 1024)} MB, {allocated / (1024 * 1024)} MB allocated in transit).");
+
         ContentIndexGeneration? compacted = ContentIndexGenerationSerializer.TryRead(workspace.PreparedDirectory);
         Assert.NotNull(compacted);
         Assert.Equal(4000, compacted!.Manifest.AliasCount);
-        // Allocation is dominated by transient buffers, never by holding the corpus: the retained set is
-        // bounded by the tiny chunk budget, so a run this size must not require anywhere near its own size.
-        Assert.True(GC.GetTotalMemory(forceFullCollection: true) < 256L * 1024 * 1024,
-            $"Live heap after compaction should stay small (allocated {allocated / (1024 * 1024)} MB in transit).");
     }
 }

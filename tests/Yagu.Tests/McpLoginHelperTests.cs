@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Xml;
 using Yagu.Services;
 using Yagu.Services.Mcp;
@@ -435,6 +436,21 @@ public class McpLoginHelperTests
         Assert.False(File.Exists(xmlPath));
     }
 
+    [Fact]
+    public void Register_WhenSchtasksCannotReadTheDefinition_ReportsTheIoFailure()
+    {
+        // The task definition is a temp file. If the scheduler cannot read it — antivirus race,
+        // profile temp failure, or permission issue — Settings must report the failure instead of
+        // claiming the sign-in helper was registered.
+        var fake = new FakeSchtasks(_ => throw new IOException("temp definition disappeared"));
+
+        McpLoginHelperState state = McpLoginHelper.RegisterWith(fake.Run, @"C:\app\Yagu.McpServer.exe", []);
+
+        Assert.False(state.Registered);
+        Assert.Equal("temp definition disappeared", state.Detail);
+        Assert.Equal(["/Create"], fake.Verbs);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -447,11 +463,190 @@ public class McpLoginHelperTests
         Assert.Empty(fake.Verbs);
     }
 
+    [Fact]
+    public void CurrentUserId_FallsBackToDomainAndUserWhenWindowsIdentityIsUnavailable()
+    {
+        // Some locked-down hosts reject WindowsIdentity.GetCurrent. The generated task still needs a
+        // usable UserId or Windows rejects the XML and the MCP server never starts at sign-in.
+        string userId = McpLoginHelper.CurrentUserId(
+            () => throw new InvalidOperationException("identity unavailable"));
+
+        Assert.Equal($@"{Environment.UserDomainName}\{Environment.UserName}", userId);
+    }
+
     // ── The real schtasks.exe invocation ──
     //
     // Every case here is a read-only /Query against a name that cannot exist, so the machine's task
     // store is never modified. The lifecycle rules are tested through fakes above; this covers only the
     // process plumbing those fakes stand in for.
+
+    private sealed class FakeSchtasksProcess(
+        string output = "",
+        string error = "",
+        int exitCode = 0,
+        bool waitForExit = true,
+        bool throwOnKill = false) : ISchtasksProcess
+    {
+        public TextReader StandardOutput { get; } = new StringReader(output);
+        public TextReader StandardError { get; } = new StringReader(error);
+        public int ExitCode { get; } = exitCode;
+        public bool KillCalled { get; private set; }
+        public bool KillTree { get; private set; }
+        public bool Disposed { get; private set; }
+
+        public bool WaitForExit(int milliseconds) => waitForExit;
+
+        public void Kill(bool entireProcessTree)
+        {
+            KillCalled = true;
+            KillTree = entireProcessTree;
+            if (throwOnKill)
+                throw new InvalidOperationException("already exited");
+        }
+
+        public void Dispose() => Disposed = true;
+    }
+
+    [Fact]
+    public void RunSchtasks_WhenProcessStartReturnsNull_ReportsAStartFailure()
+    {
+        // Process.Start can return null instead of throwing. Treating that as success would make callers
+        // believe a scheduler operation completed when no child process ever existed.
+        var result = McpLoginHelper.RunSchtasks(["/Query"], _ => null);
+
+        Assert.Equal(-1, result.ExitCode);
+        Assert.Equal("could not start schtasks.exe.", result.Error);
+    }
+
+    [Fact]
+    public void RunSchtasks_DrainsPipesAndReturnsTheExitCodeFromTheStartedProcess()
+    {
+        // The fake proves the same plumbing used for real schtasks preserves separate arguments and
+        // reports stdout, stderr, and the exit code without mutating the task store.
+        ProcessStartInfo? captured = null;
+        FakeSchtasksProcess? process = null;
+
+        var result = McpLoginHelper.RunSchtasks(["/Query", "/TN", "name with spaces"], psi =>
+        {
+            captured = psi;
+            process = new FakeSchtasksProcess("out", "err", exitCode: 7);
+            return process;
+        });
+
+        Assert.Equal(7, result.ExitCode);
+        Assert.Equal("out", result.Output);
+        Assert.Equal("err", result.Error);
+        Assert.True(process?.Disposed);
+        Assert.NotNull(captured);
+        Assert.Equal(["/Query", "/TN", "name with spaces"], captured.ArgumentList.ToArray());
+        Assert.False(captured.UseShellExecute);
+        Assert.True(captured.RedirectStandardOutput);
+        Assert.True(captured.RedirectStandardError);
+    }
+
+    [Fact]
+    public void RunSchtasks_AlwaysLaunchesTheSystem32Binary_NotABareImageName()
+    {
+        // The hardening this pins: with UseShellExecute = false, CreateProcess searches the application
+        // directory and the current directory BEFORE System32, so a bare "schtasks.exe" would run a
+        // planted binary dropped beside Yagu.exe — with whatever the signed-in user can do. The process
+        // seam makes the whole call fakeable, so the one field that must never regress is asserted here.
+        ProcessStartInfo? captured = null;
+
+        McpLoginHelper.RunSchtasks(["/Query"], psi =>
+        {
+            captured = psi;
+            return new FakeSchtasksProcess();
+        });
+
+        Assert.NotNull(captured);
+        Assert.Equal(
+            Path.Combine(Environment.SystemDirectory, "schtasks.exe"),
+            captured.FileName,
+            ignoreCase: true);
+        Assert.True(Path.IsPathFullyQualified(captured.FileName));
+
+        // A relative or bare name would be resolved against the caller's working directory, which the
+        // MCP server does not control.
+        Assert.DoesNotContain("..", captured.FileName, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunSchtasks_KillsAnUnresponsiveProcessAndReportsTheTimeout()
+    {
+        // If schtasks hangs, Settings must not hang forever; the child is killed as a process tree and
+        // the caller gets a clear failure detail.
+        var process = new FakeSchtasksProcess(waitForExit: false);
+
+        var result = McpLoginHelper.RunSchtasks(["/Query"], _ => process);
+
+        Assert.Equal(-1, result.ExitCode);
+        Assert.Equal("schtasks.exe did not respond.", result.Error);
+        Assert.True(process.KillCalled);
+        Assert.True(process.KillTree);
+    }
+
+    [Fact]
+    public void RunSchtasks_StillReportsTheTimeoutWhenTheHungProcessAlreadyExitedDuringKill()
+    {
+        // A race between timeout detection and Kill must not surface as an exception. The scheduler
+        // operation still timed out from the caller's perspective.
+        var process = new FakeSchtasksProcess(waitForExit: false, throwOnKill: true);
+
+        var result = McpLoginHelper.RunSchtasks(["/Query"], _ => process);
+
+        Assert.Equal(-1, result.ExitCode);
+        Assert.Equal("schtasks.exe did not respond.", result.Error);
+        Assert.True(process.KillCalled);
+    }
+
+    [Fact]
+    public void RunSchtasks_ReturnsProcessStartExceptionsAsSchedulerFailures()
+    {
+        // Missing executables, policy blocks, or invalid process state should be shown as task setup
+        // failures rather than crashing the Settings UI.
+        var result = McpLoginHelper.RunSchtasks(
+            ["/Query"],
+            _ => throw new System.ComponentModel.Win32Exception(5, "access denied"));
+
+        Assert.Equal(-1, result.ExitCode);
+        Assert.Contains("access denied", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RealSchtasksProcess_KillForwardsToTheUnderlyingProcess()
+    {
+        // The timeout path relies on killing the actual child process, not just reporting an error.
+        // Cover the thin adapter with a harmless long-running process instead of creating a real task.
+        var psi = new ProcessStartInfo("cmd.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psi.ArgumentList.Add("/c");
+        psi.ArgumentList.Add("ping");
+        psi.ArgumentList.Add("-n");
+        psi.ArgumentList.Add("30");
+        psi.ArgumentList.Add("127.0.0.1");
+        psi.ArgumentList.Add(">nul");
+
+        using Process process = Process.Start(psi)!;
+        using var wrapper = new McpLoginHelper.RealSchtasksProcess(process);
+
+        try
+        {
+            wrapper.Kill(entireProcessTree: true);
+
+            Assert.True(process.WaitForExit(5_000), "the adapter did not terminate the child process.");
+        }
+        finally
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+    }
 
     private static string UnusedTaskName() => "Yagu-does-not-exist-" + Guid.NewGuid().ToString("n");
 

@@ -89,7 +89,12 @@ internal sealed class NaturalLanguageSearchTool(
     private static string Trim(string request) =>
         request.Length <= 60 ? request : request[..57] + "...";
 
-    private static string Render(YaguCliResult result, McpAuthorizationPolicy policy)
+    /// <remarks>
+    /// Internal so the rendering can be driven directly. The non-completed guard is unreachable from
+    /// <see cref="StartAsync"/>, which validates the outcome first, but must be retained so a run that
+    /// never finished can never be rendered as a plan.
+    /// </remarks>
+    internal static string Render(YaguCliResult result, McpAuthorizationPolicy policy)
     {
         if (result.Outcome != YaguCliOutcome.Completed)
             return $"error: {result.Failure ?? result.Outcome.ToString().ToLowerInvariant()}";

@@ -29,6 +29,20 @@ internal sealed record McpLoginHelperState(bool Registered, string? Detail = nul
 /// <summary>Performs one <c>schtasks.exe</c> invocation and reports its outcome.</summary>
 internal delegate (int ExitCode, string Output, string Error) SchtasksRunner(IReadOnlyList<string> arguments);
 
+/// <summary>Starts one <c>schtasks.exe</c> child process, or returns null when the OS declines.</summary>
+/// <remarks>Exists so tests can drive the process-plumbing arms without ever creating a real task.</remarks>
+internal delegate ISchtasksProcess? SchtasksProcessStarter(ProcessStartInfo startInfo);
+
+/// <summary>The slice of <see cref="Process"/> that the schtasks plumbing actually uses.</summary>
+internal interface ISchtasksProcess : IDisposable
+{
+    TextReader StandardOutput { get; }
+    TextReader StandardError { get; }
+    int ExitCode { get; }
+    bool WaitForExit(int milliseconds);
+    void Kill(bool entireProcessTree);
+}
+
 internal static class McpLoginHelper
 {
     /// <summary>Task name. Per user, so two accounts on one PC do not collide.</summary>
@@ -319,10 +333,18 @@ internal static class McpLoginHelper
     }
 
     private static string CurrentUserId()
+        => CurrentUserId(System.Security.Principal.WindowsIdentity.GetCurrent);
+
+    /// <remarks>
+    /// Takes the identity lookup so tests can prove task XML falls back to the domain\user form when
+    /// WindowsIdentity is unavailable. That failure mode matters because a scheduler definition with no
+    /// usable UserId is rejected, disabling the sign-in helper for otherwise valid users.
+    /// </remarks>
+    internal static string CurrentUserId(Func<System.Security.Principal.WindowsIdentity> getCurrentIdentity)
     {
         try
         {
-            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            using var identity = getCurrentIdentity();
             return identity.User?.Value ?? $"{Environment.UserDomainName}\\{Environment.UserName}";
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or InvalidOperationException or PlatformNotSupportedException)
@@ -349,6 +371,16 @@ internal static class McpLoginHelper
     /// tested through <see cref="SchtasksRunner"/> fakes instead, so they never create a real task.
     /// </remarks>
     internal static (int ExitCode, string Output, string Error) RunSchtasks(IReadOnlyList<string> arguments)
+        => RunSchtasks(arguments, StartSchtasksProcess);
+
+    /// <remarks>
+    /// Takes the process starter so tests can cover the process-plumbing failure modes without creating
+    /// real scheduled tasks: Process.Start returning null, an unresponsive child that must be killed,
+    /// and platform start failures. The public entry point keeps using the real schtasks.exe path.
+    /// </remarks>
+    internal static (int ExitCode, string Output, string Error) RunSchtasks(
+        IReadOnlyList<string> arguments,
+        SchtasksProcessStarter startProcess)
     {
         var psi = new ProcessStartInfo
         {
@@ -369,7 +401,7 @@ internal static class McpLoginHelper
 
         try
         {
-            using Process? process = Process.Start(psi);
+            using ISchtasksProcess? process = startProcess(psi);
             if (process is null)
                 return (-1, string.Empty, "could not start schtasks.exe.");
 
@@ -389,5 +421,27 @@ internal static class McpLoginHelper
         {
             return (-1, string.Empty, ex.Message);
         }
+    }
+
+    private static ISchtasksProcess? StartSchtasksProcess(ProcessStartInfo psi)
+    {
+        Process? process = Process.Start(psi);
+        return process is null ? null : new RealSchtasksProcess(process);
+    }
+
+    /// <summary>Thin adapter that lets the real <see cref="Process"/> satisfy <see cref="ISchtasksProcess"/>.</summary>
+    /// <remarks>
+    /// Internal, not private, only so a test can prove the adapter really forwards <see cref="Kill"/> to
+    /// the child process — the timeout path depends on that, and a silently non-forwarding adapter would
+    /// leave a hung <c>schtasks.exe</c> running. It adds no behaviour of its own.
+    /// </remarks>
+    internal sealed class RealSchtasksProcess(Process process) : ISchtasksProcess
+    {
+        public TextReader StandardOutput => process.StandardOutput;
+        public TextReader StandardError => process.StandardError;
+        public int ExitCode => process.ExitCode;
+        public bool WaitForExit(int milliseconds) => process.WaitForExit(milliseconds);
+        public void Kill(bool entireProcessTree) => process.Kill(entireProcessTree);
+        public void Dispose() => process.Dispose();
     }
 }

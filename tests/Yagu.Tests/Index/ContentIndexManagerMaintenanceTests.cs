@@ -339,6 +339,22 @@ public sealed class ContentIndexManagerMaintenanceTests : IDisposable
     }
 
     [Fact]
+    public void StoredIndexDiscovery_IgnoresDirectoriesThatAreNotScopeIds()
+    {
+        // A recovery workspace or user-created folder under the index root must not be mistaken for a
+        // reusable index root and silently added back to settings.
+        Directory.CreateDirectory(Path.Combine(_indexRoot, "not-a-scope"));
+
+        Assert.False(new ContentIndexManager(_paths).HasReadableStoredIndex());
+        Assert.Empty(new ContentIndexManager(_paths).GetReusableStoredIndexRoots());
+
+        PublishGeneration();
+
+        Assert.True(new ContentIndexManager(_paths).HasReadableStoredIndex());
+        Assert.Equal([_root], new ContentIndexManager(_paths).GetReusableStoredIndexRoots());
+    }
+
+    [Fact]
     public void MetadataAndStorageStats_HandleEmptyScopeDirectory()
     {
         string scopeId = new('c', 32);
@@ -458,6 +474,54 @@ public sealed class ContentIndexManagerMaintenanceTests : IDisposable
         Assert.NotNull(manager.TryReadAutomaticCompactionFailureForRoot(_root));
         PublishGeneration(new UsnCheckpoint(1, 200));
         Assert.Null(manager.TryReadAutomaticCompactionFailureForRoot(_root));
+    }
+
+    [Fact]
+    public void AutomaticCompactionFailureMarker_MalformedAndLockedMarkersAreIgnored()
+    {
+        PublishGeneration();
+        var store = new ContentIndexStore(_paths, ContentIndexManager.ScopeIdForRoot(_root));
+        string marker = Path.Combine(store.ScopeDirectory, ContentIndexManager.AutomaticCompactionFailureFile);
+
+        File.WriteAllText(marker, "not-a-date" + Environment.NewLine + "reason");
+        Assert.False(ContentIndexManager.TryReadAutomaticCompactionFailure(store, out _));
+
+        File.WriteAllText(marker, DateTimeOffset.UtcNow.ToString("O") + Environment.NewLine + "reason");
+        using var locked = new FileStream(marker, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        // A half-written or locked retry marker cannot be trusted to suppress maintenance.
+        Assert.False(ContentIndexManager.TryReadAutomaticCompactionFailure(store, out _));
+    }
+
+    [Fact]
+    public void AutomaticCompactionFailureMarker_WriteAndClearFailuresAreNonFatal()
+    {
+        string fileBackedScope = Path.Combine(_sandbox, "scope-is-a-file");
+        File.WriteAllText(fileBackedScope, "not a directory");
+        var fileBackedStore = new ContentIndexStore(
+            new FixedScopePathProvider(_indexRoot, fileBackedScope),
+            new string('a', 32));
+
+        // Failure telemetry is best-effort; a read-only or otherwise invalid storage location must not
+        // make the original compaction failure worse by throwing while recording the marker.
+        ContentIndexManager.RecordAutomaticCompactionFailure(
+            fileBackedStore,
+            new IOException("original compaction failure"),
+            DateTimeOffset.UtcNow);
+        Assert.Equal("not a directory", File.ReadAllText(fileBackedScope));
+
+        PublishGeneration();
+        var store = new ContentIndexStore(_paths, ContentIndexManager.ScopeIdForRoot(_root));
+        ContentIndexManager.RecordAutomaticCompactionFailure(store, new IOException("clear me"), DateTimeOffset.UtcNow);
+        string marker = Path.Combine(store.ScopeDirectory, ContentIndexManager.AutomaticCompactionFailureFile);
+        using (new FileStream(marker, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            ContentIndexManager.ClearAutomaticCompactionFailure(store);
+            Assert.True(File.Exists(marker));
+        }
+
+        ContentIndexManager.ClearAutomaticCompactionFailure(store);
+        Assert.False(File.Exists(marker));
     }
 
     [Fact]
@@ -587,6 +651,153 @@ public sealed class ContentIndexManagerMaintenanceTests : IDisposable
     }
 
     [Fact]
+    public void AutomaticCompaction_RecentFailureDefersAnotherAttemptWithoutChangingSegments()
+    {
+        ContentIndexStore store = PublishDeltaSegments(2);
+        ContentIndexManager.RecordAutomaticCompactionFailure(
+            store,
+            new IOException("previous merge failed"),
+            DateTimeOffset.UtcNow);
+        var settings = new IndexMaintenanceSettings
+        {
+            MaxDeltaSegments = 1,
+            CompactionThresholdMB = 8192,
+            CoalesceMinRun = 64,
+        };
+
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+        IndexAutomaticCompactionOutcome outcome = new ContentIndexManager(_paths)
+            .CompactScopeIfOverSegmentedUnderLease(mutation, _root, Policy(), settings, DateTimeOffset.UtcNow);
+
+        // A retry marker protects the disk from hammering a failing compaction loop; the live layered
+        // index remains queryable and unchanged until the backoff expires.
+        Assert.Equal(IndexAutomaticCompactionOutcome.Failed, outcome);
+        Assert.Equal(2, store.ActiveSegmentCount());
+    }
+
+    [Fact]
+    public void AutomaticCompaction_OverBudgetWithoutAReclaimModeLeavesTheLayeredIndexInPlace()
+    {
+        ContentIndexStore store = PublishLargeDeltaSegments();
+        Assert.True(store.TotalActiveIndexBytes() > 1024 * 1024, "Setup requires an index above the 1 MB budget.");
+        var settings = new IndexMaintenanceSettings
+        {
+            MaxDeltaSegments = 1,
+            CompactionThresholdMB = 8192,
+            CoalesceMinRun = 64,
+            SizeBudgetMB = 1,
+            SizeManagementMode = IndexSizeManagementModes.Off,
+        };
+
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+        IndexAutomaticCompactionOutcome outcome = new ContentIndexManager(_paths)
+            .CompactScopeIfOverSegmentedUnderLease(mutation, _root, Policy(), settings, DateTimeOffset.UtcNow);
+
+        // Size-budget warnings must not perform a surprise compaction when the user selected "off".
+        Assert.Equal(IndexAutomaticCompactionOutcome.NotNeeded, outcome);
+        Assert.True(store.ActiveSegmentCount() > 0);
+    }
+
+    [Fact]
+    public void AutomaticCompaction_FailedStreamingFoldRecordsRetryMarker()
+    {
+        ContentIndexStore store = PublishDeltaSegments(2);
+        var settings = new IndexMaintenanceSettings
+        {
+            MaxDeltaSegments = 1,
+            CompactionThresholdMB = 8192,
+            CoalesceMinRun = 64,
+            MinimumFreeSpaceMB = int.MaxValue,
+            MaxDiskUsagePercent = 99,
+        };
+
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+        IndexAutomaticCompactionOutcome outcome = new ContentIndexManager(_paths)
+            .CompactScopeIfOverSegmentedUnderLease(mutation, _root, Policy(), settings, DateTimeOffset.UtcNow);
+
+        // The failed automatic pass must leave a marker so background maintenance backs off instead of
+        // retrying an impossible disk-headroom compaction every tick.
+        Assert.Equal(IndexAutomaticCompactionOutcome.Failed, outcome);
+        Assert.True(ContentIndexManager.TryReadAutomaticCompactionFailure(
+            store,
+            out IndexAutomaticCompactionFailure failure));
+        Assert.Equal(IndexAutomaticCompactionFailureCause.DiskHeadroom, failure.Cause);
+    }
+
+    [Fact]
+    public void CompactScopeNow_CancellationPropagatesWithoutRecordingAFailureMarker()
+    {
+        ContentIndexStore store = PublishDeltaSegments(2);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        using IndexMutationContext mutation = IndexMutationContext.Acquire(_paths);
+
+        // User-initiated cancellation is not a compaction failure and must not arm retry backoff.
+        Assert.ThrowsAny<OperationCanceledException>(() => new ContentIndexManager(_paths)
+            .CompactScopeNowUnderLease(
+                mutation,
+                _root,
+                new IndexMaintenanceSettings(),
+                DateTimeOffset.UtcNow,
+                cancellationToken: cancellation.Token));
+        Assert.False(ContentIndexManager.TryReadAutomaticCompactionFailure(store, out _));
+    }
+
+    [Fact]
+    public void CompactScopeNow_PublicWrapperReturnsWhenScopeIsAlreadySingleBase()
+    {
+        PublishGeneration();
+        var manager = new ContentIndexManager(_paths);
+
+        manager.CompactScopeNow(_root, new IndexMaintenanceSettings(), DateTimeOffset.UtcNow);
+
+        // "Compact now" on an already-folded index is a no-op, not a failure marker that would suppress
+        // future automatic maintenance.
+        Assert.Null(manager.TryReadAutomaticCompactionFailureForRoot(_root));
+    }
+
+    [Fact]
+    public void CompactScopeNow_MissingActiveLayersRecordsFailureBeforeRethrowing()
+    {
+        var manager = new ContentIndexManager(_paths);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            manager.CompactScopeNow(_root, new IndexMaintenanceSettings(), DateTimeOffset.UtcNow));
+
+        // A corrupt or missing pointer should be reported to the caller and persisted as retry state so
+        // background maintenance does not spin on the same broken index.
+        Assert.Contains("no trusted active layers", error.Message, StringComparison.OrdinalIgnoreCase);
+        IndexAutomaticCompactionFailure failure = Assert.IsType<IndexAutomaticCompactionFailure>(
+            manager.TryReadAutomaticCompactionFailureForRoot(_root));
+        Assert.Equal(IndexAutomaticCompactionFailureCause.Unknown, failure.Cause);
+    }
+
+    [Fact]
+    public void TryReadAutomaticCompactionFailureForRoot_RejectsBlankOrUnusableRoots()
+    {
+        // The status surface polls this helper defensively; an empty box or unavailable index provider
+        // should simply mean "no deferral marker".
+        Assert.Null(new ContentIndexManager(_paths).TryReadAutomaticCompactionFailureForRoot("   "));
+        Assert.Null(new ContentIndexManager(new ThrowingPathProvider(_indexRoot))
+            .TryReadAutomaticCompactionFailureForRoot(_root));
+    }
+
+    [Fact]
+    public void TryGetVolumeTotalBytes_InvalidPathReturnsZero()
+    {
+        var method = typeof(ContentIndexManager).GetMethod(
+            "TryGetVolumeTotalBytes",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        long bytes = Assert.IsType<long>(method!.Invoke(null, ["\0bad-path"]));
+
+        // A projected cloud download should disable only the percentage projection if Windows refuses to
+        // parse the root, never abort the index build.
+        Assert.Equal(0, bytes);
+    }
+
+    [Fact]
     public void MaintenanceMethods_OrdinaryProviderFailuresReturnFalse()
     {
         var manager = new ContentIndexManager(new ThrowingPathProvider(_indexRoot));
@@ -650,6 +861,67 @@ public sealed class ContentIndexManagerMaintenanceTests : IDisposable
         return identity;
     }
 
+    private ContentIndexStore PublishDeltaSegments(int count)
+    {
+        string scopeId = ContentIndexManager.ScopeIdForRoot(_root);
+        var store = new ContentIndexStore(_paths, scopeId);
+        var baseBuilder = new ContentIndexGenerationBuilder(Policy());
+        baseBuilder.AddDocument(_file, Encoding.UTF8.GetBytes("indexed content here"));
+        store.Publish(baseBuilder.Build(
+            scopeId,
+            Path.GetPathRoot(_root)!,
+            IndexScopeIdentity.NormalizePath(_root),
+            new UsnCheckpoint(1, 100),
+            DateTimeOffset.UtcNow));
+        for (int index = 0; index < count; index++)
+        {
+            var segment = new ContentIndexDeltaSegmentBuilder(Policy());
+            segment.AddChangedDocument(
+                Path.Combine(_root, $"delta-{index}.txt"),
+                Encoding.UTF8.GetBytes($"delta content {index}"));
+            store.PublishSegmentFast(segment.Build(
+                scopeId,
+                Path.GetPathRoot(_root)!,
+                IndexScopeIdentity.NormalizePath(_root),
+                new UsnCheckpoint(1, 200 + index),
+                DateTimeOffset.UtcNow.AddSeconds(index)));
+        }
+        return store;
+    }
+
+    private ContentIndexStore PublishLargeDeltaSegments()
+    {
+        string scopeId = ContentIndexManager.ScopeIdForRoot(_root);
+        var store = new ContentIndexStore(_paths, scopeId);
+        var baseBuilder = new ContentIndexGenerationBuilder(Policy());
+        baseBuilder.AddDocument(_file, Encoding.UTF8.GetBytes("indexed content here"));
+        store.Publish(baseBuilder.Build(
+            scopeId,
+            Path.GetPathRoot(_root)!,
+            IndexScopeIdentity.NormalizePath(_root),
+            new UsnCheckpoint(1, 100),
+            DateTimeOffset.UtcNow));
+        for (int layer = 0; layer < 3; layer++)
+        {
+            var segment = new ContentIndexDeltaSegmentBuilder(Policy());
+            for (int file = 0; file < 250; file++)
+            {
+                string body = string.Concat(Enumerable.Range(0, 40)
+                    .Select(_ => Guid.NewGuid().ToString("N")));
+                segment.AddChangedDocument(
+                    Path.Combine(_root, $"large-{layer}-{file}.txt"),
+                    Encoding.UTF8.GetBytes(body));
+            }
+            store.PublishSegmentFast(segment.Build(
+                scopeId,
+                Path.GetPathRoot(_root)!,
+                IndexScopeIdentity.NormalizePath(_root),
+                new UsnCheckpoint(1, 500 + layer),
+                DateTimeOffset.UtcNow.AddSeconds(layer)));
+        }
+        return store;
+    }
+
     private static IndexIngestionPolicy Policy() => new(0, null, null, true, false, 0);
 
     private static ContentIndexFreshnessEvaluator.JournalReader FreshReader
@@ -674,5 +946,11 @@ public sealed class ContentIndexManagerMaintenanceTests : IDisposable
     {
         public string IndexRoot { get; } = indexRoot;
         public string GetScopeDirectory(string scopeId) => throw new IOException("unavailable index storage");
+    }
+
+    private sealed class FixedScopePathProvider(string indexRoot, string scopeDirectory) : IContentIndexPathProvider
+    {
+        public string IndexRoot { get; } = indexRoot;
+        public string GetScopeDirectory(string scopeId) => scopeDirectory;
     }
 }

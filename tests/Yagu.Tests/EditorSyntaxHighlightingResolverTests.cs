@@ -130,4 +130,25 @@ public sealed class EditorSyntaxHighlightingResolverTests
     {
         Assert.Null(EditorSyntaxHighlightingResolver.ResolveFromFileName(filePath));
     }
+
+    [Theory]
+    [InlineData(@"C:\repo\src\")]
+    [InlineData(@"C:\")]
+    [InlineData("/")]
+    public void ResolveFromFileName_APathThatNamesNoFile_ReturnsNull(string filePath)
+    {
+        // A directory path has no file name to classify. Falling through would run the extension
+        // lookup against an empty string, and any language it happened to return would be highlighting
+        // chosen from nothing at all.
+        Assert.Null(EditorSyntaxHighlightingResolver.ResolveFromFileName(filePath));
+    }
+
+    [Fact]
+    public void ResolveFromFileName_APathThePlatformRefusesToParse_ReturnsNullInsteadOfThrowing()
+    {
+        // This runs while opening a file in the editor. A path the platform rejects must degrade to
+        // plain text; letting the failure escape would take the editor down on file open.
+        Assert.Null(EditorSyntaxHighlightingResolver.ResolveFromFileName(
+            "bad|path.cs", static _ => throw new ArgumentException("illegal characters in path")));
+    }
 }

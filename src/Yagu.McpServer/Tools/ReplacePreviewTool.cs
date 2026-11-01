@@ -144,9 +144,15 @@ internal sealed class ReplacePreviewTool(
     /// Drops scopes past their lifetime. Most previews are never committed, so without this the map
     /// grows for the life of a long-running server.
     /// </summary>
-    private static void PurgeExpiredCommitScopes()
+    private static void PurgeExpiredCommitScopes() => PurgeExpiredCommitScopes(DateTimeOffset.UtcNow);
+
+    /// <remarks>
+    /// Takes the current time so expiry is reachable without waiting out
+    /// <see cref="CommitScopeLifetime"/>; production always passes the real clock.
+    /// </remarks>
+    internal static void PurgeExpiredCommitScopes(DateTimeOffset utcNow)
     {
-        DateTimeOffset cutoff = DateTimeOffset.UtcNow - CommitScopeLifetime;
+        DateTimeOffset cutoff = utcNow - CommitScopeLifetime;
         foreach (var entry in CommitScopes)
         {
             if (entry.Value.IssuedUtc < cutoff)

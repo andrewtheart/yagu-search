@@ -49,8 +49,34 @@ internal sealed class IndexBuildRuntime
         IndexBuildOperation operation,
         CancellationToken cancellationToken,
         Action<ImageOcrBuildProgress>? progress)
+        => BuildProductionImageOcr(
+            mutation,
+            manager,
+            stagingPaths,
+            root,
+            policy,
+            operation,
+            cancellationToken,
+            progress,
+            OcrEngineFactory.Create);
+
+    /// <remarks>
+    /// Takes the OCR engine factory so tests can exercise both disposal arms without downloading OCR assets
+    /// or starting the isolated worker. The raw index must still be committed when OCR is unavailable, and
+    /// leaked worker handles would otherwise make repeated maintenance runs unreliable.
+    /// </remarks>
+    internal static ImageOcrExtendedSourceBuildResult BuildProductionImageOcr(
+        IndexMutationContext mutation,
+        ContentIndexManager manager,
+        IContentIndexPathProvider stagingPaths,
+        string root,
+        IndexIngestionPolicy policy,
+        IndexBuildOperation operation,
+        CancellationToken cancellationToken,
+        Action<ImageOcrBuildProgress>? progress,
+        Func<string?, string?, int, int, IOcrEngine> createEngine)
     {
-        IOcrEngine engine = OcrEngineFactory.Create(
+        IOcrEngine engine = createEngine(
             operation.ImageOcrEngine,
             operation.ImageOcrModel,
             operation.ImageOcrMaxSide,

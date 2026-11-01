@@ -65,4 +65,22 @@ public class SearchOptionsTests
         var opts = new SearchOptions { Directory = ".", Query = "x", SearchHiddenFiles = false };
         Assert.False(opts.SearchHiddenFiles);
     }
+
+    [Theory]
+    [InlineData(1, false, 1)]
+    [InlineData(1, true, 1)]
+    [InlineData(2, false, 2)]
+    [InlineData(2, true, 2)]
+    [InlineData(3, false, 3)]
+    [InlineData(3, true, 3)]
+    [InlineData(0, false, 1)]
+    [InlineData(0, true, 2)]
+    [InlineData(99, true, 2)]
+    public void ResolveIoOversubscriptionMultiplier_HonoursAnExplicitChoiceAndOnlyGuessesOnAuto(
+        int index, bool isHardDisk, int expected)
+    {
+        // Only the Auto arm may look at the medium. An explicit choice has to survive being run against
+        // a spindle, or a user who picked 1x to stop thrashing a rotational disk silently gets 2x.
+        Assert.Equal(expected, SearchOptions.ResolveIoOversubscriptionMultiplier(index, isHardDisk));
+    }
 }

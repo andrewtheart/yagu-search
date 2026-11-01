@@ -254,6 +254,185 @@ public sealed class PreviewSyntaxHighlighterTests
         }
     }
 
+    [Fact]
+    public void Tokenize_UnknownLanguageFallsBackToPlainCodeRules()
+    {
+        // An enum value from a newer resolver must still use the safe generic scanner rather than
+        // throwing while building the preview pane.
+        const string line = "value \"quoted\" 42";
+        var tokens = PreviewSyntaxHighlighter.Tokenize(line, (EditorSyntaxLanguage)9999);
+
+        Assert.Equal(PreviewTokenKind.StringLiteral, KindAt(line, (EditorSyntaxLanguage)9999, "\"quoted\""));
+        Assert.Equal(PreviewTokenKind.Number, KindAt(line, (EditorSyntaxLanguage)9999, "42"));
+        Assert.Equal(2, tokens.Count);
+    }
+
+    [Fact]
+    public void CodeScanner_NewlineResetsPreprocessorIndent()
+    {
+        // A directive on the second rendered line must be recognized relative to that line's indent;
+        // otherwise a multi-line preview slice loses highlighting after the first newline.
+        const string line = "int x;\n  #define VALUE 1";
+
+        Assert.Equal(PreviewTokenKind.Preprocessor, KindAt(line, EditorSyntaxLanguage.Cpp, "#define"));
+    }
+
+    [Fact]
+    public void Latex_BackslashCommandsArePreprocessorTokens()
+    {
+        // LaTeX commands are the semantic landmarks in TeX files; they should be colored even though
+        // the language disables normal quoted-string rules.
+        const string line = "\\section{Intro}";
+
+        Assert.Equal(PreviewTokenKind.Preprocessor, KindAt(line, EditorSyntaxLanguage.Latex, "\\section"));
+    }
+
+    [Fact]
+    public void Cpp_NonIncludePreprocessorDirectiveDoesNotScanHeader()
+    {
+        // Only include/import directives should color an angle-bracket target; other preprocessor
+        // lines must resume scanning after the directive word.
+        const string line = "#pragma once";
+        var tokens = PreviewSyntaxHighlighter.Tokenize(line, EditorSyntaxLanguage.Cpp);
+
+        var token = Assert.Single(tokens);
+        Assert.Equal(PreviewTokenKind.Preprocessor, token.Kind);
+        Assert.Equal("#pragma", TextOf(line, token));
+    }
+
+    [Fact]
+    public void Cpp_IncludeAtTokenCapDoesNotAppendHeaderToken()
+    {
+        // The token cap is a long-line crash guard; when the directive consumes the final token budget,
+        // the angle-bracket header must be skipped rather than overflowing the cap.
+        const string line = "#include <vector>";
+        var tokens = PreviewSyntaxHighlighter.Tokenize(line, EditorSyntaxLanguage.Cpp, maxTokens: 1);
+
+        var token = Assert.Single(tokens);
+        Assert.Equal(PreviewTokenKind.Preprocessor, token.Kind);
+        Assert.Equal("#include", TextOf(line, token));
+    }
+
+    [Fact]
+    public void Cpp_IncludeWithQuotedHeaderLeavesHeaderToGenericStringScanner()
+    {
+        // The preprocessor fast path only owns angle-bracket headers; quoted includes should fall back
+        // to the normal string scanner so token ordering remains non-overlapping.
+        const string line = "#include \"local.h\"";
+        var tokens = PreviewSyntaxHighlighter.Tokenize(line, EditorSyntaxLanguage.Cpp);
+
+        Assert.Equal(["#include", "\"local.h\""], tokens.Select(t => TextOf(line, t)).ToArray());
+        Assert.Equal(PreviewTokenKind.Preprocessor, tokens[0].Kind);
+        Assert.Equal(PreviewTokenKind.StringLiteral, tokens[1].Kind);
+    }
+
+    [Fact]
+    public void Xml_SkipsDeclarationPrefixAndClosingSlashBeforeTagName()
+    {
+        // XML declarations and closing tags begin with punctuation before the name; the scanner must
+        // skip it so attributes and tag names remain aligned.
+        const string declaration = "<?xml version='1.0'?>";
+        const string closing = "</Grid>";
+
+        Assert.Equal(PreviewTokenKind.Tag, KindAt(declaration, EditorSyntaxLanguage.XML, "<?xml"));
+        Assert.Equal(PreviewTokenKind.Attribute, KindAt(declaration, EditorSyntaxLanguage.XML, "version"));
+        Assert.Equal(PreviewTokenKind.StringLiteral, KindAt(declaration, EditorSyntaxLanguage.XML, "'1.0'"));
+        Assert.Equal(PreviewTokenKind.Tag, KindAt(closing, EditorSyntaxLanguage.XML, "</Grid"));
+    }
+
+    [Fact]
+    public void Markdown_ColorsBlockQuoteAndFenceLines()
+    {
+        // Block quotes and fenced-code markers are whole-line Markdown constructs; classifying only a
+        // prefix would leave the rest of the rendered line in the wrong brush.
+        Assert.Equal(PreviewTokenKind.Comment, KindAt("> quoted text", EditorSyntaxLanguage.Markdown, "> quoted text"));
+        Assert.Equal(PreviewTokenKind.Preprocessor, KindAt("```csharp", EditorSyntaxLanguage.Markdown, "```csharp"));
+        Assert.Equal(PreviewTokenKind.Preprocessor, KindAt("~~~", EditorSyntaxLanguage.Markdown, "~~~"));
+    }
+
+    [Fact]
+    public void Markdown_ListMarkerLinkLabelAndTargetAreDistinctTokens()
+    {
+        // A Markdown list item can contain a link; the bullet, label, and URL each need their own
+        // token so syntax color does not bleed across the line.
+        const string line = "- see [docs](https://example.test)";
+        var tokens = PreviewSyntaxHighlighter.Tokenize(line, EditorSyntaxLanguage.Markdown);
+
+        Assert.Equal(PreviewTokenKind.Keyword, KindAt(line, EditorSyntaxLanguage.Markdown, "-"));
+        Assert.Equal(PreviewTokenKind.Keyword, KindAt(line, EditorSyntaxLanguage.Markdown, "[docs]"));
+        Assert.Equal(PreviewTokenKind.Attribute, KindAt(line, EditorSyntaxLanguage.Markdown, "https://example.test"));
+        Assert.Equal(["-", "[docs]", "https://example.test"], tokens.Select(t => TextOf(line, t)).ToArray());
+    }
+
+    [Fact]
+    public void Markdown_UnclosedLinkPiecesDoNotCreateTargetTokens()
+    {
+        // Unclosed link syntax must be ignored instead of creating a zero-length target token, which
+        // would corrupt the non-overlapping token contract for malformed Markdown.
+        const string line = "see []( and [broken";
+        var tokens = PreviewSyntaxHighlighter.Tokenize(line, EditorSyntaxLanguage.Markdown);
+
+        Assert.Contains(tokens, t => t.Kind == PreviewTokenKind.Keyword && TextOf(line, t) == "[]");
+        Assert.DoesNotContain(tokens, t => t.Kind == PreviewTokenKind.Attribute);
+        Assert.DoesNotContain(tokens, t => TextOf(line, t) == "[broken");
+    }
+
+    [Fact]
+    public void CodeString_UnterminatedBeforeNewlineStopsAtLineEnd()
+    {
+        // An unterminated string literal must stop at end-of-line rather than swallowing the rest of
+        // the preview; one stray quote should not gray out every following line.
+        const string line = "\"first line\nint next;";
+        var token = Assert.Single(PreviewSyntaxHighlighter.Tokenize(line, EditorSyntaxLanguage.Cpp), t => t.Kind == PreviewTokenKind.StringLiteral);
+
+        Assert.Equal(PreviewTokenKind.StringLiteral, token.Kind);
+        Assert.Equal("\"first line", TextOf(line, token));
+    }
+
+    [Fact]
+    public void CodeString_UnterminatedAtEndStopsAtBufferEnd()
+    {
+        // A preview slice can end in the middle of a string; the token must be clamped to the slice
+        // rather than reading past the rendered text.
+        const string line = "var s = \"tail";
+        var token = Assert.Single(PreviewSyntaxHighlighter.Tokenize(line, EditorSyntaxLanguage.CSharp), t => t.Kind == PreviewTokenKind.StringLiteral);
+
+        Assert.Equal("\"tail", TextOf(line, token));
+    }
+
+    [Fact]
+    public void NumberScanner_KeepsExponentSignWithLiteral()
+    {
+        // Scientific notation must keep the exponent sign inside the number token, otherwise "1e-9"
+        // is split and the minus sign is rendered as plain text.
+        const string line = "double x = 1e-9;";
+
+        Assert.Equal(PreviewTokenKind.Number, KindAt(line, EditorSyntaxLanguage.Cpp, "1e-9"));
+        Assert.Contains(PreviewSyntaxHighlighter.Tokenize(line, EditorSyntaxLanguage.Cpp), t => TextOf(line, t) == "1e-9");
+    }
+
+    [Fact]
+    public void Css_KeyWithoutAssignmentAtEndIsNotColoredAsAttribute()
+    {
+        // CSS key coloring requires an actual ':' or '='; a partial line ending after an identifier
+        // should stay plain until the assignment appears.
+        const string line = "color   ";
+
+        Assert.Empty(PreviewSyntaxHighlighter.Tokenize(line, EditorSyntaxLanguage.CSS));
+    }
+
+    [Fact]
+    public void Json_StringAtEndWithoutColonIsValueNotProperty()
+    {
+        // A JSON string followed only by whitespace is a value token, not a property name; otherwise
+        // incomplete preview slices would color trailing values as object keys.
+        const string line = "\"tail\"   ";
+
+        var token = Assert.Single(PreviewSyntaxHighlighter.Tokenize(line, EditorSyntaxLanguage.Json));
+        Assert.Equal(PreviewTokenKind.StringLiteral, token.Kind);
+        Assert.Equal("\"tail\"", TextOf(line, token));
+    }
+
     // ── palette ───────────────────────────────────────────────────────────────
 
     [Fact]

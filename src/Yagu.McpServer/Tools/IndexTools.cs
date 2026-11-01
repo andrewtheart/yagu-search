@@ -273,7 +273,12 @@ internal sealed class IndexTools(
     /// Index commands keep their own published exit codes, so the raw code is reported alongside the
     /// protocol outcome rather than being flattened into a generic success or failure.
     /// </summary>
-    private static string DescribeMaintenanceResult(YaguCliResult result)
+    /// <remarks>
+    /// Internal so the rendering can be driven directly. Its non-completed guard is unreachable from
+    /// the tools — every caller checks the outcome first — and it must stay that way: a helper that
+    /// rendered "outcome: ..." for a run that never finished would report a crash as a verdict.
+    /// </remarks>
+    internal static string DescribeMaintenanceResult(YaguCliResult result)
     {
         if (result.Outcome != YaguCliOutcome.Completed)
             return $"error: {result.Failure ?? result.Outcome.ToString().ToLowerInvariant()}";

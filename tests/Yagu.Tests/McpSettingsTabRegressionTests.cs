@@ -809,9 +809,10 @@ public sealed class McpSettingsTabRegressionTests
         // the loop, before every attempt, not once before it.
         int loop = registrar.IndexOf("for (int attempt = 1; ; attempt++)", StringComparison.Ordinal);
         int verify = registrar.IndexOf("current.LastWriteTimeUtc != expectedWriteUtc", loop, StringComparison.Ordinal);
-        int replace = registrar.IndexOf("File.Replace(temp, path", loop, StringComparison.Ordinal);
+        Assert.Contains("File.Replace,", registrar);
+        int replace = registrar.IndexOf("replaceFile(temp, path", loop, StringComparison.Ordinal);
         Assert.True(loop >= 0 && verify > loop && replace > verify,
-            "The identity re-check must sit inside the retry loop, ahead of File.Replace.");
+            "The identity re-check must sit inside the retry loop, ahead of the atomic replace.");
 
         string tokenStore = Read("src", "Yagu", "Services", "Mcp", "McpTokenStore.cs");
         Assert.Contains("ReplaceWithRetry(temp, tokenPath);", tokenStore);

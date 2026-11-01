@@ -704,4 +704,65 @@ public class MachineOutputWriterTests
         Assert.Equal(7, suppressed);
         Assert.Equal(10, emitted + suppressed);
     }
+
+    [Fact]
+    public void AFirstMatchThatCannotBeEncodedEvenAtEveryFloor_SaysSoInsteadOfReportingNoResults()
+    {
+        // JSON escaping is why this arm exists: Utf8JsonWriter encodes '<' as \u003C, so a line sized
+        // against RAW bytes can still be six times larger on the wire. Once every field is at its floor
+        // there is nothing left to give up, and returning an empty page here would report "no matches"
+        // for a search that genuinely matched, blaming no ceiling the user could raise.
+        var floors = MachineOutputBudget.Create(
+            MachineOutputBudget.MinLineBytes,
+            MachineOutputBudget.MinLineBytes,
+            MachineOutputBudget.MinPathBytes,
+            MachineOutputBudget.MinContextLines,
+            MachineOutputBudget.MinRecords,
+            MachineOutputBudget.MinResponseBytes);
+        Assert.Null(floors.Shrink());
+
+        // Create() guarantees a floor-sized record fits, so the only way to reach exhaustion is a
+        // budget that did not come from it — which the writer's constructor accepts.
+        var budget = floors with { MaxResponseBytes = 512 };
+
+        bool wrote = true;
+        List<JsonElement> records = Run(
+            w => wrote = w.WriteMatch(Match(
+                path: @"C:\repo\" + new string('<', MachineOutputBudget.MinPathBytes - 8),
+                text: new string('<', MachineOutputBudget.MinLineBytes))),
+            budget);
+
+        Assert.False(wrote);
+        JsonElement warning = Assert.Single(records, r => r.GetProperty("type").GetString() == "warning");
+        JsonElement data = warning.GetProperty("data");
+        Assert.Equal("record-too-large", data.GetProperty("code").GetString());
+        Assert.Contains("maximum response size", data.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(records, r => r.GetProperty("type").GetString() == "result");
+    }
+
+    [Fact]
+    public void AFirstCallerComposedResultThatDoesNotFit_IsRefusedAudibly()
+    {
+        // WriteResult takes a record the caller already composed, so the writer cannot shrink it. The
+        // only honest option left is to say why the page is empty.
+        var budget = MachineOutputBudget.Create(
+            MachineOutputBudget.MinLineBytes,
+            MachineOutputBudget.MinLineBytes,
+            MachineOutputBudget.MinPathBytes,
+            MachineOutputBudget.MinContextLines,
+            MachineOutputBudget.MinRecords,
+            MachineOutputBudget.MinResponseBytes);
+
+        bool wrote = true;
+        List<JsonElement> records = Run(
+            w => wrote = w.WriteResult(x => x.WriteString(
+                "text", new string('x', 4 * 1024 * 1024))),
+            budget);
+
+        Assert.False(wrote);
+        JsonElement warning = Assert.Single(records, r => r.GetProperty("type").GetString() == "warning");
+        JsonElement data = warning.GetProperty("data");
+        Assert.Equal("record-too-large", data.GetProperty("code").GetString());
+        Assert.Contains("nothing could be returned", data.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
 }

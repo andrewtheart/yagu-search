@@ -33,6 +33,26 @@
   </ItemGroup>
 
   <!--
+    The MCP tool classes are where a client's arguments become a CLI command line and where the CLI's
+    machine records become the text a model reads: clamping, glob splitting, mode normalization, and
+    the outbound re-authorization that stops a junction inside an allowed root from leaking a path
+    outside it. That is ordinary logic with no WinUI dependency, so it is unit-tested for real rather
+    than source-pinned. Compiling them needs the MCP SDK only for the [McpServerTool] attributes.
+
+    Program.cs is deliberately NOT compiled here: it declares Main, which would collide with the entry
+    point Microsoft.NET.Test.Sdk generates. Its host wiring is covered by McpServerSmokeTests instead.
+  -->
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
+    <Compile Include="..\..\src\Yagu.McpServer\Tools\CoreTools.cs" Link="Source\McpServer\Tools\CoreTools.cs" />
+    <Compile Include="..\..\src\Yagu.McpServer\Tools\ExportTools.cs" Link="Source\McpServer\Tools\ExportTools.cs" />
+    <Compile Include="..\..\src\Yagu.McpServer\Tools\IndexTools.cs" Link="Source\McpServer\Tools\IndexTools.cs" />
+    <Compile Include="..\..\src\Yagu.McpServer\Tools\NaturalLanguageSearchTool.cs" Link="Source\McpServer\Tools\NaturalLanguageSearchTool.cs" />
+    <Compile Include="..\..\src\Yagu.McpServer\Tools\ReplacePreviewTool.cs" Link="Source\McpServer\Tools\ReplacePreviewTool.cs" />
+    <Compile Include="..\..\src\Yagu.McpServer\Tools\SearchTool.cs" Link="Source\McpServer\Tools\SearchTool.cs" />
+  </ItemGroup>
+
+  <!--
     Builds the MCP server so McpServerSmokeTests always has a binary to drive. ReferenceOutputAssembly
     is false: the test assembly must not link it, only guarantee it exists. Without this the smoke gate
     would silently skip on a machine that had not separately built the server, which defeats the point

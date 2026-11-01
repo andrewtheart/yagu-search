@@ -188,4 +188,29 @@ public class IndexSizeManagementPolicyTests
 
         Assert.Equal(app, snapshot.ResolveSizePolicy(@"C:\src"));
     }
+
+    [Fact]
+    public void AnUnlistedRootFallsBackToTheGlobalMode_EvenWithAMalformedOverrideTable()
+    {
+        // RootSizePolicies is deserialized from settings JSON, so a null entry is reachable from a
+        // hand-edited or partially-written file. Throwing there would take the maintenance worker down
+        // rather than falling back to the global mode.
+        var snapshot = new IndexMaintenanceSettings
+        {
+            SizeManagementMode = IndexSizeManagementModes.Coalesce,
+            SizeBudgetMB = 512,
+            RootSizePolicies =
+            [
+                null!,
+                new IndexedRootSizePolicy { Path = @"C:\other", Mode = IndexSizeManagementModes.Off },
+            ],
+        };
+
+        EffectiveIndexSizePolicy resolved = snapshot.ResolveSizePolicy(@"C:\src");
+
+        Assert.Equal(IndexSizeManagementModes.Coalesce, resolved.Mode);
+        Assert.Equal(
+            IndexSizeManagementModes.Off,
+            snapshot.ResolveSizePolicy(@"C:\other").Mode);
+    }
 }

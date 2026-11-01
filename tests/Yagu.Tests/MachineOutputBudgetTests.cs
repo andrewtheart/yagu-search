@@ -154,4 +154,47 @@ public class MachineOutputBudgetTests
         Assert.True(
             (long)budget.MaxLineBytes + budget.MaxPathBytes <= budget.MaxResponseBytes / 2);
     }
+
+    [Fact]
+    public void Shrink_SurrendersFieldsWorstValueFirstAndEventuallyReportsNoRoomLeft()
+    {
+        var budget = MachineOutputBudget.Create(
+            maxLineBytes: MachineOutputBudget.MinLineBytes * 4,
+            maxContextLineBytes: MachineOutputBudget.MinLineBytes * 4,
+            maxPathBytes: MachineOutputBudget.MinPathBytes * 4,
+            maxContextLines: MachineOutputBudget.MinContextLines + 4,
+            maxRecords: MachineOutputBudget.MinRecords,
+            maxResponseBytes: MachineOutputBudget.MaxResponseBytesCeiling);
+
+        // Context lines are the least valuable thing in a match record, so they go first and go whole.
+        MachineOutputBudget? step = budget.Shrink();
+        Assert.NotNull(step);
+        Assert.Equal(MachineOutputBudget.MinContextLines, step!.MaxContextLines);
+        Assert.Equal(budget.MaxLineBytes, step.MaxLineBytes);
+        Assert.Equal(budget.MaxPathBytes, step.MaxPathBytes);
+
+        // The path is surrendered last: a shortened path is the least useful of the four, because a
+        // caller cannot open a file it can no longer name.
+        var rungs = new List<MachineOutputBudget> { budget, step };
+        while (rungs[^1].Shrink() is { } next)
+        {
+            rungs.Add(next);
+            Assert.True(rungs.Count < 64, "the ladder must terminate rather than shrinking forever.");
+        }
+
+        MachineOutputBudget floor = rungs[^1];
+        Assert.Equal(MachineOutputBudget.MinContextLines, floor.MaxContextLines);
+        Assert.Equal(MachineOutputBudget.MinLineBytes, floor.MaxLineBytes);
+        Assert.Equal(MachineOutputBudget.MinLineBytes, floor.MaxContextLineBytes);
+        Assert.Equal(MachineOutputBudget.MinPathBytes, floor.MaxPathBytes);
+        Assert.Null(floor.Shrink());
+
+        int pathShrankAt = rungs.FindIndex(r => r.MaxPathBytes < budget.MaxPathBytes);
+        int lineShrankAt = rungs.FindIndex(r => r.MaxLineBytes < budget.MaxLineBytes);
+        Assert.True(lineShrankAt < pathShrankAt, "the match line must be given up before the path.");
+
+        // Shrinking must never touch the response or record ceilings, which are the caller's contract.
+        Assert.Equal(budget.MaxResponseBytes, floor.MaxResponseBytes);
+        Assert.Equal(budget.MaxRecords, floor.MaxRecords);
+    }
 }

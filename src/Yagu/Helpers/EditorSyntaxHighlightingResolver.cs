@@ -148,6 +148,15 @@ internal static class EditorSyntaxHighlightingResolver
     /// syntax highlighting in that case).
     /// </summary>
     public static EditorSyntaxLanguage? ResolveFromFileName(string? filePath)
+        => ResolveFromFileName(filePath, Path.GetFileName);
+
+    /// <remarks>
+    /// Takes the name extractor so the "platform refused to parse this path" arm is reachable. It has
+    /// to answer <c>null</c> (highlighting off) rather than throwing: this runs while opening a file in
+    /// the editor, and a throw here would take the editor down instead of showing plain text.
+    /// </remarks>
+    internal static EditorSyntaxLanguage? ResolveFromFileName(
+        string? filePath, Func<string, string> getFileName)
     {
         if (string.IsNullOrWhiteSpace(filePath))
             return null;
@@ -155,7 +164,7 @@ internal static class EditorSyntaxHighlightingResolver
         string name;
         try
         {
-            name = Path.GetFileName(filePath);
+            name = getFileName(filePath);
         }
         catch (ArgumentException)
         {

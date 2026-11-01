@@ -947,6 +947,306 @@ public class FileGroupTests
         group.Provenance = Yagu.Services.Index.IndexProvenanceKind.LiveScanned;
         Assert.False(group.IsIndexAccelerated);
     }
+
+    [Fact]
+    public void RegisterVisibleForTrim_FileNameRowsAreNotRememberedAsContentRows()
+    {
+        // Filename-only matches are represented by the header pill; if the trim state remembered one
+        // as a content row, a later content append would mutate the hidden row's context window.
+        var group = new FileGroup(@"D:\name-hit.txt");
+        var fileNameRow = MakeResultWithContext(@"D:\name-hit.txt", 0, contextRadius: 2);
+        var changed = new List<string?>();
+        ((System.ComponentModel.INotifyPropertyChanged)fileNameRow).PropertyChanged +=
+            (_, args) => changed.Add(args.PropertyName);
+
+        group.RegisterVisibleForTrim(fileNameRow);
+        group.RegisterVisibleForTrim(MakeResult(@"D:\name-hit.txt", 3));
+
+        Assert.Empty(changed);
+        Assert.Equal(new[] { 1, 2 }, fileNameRow.NumberedAfter.Select(c => c.LineNum).ToArray());
+    }
+
+    [Fact]
+    public void AddSourceBackedMatch_ExpandedGroupAddsRetainedStubRow()
+    {
+        // Expanded groups must route source-backed matches through the normal collection path so the
+        // row is retained for on-demand hydration while the visible drawer skips empty evicted payloads.
+        var group = new FileGroup(@"D:\file.txt") { IsExpanded = true };
+
+        group.AddSourceBackedMatch(lineNumber: 7, matchStartColumn: 2, matchLength: 4, sourceMatchStartColumn: 20);
+
+        var result = Assert.Single(group);
+        Assert.Equal(7, result.LineNumber);
+        Assert.Equal(2, result.MatchStartColumn);
+        Assert.Equal(4, result.MatchLength);
+        Assert.True(result.IsEvicted);
+        Assert.Empty(group.VisibleResults);
+        Assert.True(group.HasMore);
+    }
+
+    [Fact]
+    public void AddSourceBackedMatch_CollapsedGroupHonorsPerFileCap()
+    {
+        // The allocation-free source-backed path must enforce the same per-file cap as SearchResult
+        // inserts; otherwise collapsed hot-path ingestion can grow past the user's limit.
+        int oldMax = FileGroup.MaxMatchesPerGroup;
+        try
+        {
+            FileGroup.MaxMatchesPerGroup = 0;
+            var group = new FileGroup(@"D:\file.txt");
+            var changed = new List<string?>();
+            ((System.ComponentModel.INotifyPropertyChanged)group).PropertyChanged +=
+                (_, args) => changed.Add(args.PropertyName);
+
+            group.AddSourceBackedMatch(lineNumber: 1, matchStartColumn: 0, matchLength: 5, sourceMatchStartColumn: 0);
+
+            Assert.Equal(0, group.Count);
+            Assert.Equal(1, group.HiddenMatchCount);
+            Assert.True(group.HasHiddenMatches);
+            Assert.Contains(nameof(FileGroup.HasHiddenMatches), changed);
+            Assert.True(group.HasContentMatches);
+        }
+        finally
+        {
+            FileGroup.MaxMatchesPerGroup = oldMax;
+        }
+    }
+
+    [Fact]
+    public void AddSelectedResultToExpandedGroupUpdatesSelectedCount()
+    {
+        // A selected result added while the drawer is expanded must refresh the header count
+        // immediately; otherwise live-selected searches show stale "N/M selected" text.
+        var group = new FileGroup(@"D:\file.txt") { IsExpanded = true };
+        var result = MakeResult(@"D:\file.txt", 1);
+        result.IsSelected = true;
+        var changed = new List<string?>();
+        ((System.ComponentModel.INotifyPropertyChanged)group).PropertyChanged +=
+            (_, args) => changed.Add(args.PropertyName);
+
+        group.Add(result);
+
+        Assert.Equal(1, group.SelectedCount);
+        Assert.Equal("1/1 selected", group.SelectedCountText);
+        Assert.Contains(nameof(FileGroup.SelectedCount), changed);
+        Assert.Contains(nameof(FileGroup.SelectedCountText), changed);
+    }
+
+    [Fact]
+    public void AddSourceBackedMatch_CapNotifiesEveryTwoHundredFiftySixHiddenRows()
+    {
+        // Hidden source-backed rows are throttled for performance, but every 256th hidden match must
+        // still notify so long-running capped scans do not leave the header permanently stale.
+        int oldMax = FileGroup.MaxMatchesPerGroup;
+        try
+        {
+            FileGroup.MaxMatchesPerGroup = 0;
+            var group = new FileGroup(@"D:\file.txt");
+            var changed = new List<string?>();
+            ((System.ComponentModel.INotifyPropertyChanged)group).PropertyChanged +=
+                (_, args) => changed.Add(args.PropertyName);
+
+            for (int i = 0; i < 256; i++)
+                group.AddSourceBackedMatch(i + 1, matchStartColumn: 0, matchLength: 1, sourceMatchStartColumn: 0);
+
+            Assert.Equal(256, group.HiddenMatchCount);
+            Assert.Contains(nameof(FileGroup.HiddenMatchCount), changed);
+            Assert.Contains(nameof(FileGroup.MatchCount), changed);
+        }
+        finally
+        {
+            FileGroup.MaxMatchesPerGroup = oldMax;
+        }
+    }
+
+    [Fact]
+    public void AddSourceBackedMatch_CollapsedGroupNotifiesAtPageBoundary()
+    {
+        // Compact source-backed stubs throttle UI notifications, but crossing the first page boundary
+        // must still wake the "Show more" binding so users can expand large collapsed groups.
+        var group = new FileGroup(@"D:\file.txt");
+        var changed = new List<string?>();
+        ((System.ComponentModel.INotifyPropertyChanged)group).PropertyChanged +=
+            (_, args) => changed.Add(args.PropertyName);
+
+        for (int i = 0; i < FileGroup.PageSize + 1; i++)
+            group.AddSourceBackedMatch(i + 1, matchStartColumn: 0, matchLength: 3, sourceMatchStartColumn: 0);
+
+        Assert.Equal(0, group.Count);
+        Assert.Equal(FileGroup.PageSize + 1, group.MatchCount);
+        Assert.True(group.HasMore);
+        Assert.Contains("Count", changed);
+        Assert.Contains(nameof(FileGroup.MatchCount), changed);
+        Assert.Contains(nameof(FileGroup.HasMore), changed);
+    }
+
+    [Fact]
+    public void AddSourceBackedMatches_ZeroCountDoesNotReadInput()
+    {
+        // A zero-count bulk add is used by range callers; it must be a true no-op and not touch the
+        // supplied list/start index.
+        var group = new FileGroup(@"D:\file.txt");
+        var matches = new List<SourceBackedMatch> { new(@"D:\other.txt", 99, 1, 2, 3) };
+
+        group.AddSourceBackedMatches(matches, start: 1, count: 0);
+
+        Assert.Equal(0, group.Count);
+        Assert.Equal(0, group.MatchCount);
+        Assert.False(group.HasMore);
+    }
+
+    [Fact]
+    public void AddSourceBackedMatches_ExpandedGroupAddsEachRowInOrder()
+    {
+        // Bulk source-backed ingestion must preserve ordering for expanded drawers; a user watching
+        // live results should see the same sequence as the scanner produced.
+        var group = new FileGroup(@"D:\file.txt") { IsExpanded = true };
+        var matches = new List<SourceBackedMatch>
+        {
+            new(@"D:\file.txt", 4, 1, 2, 10),
+            new(@"D:\file.txt", 6, 3, 4, 30),
+        };
+
+        group.AddSourceBackedMatches(matches, 0, matches.Count);
+
+        Assert.Equal(new[] { 4, 6 }, group.Select(r => r.LineNumber).ToArray());
+        Assert.Empty(group.VisibleResults);
+        Assert.True(group.HasMore);
+        Assert.All(group, r => Assert.True(r.IsEvicted));
+    }
+
+    [Fact]
+    public void AddSourceBackedMatches_CollapsedGroupHonorsCapAndReportsHiddenRows()
+    {
+        // The bulk compact-stub path must count rows hidden by MaxMatchesPerGroup rather than losing
+        // them silently, so the header still tells users that more matches existed.
+        int oldMax = FileGroup.MaxMatchesPerGroup;
+        try
+        {
+            FileGroup.MaxMatchesPerGroup = 1;
+            var group = new FileGroup(@"D:\file.txt");
+            var changed = new List<string?>();
+            ((System.ComponentModel.INotifyPropertyChanged)group).PropertyChanged +=
+                (_, args) => changed.Add(args.PropertyName);
+            var matches = new List<SourceBackedMatch>
+            {
+                new(@"D:\file.txt", 1, 0, 1, 0),
+                new(@"D:\file.txt", 2, 0, 1, 0),
+                new(@"D:\file.txt", 3, 0, 1, 0),
+            };
+
+            group.AddSourceBackedMatches(matches, 0, matches.Count);
+
+            Assert.Equal(0, group.Count);
+            Assert.Equal(2, group.HiddenMatchCount);
+            Assert.True(group.HasHiddenMatches);
+            Assert.Equal(3, group.MatchCount);
+            Assert.Contains(nameof(FileGroup.HasHiddenMatches), changed);
+            Assert.Contains(nameof(FileGroup.HiddenMatchCount), changed);
+            Assert.Contains(nameof(FileGroup.MatchCount), changed);
+        }
+        finally
+        {
+            FileGroup.MaxMatchesPerGroup = oldMax;
+        }
+    }
+
+    [Fact]
+    public void ExpandedGroup_RemovesStaleFileNameVisibleRowsWhenContentArrives()
+    {
+        // If a filename row ever leaks into VisibleResults before a content match arrives, the next
+        // append must remove it so the drawer never renders a confusing line-0 result.
+        var group = new FileGroup(@"D:\mixed.txt") { IsExpanded = true };
+        var fileName = MakeResult(@"D:\mixed.txt", 0, "mixed.txt");
+        group.Add(fileName);
+        group.VisibleResults.Add(fileName);
+
+        group.Add(MakeResult(@"D:\mixed.txt", 12));
+
+        Assert.DoesNotContain(group.VisibleResults, r => r.LineNumber == 0);
+        var visible = Assert.Single(group.VisibleResults);
+        Assert.Equal(12, visible.LineNumber);
+        Assert.Equal(0, group.RemainingCount);
+    }
+
+    [Fact]
+    public void MaterializeEvictedStubs_EmptyGroupReturnsZero()
+    {
+        // Expanding a group that never compacted evicted rows must be allocation-free and report that
+        // no hidden stubs were decoded.
+        var group = new FileGroup(@"D:\file.txt");
+
+        Assert.Equal(0, group.MaterializeEvictedStubs());
+        Assert.Equal(0, group.Count);
+        Assert.False(group.HasMore);
+    }
+
+    [Fact]
+    public void ModifiedOrCreated_ChoosesAvailableAndLatestTimestamp()
+    {
+        // Group headers use ModifiedOrCreated for date grouping; missing metadata must fall back to
+        // the available timestamp, while two real timestamps choose the later one.
+        FileMetadataCache.Clear();
+        try
+        {
+            var createdOnly = new FileGroup(@"C:\fake\created-only.txt");
+            FileMetadataCache.Set(createdOnly.FilePath, new FileMetadata(1, default, new DateTime(2024, 1, 2)));
+            createdOnly.LoadMetadata();
+            Assert.Equal(new DateTime(2024, 1, 2), createdOnly.ModifiedOrCreated);
+
+            var modifiedOnly = new FileGroup(@"C:\fake\modified-only.txt");
+            FileMetadataCache.Set(modifiedOnly.FilePath, new FileMetadata(1, new DateTime(2024, 2, 3), default));
+            modifiedOnly.LoadMetadata();
+            Assert.Equal(new DateTime(2024, 2, 3), modifiedOnly.ModifiedOrCreated);
+
+            var both = new FileGroup(@"C:\fake\both.txt");
+            FileMetadataCache.Set(both.FilePath, new FileMetadata(1, new DateTime(2024, 3, 1), new DateTime(2024, 3, 2)));
+            both.LoadMetadata();
+            Assert.Equal(new DateTime(2024, 3, 2), both.ModifiedOrCreated);
+        }
+        finally
+        {
+            FileMetadataCache.Clear();
+        }
+    }
+
+    [Fact]
+    public void ResultGroupIndent_NotifiesOnlyWhenValueChanges()
+    {
+        // Grouped result projections bind to ResultGroupIndent; setting the same value again must not
+        // produce redundant UI notifications during large regroup operations.
+        var group = new FileGroup(@"D:\file.txt");
+        var changed = new List<string?>();
+        ((System.ComponentModel.INotifyPropertyChanged)group).PropertyChanged +=
+            (_, args) => changed.Add(args.PropertyName);
+
+        Assert.Equal(0, group.ResultGroupIndent);
+        group.ResultGroupIndent = 24;
+        group.ResultGroupIndent = 24;
+
+        Assert.Equal(24, group.ResultGroupIndent);
+        Assert.Equal([nameof(FileGroup.ResultGroupIndent)], changed);
+    }
+
+    [Fact]
+    public void PreviewSnapshot_SkipsFilenameOnlyCompactStubsWhenContentExists()
+    {
+        // Preview snapshots for mixed filename/content groups must omit compact line-0 stubs just like
+        // the visible drawer, or the preview can open on a fake "line 0" match.
+        var group = new FileGroup(@"D:\mixed.txt");
+        var matches = new List<SourceBackedMatch>
+        {
+            new(@"D:\mixed.txt", 0, 0, 5, 0),
+            new(@"D:\mixed.txt", 9, 2, 3, 2),
+        };
+
+        group.AddSourceBackedMatches(matches, 0, matches.Count);
+        var snapshot = group.GetPreviewSnapshot(maxResults: 10);
+
+        var result = Assert.Single(snapshot);
+        Assert.Equal(9, result.LineNumber);
+        Assert.DoesNotContain(snapshot, r => r.LineNumber == 0);
+    }
 }
 
 // ─── FileGroup: FormatSize branches (MB, GB) ────────────────────────────

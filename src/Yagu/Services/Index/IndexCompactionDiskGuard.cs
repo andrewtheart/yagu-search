@@ -155,10 +155,18 @@ internal sealed class IndexCompactionDiskGuard
     }
 
     internal static IndexVolumeSpace? ProbeVolume(string path)
+        => ProbeVolume(path, static p => Path.GetPathRoot(Path.GetFullPath(p)));
+
+    /// <remarks>
+    /// Takes the root resolver so both "no volume to measure" arms are reachable. Either one must
+    /// answer <c>null</c> — an unmeasurable volume disables the guard rather than reporting a
+    /// fabricated free-space figure that would let a merge fill the disk.
+    /// </remarks>
+    internal static IndexVolumeSpace? ProbeVolume(string path, Func<string, string?> getVolumeRoot)
     {
         try
         {
-            string? root = Path.GetPathRoot(Path.GetFullPath(path));
+            string? root = getVolumeRoot(path);
             if (string.IsNullOrEmpty(root))
                 return null;
             var drive = new DriveInfo(root);

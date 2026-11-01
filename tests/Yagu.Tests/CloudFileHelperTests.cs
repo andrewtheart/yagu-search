@@ -130,4 +130,170 @@ public sealed class CloudFileHelperTests
     [Fact]
     public void SearchOptions_SearchOnlineOnlyFiles_DefaultsOff()
         => Assert.False(new SearchOptions { Directory = @"C:\", Query = "x" }.SearchOnlineOnlyFiles);
+
+    [Fact]
+    public void WithNoCloudProviderInstalled_TheDiscoveredPathGateCostsNothingAndSkipsNothing()
+    {
+        // Everything yields bare path strings, so this gate runs for every discovered result. With no
+        // sync root registered it must answer without stat-ing anything — a File.GetAttributes per
+        // result would be a syscall on a path that cannot be a placeholder.
+        Assert.False(CloudFileHelper.ShouldSkipDiscoveredPath(
+            @"C:\does\not\exist\file.txt", searchOnlineOnlyFiles: false, prefixes: []));
+    }
+
+    [Fact]
+    public void APathUnderASyncRootThatCannotBeStatted_IsKeptRatherThanSkipped()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "yagu-cloud-" + Guid.NewGuid().ToString("n"));
+        string[] prefixes = [root + "\\"];
+
+        // A path that vanished between discovery and this check cannot be proven to be a placeholder.
+        // Skipping on a failed stat would silently drop real results whenever a scan raced a delete.
+        Assert.False(CloudFileHelper.ShouldSkipDiscoveredPath(
+            Path.Combine(root, "gone.txt"), searchOnlineOnlyFiles: false, prefixes));
+    }
+
+    [Fact]
+    public void AnOrdinaryFileUnderASyncRoot_IsNotTreatedAsAPlaceholder()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "yagu-cloud-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string file = Path.Combine(root, "local.txt");
+            File.WriteAllText(file, "hydrated content");
+            string[] prefixes = [root + "\\"];
+
+            // Being inside a sync root is not itself a reason to skip: most files under OneDrive are
+            // fully local, and skipping them would silently exclude the user's own documents.
+            Assert.False(CloudFileHelper.ShouldSkipDiscoveredPath(file, searchOnlineOnlyFiles: false, prefixes));
+            Assert.False(CloudFileHelper.ShouldSkipDiscoveredPath(file, searchOnlineOnlyFiles: true, prefixes));
+
+            // A path outside every prefix never reaches the stat at all.
+            Assert.False(CloudFileHelper.ShouldSkipDiscoveredPath(
+                @"C:\src\Yagu\README.md", searchOnlineOnlyFiles: false, prefixes));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OnAHostWithoutTheCloudFilterApi_NothingIsHydratable()
+    {
+        // The API arrived in Windows 10 1709. Before it, every placeholder is unrecoverable, so the
+        // only safe answer is "no live provider" rather than optimistically trying to read the file.
+        Assert.False(CloudFileHelper.IsProviderLive(
+            @"C:\x\y.txt", cloudFilterAvailable: false, static _ => @"C:\x"));
+    }
+
+    [Fact]
+    public void APathThePlatformRefusesToParse_IsReportedAsNotHydratable()
+    {
+        // This runs per file during a scan. Letting the failure escape would abort the whole search
+        // over one unparseable path.
+        Assert.False(CloudFileHelper.IsProviderLive(
+            "\0bad", cloudFilterAvailable: true, static _ => throw new ArgumentException("bad path")));
+    }
+
+    [Fact]
+    public void WithNoSyncRootManagerKey_TheSyncRootListIsEmptyRatherThanFailing()
+    {
+        Assert.Empty(CloudFileHelper.LoadSyncRootPrefixes(isWindows: true, static () => null));
+        Assert.Empty(CloudFileHelper.LoadSyncRootPrefixes(isWindows: false, static () => null));
+    }
+
+    [Fact]
+    public void WhenTheRegistryCannotBeRead_TheSyncRootListIsEmptyRatherThanFailing()
+    {
+        // Warming this list is the first thing a search does. A throw here would turn a locked-down
+        // registry into a total search failure instead of "no cloud roots known".
+        Assert.Empty(CloudFileHelper.LoadSyncRootPrefixes(
+            isWindows: true, static () => throw new System.Security.SecurityException("denied")));
+    }
+
+    [Fact]
+    public void AProviderRecordLargerThanTheFirstBuffer_IsRetriedAtTheSizeTheApiReports()
+    {
+        // This is the defect the retry exists for: CF_SYNC_ROOT_PROVIDER_INFO is 1028 bytes, and
+        // reading ERROR_MORE_DATA as "not a sync root" reported every provider as dead — which
+        // silently disabled every cloud opt-in in both search and indexing.
+        var sizes = new List<int>();
+        bool Probe(string path, int bytes, out uint status, out int hr, out int required)
+        {
+            sizes.Add(bytes);
+            if (bytes < 4096)
+            {
+                status = 0;
+                hr = unchecked((int)0x800700EA); // ERROR_MORE_DATA
+                required = 4096;
+                return false;
+            }
+            status = 1;
+            hr = 0;
+            required = 4096;
+            return true;
+        }
+
+        Assert.True(CloudFileHelper.TryQuerySyncRootProvider(@"C:\cloud\a.txt", out uint providerStatus, Probe));
+        Assert.Equal(1u, providerStatus);
+        Assert.Equal(2, sizes.Count);
+        Assert.Equal(4096, sizes[1]);
+    }
+
+    [Fact]
+    public void AFailureThatIsNotATooSmallBuffer_IsNotRetried()
+    {
+        int calls = 0;
+        bool Probe(string path, int bytes, out uint status, out int hr, out int required)
+        {
+            calls++;
+            status = 0;
+            hr = unchecked((int)0x80070186); // ERROR_NOT_A_CLOUD_FILE
+            required = 0;
+            return false;
+        }
+
+        Assert.False(CloudFileHelper.TryQuerySyncRootProvider(@"C:\plain\a.txt", out uint status, Probe));
+        Assert.Equal(0u, status);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void ARetryTheApiSizesNoLargerThanTheFirstAttempt_IsNotAttempted()
+    {
+        // Retrying at a size that is not actually bigger would loop on a provider that keeps saying
+        // "more data" without ever asking for more room.
+        int calls = 0;
+        bool Probe(string path, int bytes, out uint status, out int hr, out int required)
+        {
+            calls++;
+            status = 0;
+            hr = unchecked((int)0x800700EA);
+            required = 8; // smaller than the initial buffer
+            return false;
+        }
+
+        Assert.False(CloudFileHelper.TryQuerySyncRootProvider(@"C:\cloud\a.txt", out _, Probe));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void WhenTheCloudFilterLibraryIsMissing_TheQueryAnswersNotHydratable()
+    {
+        Assert.False(CloudFileHelper.TryQuerySyncRootProvider(
+            @"C:\cloud\a.txt",
+            out _,
+            static (string p, int b, out uint s, out int h, out int r) => throw new DllNotFoundException("cldapi.dll")));
+    }
+
+    [Fact]
+    public void AnUnexpectedQueryFailure_IsSwallowedRatherThanFailingTheScan()
+    {
+        Assert.False(CloudFileHelper.TryQuerySyncRootProvider(
+            @"C:\cloud\a.txt",
+            out _,
+            static (string p, int b, out uint s, out int h, out int r) => throw new InvalidOperationException("boom")));
+    }
 }

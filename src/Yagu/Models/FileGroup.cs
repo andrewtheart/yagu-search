@@ -169,7 +169,12 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// or owned by the next match's line. Call once per result with <c>LineNumber &gt; 0</c>, in the
     /// order rows are rendered.
     /// </summary>
-    private void RegisterVisibleForTrim(SearchResult item)
+    /// <remarks>
+    /// Internal so tests can pin the defensive filename-only guard directly. Current callers skip
+    /// line-0 rows before trimming, but if that changes the guard must still avoid treating the header
+    /// "file name" match as a rendered content line.
+    /// </remarks>
+    internal void RegisterVisibleForTrim(SearchResult item)
     {
         if (item.LineNumber <= 0)
             return;
@@ -873,10 +878,6 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                 var metadata = new FileMetadata(fi.Length, fi.LastWriteTime, fi.CreationTime);
                 FileMetadataCache.Set(physicalPath, metadata);
                 ApplyMetadata(metadata.Length, metadata.LastModified, metadata.Created);
-            }
-            else if (cached != default)
-            {
-                ApplyMetadata(cached.Length, cached.LastModified, cached.Created);
             }
         }
         catch (Exception ex) { YaguLog.For("FileGroup").LogDebug(ex, "Cannot load metadata for {FilePath}", FilePath); }

@@ -34,4 +34,47 @@ public sealed class SemanticWholeFileExclusionTests
     [InlineData("python files containing a but not b modified today")]
     public void TryBuildPlan_DoesNotDiscardUnknownConstraints(string query)
         => Assert.False(SemanticWholeFileExclusion.TryBuildPlan(query, out _));
+
+    [Theory]
+    [InlineData("pdfs containing invoice but not refund")]
+    [InlineData("images containing invoice but not refund")]
+    [InlineData("archives containing invoice but not refund")]
+    public void AScopeWhoseTextOnlyExistsAfterExtraction_DeclinesTheShortcut(string query)
+    {
+        // This shortcut regex-matches the file's raw bytes, so it can never see PDF-extracted, OCR'd or
+        // archived text. Taking it for a scope made entirely of those types would answer "no matches"
+        // for a search that should have matched; declining hands the query to the plan path, which
+        // turns the corresponding extraction toggle on instead.
+        Assert.False(SemanticWholeFileExclusion.TryBuildPlan(query, out _));
+    }
+
+    [Fact]
+    public void AScopeMixingPlainTextWithAContainerType_StillTakesTheShortcut()
+    {
+        // Declining is only correct when EVERY resolved type needs extraction, so a scope that also
+        // contains a directly-readable type must still take the shortcut.
+        Assert.True(SemanticFileTypes.TryResolve("code", out var globs));
+        Assert.Contains(globs, g => !SemanticWholeFileExclusion.IsExtractionOnlyGlob(g));
+        Assert.True(SemanticWholeFileExclusion.TryBuildPlan("code files containing invoice but not refund", out var plan));
+
+        Assert.False(plan!.SearchInsideArchives);
+        Assert.False(plan.SearchImageText);
+        Assert.False(plan.SearchPdfText);
+    }
+
+    [Theory]
+    [InlineData("*.pdf", true)]
+    [InlineData("*.PNG", true)]
+    [InlineData("*.zip", true)]
+    [InlineData("*.cs", false)]
+    [InlineData("*.log", false)]
+    [InlineData("Makefile", false)]
+    [InlineData("*.", false)]
+    [InlineData("*. ", false)]
+    public void AGlobIsExtractionOnly_OnlyWhenItNamesATypeThisShortcutCannotRead(string glob, bool expected)
+    {
+        // An entry with no extension at all ("Makefile") or a trailing dot must classify as readable
+        // rather than throwing or being treated as a container.
+        Assert.Equal(expected, SemanticWholeFileExclusion.IsExtractionOnlyGlob(glob));
+    }
 }

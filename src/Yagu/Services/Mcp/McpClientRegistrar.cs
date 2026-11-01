@@ -65,6 +65,20 @@ internal static class McpClientRegistrar
     /// <summary>The user's previous configuration, kept because the splice is validated but not verified.</summary>
     internal const string BackupSuffix = ".yagu-backup";
 
+    internal delegate bool InputRemovalOperation(
+        string text,
+        string inputId,
+        out string updated,
+        out string? parseError);
+
+    internal delegate void FileReplaceOperation(
+        string sourceFileName,
+        string destinationFileName,
+        string? destinationBackupFileName,
+        bool ignoreMetadataErrors);
+
+    internal delegate void FileMoveOperation(string sourceFileName, string destinationFileName, bool overwrite);
+
     /// <summary>Adds or updates Yagu's entry. <paramref name="serverJson"/> is the value object for the entry.</summary>
     /// <param name="inputId">
     /// When set, an <c>inputs</c> definition with this id is merged too. An HTTP entry references the
@@ -142,6 +156,20 @@ internal static class McpClientRegistrar
     /// </summary>
     public static McpRegistrationResult Remove(
         string path, string containerProperty, string serverName, string? inputId = null)
+        => Remove(path, containerProperty, serverName, inputId, TryRemoveInput, IsWellFormed);
+
+    /// <remarks>
+    /// Takes the input-removal and final JSON validation seams so tests can force the rollback arms that
+    /// protect users from future splice regressions; a well-formed document cannot naturally make the
+    /// current remover produce malformed JSON without changing this production code.
+    /// </remarks>
+    internal static McpRegistrationResult Remove(
+        string path,
+        string containerProperty,
+        string serverName,
+        string? inputId,
+        InputRemovalOperation removeInput,
+        Func<string, bool> isWellFormed)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
@@ -162,10 +190,10 @@ internal static class McpClientRegistrar
 
             // The token input is ours too, so uninstalling must not leave it prompting for a server that
             // no longer exists.
-            if (inputId is not null && !TryRemoveInput(updated, inputId, out updated, out string? inputError))
+            if (inputId is not null && !removeInput(updated, inputId, out updated, out string? inputError))
                 return new McpRegistrationResult(McpRegistrationOutcome.Malformed, inputError);
 
-            if (!IsWellFormed(updated))
+            if (!isWellFormed(updated))
                 return new McpRegistrationResult(McpRegistrationOutcome.Malformed, SpliceRefusal);
 
             return Write(path, updated, stamp, length, McpRegistrationOutcome.Removed);
@@ -184,6 +212,17 @@ internal static class McpClientRegistrar
     /// its definition, which would otherwise keep prompting for a token nothing uses.
     /// </remarks>
     public static McpRegistrationResult RemoveInput(string path, string inputId)
+        => RemoveInput(path, inputId, TryRemoveInput, IsWellFormed);
+
+    /// <remarks>
+    /// Takes the input-removal and final JSON validation seams so tests can reach the refusal arm that
+    /// prevents a future bad splice from committing a malformed <c>inputs</c> array.
+    /// </remarks>
+    internal static McpRegistrationResult RemoveInput(
+        string path,
+        string inputId,
+        InputRemovalOperation removeInput,
+        Func<string, bool> isWellFormed)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
@@ -193,13 +232,13 @@ internal static class McpClientRegistrar
             if (string.IsNullOrWhiteSpace(original))
                 return new McpRegistrationResult(McpRegistrationOutcome.NotPresent);
 
-            if (!TryRemoveInput(original, inputId, out string updated, out string? parseError))
+            if (!removeInput(original, inputId, out string updated, out string? parseError))
                 return new McpRegistrationResult(McpRegistrationOutcome.Malformed, parseError);
 
             if (ReferenceEquals(updated, original) || string.Equals(updated, original, StringComparison.Ordinal))
                 return new McpRegistrationResult(McpRegistrationOutcome.NotPresent);
 
-            if (!IsWellFormed(updated))
+            if (!isWellFormed(updated))
                 return new McpRegistrationResult(McpRegistrationOutcome.Malformed, SpliceRefusal);
 
             return Write(path, updated, stamp, length, McpRegistrationOutcome.Removed);
@@ -474,6 +513,20 @@ internal static class McpClientRegistrar
     /// <summary>Adds or refreshes our <c>inputs</c> element, creating the array when the file has none.</summary>
     private static bool TryMergeInput(
         string text, string inputId, string inputJson, out string updated, out string? parseError)
+        => TryMergeInput(text, inputId, inputJson, RootBraceIndex, out updated, out parseError);
+
+    /// <remarks>
+    /// Takes the root-brace resolver so tests can exercise the fail-closed insertion arm. Public callers
+    /// reach this only after the JSON reader has accepted the root object, so a natural filesystem input
+    /// cannot make <see cref="RootBraceIndex"/> fail without a future parser regression.
+    /// </remarks>
+    internal static bool TryMergeInput(
+        string text,
+        string inputId,
+        string inputJson,
+        Func<string, int> rootBraceIndex,
+        out string updated,
+        out string? parseError)
     {
         updated = text;
 
@@ -501,7 +554,7 @@ internal static class McpClientRegistrar
             return true;
         }
 
-        int open = RootBraceIndex(text);
+        int open = rootBraceIndex(text);
         if (open < 0)
         {
             parseError = "the file's root is not a JSON object.";
@@ -836,6 +889,32 @@ internal static class McpClientRegistrar
     /// </remarks>
     internal static McpRegistrationResult Write(
         string path, string content, DateTime expectedWriteUtc, long expectedLength, McpRegistrationOutcome outcome)
+        => Write(
+            path,
+            content,
+            expectedWriteUtc,
+            expectedLength,
+            outcome,
+            afterTempWritten: null,
+            File.Replace,
+            File.Move,
+            Thread.Sleep);
+
+    /// <remarks>
+    /// Takes the replace/move/sleep operations and an after-temp-write hook so tests can deterministically
+    /// hit the second identity check, retry loop, and cleanup path. Reproducing those with real editors,
+    /// antivirus scanners, or concurrent MCP registrations would be timing-dependent.
+    /// </remarks>
+    internal static McpRegistrationResult Write(
+        string path,
+        string content,
+        DateTime expectedWriteUtc,
+        long expectedLength,
+        McpRegistrationOutcome outcome,
+        Action? afterTempWritten,
+        FileReplaceOperation replaceFile,
+        FileMoveOperation moveFile,
+        Action<int> sleep)
     {
         string? directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(directory))
@@ -881,6 +960,7 @@ internal static class McpClientRegistrar
             {
                 writer.Write(content);
             }
+            afterTempWritten?.Invoke();
 
             if (expectedToExist)
             {
@@ -910,18 +990,18 @@ internal static class McpClientRegistrar
                         // A backup, not null: the splice is validated for well-formedness but not for
                         // meaning, and this is a file the user may have hand-tuned over a long time.
                         // File.Replace produces it for free and it is the only recovery path there is.
-                        File.Replace(temp, path, path + BackupSuffix, ignoreMetadataErrors: true);
+                        replaceFile(temp, path, path + BackupSuffix, ignoreMetadataErrors: true);
                         break;
                     }
                     catch (IOException) when (attempt < replaceAttempts)
                     {
-                        Thread.Sleep(attempt * 20);
+                        sleep(attempt * 20);
                     }
                 }
             }
             else
             {
-                File.Move(temp, path, overwrite: false);
+                moveFile(temp, path, overwrite: false);
             }
         }
         catch

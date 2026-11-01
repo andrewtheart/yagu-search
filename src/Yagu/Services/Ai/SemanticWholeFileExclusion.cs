@@ -50,7 +50,11 @@ internal static class SemanticWholeFileExclusion
     /// Whether a glob targets a type whose text is only reachable through PDF extraction, OCR, or archive
     /// expansion — the three things this shortcut cannot do.
     /// </summary>
-    private static bool IsExtractionOnlyGlob(string glob)
+    /// <remarks>
+    /// Internal so the classification can be pinned directly: the resolved globs come from a fixed
+    /// table, so a table entry without an extension would otherwise silently never be exercised.
+    /// </remarks>
+    internal static bool IsExtractionOnlyGlob(string glob)
     {
         int dot = glob.LastIndexOf('.');
         if (dot < 0)

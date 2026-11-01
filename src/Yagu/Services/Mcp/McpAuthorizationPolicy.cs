@@ -311,11 +311,19 @@ internal sealed class McpAuthorizationPolicy
     }
 
     private static bool TryCanonicalize(string path, out string canonical)
+        => TryCanonicalize(path, Path.GetFullPath, out canonical);
+
+    /// <remarks>
+    /// Takes the full-path resolver so tests can prove canonicalization fails closed when the platform
+    /// API returns an unusable empty path or throws for malformed input. Those arms are defensive guards
+    /// against authorizing a path that could not be normalized into the form used for containment.
+    /// </remarks>
+    internal static bool TryCanonicalize(string path, Func<string, string> getFullPath, out string canonical)
     {
         canonical = string.Empty;
         try
         {
-            string full = Path.GetFullPath(path);
+            string full = getFullPath(path);
 
             // Trim a trailing separator so containment comparisons are consistent, but keep it for a
             // drive root ("C:\"), where it is part of the path rather than decoration.
@@ -402,12 +410,20 @@ internal sealed class McpAuthorizationPolicy
     /// falling back to the string-prefix test this resolver exists to backstop.
     /// </summary>
     private static string ResolveByReadingLinkTargets(string path)
+        => ResolveByReadingLinkTargets(path, TryRewriteFirstLink);
+
+    /// <remarks>
+    /// Takes the link rewriter so the fail-closed arms are reachable without constructing privileged or
+    /// hostile reparse-point graphs on the test machine. A broken or cyclic link chain must deny rather
+    /// than fall back to the textual prefix check that this resolver exists to harden.
+    /// </remarks>
+    internal static string ResolveByReadingLinkTargets(string path, LinkRewriter tryRewriteFirstLink)
     {
         string current = path;
 
         for (int hop = 0; hop < MaxLinkHops; hop++)
         {
-            if (!TryRewriteFirstLink(current, out string rewritten))
+            if (!tryRewriteFirstLink(current, out string rewritten))
                 return current;
 
             if (rewritten.Length == 0)
@@ -429,6 +445,18 @@ internal sealed class McpAuthorizationPolicy
     /// caller must deny.
     /// </returns>
     private static bool TryRewriteFirstLink(string path, out string rewritten)
+        => TryRewriteFirstLink(path, ClassifySegment, TryReadLinkTarget, out rewritten);
+
+    /// <remarks>
+    /// Takes segment classification and target-reading delegates so tests can drive unreadable links and
+    /// missing targets deterministically. Those cases are where the policy must fail closed instead of
+    /// silently trusting the unresolved, textually-contained path.
+    /// </remarks>
+    internal static bool TryRewriteFirstLink(
+        string path,
+        SegmentClassifier classifySegment,
+        LinkTargetReader readLinkTarget,
+        out string rewritten)
     {
         rewritten = string.Empty;
 
@@ -446,7 +474,7 @@ internal sealed class McpAuthorizationPolicy
         {
             current = Path.Combine(current, parts[i]);
 
-            SegmentKind kind = ClassifySegment(current, out bool isDirectory);
+            SegmentKind kind = classifySegment(current, out bool isDirectory);
 
             // Once a segment is missing, nothing deeper can exist, so nothing deeper can be a link.
             if (kind == SegmentKind.Missing)
@@ -458,7 +486,7 @@ internal sealed class McpAuthorizationPolicy
             if (kind == SegmentKind.Unreadable)
                 return true;
 
-            string? target = TryReadLinkTarget(current, isDirectory);
+            string? target = readLinkTarget(current, isDirectory);
             if (string.IsNullOrEmpty(target))
                 return true;
 
@@ -470,7 +498,13 @@ internal sealed class McpAuthorizationPolicy
         return false;
     }
 
-    private enum SegmentKind
+    internal delegate bool LinkRewriter(string path, out string rewritten);
+
+    internal delegate SegmentKind SegmentClassifier(string path, out bool isDirectory);
+
+    internal delegate string? LinkTargetReader(string path, bool isDirectory);
+
+    internal enum SegmentKind
     {
         Missing,
         Plain,
@@ -483,12 +517,23 @@ internal sealed class McpAuthorizationPolicy
     /// queries by path without opening, so it reports the reparse point itself instead of traversing it.
     /// </summary>
     private static SegmentKind ClassifySegment(string path, out bool isDirectory)
+        => ClassifySegment(path, File.GetAttributes, out isDirectory);
+
+    /// <remarks>
+    /// Takes the attribute reader so tests can prove inaccessible or malformed segments are classified
+    /// as unreadable. That distinction matters because an unreadable reparse point must make the whole
+    /// path unresolvable instead of being treated like an ordinary missing descendant.
+    /// </remarks>
+    internal static SegmentKind ClassifySegment(
+        string path,
+        Func<string, FileAttributes> getAttributes,
+        out bool isDirectory)
     {
         isDirectory = false;
 
         try
         {
-            FileAttributes attributes = File.GetAttributes(path);
+            FileAttributes attributes = getAttributes(path);
             isDirectory = (attributes & FileAttributes.Directory) != 0;
             return (attributes & FileAttributes.ReparsePoint) != 0 ? SegmentKind.Link : SegmentKind.Plain;
         }
@@ -507,12 +552,26 @@ internal sealed class McpAuthorizationPolicy
     /// the same untrusted-mount-point refusal that makes the handle-based resolver unusable here.
     /// </summary>
     private static string? TryReadLinkTarget(string path, bool isDirectory)
+        => TryReadLinkTarget(
+            path,
+            isDirectory,
+            static (linkPath, directory) => directory
+                ? Directory.ResolveLinkTarget(linkPath, returnFinalTarget: false)
+                : File.ResolveLinkTarget(linkPath, returnFinalTarget: false));
+
+    /// <remarks>
+    /// Takes the target reader so tests can prove target-read failures deny access without creating
+    /// real damaged or access-denied links. A null target is the security-relevant case where continuing
+    /// with the unresolved path would authorize a link escape by string prefix alone.
+    /// </remarks>
+    internal static string? TryReadLinkTarget(
+        string path,
+        bool isDirectory,
+        Func<string, bool, FileSystemInfo?> resolveLinkTarget)
     {
         try
         {
-            FileSystemInfo? target = isDirectory
-                ? Directory.ResolveLinkTarget(path, returnFinalTarget: false)
-                : File.ResolveLinkTarget(path, returnFinalTarget: false);
+            FileSystemInfo? target = resolveLinkTarget(path, isDirectory);
 
             return target?.FullName;
         }
@@ -538,10 +597,30 @@ internal sealed class McpAuthorizationPolicy
         SafeFileHandle hFile, [Out] char[] lpszFilePath, uint cchFilePath, uint dwFlags);
 
     private static bool TryGetFinalPathName(string path, out string finalPath)
+        => TryGetFinalPathName(
+            path,
+            OperatingSystem.IsWindows(),
+            static extendedPath => CreateFile(
+                ToExtendedLengthPath(extendedPath), 0, FileShareAll, IntPtr.Zero, OpenExisting, FileFlagBackupSemantics, IntPtr.Zero),
+            static (handle, buffer, bufferLength, flags) => GetFinalPathNameByHandle(handle, buffer, bufferLength, flags),
+            out finalPath);
+
+    /// <remarks>
+    /// Takes the platform gate and native calls so tests can cover the fail-closed cases that are hard
+    /// to force reliably: non-Windows execution, invalid handles, too-small retry buffers, and missing
+    /// native entry points. If any of these arms regresses, link resolution can fall back to weaker path
+    /// rewriting and miss the canonical target shape used for containment.
+    /// </remarks>
+    internal static bool TryGetFinalPathName(
+        string path,
+        bool isWindows,
+        Func<string, SafeFileHandle> createFile,
+        Func<SafeFileHandle, char[], uint, uint, uint> getFinalPathName,
+        out string finalPath)
     {
         finalPath = string.Empty;
 
-        if (!OperatingSystem.IsWindows())
+        if (!isWindows)
             return false;
 
         try
@@ -552,14 +631,13 @@ internal sealed class McpAuthorizationPolicy
             // .NET's own file APIs (which the CLI uses to read and write the file) transparently handle
             // long paths. That asymmetry meant any path at or beyond 260 characters failed to resolve
             // here and fell through to the string-prefix test, so a junction behind a long path escaped.
-            using SafeFileHandle handle = CreateFile(
-                ToExtendedLengthPath(path), 0, FileShareAll, IntPtr.Zero, OpenExisting, FileFlagBackupSemantics, IntPtr.Zero);
+            using SafeFileHandle handle = createFile(path);
 
             if (handle.IsInvalid)
                 return false;
 
             var buffer = new char[512];
-            uint length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Length, FileNameNormalized | VolumeNameDos);
+            uint length = getFinalPathName(handle, buffer, (uint)buffer.Length, FileNameNormalized | VolumeNameDos);
 
             if (length == 0)
                 return false;
@@ -570,7 +648,7 @@ internal sealed class McpAuthorizationPolicy
             if (length >= buffer.Length)
             {
                 buffer = new char[length + 1];
-                length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Length, FileNameNormalized | VolumeNameDos);
+                length = getFinalPathName(handle, buffer, (uint)buffer.Length, FileNameNormalized | VolumeNameDos);
                 if (length == 0 || length >= buffer.Length)
                     return false;
             }

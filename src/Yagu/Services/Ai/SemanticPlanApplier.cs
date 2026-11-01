@@ -1574,22 +1574,34 @@ public static class SemanticPlanApplier
     /// folder ("my documents", "documents folder", "in documents"). Returns false when no clear
     /// reference is present or the resolved folder does not exist.</summary>
     internal static bool TryResolveKnownFolder(string? originalQuery, out string path)
+        => TryResolveKnownFolder(originalQuery, Environment.GetFolderPath, Directory.Exists, out path);
+
+    /// <remarks>
+    /// Takes folder-resolution delegates so tests can cover clean-machine and redirected-profile arms
+    /// deterministically. A failed known-folder lookup must leave the semantic plan scoped to the
+    /// user's current directory instead of throwing or applying a placeholder path.
+    /// </remarks>
+    internal static bool TryResolveKnownFolder(
+        string? originalQuery,
+        Func<Environment.SpecialFolder, string> getFolderPath,
+        Func<string, bool> directoryExists,
+        out string path)
     {
         path = string.Empty;
         if (string.IsNullOrWhiteSpace(originalQuery)) return false;
 
         string? candidate = null;
         if (DesktopFolderRef.IsMatch(originalQuery))
-            candidate = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            candidate = getFolderPath(Environment.SpecialFolder.DesktopDirectory);
         else if (DocumentsFolderRef.IsMatch(originalQuery))
-            candidate = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            candidate = getFolderPath(Environment.SpecialFolder.MyDocuments);
         else if (DownloadsFolderRef.IsMatch(originalQuery))
         {
-            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string profile = getFolderPath(Environment.SpecialFolder.UserProfile);
             candidate = string.IsNullOrEmpty(profile) ? null : Path.Combine(profile, "Downloads");
         }
 
-        if (string.IsNullOrEmpty(candidate) || !Directory.Exists(candidate))
+        if (string.IsNullOrEmpty(candidate) || !directoryExists(candidate))
             return false;
         path = candidate;
         return true;
@@ -1679,9 +1691,12 @@ public static class SemanticPlanApplier
 
         // Scope the negation scan to the clause that contains the "hidden" word so a negation in an
         // earlier, unrelated clause ("exclude tmp files, show hidden files") doesn't flip the result.
+        // Both alternatives of HiddenFileMentionRegex contain the literal "hidden" at or after the
+        // match start, and the regex's CultureInvariant folding agrees with OrdinalIgnoreCase for
+        // every letter in that word, so this lookup cannot return -1. Pinned by
+        // DetectHiddenFilePreference_EveryRegexAlternativeContainsTheLiteralHiddenToken — a new
+        // alternative without "hidden" would make HiddenClauseBefore slice on a negative index.
         int hiddenIndex = query.IndexOf("hidden", match.Index, StringComparison.OrdinalIgnoreCase);
-        if (hiddenIndex < 0)
-            hiddenIndex = match.Index;
         string before = HiddenClauseBefore(query, hiddenIndex);
         return !HiddenExclusionCueRegex.IsMatch(before);
     }
@@ -1823,7 +1838,12 @@ public static class SemanticPlanApplier
         return false;
     }
 
-    private static string CleanAnchor(string token)
+    /// <remarks>
+    /// Internal so tests can pin the defensive empty-anchor arm directly. Regex extraction uses
+    /// non-empty captures today, but an empty anchor must still be rejected instead of producing a
+    /// match-all cross-line regex if the extraction patterns are widened later.
+    /// </remarks>
+    internal static string CleanAnchor(string token)
     {
         if (string.IsNullOrEmpty(token))
             return "";
@@ -2107,12 +2127,25 @@ public static class SemanticPlanApplier
     /// period ("this week", "last month") is inclusive. Chronic can throw on unparseable input, which
     /// is treated as "not interpretable" (returns false).</summary>
     private static bool TryResolveWithChronic(string phrase, DateTimeOffset now, bool endOfDay, out DateTimeOffset result)
+        => TryResolveWithChronic(phrase, now, endOfDay, ChronicParser.Parse, out result);
+
+    /// <remarks>
+    /// Takes the parser delegate so tests can cover Chronic throwing without relying on a particular
+    /// natural-language phrase to tickle a library exception. Semantic date repair is best-effort:
+    /// parser failures must drop the date with a warning rather than fail the whole search.
+    /// </remarks>
+    internal static bool TryResolveWithChronic(
+        string phrase,
+        DateTimeOffset now,
+        bool endOfDay,
+        Func<string, global::Chronic.Options, global::Chronic.Span?> parse,
+        out DateTimeOffset result)
     {
         result = default;
         try
         {
             var options = new global::Chronic.Options { Clock = () => now.DateTime };
-            var span = ChronicParser.Parse(phrase, options);
+            var span = parse(phrase, options);
             DateTime? picked = endOfDay ? (span?.End ?? span?.Start) : (span?.Start ?? span?.End);
             if (picked is not { } dtp) return false;
             result = new DateTimeOffset(DateTime.SpecifyKind(dtp, DateTimeKind.Unspecified), now.Offset);
@@ -2264,13 +2297,21 @@ internal static class KnownFileExtensions
     public static IReadOnlySet<string> Default => LazySet.Value;
 
     private static HashSet<string> Build()
+        => Build(GetRegisteredExtensionKeyNames);
+
+    /// <remarks>
+    /// Takes the registry enumerator so tests can cover locked-down registry failures. The production
+    /// path remains a one-time Lazy build; if extension enumeration is denied, semantic glob repair
+    /// must keep using the curated baseline instead of failing model application.
+    /// </remarks>
+    internal static HashSet<string> Build(Func<IEnumerable<string>> getRegisteredExtensionKeyNames)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         AddSemicolonList(set, CuratedExtensions);
         AddSemicolonList(set, AppSettings.DefaultSkipExtensions);
         AddSemicolonList(set, AppSettings.DefaultBinaryExtensions);
         AddSemicolonList(set, AppSettings.DefaultArchiveExtensions);
-        TryAddRegisteredExtensions(set);
+        TryAddRegisteredExtensions(set, getRegisteredExtensionKeyNames);
         return set;
     }
 
@@ -2283,12 +2324,17 @@ internal static class KnownFileExtensions
         }
     }
 
-    private static void TryAddRegisteredExtensions(HashSet<string> set)
+    private static IEnumerable<string> GetRegisteredExtensionKeyNames()
+    {
+        using RegistryKey hkcr = Registry.ClassesRoot;
+        return hkcr.GetSubKeyNames();
+    }
+
+    private static void TryAddRegisteredExtensions(HashSet<string> set, Func<IEnumerable<string>> getRegisteredExtensionKeyNames)
     {
         try
         {
-            using RegistryKey hkcr = Registry.ClassesRoot;
-            foreach (string keyName in hkcr.GetSubKeyNames())
+            foreach (string keyName in getRegisteredExtensionKeyNames())
             {
                 // Extension keys are the only ones that begin with a dot (e.g. ".png"); ProgIDs do not.
                 if (keyName.Length > 1 && keyName[0] == '.')
